@@ -1,1 +1,124 @@
 # video-editor-ai
+
+Semi-automated video editing pipeline for long-form recordings on Linux.
+
+The pipeline creates a rough-cut Blender project for human review and fine-tuning.
+
+## Pipeline Stages
+
+1. Stage 1: WhisperX in Docker -> transcript outputs (`json`, `srt`, `vtt`, etc.)
+2. Stage 2: Python interval logic -> `*_intervals.json` keep ranges
+3. Stage 3: Blender headless -> `.blend` with VSE strips arranged back-to-back
+
+## Requirements
+
+- Linux
+- NVIDIA GPU + NVIDIA Container Toolkit
+- Docker + Docker Compose
+- Blender available as `blender`
+- Python 3.10+
+
+## Repository Layout
+
+```text
+.
+├── cache/
+├── config/
+│   └── filler_words.yaml
+├── input/
+├── output/
+├── docker-compose.yml
+├── run_pipeline.sh
+├── stage2_intervals.py
+└── stage3_blender.py
+```
+
+## Quick Start
+
+1. Put source media in `input/`.
+2. Run the full pipeline:
+
+```bash
+./run_pipeline.sh "input/myvideo.mp4" ja
+```
+
+This produces outputs under `output/`, including:
+
+- `myvideo.json`
+- `myvideo.srt`
+- `myvideo.vtt`
+- `myvideo_intervals.json`
+- `myvideo_edited.blend`
+
+## Stage Commands
+
+### Stage 1 only (WhisperX)
+
+```bash
+docker compose run --rm --user "0:0" whisperx \
+  _ \
+  "myvideo.mp4" \
+  --output_dir /output \
+  --output_format all \
+  --language ja \
+  --compute_type float16 \
+  --batch_size 16
+```
+
+Notes:
+
+- Input files are mounted to `/app` via `./input:/app`.
+- Output files are mounted to `/output` via `./output:/output`.
+- This image tag does not accept `--word_timestamps`.
+- No diarization flags are used.
+
+### Stage 2 only (interval generation)
+
+```bash
+python stage2_intervals.py \
+  --json output/myvideo.json \
+  --config config/filler_words.yaml \
+  --language ja \
+  --silence_threshold 1.5 \
+  --min_keep 1.0 \
+  --output output/myvideo_intervals.json
+```
+
+### Stage 3 only (Blender VSE project)
+
+```bash
+blender --background --factory-startup --python-exit-code 1 --python stage3_blender.py -- \
+  --source input/myvideo.mp4 \
+  --intervals output/myvideo_intervals.json \
+  --output output/myvideo_edited.blend
+```
+
+## Config
+
+`config/filler_words.yaml` contains language-specific filler terms used by Stage 2.
+
+Example:
+
+```yaml
+ja:
+  - えーと
+  - あのー
+  - うーん
+  - えっと
+  - まあ
+en:
+  - um
+  - uh
+  - like
+  - you know
+```
+
+## Operational Notes
+
+- `run_pipeline.sh` currently runs WhisperX as root (`--user "0:0"`) for compatibility with this image/runtime.
+- As a result, Stage 1 output files can be root-owned on host.
+- If needed, fix ownership after run:
+
+```bash
+sudo chown -R "$(id -u):$(id -g)" output cache
+```

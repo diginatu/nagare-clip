@@ -1,0 +1,16 @@
+services:
+  whisperx:
+    image: ghcr.io/jim60105/whisperx:large-v3-ja
+    working_dir: /app
+    volumes:
+      - ./input:/app
+      - ./output:/output
+      - ./cache:/root/.cache
+    command: []
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
