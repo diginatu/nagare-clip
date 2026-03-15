@@ -156,17 +156,48 @@ def main() -> None:
                 bounded_end,
             )
 
-        strip.animation_offset_start = bounded_start
-        strip.animation_offset_end = full_duration - bounded_end
+        strip.frame_start = timeline_cursor - bounded_start
+        strip.frame_offset_start = bounded_start
+        strip.frame_offset_end = full_duration - bounded_end
+        strip.channel = 1
 
         sound_strip = sequence_collection.new_sound(
             name=f"keep_{idx:04d}_audio",
             filepath=str(source_path),
             channel=2,
-            frame_start=timeline_cursor,
+            frame_start=timeline_cursor - bounded_start,
         )
-        sound_strip.animation_offset_start = bounded_start
-        sound_strip.animation_offset_end = full_duration - bounded_end
+        sound_strip.frame_offset_start = bounded_start
+        sound_strip.frame_offset_end = full_duration - bounded_end
+
+        # Deselect all strips, then select only this video+audio pair
+        for s in sequence_collection:
+            s.select = False
+        strip.select = True
+        sound_strip.select = True
+
+        # Connect requires a sequencer area context — build a temporary override
+        sequencer_area = None
+        window = None
+        for window in bpy.context.window_manager.windows:
+            for area in window.screen.areas:
+                if area.type == "SEQUENCE_EDITOR":
+                    sequencer_area = area
+                    break
+            if sequencer_area:
+                break
+
+        if sequencer_area is not None and window is not None:
+            with bpy.context.temp_override(
+                window=window,
+                area=sequencer_area,
+                region=sequencer_area.regions[-1],
+            ):
+                bpy.ops.sequencer.connect(toggle=False)
+        else:
+            logging.warning(
+                "Strip %d: no SEQUENCE_EDITOR area found, skipping connect.", idx
+            )
 
         if strip.frame_final_duration != keep_frame_count:
             logging.warning(
@@ -177,9 +208,10 @@ def main() -> None:
             )
 
         logging.info(
-            "Strip %d: animation_offset_start=%d animation_offset_end=%d "
+            "Strip %d: frame_start=%d frame_offset_start=%d frame_offset_end=%d "
             "keep_frames=%d timeline_cursor=%d",
             idx,
+            timeline_cursor - bounded_start,
             bounded_start,
             full_duration - bounded_end,
             keep_frame_count,
@@ -188,6 +220,11 @@ def main() -> None:
 
         timeline_cursor += keep_frame_count
 
+    for s in sequence_collection:
+        s.select = False
+
+    min_strip_frame = min((s.frame_start for s in sequence_collection), default=1)
+    scene.frame_start = int(min(1, min_strip_frame))
     scene.frame_end = max(scene.frame_start, timeline_cursor - 1)
 
     captions = intervals_data.get("captions", [])
