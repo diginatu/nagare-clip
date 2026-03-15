@@ -167,8 +167,13 @@ def main() -> None:
             channel=2,
             frame_start=timeline_cursor - bounded_start,
         )
+        sound_full_duration = max(1, int(sound_strip.frame_duration))
         sound_strip.frame_offset_start = bounded_start
-        sound_strip.frame_offset_end = full_duration - bounded_end
+        sound_strip.frame_offset_end = sound_full_duration - (
+            bounded_start + keep_frame_count
+        )
+        if sound_strip.frame_offset_end < 0:
+            sound_strip.frame_offset_end = 0
 
         # Deselect all strips, then select only this video+audio pair
         for s in sequence_collection:
@@ -240,6 +245,7 @@ def main() -> None:
 
             tl_start = None
             tl_end = None
+            length = None
             for entry in tl_map:
                 if (
                     cap_src_start < entry["src_end"]
@@ -250,20 +256,22 @@ def main() -> None:
                     offset_start = sec_to_frames(
                         clamped_start - entry["src_start"], effective_fps
                     )
-                    offset_end = sec_to_frames(
-                        clamped_end - entry["src_start"], effective_fps
-                    )
+                    duration_sec = clamped_end - clamped_start
+                    length = max(1, sec_to_frames(duration_sec, effective_fps))
                     tl_start = entry["tl_start"] + offset_start
-                    tl_end = entry["tl_start"] + offset_end
+                    tl_end = tl_start + length
                     break
 
-            if tl_start is None or tl_end is None or tl_end <= tl_start:
+            if (
+                tl_start is None
+                or tl_end is None
+                or length is None
+                or tl_end <= tl_start
+            ):
                 logging.warning(
                     "Caption skipped (no matching keep interval): %r", text[:60]
                 )
                 continue
-
-            length = max(1, tl_end - tl_start)
             text_strip = sequence_collection.new_effect(
                 name=f"cap_{cap_src_start:.3f}",
                 type="TEXT",
