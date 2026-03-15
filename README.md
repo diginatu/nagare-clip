@@ -16,8 +16,22 @@ The pipeline creates a rough-cut Blender project for human review and fine-tunin
 - NVIDIA GPU + NVIDIA Container Toolkit
 - Docker + Docker Compose
 - Blender available as `blender`
-- Python 3.10+
-- Python deps: `pip install -r requirements.txt` (installs `fugashi[unidic-lite]`)
+- Python 3.11+
+
+## Setup
+
+Install [uv](https://docs.astral.sh/uv/getting-started/installation/), then:
+
+```bash
+uv sync          # install runtime deps
+uv sync --dev    # install runtime + dev deps (includes pytest)
+```
+
+Run tests:
+
+```bash
+uv run pytest
+```
 
 ## Repository Layout
 

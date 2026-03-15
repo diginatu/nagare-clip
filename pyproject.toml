@@ -1,0 +1,21 @@
+[project]
+name = "video-editor-ai"
+version = "0.1.0"
+requires-python = ">=3.11"
+dependencies = [
+    "PyYAML",
+    "fugashi[unidic-lite]",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest",
+]
+
+[dependency-groups]
+dev = [
+    "pytest",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

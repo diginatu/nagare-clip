@@ -18,6 +18,7 @@ Final deliverable is a `.blend` project for human editing.
   - Do not add `--diarize`.
   - Do not add `--hf_token` handling.
   - Do not add diarization-specific dependencies.
+- Dependency management uses uv + pyproject.toml. Always run `uv lock` after changing dependencies and commit uv.lock.
 - Preserve Stage 2 interval JSON as human-editable contract for Stage 3.
 - Stage 3 must reference original media; do not re-encode/copy source media.
 

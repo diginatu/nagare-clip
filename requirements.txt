@@ -1,3 +1,0 @@
-PyYAML
-fugashi[unidic-lite]
-pytest

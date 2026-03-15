@@ -84,7 +84,7 @@ docker compose run --rm --user "0:0" whisperx \
   --batch_size 16
 
 echo "[Stage 2/3] Keep interval computation"
-python stage2_intervals.py \
+uv run python stage2_intervals.py \
   --json "$WHISPER_JSON" \
   --config config/filler_words.yaml \
   --language "$LANGUAGE" \
