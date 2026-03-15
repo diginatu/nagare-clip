@@ -3,8 +3,8 @@ services:
     image: ghcr.io/jim60105/whisperx:large-v3-ja
     working_dir: /app
     volumes:
-      - ./input:/app
-      - ./output:/output
+      - ${INPUT_VIDEOS_DIR:-./src_video}:/app
+      - ${OUTPUT_DIR:-./output}:/output
       - ./cache:/root/.cache
     command: []
     deploy:

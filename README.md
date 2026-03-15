@@ -26,7 +26,7 @@ The pipeline creates a rough-cut Blender project for human review and fine-tunin
 ├── cache/
 ├── config/
 │   └── filler_words.yaml
-├── input/
+├── src_video/
 ├── output/
 ├── docker-compose.yml
 ├── run_pipeline.sh
@@ -36,20 +36,36 @@ The pipeline creates a rough-cut Blender project for human review and fine-tunin
 
 ## Quick Start
 
-1. Put source media in `input/`.
-2. Run the full pipeline:
+1. Put source media in `src_video/` (default input directory).
+2. Run the full pipeline (defaults resolve to `src_video/` and `output/`):
 
 ```bash
-./run_pipeline.sh "input/myvideo.mp4" ja
+./run_pipeline.sh "myvideo.mp4" ja
 ```
 
-This produces outputs under `output/`, including:
+Pass custom locations with options:
+
+```bash
+./run_pipeline.sh --input-videos-dir my_videos --output-dir my_out "myvideo.mp4" ja
+```
+
+This produces outputs under `output/` (or your `--output-dir`), including:
 
 - `myvideo.json`
 - `myvideo.srt`
 - `myvideo.vtt`
 - `myvideo_intervals.json`
 - `myvideo_edited.blend`
+
+## CLI
+
+```bash
+./run_pipeline.sh [--input-videos-dir DIR] [--output-dir DIR] <source> <language> [silence_threshold] [min_keep]
+```
+
+- Defaults: input videos under `src_video/`, outputs under `output/`.
+- If `<source>` contains `/`, it is treated as the exact path; otherwise it is resolved inside `--input-videos-dir`.
+- `silence_threshold` and `min_keep` keep their existing defaults of `1.5` and `1.0`.
 
 ## Stage Commands
 
@@ -68,8 +84,8 @@ docker compose run --rm --user "0:0" whisperx \
 
 Notes:
 
-- Input files are mounted to `/app` via `./input:/app`.
-- Output files are mounted to `/output` via `./output:/output`.
+- Input files are mounted to `/app` via `${INPUT_VIDEOS_DIR:-src_video}:/app` (set env vars or rely on defaults).
+- Output files are mounted to `/output` via `${OUTPUT_DIR:-output}:/output`.
 - This image tag does not accept `--word_timestamps`.
 - No diarization flags are used.
 
@@ -96,7 +112,7 @@ Caption chunks use `fugashi` morphological segmentation with morpheme-level timi
 
 ```bash
 blender --background --factory-startup --python-exit-code 1 --python stage3_blender.py -- \
-  --source input/myvideo.mp4 \
+  --source src_video/myvideo.mp4 \
   --intervals output/myvideo_intervals.json \
   --output output/myvideo_edited.blend
 ```
