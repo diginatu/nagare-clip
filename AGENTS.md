@@ -36,15 +36,15 @@ Final deliverable is a `.blend` project for human editing.
 
 ## Preferred Validation
 
-After edits, validate at least:
+Validation runs automatically via the OpenCode `PostToolUse` hook
+defined in `.opencode/config.json`. It triggers after every file
+write/edit and runs:
 
-```bash
-docker compose config --services
-python -m py_compile stage2_intervals.py stage3_blender.py
-bash -n run_pipeline.sh
-```
+- `docker compose config --services`
+- `python -m py_compile stage2_intervals.py stage3_blender.py`
+- `bash -n run_pipeline.sh`
 
-If environment allows, validate full run:
+If environment allows, also validate with a full run:
 
 ```bash
 ./run_pipeline.sh "input/<sample>.mp4" ja

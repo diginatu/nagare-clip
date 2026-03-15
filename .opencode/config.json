@@ -1,0 +1,16 @@
+{
+  "$schema": "https://opencode.ai/config.json",
+  "hooks": {
+    "PostToolUse": [
+      {
+        "matcher": "write|edit|patch",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "docker compose config --services && python -m py_compile stage2_intervals.py stage3_blender.py && bash -n run_pipeline.sh && echo 'Validation passed.'"
+          }
+        ]
+      }
+    ]
+  }
+}
