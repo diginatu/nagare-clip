@@ -33,7 +33,7 @@ Final deliverable is a `.blend` project for human editing.
 - Blender VSE API compatibility:
   - prefer `sequence_editor.sequences`
   - fallback to `sequence_editor.strips`
-- Stage 2 captions are chunked on `fugashi` morphemes using `fugashi[unidic-lite]`; defaults are 12 morphemes or 4.0 seconds per chunk with a minimum of 3 morphemes before flushing. Silence gaps larger than `caption_max_duration` force a flush.
+- Stage 2 captions are chunked on `fugashi` morphemes using `fugashi[unidic-lite]` with morpheme-level timing (`end = min(start+0.02s, next start)`); defaults are 12 morphemes, 4.0 seconds max, minimum 3 morphemes, min duration 1.5s, and silence flush at 1.5s.
 
 ## Preferred Validation
 

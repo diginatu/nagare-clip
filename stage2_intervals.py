@@ -58,6 +58,18 @@ def parse_args() -> argparse.Namespace:
         help="Minimum morphemes before a chunk can be flushed (default: 3)",
     )
     parser.add_argument(
+        "--caption_min_duration",
+        type=float,
+        default=1.5,
+        help="Minimum seconds of speech before flushing a caption chunk (default: 1.5)",
+    )
+    parser.add_argument(
+        "--caption_silence_flush",
+        type=float,
+        default=1.5,
+        help="Silence duration that forces flushing the current caption chunk (default: 1.5)",
+    )
+    parser.add_argument(
         "--output", required=True, dest="output_path", help="Output JSON path"
     )
     parser.add_argument(
@@ -93,33 +105,74 @@ def load_filler_set(config_path: Path, language: str) -> set[str]:
     return {normalize_word(w) for w in config[language] if normalize_word(w)}
 
 
-def flatten_words(whisperx_data: dict) -> List[Tuple[float, float, str]]:
-    words: List[Tuple[float, float, str]] = []
+_CHAR_EPS = 0.02
+
+
+def build_morpheme_times(
+    whisperx_data: dict,
+    tagger: "Tagger",
+) -> List[Tuple[float, float, str]]:
+    """
+    Returns a flat list of (start, end, surface) for every morpheme
+    across all segments, sorted by start time.
+
+    end = min(last_char_start + _CHAR_EPS, next_morpheme_start)
+    so that gap = next.start - this.end reflects real silence only.
+    """
+    all_morphemes: List[Tuple[float, float, str]] = []
 
     for segment in whisperx_data.get("segments", []):
-        seg_end = float(segment.get("end") or 0.0)
-        raw_seg: List[Tuple[float, str]] = []
-        for word in segment.get("words", []):
-            start = word.get("start")
-            token = word.get("word", "")
-            if start is None:
-                continue
-            raw_seg.append((float(start), token))
-        raw_seg.sort(key=lambda item: item[0])
+        seg_text = segment.get("text", "").strip()
+        char_entries = segment.get("words", [])
+        if not seg_text or not char_entries:
+            continue
 
-        for i, (start, token) in enumerate(raw_seg):
-            if i + 1 < len(raw_seg):
-                # Within segment: end = next char's start (no intra-segment gaps)
-                end = min(start + 0.02, raw_seg[i + 1][0])
-            else:
-                # Last char of segment: use reliable segment-level end
-                end = max(seg_end, start + 0.02)
-            if end <= start:
-                end = start + 0.02
-            words.append((start, end, token))
+        # Build char_starts: one start time per character of seg_text,
+        # inheriting the last valid start for score=0.0 placeholders.
+        char_starts: List[float] = []
+        last_valid = float(char_entries[0].get("start") or 0.0)
+        for entry in char_entries:
+            s = entry.get("start")
+            if s is not None:
+                last_valid = float(s)
+            char_starts.append(last_valid)
+        while len(char_starts) < len(seg_text):
+            char_starts.append(char_starts[-1] if char_starts else 0.0)
+        char_starts = char_starts[: len(seg_text)]
 
-    words.sort(key=lambda item: item[0])
-    return words
+        # Morphological analysis
+        morphemes: List[str] = [w.surface for w in tagger(seg_text)]
+
+        # Map each morpheme to (start, tentative_end, surface).
+        # tentative_end = last_char_start + eps; will be clamped below.
+        seg_morphemes: List[Tuple[float, float, str]] = []
+        char_cursor = 0
+        for morpheme in morphemes:
+            m_len = len(morpheme)
+            start_idx = min(char_cursor, len(char_starts) - 1)
+            last_idx = min(char_cursor + m_len - 1, len(char_starts) - 1)
+            m_start = char_starts[start_idx]
+            m_end = char_starts[last_idx] + _CHAR_EPS
+            seg_morphemes.append((m_start, m_end, morpheme))
+            char_cursor += m_len
+
+        # Apply min(tentative_end, next_morpheme_start) within segment
+        for i in range(len(seg_morphemes) - 1):
+            m_start, m_end, surface = seg_morphemes[i]
+            next_start = seg_morphemes[i + 1][0]
+            seg_morphemes[i] = (m_start, min(m_end, next_start), surface)
+
+        all_morphemes.extend(seg_morphemes)
+
+    all_morphemes.sort(key=lambda x: x[0])
+    return all_morphemes
+
+
+def flatten_words(whisperx_data: dict) -> List[Tuple[float, float, str]]:
+    from fugashi import Tagger as _Tagger
+
+    tagger = _Tagger("-Owakati")
+    return build_morpheme_times(whisperx_data, tagger)
 
 
 def get_duration_sec(
@@ -182,95 +235,52 @@ def infer_source_file(whisperx_data: dict, json_path: Path) -> str:
 
 
 def collect_captions(
-    whisperx_data: dict,
+    morpheme_times: List[Tuple[float, float, str]],
     keep_intervals: List[dict],
     max_duration: float = 4.0,
     max_morphemes: int = 12,
     min_morphemes: int = 3,
+    min_duration: float = 1.5,
+    silence_flush: float = 1.5,
 ) -> List[dict]:
-    tagger = Tagger("-Owakati")
     captions = []
 
-    for segment in whisperx_data.get("segments", []):
-        seg_text = segment.get("text", "").strip()
-        char_entries = segment.get("words", [])
-        if not seg_text or not char_entries:
-            continue
+    chunk: List[str] = []
+    chunk_start = 0.0
+    chunk_end = 0.0
 
-        # Build flat list of char start times aligned to seg_text characters.
-        # Inherit last valid start for score=0.0 placeholder entries.
-        char_starts: List[float] = []
-        last_valid = float(char_entries[0].get("start") or 0.0)
-        for entry in char_entries:
-            s = entry.get("start")
-            if s is not None:
-                last_valid = float(s)
-            char_starts.append(last_valid)
-
-        # Align to seg_text length
-        while len(char_starts) < len(seg_text):
-            char_starts.append(char_starts[-1] if char_starts else 0.0)
-        char_starts = char_starts[: len(seg_text)]
-
-        # Map each morpheme to (surface, start, end) using char_starts.
-        # morpheme start = char_starts[first char index]
-        # morpheme end   = char_starts[last char index + 1] if available,
-        #                  else char_starts[last char index] + 0.02
-        morphemes: List[str] = [w.surface for w in tagger(seg_text)]
-        morpheme_times: List[Tuple[str, float, float]] = []
-        char_cursor = 0
-        for morpheme in morphemes:
-            m_len = len(morpheme)
-            start_idx = min(char_cursor, len(char_starts) - 1)
-            next_idx = min(char_cursor + m_len, len(char_starts))
-            m_start = char_starts[start_idx]
-            m_end = (
-                char_starts[next_idx]
-                if next_idx < len(char_starts)
-                else char_starts[-1] + 0.02
-            )
-            if m_end <= m_start:
-                m_end = m_start + 0.02
-            morpheme_times.append((morpheme, m_start, m_end))
-            char_cursor += m_len
-
-        # Group morphemes into caption chunks
-        chunk: List[str] = []
-        chunk_start = 0.0
-        chunk_end = 0.0
-
-        for morpheme, m_start, m_end in morpheme_times:
-            if chunk:
-                speech_duration = chunk_end - chunk_start
-                silence_gap = m_start - chunk_end
-                should_flush = (
-                    (speech_duration > max_duration or len(chunk) >= max_morphemes)
-                    and len(chunk) >= min_morphemes
-                ) or silence_gap > max_duration
-
-                if should_flush:
-                    captions.append(
-                        {
-                            "start": round(chunk_start, 3),
-                            "end": round(chunk_end, 3),
-                            "text": "".join(chunk),
-                        }
-                    )
-                    chunk = []
-
-            if not chunk:
-                chunk_start = m_start
-            chunk.append(morpheme)
-            chunk_end = m_end
-
+    for m_start, m_end, morpheme in morpheme_times:
         if chunk:
-            captions.append(
-                {
-                    "start": round(chunk_start, 3),
-                    "end": round(chunk_end, 3),
-                    "text": "".join(chunk),
-                }
-            )
+            speech_duration = chunk_end - chunk_start
+            silence_gap = m_start - chunk_end
+            should_flush = (
+                (speech_duration > max_duration or len(chunk) >= max_morphemes)
+                and len(chunk) >= min_morphemes
+            ) or silence_gap > silence_flush
+
+            if should_flush:
+                captions.append(
+                    {
+                        "start": round(chunk_start, 3),
+                        "end": round(chunk_end, 3),
+                        "text": "".join(chunk),
+                    }
+                )
+                chunk = []
+
+        if not chunk:
+            chunk_start = m_start
+        chunk.append(morpheme)
+        chunk_end = m_end
+
+    if chunk:
+        captions.append(
+            {
+                "start": round(chunk_start, 3),
+                "end": round(chunk_end, 3),
+                "text": "".join(chunk),
+            }
+        )
 
     # Retain only captions that overlap at least one keep interval
     filtered = []
@@ -293,7 +303,10 @@ def main() -> None:
         whisperx_data = json.load(f)
 
     filler_set = load_filler_set(config_path, args.language)
-    words = flatten_words(whisperx_data)
+    tagger = Tagger("-Owakati")
+    all_morpheme_times = build_morpheme_times(whisperx_data, tagger)
+
+    words = all_morpheme_times
     duration_sec = get_duration_sec(whisperx_data, words)
 
     excludes: List[Tuple[float, float]] = []
@@ -331,11 +344,13 @@ def main() -> None:
     ]
 
     captions = collect_captions(
-        whisperx_data,
+        all_morpheme_times,
         filtered_keep,
         max_duration=args.caption_max_duration,
         max_morphemes=args.caption_max_morphemes,
         min_morphemes=args.caption_min_morphemes,
+        min_duration=args.caption_min_duration,
+        silence_flush=args.caption_silence_flush,
     )
 
     output_data = {
