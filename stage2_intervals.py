@@ -151,6 +151,32 @@ def infer_source_file(whisperx_data: dict, json_path: Path) -> str:
     return json_path.stem
 
 
+def collect_captions(
+    whisperx_data: dict,
+    keep_intervals: List[dict],
+) -> List[dict]:
+    captions = []
+    for segment in whisperx_data.get("segments", []):
+        seg_start = segment.get("start")
+        seg_end = segment.get("end")
+        text = segment.get("text", "").strip()
+        if seg_start is None or seg_end is None or not text:
+            continue
+        seg_start = float(seg_start)
+        seg_end = float(seg_end)
+        for iv in keep_intervals:
+            if seg_start < iv["end"] and seg_end > iv["start"]:
+                captions.append(
+                    {
+                        "start": round(seg_start, 3),
+                        "end": round(seg_end, 3),
+                        "text": text,
+                    }
+                )
+                break
+    return captions
+
+
 def main() -> None:
     args = parse_args()
 
@@ -198,10 +224,13 @@ def main() -> None:
         if (end - start) >= args.min_keep
     ]
 
+    captions = collect_captions(whisperx_data, filtered_keep)
+
     output_data = {
         "source_file": infer_source_file(whisperx_data, json_path),
         "duration_sec": round(duration_sec, 3),
         "keep_intervals": filtered_keep,
+        "captions": captions,
     }
 
     output_path.parent.mkdir(parents=True, exist_ok=True)

@@ -46,6 +46,44 @@ def load_source_metadata(source_path: Path) -> tuple[float, int, int]:
     return fps, int(width), int(height)
 
 
+def build_timeline_map(
+    keep_intervals: list,
+    effective_fps: float,
+    source_fps: float,
+) -> list:
+    """
+    Returns a list of dicts, each describing one placed keep interval:
+      src_start, src_end: original source seconds
+      tl_start: first frame on the output timeline (1-based)
+      tl_end:   last frame (exclusive) on the output timeline
+    This must mirror the strip placement loop exactly.
+    """
+    mapping = []
+    cursor = 1
+    for interval in keep_intervals:
+        start_sec = float(interval["start"])
+        end_sec = float(interval["end"])
+        if end_sec <= start_sec:
+            continue
+        src_start_frame = max(0, sec_to_frames(start_sec, effective_fps))
+        src_end_frame = max(src_start_frame + 1, sec_to_frames(end_sec, effective_fps))
+        # Mirror the clamping logic from the strip loop
+        # full_duration is not available here, so use src_end_frame as
+        # an upper bound — clamping only matters at the very end of the
+        # source clip and will not affect most captions
+        keep_frame_count = src_end_frame - src_start_frame
+        mapping.append(
+            {
+                "src_start": start_sec,
+                "src_end": end_sec,
+                "tl_start": cursor,
+                "tl_end": cursor + keep_frame_count,
+            }
+        )
+        cursor += keep_frame_count
+    return mapping
+
+
 def main() -> None:
     args = parse_blender_args(sys.argv)
 
@@ -151,6 +189,65 @@ def main() -> None:
         timeline_cursor += keep_frame_count
 
     scene.frame_end = max(scene.frame_start, timeline_cursor - 1)
+
+    captions = intervals_data.get("captions", [])
+    if captions:
+        tl_map = build_timeline_map(keep_intervals, effective_fps, source_fps)
+
+        for cap in captions:
+            cap_src_start = float(cap["start"])
+            cap_src_end = float(cap["end"])
+            text = cap.get("text", "").strip()
+            if not text:
+                continue
+
+            tl_start = None
+            tl_end = None
+            for entry in tl_map:
+                if (
+                    cap_src_start < entry["src_end"]
+                    and cap_src_end > entry["src_start"]
+                ):
+                    clamped_start = max(cap_src_start, entry["src_start"])
+                    clamped_end = min(cap_src_end, entry["src_end"])
+                    offset_start = sec_to_frames(
+                        clamped_start - entry["src_start"], effective_fps
+                    )
+                    offset_end = sec_to_frames(
+                        clamped_end - entry["src_start"], effective_fps
+                    )
+                    tl_start = entry["tl_start"] + offset_start
+                    tl_end = entry["tl_start"] + offset_end
+                    break
+
+            if tl_start is None or tl_end is None or tl_end <= tl_start:
+                logging.warning(
+                    "Caption skipped (no matching keep interval): %r", text[:60]
+                )
+                continue
+
+            length = max(1, tl_end - tl_start)
+            text_strip = sequence_collection.new_effect(
+                name=f"cap_{cap_src_start:.3f}",
+                type="TEXT",
+                channel=3,
+                frame_start=tl_start,
+                length=length,
+            )
+            text_strip.text = text
+            text_strip.font_size = 50
+            text_strip.alignment_x = "CENTER"
+            text_strip.anchor_y = "BOTTOM"
+            text_strip.location[0] = 0.5
+            text_strip.location[1] = 0.05
+            text_strip.use_shadow = True
+            logging.info(
+                "Caption '%s': timeline frames %d–%d",
+                text[:40],
+                tl_start,
+                tl_end,
+            )
+
     output_path.parent.mkdir(parents=True, exist_ok=True)
 
     logging.info(
