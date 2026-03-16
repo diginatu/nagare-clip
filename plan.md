@@ -13,7 +13,7 @@ Output is a reviewable `.blend`, not a final rendered export.
 ## Current Status
 
 - `docker-compose.yml` implemented for `ghcr.io/jim60105/whisperx:large-v3-ja` with GPU reservation and persistent cache.
-- `stage2_intervals.py` implemented with filler-word/silence exclusion on shared morpheme-level timing (end = min(start+0.02s, next start)), merge/invert, min keep filtering, configurable pre/post keep margins (default 1s) with overlap merge, and `fugashi`-based caption chunking with guards on morpheme count, min duration, and silence flush.
+- `stage2_intervals.py` implemented with filler-word exclusion on morpheme-level timing (end = min(start+0.02s, next start)), silence exclusion on WhisperX word timings (word start/end) with a 0.6s per-word span cap to avoid inflated-end masking, merge/invert, min keep filtering, configurable pre/post keep margins (default 1s) with overlap merge, and `fugashi`-based caption chunking split on silence gaps and keep-boundary crossings. Captions are preserved as transcript chunks and are not pre-filtered by keep intervals.
 - `stage3_blender.py` implemented with Blender arg split (`--`), source metadata detection, VSE strip packing, and `.blend` save.
 - `run_pipeline.sh` implemented and tested end-to-end with configurable input (`--input-videos-dir`, default `src_video`) and output (`--output-dir`, default `output`) directories shared with Docker Compose.
 

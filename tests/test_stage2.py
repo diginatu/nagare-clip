@@ -1,3 +1,6 @@
+import json
+from pathlib import Path
+
 import pytest
 from unittest.mock import MagicMock, patch
 
@@ -210,7 +213,7 @@ def test_build_morpheme_times_real_silence_gap():
 # collect_captions
 
 
-def test_collect_captions_flush_and_filter():
+def test_collect_captions_flush_and_preserve_silence_split_chunks():
     morphemes = [
         (0.0, 0.5, "あ"),
         (0.6, 1.0, "い"),
@@ -228,10 +231,50 @@ def test_collect_captions_flush_and_filter():
         silence_flush=1.5,
     )
 
-    assert len(captions) == 1
+    assert len(captions) == 2
     assert captions[0]["text"] == "あい"
     assert captions[0]["start"] == pytest.approx(0.0)
     assert captions[0]["end"] == pytest.approx(1.0)
+    assert captions[1]["text"] == "う"
+    assert captions[1]["start"] == pytest.approx(3.3)
+    assert captions[1]["end"] == pytest.approx(3.5)
+
+
+def test_build_speech_spans_caps_inflated_word_end_for_gap_detection():
+    whisperx_path = Path("tests/fixtures/whisperx_segment_motor.json")
+    whisperx_data = json.loads(whisperx_path.read_text())
+
+    spans = s.build_speech_spans(whisperx_data)
+
+    ic_idx = next(
+        i
+        for i, (start, _) in enumerate(spans)
+        if start == pytest.approx(75.073, abs=1e-3)
+    )
+    assert spans[ic_idx][1] == pytest.approx(75.673, abs=1e-3)
+    gap = spans[ic_idx + 1][0] - spans[ic_idx][1]
+    assert gap == pytest.approx(4.387, abs=1e-3)
+
+
+def test_collect_captions_splits_on_keep_boundary_without_silence():
+    morphemes = [
+        (0.0, 0.3, "あ"),
+        (0.3, 0.6, "い"),
+        (0.6, 0.9, "う"),
+    ]
+    keep_intervals = [{"start": 0.0, "end": 0.6}]
+
+    captions = s.collect_captions(
+        morphemes,
+        keep_intervals,
+        max_duration=10.0,
+        max_morphemes=12,
+        min_morphemes=1,
+        min_duration=0.0,
+        silence_flush=10.0,
+    )
+
+    assert [cap["text"] for cap in captions] == ["あい", "う"]
 
 
 # apply_margins integration

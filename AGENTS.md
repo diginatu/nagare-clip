@@ -34,8 +34,10 @@ Final deliverable is a `.blend` project for human editing.
 - Blender VSE API compatibility:
   - prefer `sequence_editor.sequences`
   - fallback to `sequence_editor.strips`
-- Stage 2 keep intervals are expanded by configurable pre/post margins (defaults 1.0s) and merged before caption filtering/Blender export.
-- Stage 2 captions are chunked on `fugashi` morphemes using `fugashi[unidic-lite]` with morpheme-level timing (`end = min(start+0.02s, next start)`); defaults are 12 morphemes, 4.0 seconds max, minimum 3 morphemes, min duration 1.5s, and silence flush at 1.5s.
+- Stage 2 keep intervals are expanded by configurable pre/post margins (defaults 1.0s) and merged before Blender export.
+- Stage 2 silence-based keep-interval detection uses WhisperX word timings (`word.start`/`word.end`) with a 0.6s per-word span cap so inflated token ends do not hide pauses.
+- Stage 2 captions are chunked on `fugashi` morphemes using `fugashi[unidic-lite]` with morpheme-level timing (`end = min(start+0.02s, next start)`), split on silence gaps and keep-boundary crossings; defaults are 12 morphemes, 4.0 seconds max, minimum 3 morphemes, min duration 1.5s, and silence flush at 1.5s.
+- Stage 2 captions are preserved as transcript chunks (not pre-filtered by keep intervals); Stage 3 is responsible for mapping captions onto overlapping keep intervals.
 - Changes to `run_pipeline.sh` or `docker-compose.yml` must preserve:
   - default `INPUT_VIDEOS_DIR=src_video`, `OUTPUT_DIR=output`
   - Docker mounts driven by the same env vars as the shell script

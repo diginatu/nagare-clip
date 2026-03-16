@@ -119,6 +119,7 @@ def load_filler_set(config_path: Path, language: str) -> set[str]:
 
 
 _CHAR_EPS = 0.02
+_SILENCE_MAX_WORD_SPAN = 0.6
 
 
 def build_morpheme_times(
@@ -141,7 +142,7 @@ def build_morpheme_times(
             continue
 
         # Build char_starts: one start time per character of seg_text,
-        # inheriting the last valid start for score=0.0 placeholders.
+        # inheriting the last valid start for entries with missing start times.
         char_starts: List[float] = []
         last_valid = float(char_entries[0].get("start") or 0.0)
         for entry in char_entries:
@@ -186,6 +187,43 @@ def flatten_words(whisperx_data: dict) -> List[Tuple[float, float, str]]:
 
     tagger = _Tagger("-Owakati")
     return build_morpheme_times(whisperx_data, tagger)
+
+
+def build_speech_spans(whisperx_data: dict) -> List[Tuple[float, float]]:
+    """Build speech spans from WhisperX word timings for silence detection."""
+    spans: List[Tuple[float, float]] = []
+
+    for segment in whisperx_data.get("segments", []):
+        raw_entries = segment.get("words", [])
+        entries = [e for e in raw_entries if e.get("start") is not None]
+        for idx, entry in enumerate(entries):
+            start_raw = entry.get("start")
+            end_raw = entry.get("end")
+
+            if start_raw is None:
+                continue
+            start = float(start_raw)
+
+            next_start = None
+            if idx + 1 < len(entries):
+                next_start = float(entries[idx + 1].get("start"))
+
+            if end_raw is None:
+                end = start + _SILENCE_MAX_WORD_SPAN
+            else:
+                end = float(end_raw)
+
+            end = min(end, start + _SILENCE_MAX_WORD_SPAN)
+            if next_start is not None:
+                end = min(end, next_start)
+
+            if end <= start:
+                end = start + _CHAR_EPS
+
+            spans.append((start, end))
+
+    spans.sort(key=lambda x: x[0])
+    return spans
 
 
 def get_duration_sec(
@@ -256,20 +294,41 @@ def collect_captions(
     min_duration: float = 1.5,
     silence_flush: float = 1.5,
 ) -> List[dict]:
+    del min_duration
+
+    keep_ranges = [
+        (float(iv["start"]), float(iv["end"]))
+        for iv in keep_intervals
+        if float(iv["end"]) > float(iv["start"])
+    ]
+
+    def overlaps_keep(start: float, end: float) -> bool:
+        for iv_start, iv_end in keep_ranges:
+            if start < iv_end and end > iv_start:
+                return True
+        return False
+
     captions = []
 
     chunk: List[str] = []
     chunk_start = 0.0
     chunk_end = 0.0
+    chunk_overlaps_keep = False
 
     for m_start, m_end, morpheme in morpheme_times:
+        current_overlaps_keep = overlaps_keep(m_start, m_end)
         if chunk:
             speech_duration = chunk_end - chunk_start
             silence_gap = m_start - chunk_end
+            crossed_keep_boundary = current_overlaps_keep != chunk_overlaps_keep
             should_flush = (
-                (speech_duration > max_duration or len(chunk) >= max_morphemes)
-                and len(chunk) >= min_morphemes
-            ) or silence_gap > silence_flush
+                (
+                    (speech_duration > max_duration or len(chunk) >= max_morphemes)
+                    and len(chunk) >= min_morphemes
+                )
+                or silence_gap > silence_flush
+                or crossed_keep_boundary
+            )
 
             if should_flush:
                 captions.append(
@@ -283,6 +342,7 @@ def collect_captions(
 
         if not chunk:
             chunk_start = m_start
+            chunk_overlaps_keep = current_overlaps_keep
         chunk.append(morpheme)
         chunk_end = m_end
 
@@ -295,14 +355,7 @@ def collect_captions(
             }
         )
 
-    # Retain only captions that overlap at least one keep interval
-    filtered = []
-    for cap in captions:
-        for iv in keep_intervals:
-            if cap["start"] < iv["end"] and cap["end"] > iv["start"]:
-                filtered.append(cap)
-                break
-    return filtered
+    return captions
 
 
 def apply_margins(
@@ -351,6 +404,7 @@ def main() -> None:
     all_morpheme_times = build_morpheme_times(whisperx_data, tagger)
 
     words = all_morpheme_times
+    speech_spans = build_speech_spans(whisperx_data)
     duration_sec = get_duration_sec(whisperx_data, words)
 
     excludes: List[Tuple[float, float]] = []
@@ -360,19 +414,18 @@ def main() -> None:
         if normalized in filler_set:
             excludes.append((start - args.word_padding, end + args.word_padding))
 
-    for idx in range(len(words) - 1):
-        current_end = words[idx][1]
-        next_start = words[idx + 1][0]
+    for idx in range(len(speech_spans) - 1):
+        current_end = speech_spans[idx][1]
+        next_start = speech_spans[idx + 1][0]
         gap = next_start - current_end
-        # print(f"[debug] gap between '{words[idx][2]}' and '{words[idx + 1][2]}': {gap:.3f}s")
         if gap > args.silence_threshold:
             excludes.append((current_end, next_start))
 
-    if words and words[0][0] > args.silence_threshold:
-        excludes.append((0.0, words[0][0]))
+    if speech_spans and speech_spans[0][0] > args.silence_threshold:
+        excludes.append((0.0, speech_spans[0][0]))
 
-    if words and (duration_sec - words[-1][1]) > args.silence_threshold:
-        excludes.append((words[-1][1], duration_sec))
+    if speech_spans and (duration_sec - speech_spans[-1][1]) > args.silence_threshold:
+        excludes.append((speech_spans[-1][1], duration_sec))
 
     bounded_excludes = [
         (max(0.0, start), min(duration_sec, end))
