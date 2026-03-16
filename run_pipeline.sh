@@ -10,7 +10,7 @@ usage() {
   echo "  --post-margin       SEC  Seconds to extend keep intervals after end (default: 1.0)"
   echo "  --align-model       MODEL  HuggingFace model ID for WhisperX alignment"
   echo "                             Japanese default: reazon-research/japanese-wav2vec2-base-rs35kh"
-  echo "                             English default: (whisperx built-in)"
+  echo "                             Non-Japanese default: (whisperx built-in)"
   echo "  source                   Video filename (resolved under input-videos-dir) or explicit path"
   echo "  language                 Language code, e.g. ja, en"
 }
