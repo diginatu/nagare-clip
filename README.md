@@ -63,10 +63,10 @@ Pass custom locations with options:
 ./run_pipeline.sh --input-videos-dir my_videos --output-dir my_out "myvideo.mp4" ja
 ```
 
-Override the alignment model (e.g. to specify a different wav2vec2 model for Japanese):
+Override the alignment model (e.g. to revert to the WhisperX built-in default for Japanese):
 
 ```bash
-./run_pipeline.sh --align-model reazon-research/japanese-wav2vec2-base-rs35kh "myvideo.mp4" ja
+./run_pipeline.sh --align-model jonatasgrosman/wav2vec2-large-xlsr-53-japanese "myvideo.mp4" ja
 ```
 
 This produces outputs under `output/` (or your `--output-dir`), including:
@@ -87,7 +87,7 @@ This produces outputs under `output/` (or your `--output-dir`), including:
 - If `<source>` contains `/`, it is treated as the exact path; otherwise it is resolved inside `--input-videos-dir`.
 - `silence_threshold` and `min_keep` keep their existing defaults of `1.5` and `1.0`.
 - `pre-margin`/`post-margin` extend keep intervals before/after by default `1.0s` and merge overlaps.
-- `--align-model` overrides the HuggingFace model used for WhisperX forced alignment. For Japanese (`ja`), defaults to `reazon-research/japanese-wav2vec2-base-rs35kh` for better accuracy; for other languages the WhisperX built-in model is used.
+- `--align-model` overrides the HuggingFace model used for WhisperX forced alignment. For Japanese (`ja`), defaults to `vumichien/wav2vec2-large-xlsr-japanese` which showed better alignment scores than the WhisperX built-in default (`jonatasgrosman/wav2vec2-large-xlsr-53-japanese`); for other languages the WhisperX built-in model is used.
 
 ## Stage Commands
 

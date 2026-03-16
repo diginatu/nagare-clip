@@ -9,8 +9,8 @@ usage() {
   echo "  --pre-margin        SEC  Seconds to extend keep intervals before start (default: 1.0)"
   echo "  --post-margin       SEC  Seconds to extend keep intervals after end (default: 1.0)"
   echo "  --align-model       MODEL  HuggingFace model ID for WhisperX alignment"
-  echo "                             Japanese default: reazon-research/japanese-wav2vec2-base-rs35kh"
-  echo "                             Non-Japanese default: (whisperx built-in)"
+  echo "                             Japanese default: vumichien/wav2vec2-large-xlsr-japanese"
+  echo "                             English default: (whisperx built-in)"
   echo "  source                   Video filename (resolved under input-videos-dir) or explicit path"
   echo "  language                 Language code, e.g. ja, en"
 }
@@ -48,7 +48,7 @@ fi
 # Set default alignment model per language if not specified
 if [[ -z "$ALIGN_MODEL" ]]; then
   case "$LANGUAGE" in
-    ja) ALIGN_MODEL="reazon-research/japanese-wav2vec2-base-rs35kh" ;;
+    ja) ALIGN_MODEL="vumichien/wav2vec2-large-xlsr-japanese" ;;
   esac
 fi
 
