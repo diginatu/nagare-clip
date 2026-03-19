@@ -221,6 +221,7 @@ def main() -> None:
         min_morphemes=args.caption_min_morphemes,
         min_duration=args.caption_min_duration,
         silence_flush=args.caption_silence_flush,
+        duration_sec=duration_sec,
     )
     logging.info("Captions: %d chunk(s)", len(captions))
 

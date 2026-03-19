@@ -71,6 +71,18 @@ config/
   - Docker mounts driven by the same env vars as the shell script
   - explicit source paths (containing `/`) continue to work without rewriting
 
+## Python Execution
+
+Always use `uv run` to invoke Python tools in this repo. Examples:
+
+```bash
+uv run python -m pytest tests/
+uv run python -m py_compile src/video_editor_ai/stage2/captions.py
+uv run python -m video_editor_ai --help
+```
+
+Never use bare `python` or `python3` directly.
+
 ## Preferred Validation
 
 Validation runs automatically via the OpenCode `PostToolUse` hook
