@@ -1,3 +1,7 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
 [project]
 name = "video-editor-ai"
 version = "0.1.0"
@@ -12,10 +16,16 @@ dev = [
     "pytest",
 ]
 
+[project.scripts]
+video-editor-ai-stage2 = "video_editor_ai.cli:main"
+
 [dependency-groups]
 dev = [
     "pytest",
 ]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/video_editor_ai"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

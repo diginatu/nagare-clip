@@ -2,8 +2,12 @@
 
 set -euo pipefail
 
+# Resolve the project root directory (parent of scripts/)
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+
 usage() {
-  echo "Usage: ./run_pipeline.sh [--input-videos-dir DIR] [--output-dir DIR] [--pre-margin SEC] [--post-margin SEC] [--align-model MODEL] <source> <language> [silence_threshold] [min_keep]"
+  echo "Usage: ./scripts/run_pipeline.sh [--input-videos-dir DIR] [--output-dir DIR] [--pre-margin SEC] [--post-margin SEC] [--align-model MODEL] <source> <language> [silence_threshold] [min_keep]"
   echo "  --input-videos-dir  DIR  Directory containing source videos (default: src_video)"
   echo "  --output-dir        DIR  Directory for all output artifacts (default: output)"
   echo "  --pre-margin        SEC  Seconds to extend keep intervals before start (default: 1.0)"
@@ -92,7 +96,7 @@ fi
 
 echo "[Stage 1/3] WhisperX transcription"
 INPUT_VIDEOS_DIR="$ABS_INPUT_VIDEOS" OUTPUT_DIR="$ABS_OUTPUT_DIR" \
-docker compose run --rm --user "0:0" whisperx \
+docker compose -f "$PROJECT_ROOT/docker-compose.yml" run --rm --user "0:0" whisperx \
   _ \
   "$SOURCE_RELATIVE" \
   --output_dir /output \
@@ -103,7 +107,7 @@ docker compose run --rm --user "0:0" whisperx \
   "${ALIGN_MODEL_ARGS[@]}"
 
 echo "[Stage 2/3] Keep interval computation"
-uv run python stage2_intervals.py \
+uv run --project "$PROJECT_ROOT" python -m video_editor_ai.cli \
   --json "$WHISPER_JSON" \
   --config config/filler_words.yaml \
   --language "$LANGUAGE" \
@@ -114,7 +118,7 @@ uv run python stage2_intervals.py \
   --output "$INTERVALS_JSON"
 
 echo "[Stage 3/3] Blender VSE project generation"
-blender --background --factory-startup --python-exit-code 1 --python stage3_blender.py -- \
+blender --background --factory-startup --python-exit-code 1 --python "$PROJECT_ROOT/src/video_editor_ai/stage3/blender_cli.py" -- \
   --source "$SOURCE_PATH" \
   --intervals "$INTERVALS_JSON" \
   --output "$BLEND_OUTPUT"

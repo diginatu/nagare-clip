@@ -33,40 +33,25 @@ Run tests:
 uv run pytest
 ```
 
-## Repository Layout
-
-```text
-.
-├── cache/
-├── config/
-│   └── filler_words.yaml
-├── src_video/
-├── output/
-├── docker-compose.yml
-├── run_pipeline.sh
-├── stage2_intervals.py
-└── stage3_blender.py
-```
-
 ## Quick Start
 
 1. Put source media in `src_video/` (default input directory).
 2. Run the full pipeline (defaults resolve to `src_video/` and `output/`):
 
 ```bash
-./run_pipeline.sh "myvideo.mp4" ja
+./scripts/run_pipeline.sh "myvideo.mp4" ja
 ```
 
 Pass custom locations with options:
 
 ```bash
-./run_pipeline.sh --input-videos-dir my_videos --output-dir my_out "myvideo.mp4" ja
+./scripts/run_pipeline.sh --input-videos-dir my_videos --output-dir my_out "myvideo.mp4" ja
 ```
 
 Override the alignment model (e.g. to revert to the WhisperX built-in default for Japanese):
 
 ```bash
-./run_pipeline.sh --align-model jonatasgrosman/wav2vec2-large-xlsr-53-japanese "myvideo.mp4" ja
+./scripts/run_pipeline.sh --align-model jonatasgrosman/wav2vec2-large-xlsr-53-japanese "myvideo.mp4" ja
 ```
 
 This produces outputs under `output/` (or your `--output-dir`), including:
@@ -80,7 +65,7 @@ This produces outputs under `output/` (or your `--output-dir`), including:
 ## CLI
 
 ```bash
-./run_pipeline.sh [--input-videos-dir DIR] [--output-dir DIR] [--pre-margin SEC] [--post-margin SEC] [--align-model MODEL] <source> <language> [silence_threshold] [min_keep]
+./scripts/run_pipeline.sh [--input-videos-dir DIR] [--output-dir DIR] [--pre-margin SEC] [--post-margin SEC] [--align-model MODEL] <source> <language> [silence_threshold] [min_keep]
 ```
 
 - Defaults: input videos under `src_video/`, outputs under `output/`.
@@ -114,7 +99,7 @@ Notes:
 ### Stage 2 only (interval generation)
 
 ```bash
-python stage2_intervals.py \
+uv run python -m video_editor_ai.cli \
   --json output/myvideo.json \
   --config config/filler_words.yaml \
   --language ja \
@@ -135,7 +120,7 @@ Keep-interval silence detection uses WhisperX word timings (`word.start`/`word.e
 ### Stage 3 only (Blender VSE project)
 
 ```bash
-blender --background --factory-startup --python-exit-code 1 --python stage3_blender.py -- \
+blender --background --factory-startup --python-exit-code 1 --python src/video_editor_ai/stage3/blender_cli.py -- \
   --source src_video/myvideo.mp4 \
   --intervals output/myvideo_intervals.json \
   --output output/myvideo_edited.blend
@@ -163,7 +148,7 @@ en:
 
 ## Operational Notes
 
-- `run_pipeline.sh` currently runs WhisperX as root (`--user "0:0"`) for compatibility with this image/runtime.
+- `scripts/run_pipeline.sh` currently runs WhisperX as root (`--user "0:0"`) for compatibility with this image/runtime.
 - As a result, Stage 1 output files can be root-owned on host.
 - If needed, fix ownership after run:
 

@@ -6,7 +6,7 @@ export default function plugin({ client, $ }: PluginContext): Hooks {
       const toolName: string = event.tool?.name ?? "";
       if (/write|edit|patch/i.test(toolName)) {
         try {
-          const result = await $`sh -c "docker compose config --services && uv run python -m py_compile stage2_intervals.py stage3_blender.py && bash -n run_pipeline.sh && echo 'Validation passed.'"`;
+          const result = await $`sh -c "docker compose config --services && uv run python -m py_compile src/video_editor_ai/cli.py src/video_editor_ai/stage2/morpheme.py src/video_editor_ai/stage2/speech.py src/video_editor_ai/stage2/intervals.py src/video_editor_ai/stage2/captions.py src/video_editor_ai/stage2/filler.py src/video_editor_ai/stage2/io.py && bash -n scripts/run_pipeline.sh && echo 'Validation passed.'"`;
           const out = result.stdout.toString();
           if (out) {
             await client.app.log({ level: "info", message: out });
