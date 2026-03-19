@@ -173,6 +173,15 @@ def build_morpheme_times(
             # Scan for large intra-morpheme gaps and snap to the later cluster.
             for ci in range(start_idx, last_idx):
                 if char_starts[ci + 1] - char_starts[ci] > _SILENCE_MAX_WORD_SPAN:
+                    logging.debug(
+                        "morpheme %r: large intra-morpheme gap %.3fs at char index %d; "
+                        "snapping start %.3f -> %.3f",
+                        morpheme,
+                        char_starts[ci + 1] - char_starts[ci],
+                        ci,
+                        char_starts[start_idx],
+                        char_starts[ci + 1],
+                    )
                     m_start = char_starts[ci + 1]
             m_end = char_starts[last_idx] + _CHAR_EPS
             seg_morphemes.append((m_start, m_end, morpheme))
