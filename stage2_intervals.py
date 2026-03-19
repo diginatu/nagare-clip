@@ -335,11 +335,13 @@ def collect_captions(
     def flush_chunk() -> None:
         if not chunk:
             return
+        text = "".join(chunk)
+        logging.debug("Caption chunk [%.3f-%.3f]: %r", chunk_start, chunk_end, text)
         captions.append(
             {
                 "start": round(chunk_start, 3),
                 "end": round(chunk_end, 3),
-                "text": "".join(chunk),
+                "text": text,
             }
         )
 
@@ -478,32 +480,67 @@ def main() -> None:
         whisperx_data = json.load(f)
 
     filler_set = load_filler_set(config_path, args.language)
+    logging.info(
+        "Loaded %d segment(s) from %s",
+        len(whisperx_data.get("segments", [])),
+        json_path.name,
+    )
+
     tagger = Tagger("-Owakati")
     all_morpheme_times = build_morpheme_times(whisperx_data, tagger)
 
     words = all_morpheme_times
     speech_spans = build_speech_spans(whisperx_data)
     duration_sec = get_duration_sec(whisperx_data, words)
+    logging.info(
+        "Duration: %.1fs, morphemes: %d", duration_sec, len(all_morpheme_times)
+    )
 
     excludes: List[Tuple[float, float]] = []
 
+    filler_hits = 0
     for start, end, token in words:
         normalized = normalize_word(token)
         if normalized in filler_set:
+            logging.debug("Filler hit: %r [%.3f-%.3f]", token, start, end)
             excludes.append((start - args.word_padding, end + args.word_padding))
+            filler_hits += 1
+    logging.info(
+        "Filler words excluded: %d interval(s) from %d hit(s)", filler_hits, filler_hits
+    )
 
+    silence_excludes = 0
     for idx in range(len(speech_spans) - 1):
         current_end = speech_spans[idx][1]
         next_start = speech_spans[idx + 1][0]
         gap = next_start - current_end
         if gap > args.silence_threshold:
+            logging.debug(
+                "Silence gap: %.3f-%.3f (%.3fs)", current_end, next_start, gap
+            )
             excludes.append((current_end, next_start))
+            silence_excludes += 1
 
     if speech_spans and speech_spans[0][0] > args.silence_threshold:
+        logging.debug(
+            "Silence gap: 0.000-%.3f (%.3fs) [leading]",
+            speech_spans[0][0],
+            speech_spans[0][0],
+        )
         excludes.append((0.0, speech_spans[0][0]))
+        silence_excludes += 1
 
     if speech_spans and (duration_sec - speech_spans[-1][1]) > args.silence_threshold:
+        logging.debug(
+            "Silence gap: %.3f-%.3f (%.3fs) [trailing]",
+            speech_spans[-1][1],
+            duration_sec,
+            duration_sec - speech_spans[-1][1],
+        )
         excludes.append((speech_spans[-1][1], duration_sec))
+        silence_excludes += 1
+
+    logging.info("Silence excluded: %d interval(s)", silence_excludes)
 
     bounded_excludes = [
         (max(0.0, start), min(duration_sec, end))
@@ -517,6 +554,7 @@ def main() -> None:
         for start, end in keep_intervals
         if (end - start) >= args.min_keep
     ]
+    logging.info("Keep intervals before margins: %d", len(filtered_keep))
 
     keep_intervals = apply_margins(
         filtered_keep,
@@ -540,16 +578,21 @@ def main() -> None:
         min_duration=args.caption_min_duration,
         silence_flush=args.caption_silence_flush,
     )
+    logging.info("Captions: %d chunk(s)", len(captions))
+
     keep_intervals = ensure_keep_covers_captions(
         keep_intervals,
         captions,
         duration_sec,
     )
+    logging.info("After caption expansion: %d interval(s)", len(keep_intervals))
+
     keep_intervals = enforce_min_keep_duration(
         keep_intervals,
         args.min_keep,
         duration_sec,
     )
+    logging.info("After min_keep enforcement: %d interval(s)", len(keep_intervals))
 
     output_data = {
         "source_file": infer_source_file(whisperx_data, json_path),
@@ -559,6 +602,7 @@ def main() -> None:
     }
 
     output_path.parent.mkdir(parents=True, exist_ok=True)
+    logging.info("Writing output to %s", output_path)
     with output_path.open("w", encoding="utf-8") as f:
         json.dump(output_data, f, ensure_ascii=False, indent=2)
         f.write("\n")
