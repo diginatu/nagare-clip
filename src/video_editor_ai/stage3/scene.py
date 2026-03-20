@@ -15,9 +15,11 @@ def reset_scene() -> bpy.types.Scene:
     return scene
 
 
-def load_source_metadata(source_path: Path) -> tuple[float, int, int]:
+def load_source_metadata(
+    source_path: Path, *, default_fps: float = 30.0
+) -> tuple[float, int, int]:
     clip = bpy.data.movieclips.load(str(source_path))
-    fps = float(clip.fps) if clip.fps and clip.fps > 0 else 30.0
+    fps = float(clip.fps) if clip.fps and clip.fps > 0 else default_fps
     width, height = clip.size
     bpy.data.movieclips.remove(clip)
     return fps, int(width), int(height)

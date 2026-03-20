@@ -1,0 +1,43 @@
+# Example configuration for video-editor-ai pipeline.
+# Copy to your project and pass via --config flag.
+# All values shown are the defaults; remove or comment out
+# any you don't want to change.
+
+general:
+  log_level: INFO   # DEBUG | INFO | WARNING | ERROR | CRITICAL
+
+stage1:
+  compute_type: float16
+  batch_size: 16
+  # align_model: vumichien/wav2vec2-large-xlsr-japanese
+
+stage2:
+  silence_threshold: 1.5     # Silence gap threshold in seconds
+  min_keep: 1.0              # Minimum keep interval length in seconds
+  pre_margin: 1.0            # Seconds to extend intervals before start
+  post_margin: 1.0           # Seconds to extend intervals after end
+  caption:
+    max_bunsetu: 12           # Maximum bunsetsu units per caption chunk
+    max_duration: 4.0         # Maximum seconds per caption chunk
+    min_bunsetu: 3            # Minimum bunsetsu before flushing chunk
+    min_duration: 1.5         # Minimum seconds before flushing chunk
+    silence_flush: 1.5        # Silence duration that forces chunk flush
+    bunsetu_separator: " "    # Separator between bunsetsu units
+  # Advanced: bunsetsu timing parameters (rarely need changing)
+  # bunsetu:
+  #   char_eps: 0.02
+  #   silence_max_word_span: 0.6
+
+stage3:
+  default_fps: 30.0           # Fallback FPS when source metadata unavailable
+  caption_style:
+    font_size: 50
+    alignment_x: CENTER        # LEFT | CENTER | RIGHT
+    anchor_y: BOTTOM           # TOP | CENTER | BOTTOM
+    location_x: 0.5           # Horizontal position (0.0 - 1.0)
+    location_y: 0.05          # Vertical position (0.0 - 1.0)
+    use_shadow: true
+
+pipeline:
+  input_videos_dir: src_video
+  output_dir: output

@@ -10,6 +10,7 @@ from typing import List, Tuple
 
 import spacy
 
+from video_editor_ai.config import get_effective_config
 from video_editor_ai.stage2.bunsetu import build_bunsetu_times
 from video_editor_ai.stage2.captions import collect_captions
 from video_editor_ai.stage2.intervals import (
@@ -31,63 +32,69 @@ def parse_args() -> argparse.Namespace:
         "--json", required=True, dest="json_path", help="WhisperX JSON path"
     )
     parser.add_argument(
+        "--config",
+        dest="config_path",
+        default=None,
+        help="Path to YAML config file",
+    )
+    parser.add_argument(
         "--silence_threshold",
         type=float,
-        default=1.5,
+        default=None,
         help="Silence gap threshold in seconds",
     )
     parser.add_argument(
         "--min_keep",
         type=float,
-        default=1.0,
+        default=None,
         help="Minimum keep interval length in seconds",
     )
     parser.add_argument(
         "--pre_margin",
         type=float,
-        default=1.0,
+        default=None,
         help="Seconds to extend each keep interval before its start (default: 1.0)",
     )
     parser.add_argument(
         "--post_margin",
         type=float,
-        default=1.0,
+        default=None,
         help="Seconds to extend each keep interval after its end (default: 1.0)",
     )
     parser.add_argument(
         "--caption_max_bunsetu",
         type=int,
-        default=12,
+        default=None,
         help="Maximum bunsetsu units per caption chunk (default: 12)",
     )
     parser.add_argument(
         "--caption_max_duration",
         type=float,
-        default=4.0,
+        default=None,
         help="Maximum seconds per caption chunk (default: 4.0)",
     )
     parser.add_argument(
         "--caption_min_bunsetu",
         type=int,
-        default=3,
+        default=None,
         help="Minimum bunsetsu units before a chunk can be flushed (default: 3)",
     )
     parser.add_argument(
         "--caption_min_duration",
         type=float,
-        default=1.5,
+        default=None,
         help="Minimum seconds of speech before flushing a caption chunk (default: 1.5)",
     )
     parser.add_argument(
         "--caption_silence_flush",
         type=float,
-        default=1.5,
+        default=None,
         help="Silence duration that forces flushing the current caption chunk (default: 1.5)",
     )
     parser.add_argument(
         "--caption_bunsetu_separator",
         type=str,
-        default=" ",
+        default=None,
         help="Separator inserted between bunsetsu units in caption text; use empty string to disable (default: ' ')",
     )
     parser.add_argument(
@@ -95,16 +102,64 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--log-level",
-        default="INFO",
+        default=None,
         choices=["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"],
         help="Logging verbosity (default: INFO)",
     )
     return parser.parse_args()
 
 
+def _build_cli_overrides(args: argparse.Namespace) -> dict:
+    """Build a nested override dict from explicitly-provided CLI arguments."""
+    overrides: dict = {}
+
+    # Stage 2 flat keys
+    stage2_map = {
+        "silence_threshold": "silence_threshold",
+        "min_keep": "min_keep",
+        "pre_margin": "pre_margin",
+        "post_margin": "post_margin",
+    }
+    for attr, key in stage2_map.items():
+        val = getattr(args, attr, None)
+        if val is not None:
+            overrides.setdefault("stage2", {})[key] = val
+
+    # Stage 2 caption keys
+    caption_map = {
+        "caption_max_bunsetu": "max_bunsetu",
+        "caption_max_duration": "max_duration",
+        "caption_min_bunsetu": "min_bunsetu",
+        "caption_min_duration": "min_duration",
+        "caption_silence_flush": "silence_flush",
+        "caption_bunsetu_separator": "bunsetu_separator",
+    }
+    for attr, key in caption_map.items():
+        val = getattr(args, attr, None)
+        if val is not None:
+            overrides.setdefault("stage2", {}).setdefault("caption", {})[key] = val
+
+    # General
+    if args.log_level is not None:
+        overrides.setdefault("general", {})["log_level"] = args.log_level
+
+    return overrides
+
+
 def main() -> None:
     args = parse_args()
-    logging.basicConfig(level=args.log_level, format="%(levelname)s: %(message)s")
+
+    config_path = Path(args.config_path) if args.config_path else None
+    cli_overrides = _build_cli_overrides(args)
+    cfg = get_effective_config(config_path, cli_overrides)
+
+    s2 = cfg["stage2"]
+    cap = s2["caption"]
+    bun = s2["bunsetu"]
+
+    logging.basicConfig(
+        level=cfg["general"]["log_level"], format="%(levelname)s: %(message)s"
+    )
 
     json_path = Path(args.json_path)
     output_path = Path(args.output_path)
@@ -119,7 +174,12 @@ def main() -> None:
     )
 
     nlp = spacy.load("ja_ginza")
-    all_bunsetu_times = build_bunsetu_times(whisperx_data, nlp)
+    all_bunsetu_times = build_bunsetu_times(
+        whisperx_data,
+        nlp,
+        char_eps=bun["char_eps"],
+        silence_max_word_span=bun["silence_max_word_span"],
+    )
 
     words = all_bunsetu_times
     speech_spans = build_speech_spans(whisperx_data)
@@ -133,14 +193,14 @@ def main() -> None:
         current_end = speech_spans[idx][1]
         next_start = speech_spans[idx + 1][0]
         gap = next_start - current_end
-        if gap > args.silence_threshold:
+        if gap > s2["silence_threshold"]:
             logging.debug(
                 "Silence gap: %.3f-%.3f (%.3fs)", current_end, next_start, gap
             )
             excludes.append((current_end, next_start))
             silence_excludes += 1
 
-    if speech_spans and speech_spans[0][0] > args.silence_threshold:
+    if speech_spans and speech_spans[0][0] > s2["silence_threshold"]:
         logging.debug(
             "Silence gap: 0.000-%.3f (%.3fs) [leading]",
             speech_spans[0][0],
@@ -149,7 +209,7 @@ def main() -> None:
         excludes.append((0.0, speech_spans[0][0]))
         silence_excludes += 1
 
-    if speech_spans and (duration_sec - speech_spans[-1][1]) > args.silence_threshold:
+    if speech_spans and (duration_sec - speech_spans[-1][1]) > s2["silence_threshold"]:
         logging.debug(
             "Silence gap: %.3f-%.3f (%.3fs) [trailing]",
             speech_spans[-1][1],
@@ -171,33 +231,33 @@ def main() -> None:
     filtered_keep = [
         {"start": round(start, 3), "end": round(end, 3)}
         for start, end in keep_intervals
-        if (end - start) >= args.min_keep
+        if (end - start) >= s2["min_keep"]
     ]
     logging.info("Keep intervals before margins: %d", len(filtered_keep))
 
     keep_intervals_dicts = apply_margins(
         filtered_keep,
-        pre_margin=args.pre_margin,
-        post_margin=args.post_margin,
+        pre_margin=s2["pre_margin"],
+        post_margin=s2["post_margin"],
         duration_sec=duration_sec,
     )
     logging.info(
         "After margins (pre=%.2fs post=%.2fs): %d interval(s)",
-        args.pre_margin,
-        args.post_margin,
+        s2["pre_margin"],
+        s2["post_margin"],
         len(keep_intervals_dicts),
     )
 
     captions = collect_captions(
         all_bunsetu_times,
         keep_intervals_dicts,
-        max_duration=args.caption_max_duration,
-        max_bunsetu=args.caption_max_bunsetu,
-        min_bunsetu=args.caption_min_bunsetu,
-        min_duration=args.caption_min_duration,
-        silence_flush=args.caption_silence_flush,
+        max_duration=cap["max_duration"],
+        max_bunsetu=cap["max_bunsetu"],
+        min_bunsetu=cap["min_bunsetu"],
+        min_duration=cap["min_duration"],
+        silence_flush=cap["silence_flush"],
         duration_sec=duration_sec,
-        bunsetu_separator=args.caption_bunsetu_separator,
+        bunsetu_separator=cap["bunsetu_separator"],
     )
     logging.info("Captions: %d chunk(s)", len(captions))
 
@@ -210,7 +270,7 @@ def main() -> None:
 
     keep_intervals_dicts = enforce_min_keep_duration(
         keep_intervals_dicts,
-        args.min_keep,
+        s2["min_keep"],
         duration_sec,
     )
     logging.info(

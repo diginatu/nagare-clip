@@ -180,6 +180,8 @@ def place_captions(
     tl_map: list,
     effective_fps: float,
     sequence_collection: object,
+    *,
+    caption_style: dict | None = None,
 ) -> None:
     """Place text caption strips on channel 3 of the timeline."""
     for cap in captions:
@@ -217,13 +219,14 @@ def place_captions(
             frame_start=tl_start,
             length=length,
         )
+        style = caption_style or {}
         text_strip.text = text
-        text_strip.font_size = 50
-        text_strip.alignment_x = "CENTER"
-        text_strip.anchor_y = "BOTTOM"
-        text_strip.location[0] = 0.5
-        text_strip.location[1] = 0.05
-        text_strip.use_shadow = True
+        text_strip.font_size = style.get("font_size", 50)
+        text_strip.alignment_x = style.get("alignment_x", "CENTER")
+        text_strip.anchor_y = style.get("anchor_y", "BOTTOM")
+        text_strip.location[0] = style.get("location_x", 0.5)
+        text_strip.location[1] = style.get("location_y", 0.05)
+        text_strip.use_shadow = style.get("use_shadow", True)
         logging.info(
             "Caption '%s': timeline frames %d-%d",
             text[:40],

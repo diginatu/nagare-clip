@@ -48,6 +48,12 @@ Pass custom locations with options:
 ./scripts/run_pipeline.sh --input-videos-dir my_videos --output-dir my_out "myvideo.mp4" ja
 ```
 
+Use a YAML config file to tune pipeline parameters (see `config.example.yml`):
+
+```bash
+./scripts/run_pipeline.sh --config my_project.yml "myvideo.mp4" ja
+```
+
 Override the alignment model (e.g. to revert to the WhisperX built-in default for Japanese):
 
 ```bash
@@ -62,15 +68,34 @@ This produces outputs under `output/` (or your `--output-dir`), including:
 - `myvideo_intervals.json`
 - `myvideo_edited.blend`
 
+## Configuration
+
+All pipeline parameters can be controlled via a YAML config file. Copy `config.example.yml` as a starting point:
+
+```bash
+cp config.example.yml my_project.yml
+# edit my_project.yml as needed
+./scripts/run_pipeline.sh --config my_project.yml "myvideo.mp4" ja
+```
+
+Parameters resolve in this priority order (highest wins):
+
+1. CLI flags (e.g. `--pre-margin 2.0`)
+2. Config file values
+3. Built-in defaults
+
+The config file covers all sections (`general`, `stage1`, `stage2`, `stage3`, `pipeline`). See `config.example.yml` for the full list of keys and their defaults.
+
 ## CLI
 
 ```bash
-./scripts/run_pipeline.sh [--input-videos-dir DIR] [--output-dir DIR] [--pre-margin SEC] [--post-margin SEC] [--align-model MODEL] <source> <language> [silence_threshold] [min_keep]
+./scripts/run_pipeline.sh [--config FILE] [--input-videos-dir DIR] [--output-dir DIR] [--pre-margin SEC] [--post-margin SEC] [--align-model MODEL] <source> <language> [silence_threshold] [min_keep]
 ```
 
+- `--config FILE` — path to a YAML config file; config values fill in between CLI overrides and built-in defaults.
 - Defaults: input videos under `src_video/`, outputs under `output/`.
 - If `<source>` contains `/`, it is treated as the exact path; otherwise it is resolved inside `--input-videos-dir`.
-- `silence_threshold` and `min_keep` keep their existing defaults of `1.5` and `1.0`.
+- `silence_threshold` and `min_keep` default to `1.5` and `1.0` (overridable via config).
 - `pre-margin`/`post-margin` extend keep intervals before/after by default `1.0s` and merge overlaps.
 - `--align-model` overrides the HuggingFace model used for WhisperX forced alignment. For Japanese (`ja`), defaults to `vumichien/wav2vec2-large-xlsr-japanese` which showed better alignment scores than the WhisperX built-in default (`jonatasgrosman/wav2vec2-large-xlsr-53-japanese`); for other languages the WhisperX built-in model is used.
 
@@ -101,6 +126,15 @@ Notes:
 ```bash
 uv run python -m video_editor_ai.cli \
   --json output/myvideo.json \
+  --config my_project.yml \
+  --output output/myvideo_intervals.json
+```
+
+CLI flags override config file values:
+
+```bash
+uv run python -m video_editor_ai.cli \
+  --json output/myvideo.json \
   --silence_threshold 1.5 \
   --min_keep 1.0 \
   --pre_margin 1.0 \
@@ -121,7 +155,8 @@ Keep-interval silence detection uses WhisperX word timings (`word.start`/`word.e
 blender --background --factory-startup --python-exit-code 1 --python src/video_editor_ai/stage3/blender_cli.py -- \
   --source src_video/myvideo.mp4 \
   --intervals output/myvideo_intervals.json \
-  --output output/myvideo_edited.blend
+  --output output/myvideo_edited.blend \
+  --config my_project.yml
 ```
 
 ## Operational Notes

@@ -15,6 +15,9 @@ SILENCE_MAX_WORD_SPAN = 0.6
 def build_bunsetu_times(
     whisperx_data: dict,
     nlp: "spacy.language.Language",
+    *,
+    char_eps: float = CHAR_EPS,
+    silence_max_word_span: float = SILENCE_MAX_WORD_SPAN,
 ) -> List[Tuple[float, float, str]]:
     """Return a flat list of (start, end, surface) for every bunsetsu across all
     segments, sorted by start time.
@@ -78,7 +81,7 @@ def build_bunsetu_times(
 
             # Scan for large intra-bunsetu gaps and snap to the later cluster.
             for ci in range(start_idx, last_idx):
-                if char_starts[ci + 1] - char_starts[ci] > SILENCE_MAX_WORD_SPAN:
+                if char_starts[ci + 1] - char_starts[ci] > silence_max_word_span:
                     logging.debug(
                         "bunsetu %r: large intra-bunsetu gap %.3fs at char index %d; "
                         "snapping start %.3f -> %.3f",
@@ -90,7 +93,7 @@ def build_bunsetu_times(
                     )
                     m_start = char_starts[ci + 1]
 
-            m_end = char_starts[last_idx] + CHAR_EPS
+            m_end = char_starts[last_idx] + char_eps
             seg_bunsetu.append((m_start, m_end, span.text))
 
         # Clamp m_end = min(tentative_end, next_bunsetu_start) within segment.

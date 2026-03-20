@@ -17,6 +17,7 @@ if str(_SRC) not in sys.path:
 
 import bpy
 
+from video_editor_ai.config import get_effective_config
 from video_editor_ai.stage3.scene import load_source_metadata, reset_scene
 from video_editor_ai.stage3.timeline import (
     build_timeline_map,
@@ -38,11 +39,17 @@ def parse_blender_args(argv: list[str]) -> argparse.Namespace:
     parser.add_argument("--source", required=True, help="Source video file path")
     parser.add_argument("--intervals", required=True, help="Intervals JSON path")
     parser.add_argument("--output", required=True, help="Output .blend path")
+    parser.add_argument(
+        "--config", dest="config_path", default=None, help="Path to YAML config file"
+    )
     return parser.parse_args(user_args)
 
 
 def main() -> None:
     args = parse_blender_args(sys.argv)
+
+    config_path = Path(args.config_path) if args.config_path else None
+    cfg = get_effective_config(config_path)
 
     source_path = Path(args.source).expanduser().resolve()
     intervals_path = Path(args.intervals).expanduser().resolve()
@@ -54,7 +61,9 @@ def main() -> None:
     keep_intervals = intervals_data.get("keep_intervals", [])
     scene = reset_scene()
 
-    source_fps, source_width, source_height = load_source_metadata(source_path)
+    source_fps, source_width, source_height = load_source_metadata(
+        source_path, default_fps=cfg["stage3"]["default_fps"]
+    )
     fps_int = max(1, int(round(source_fps)))
     fps_base = fps_int / source_fps
 
@@ -87,7 +96,13 @@ def main() -> None:
     captions = intervals_data.get("captions", [])
     if captions:
         tl_map = build_timeline_map(keep_intervals, effective_fps, source_fps)
-        place_captions(captions, tl_map, effective_fps, sequence_collection)
+        place_captions(
+            captions,
+            tl_map,
+            effective_fps,
+            sequence_collection,
+            caption_style=cfg["stage3"]["caption_style"],
+        )
 
     output_path.parent.mkdir(parents=True, exist_ok=True)
 
