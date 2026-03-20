@@ -112,7 +112,12 @@ def main() -> None:
     all_tl_maps = []
     all_captions = []
 
-    for source_path, intervals_data in zip(sources, all_intervals_data):
+    for src_num, (source_path, intervals_data) in enumerate(
+        zip(sources, all_intervals_data), start=1
+    ):
+        logging.info(
+            "Source %d/%d: %s", src_num, len(sources), source_path.name
+        )
         keep_intervals = intervals_data.get("keep_intervals", [])
         captions = intervals_data.get("captions", [])
 
@@ -129,6 +134,7 @@ def main() -> None:
             effective_fps,
             start_cursor=timeline_cursor,
             idx_offset=idx_offset,
+            source_num=src_num,
         )
         idx_offset += len(keep_intervals)
 

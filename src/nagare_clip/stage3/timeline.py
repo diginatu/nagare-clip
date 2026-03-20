@@ -50,6 +50,35 @@ def build_timeline_map(
     return mapping
 
 
+def _get_sequencer_context():
+    """Find a SEQUENCE_EDITOR area and return (window, area) or (None, None)."""
+    for window in bpy.context.window_manager.windows:
+        for area in window.screen.areas:
+            if area.type == "SEQUENCE_EDITOR":
+                return window, area
+    return None, None
+
+
+def _sequencer_op(window, area, op_func, **kwargs):
+    """Run a bpy.ops.sequencer operation with a temp_override context.
+
+    Returns True if the operation ran, False if no SEQUENCE_EDITOR area.
+    """
+    if area is None or window is None:
+        return False
+    with bpy.context.temp_override(
+        window=window, area=area, region=area.regions[-1],
+    ):
+        op_func(**kwargs)
+    return True
+
+
+def _deselect_all(sequence_collection):
+    """Deselect every strip in the collection."""
+    for s in sequence_collection:
+        s.select = False
+
+
 def place_strips(
     keep_intervals: list,
     source_path: str,
@@ -57,13 +86,52 @@ def place_strips(
     effective_fps: float,
     start_cursor: int = 1,
     idx_offset: int = 0,
+    source_num: int | None = None,
 ) -> int:
     """Place video+audio strip pairs on the timeline.
 
+    Uses a template-duplicate pattern: the source file is opened only once
+    (as a muted template pair on high channels), then duplicated per interval.
+    This avoids opening a new FFmpeg decoder per interval and keeps memory
+    usage constant regardless of interval count.
+
     Returns the final timeline cursor position (one past the last frame).
     """
+    src_tag = f"[src {source_num}] " if source_num is not None else ""
     timeline_cursor = start_cursor
 
+    # --- Phase A: create template strips (opened once, reused via duplicate) ---
+    TEMPLATE_VIDEO_CH = 10
+    TEMPLATE_SOUND_CH = 11
+
+    tmpl_video = sequence_collection.new_movie(
+        name="_tmpl_video",
+        filepath=source_path,
+        channel=TEMPLATE_VIDEO_CH,
+        frame_start=1,
+    )
+    tmpl_video.mute = True
+    full_duration = max(1, int(tmpl_video.frame_duration))
+
+    tmpl_sound = sequence_collection.new_sound(
+        name="_tmpl_sound",
+        filepath=source_path,
+        channel=TEMPLATE_SOUND_CH,
+        frame_start=1,
+    )
+    tmpl_sound.mute = True
+    sound_full_duration = max(1, int(tmpl_sound.frame_duration))
+
+    logging.info(
+        "%sTemplate strips created: video %d frames, sound %d frames",
+        src_tag,
+        full_duration,
+        sound_full_duration,
+    )
+
+    window, sequencer_area = _get_sequencer_context()
+
+    # --- Phase B: duplicate templates for each keep interval ---
     for idx, interval in enumerate(keep_intervals, start=1 + idx_offset):
         start_sec = float(interval["start"])
         end_sec = float(interval["end"])
@@ -74,7 +142,8 @@ def place_strips(
         src_end_frame = max(src_start_frame + 1, sec_to_frames(end_sec, effective_fps))
 
         logging.info(
-            "Strip %d: source %.3fs-%.3fs -> frames %d-%d",
+            "%sStrip %d: source %.3fs-%.3fs -> frames %d-%d",
+            src_tag,
             idx,
             start_sec,
             end_sec,
@@ -82,22 +151,15 @@ def place_strips(
             src_end_frame,
         )
 
-        strip = sequence_collection.new_movie(
-            name=f"keep_{idx:04d}",
-            filepath=source_path,
-            channel=1,
-            frame_start=timeline_cursor,
-        )
-
-        full_duration = max(1, int(strip.frame_duration))
         bounded_start = min(src_start_frame, full_duration - 1)
         bounded_end = min(max(src_end_frame, bounded_start + 1), full_duration)
         keep_frame_count = bounded_end - bounded_start
 
         if bounded_start != src_start_frame or bounded_end != src_end_frame:
             logging.warning(
-                "Strip %d: interval clamped to clip duration (%d frames). "
+                "%sStrip %d: interval clamped to clip duration (%d frames). "
                 "Requested frames %d-%d, applied %d-%d",
+                src_tag,
                 idx,
                 full_duration,
                 src_start_frame,
@@ -106,65 +168,77 @@ def place_strips(
                 bounded_end,
             )
 
-        strip.frame_start = timeline_cursor - bounded_start
-        strip.frame_offset_start = bounded_start
-        strip.frame_offset_end = full_duration - bounded_end
-        strip.channel = 1
+        # Deselect all, then select only templates
+        _deselect_all(sequence_collection)
+        tmpl_video.select = True
+        tmpl_sound.select = True
 
-        sound_strip = sequence_collection.new_sound(
-            name=f"keep_{idx:04d}_audio",
-            filepath=source_path,
-            channel=2,
-            frame_start=timeline_cursor - bounded_start,
-        )
-        sound_full_duration = max(1, int(sound_strip.frame_duration))
-        sound_strip.frame_offset_start = bounded_start
-        sound_strip.frame_offset_end = sound_full_duration - (
+        if not _sequencer_op(window, sequencer_area, bpy.ops.sequencer.duplicate):
+            logging.warning(
+                "%sStrip %d: no SEQUENCE_EDITOR area found, cannot duplicate.",
+                src_tag, idx
+            )
+            continue
+
+        # Find the newly duplicated strips (duplicate deselects originals)
+        new_video = None
+        new_sound = None
+        for s in sequence_collection:
+            if not s.select:
+                continue
+            if s.type == "MOVIE" and new_video is None:
+                new_video = s
+            elif s.type == "SOUND" and new_sound is None:
+                new_sound = s
+
+        if new_video is None or new_sound is None:
+            logging.warning(
+                "%sStrip %d: duplicate did not produce expected strips, skipping.",
+                src_tag, idx
+            )
+            continue
+
+        # Configure the duplicated video strip
+        # Set frame position and offsets before channel so Blender sees the
+        # trimmed range and does not reject channel 1 due to overlap.
+        new_video.name = f"keep_{idx:04d}"
+        new_video.mute = False
+        new_video.frame_start = timeline_cursor - bounded_start
+        new_video.frame_offset_start = bounded_start
+        new_video.frame_offset_end = full_duration - bounded_end
+        new_video.channel = 1
+
+        # Configure the duplicated sound strip
+        new_sound.name = f"keep_{idx:04d}_audio"
+        new_sound.mute = False
+        new_sound.frame_start = timeline_cursor - bounded_start
+        new_sound.frame_offset_start = bounded_start
+        new_sound.frame_offset_end = sound_full_duration - (
             bounded_start + keep_frame_count
         )
-        if sound_strip.frame_offset_end < 0:
-            sound_strip.frame_offset_end = 0
+        if new_sound.frame_offset_end < 0:
+            new_sound.frame_offset_end = 0
+        new_sound.channel = 2
 
-        # Deselect all strips, then select only this video+audio pair
-        for s in sequence_collection:
-            s.select = False
-        strip.select = True
-        sound_strip.select = True
+        # Connect the video+audio pair
+        _deselect_all(sequence_collection)
+        new_video.select = True
+        new_sound.select = True
+        _sequencer_op(window, sequencer_area, bpy.ops.sequencer.connect, toggle=False)
 
-        # Connect requires a sequencer area context -- build a temporary override
-        sequencer_area = None
-        window = None
-        for window in bpy.context.window_manager.windows:
-            for area in window.screen.areas:
-                if area.type == "SEQUENCE_EDITOR":
-                    sequencer_area = area
-                    break
-            if sequencer_area:
-                break
-
-        if sequencer_area is not None and window is not None:
-            with bpy.context.temp_override(
-                window=window,
-                area=sequencer_area,
-                region=sequencer_area.regions[-1],
-            ):
-                bpy.ops.sequencer.connect(toggle=False)
-        else:
+        if new_video.frame_final_duration != keep_frame_count:
             logging.warning(
-                "Strip %d: no SEQUENCE_EDITOR area found, skipping connect.", idx
-            )
-
-        if strip.frame_final_duration != keep_frame_count:
-            logging.warning(
-                "Strip %d: frame_final_duration=%d differs from keep_frame_count=%d",
+                "%sStrip %d: frame_final_duration=%d differs from keep_frame_count=%d",
+                src_tag,
                 idx,
-                strip.frame_final_duration,
+                new_video.frame_final_duration,
                 keep_frame_count,
             )
 
         logging.info(
-            "Strip %d: frame_start=%d frame_offset_start=%d frame_offset_end=%d "
+            "%sStrip %d: frame_start=%d frame_offset_start=%d frame_offset_end=%d "
             "keep_frames=%d timeline_cursor=%d",
+            src_tag,
             idx,
             timeline_cursor - bounded_start,
             bounded_start,
@@ -174,6 +248,18 @@ def place_strips(
         )
 
         timeline_cursor += keep_frame_count
+
+    # --- Phase C: delete template strips ---
+    _deselect_all(sequence_collection)
+    tmpl_video.select = True
+    tmpl_sound.select = True
+
+    if _sequencer_op(window, sequencer_area, bpy.ops.sequencer.delete):
+        logging.info("%sTemplate strips deleted.", src_tag)
+    else:
+        logging.warning(
+            "%sCould not delete template strips: no SEQUENCE_EDITOR area.", src_tag
+        )
 
     return timeline_cursor
 
