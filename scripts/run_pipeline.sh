@@ -7,9 +7,10 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 
 usage() {
-  echo "Usage: ./scripts/run_pipeline.sh [OPTIONS] <source> <language> [silence_threshold] [min_keep]"
+  echo "Usage: ./scripts/run_pipeline.sh [OPTIONS] <language>"
   echo ""
   echo "Options:"
+  echo "  --source            FILE  Source video file (may be repeated; default: all videos in input-videos-dir)"
   echo "  --config            FILE  Path to YAML config file"
   echo "  --input-videos-dir  DIR   Directory containing source videos (default: src_video)"
   echo "  --output-dir        DIR   Directory for all output artifacts (default: output)"
@@ -20,7 +21,6 @@ usage() {
   echo "                            English default: (whisperx built-in)"
   echo ""
   echo "Positional:"
-  echo "  source                    Video filename (resolved under input-videos-dir) or explicit path"
   echo "  language                  Language code, e.g. ja, en"
 }
 
@@ -39,9 +39,11 @@ CLI_POST_MARGIN=""
 CLI_ALIGN_MODEL=""
 CLI_SILENCE_THRESHOLD=""
 CLI_MIN_KEEP=""
+CLI_SOURCES=()
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
+    --source) CLI_SOURCES+=("$2"); shift 2 ;;
     --config) CONFIG_FILE="$2"; shift 2 ;;
     --input-videos-dir) CLI_INPUT_VIDEOS_DIR="$2"; shift 2 ;;
     --output-dir) CLI_OUTPUT_DIR="$2"; shift 2 ;;
@@ -55,13 +57,9 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
-SOURCE_ARG="${1:-}"
-LANGUAGE="${2:-}"
-# Positional overrides for silence_threshold and min_keep
-if [[ -n "${3:-}" ]]; then CLI_SILENCE_THRESHOLD="$3"; fi
-if [[ -n "${4:-}" ]]; then CLI_MIN_KEEP="$4"; fi
+LANGUAGE="${1:-}"
 
-if [[ -z "$SOURCE_ARG" || -z "$LANGUAGE" ]]; then
+if [[ -z "$LANGUAGE" ]]; then
   usage >&2
   exit 1
 fi
@@ -122,43 +120,45 @@ if [[ -z "$ALIGN_MODEL" ]]; then
   esac
 fi
 
-if [[ "$SOURCE_ARG" == */* ]]; then
-  SOURCE_PATH="$SOURCE_ARG"
-else
-  SOURCE_PATH="${INPUT_VIDEOS_DIR%/}/$SOURCE_ARG"
-fi
-
-if [[ ! -f "$SOURCE_PATH" ]]; then
-  echo "Source file not found: $SOURCE_PATH"
-  exit 1
-fi
-
 mkdir -p "$INPUT_VIDEOS_DIR" "$OUTPUT_DIR" "$PROJECT_ROOT/cache"
 
 ABS_INPUT_VIDEOS="$(realpath "$INPUT_VIDEOS_DIR")"
-ABS_SOURCE="$(realpath "$SOURCE_PATH")"
 ABS_OUTPUT_DIR="$(realpath "$OUTPUT_DIR")"
 
-if [[ "$ABS_SOURCE" == "$ABS_INPUT_VIDEOS/"* ]]; then
-  SOURCE_RELATIVE="${ABS_SOURCE#"$ABS_INPUT_VIDEOS/"}"
+# --- Source file discovery ---
+SOURCE_PATHS=()
+
+if [[ ${#CLI_SOURCES[@]} -gt 0 ]]; then
+  # Explicit --source flags: resolve each path
+  for src in "${CLI_SOURCES[@]}"; do
+    if [[ "$src" == */* ]]; then
+      SOURCE_PATHS+=("$src")
+    else
+      SOURCE_PATHS+=("${INPUT_VIDEOS_DIR%/}/$src")
+    fi
+  done
 else
-  cp "$SOURCE_PATH" "$INPUT_VIDEOS_DIR/"
-  SOURCE_RELATIVE="$(basename "$SOURCE_PATH")"
-  CLEANUP_COPY=true
+  # Auto-discover all video files in input-videos-dir, sorted alphabetically
+  while IFS= read -r -d '' f; do
+    SOURCE_PATHS+=("$f")
+  done < <(find "$INPUT_VIDEOS_DIR" -maxdepth 1 \
+    \( -iname "*.mp4" -o -iname "*.mkv" -o -iname "*.mov" \
+       -o -iname "*.avi" -o -iname "*.webm" \) \
+    -print0 | sort -z)
+
+  if [[ ${#SOURCE_PATHS[@]} -eq 0 ]]; then
+    echo "No video files found in: $INPUT_VIDEOS_DIR" >&2
+    exit 1
+  fi
 fi
 
-BASENAME="$(basename "$SOURCE_PATH")"
-STEM="${BASENAME%.*}"
-
-WHISPER_JSON="${OUTPUT_DIR}/${STEM}.json"
-INTERVALS_JSON="${OUTPUT_DIR}/${STEM}_intervals.json"
-BLEND_OUTPUT="${OUTPUT_DIR}/${STEM}_edited.blend"
-
-# Build optional align_model flag
-ALIGN_MODEL_ARGS=()
-if [[ -n "$ALIGN_MODEL" ]]; then
-  ALIGN_MODEL_ARGS=("--align_model" "$ALIGN_MODEL")
-fi
+# Validate all source files exist
+for src in "${SOURCE_PATHS[@]}"; do
+  if [[ ! -f "$src" ]]; then
+    echo "Source file not found: $src" >&2
+    exit 1
+  fi
+done
 
 # Build config passthrough args for Python stages
 CONFIG_ARGS=()
@@ -181,34 +181,82 @@ if [[ -n "$CLI_POST_MARGIN" ]]; then
   STAGE2_OVERRIDE_ARGS+=("--post_margin" "$CLI_POST_MARGIN")
 fi
 
-echo "[Stage 1/3] WhisperX transcription"
-INPUT_VIDEOS_DIR="$ABS_INPUT_VIDEOS" OUTPUT_DIR="$ABS_OUTPUT_DIR" \
-docker compose -f "$PROJECT_ROOT/docker-compose.yml" run --rm --user "0:0" whisperx \
-  _ \
-  "$SOURCE_RELATIVE" \
-  --output_dir /output \
-  --output_format all \
-  --language "$LANGUAGE" \
-  --compute_type "$COMPUTE_TYPE" \
-  --batch_size "$BATCH_SIZE" \
-  "${ALIGN_MODEL_ARGS[@]}"
+# Build align model args
+ALIGN_MODEL_ARGS=()
+if [[ -n "$ALIGN_MODEL" ]]; then
+  ALIGN_MODEL_ARGS=("--align_model" "$ALIGN_MODEL")
+fi
 
-echo "[Stage 2/3] Keep interval computation"
-uv run --project "$PROJECT_ROOT" python -m nagare_clip.cli \
-  --json "$WHISPER_JSON" \
-  "${CONFIG_ARGS[@]}" \
-  "${STAGE2_OVERRIDE_ARGS[@]}" \
-  --output "$INTERVALS_JSON"
+# --- Stage 1 & 2: loop over each source ---
+ALL_SOURCE_PATHS=()
+ALL_INTERVALS=()
+CLEANUP_COPIES=()
+FIRST_STEM=""
+
+for SOURCE_PATH in "${SOURCE_PATHS[@]}"; do
+  ABS_SOURCE="$(realpath "$SOURCE_PATH")"
+
+  if [[ "$ABS_SOURCE" == "$ABS_INPUT_VIDEOS/"* ]]; then
+    SOURCE_RELATIVE="${ABS_SOURCE#"$ABS_INPUT_VIDEOS/"}"
+  else
+    cp "$SOURCE_PATH" "$INPUT_VIDEOS_DIR/"
+    SOURCE_RELATIVE="$(basename "$SOURCE_PATH")"
+    CLEANUP_COPIES+=("${INPUT_VIDEOS_DIR}/$(basename "$SOURCE_PATH")")
+  fi
+
+  BASENAME="$(basename "$SOURCE_PATH")"
+  STEM="${BASENAME%.*}"
+  [[ -z "$FIRST_STEM" ]] && FIRST_STEM="$STEM"
+
+  WHISPER_JSON="${OUTPUT_DIR}/${STEM}.json"
+  INTERVALS_JSON="${OUTPUT_DIR}/${STEM}_intervals.json"
+
+  echo "[Stage 1/3] WhisperX transcription: $BASENAME"
+  INPUT_VIDEOS_DIR="$ABS_INPUT_VIDEOS" OUTPUT_DIR="$ABS_OUTPUT_DIR" \
+  docker compose -f "$PROJECT_ROOT/docker-compose.yml" run --rm --user "0:0" whisperx \
+    _ \
+    "$SOURCE_RELATIVE" \
+    --output_dir /output \
+    --output_format all \
+    --language "$LANGUAGE" \
+    --compute_type "$COMPUTE_TYPE" \
+    --batch_size "$BATCH_SIZE" \
+    "${ALIGN_MODEL_ARGS[@]}"
+
+  echo "[Stage 2/3] Keep interval computation: $BASENAME"
+  uv run --project "$PROJECT_ROOT" python -m nagare_clip.cli \
+    --json "$WHISPER_JSON" \
+    "${CONFIG_ARGS[@]}" \
+    "${STAGE2_OVERRIDE_ARGS[@]}" \
+    --output "$INTERVALS_JSON"
+
+  ALL_SOURCE_PATHS+=("$ABS_SOURCE")
+  ALL_INTERVALS+=("$(realpath "$INTERVALS_JSON")")
+done
+
+# --- Stage 3: Blender VSE project generation ---
+BLEND_OUTPUT="${OUTPUT_DIR}/${FIRST_STEM}_edited.blend"
+
+STAGE3_SOURCE_ARGS=()
+for src in "${ALL_SOURCE_PATHS[@]}"; do
+  STAGE3_SOURCE_ARGS+=("--source" "$src")
+done
+
+STAGE3_INTERVALS_ARGS=()
+for ivp in "${ALL_INTERVALS[@]}"; do
+  STAGE3_INTERVALS_ARGS+=("--intervals" "$ivp")
+done
 
 echo "[Stage 3/3] Blender VSE project generation"
 blender --background --factory-startup --python-exit-code 1 --python "$PROJECT_ROOT/src/nagare_clip/stage3/blender_cli.py" -- \
-  --source "$SOURCE_PATH" \
-  --intervals "$INTERVALS_JSON" \
+  "${STAGE3_SOURCE_ARGS[@]}" \
+  "${STAGE3_INTERVALS_ARGS[@]}" \
   --output "$BLEND_OUTPUT" \
   "${CONFIG_ARGS[@]}"
 
-if [[ "${CLEANUP_COPY:-false}" == true ]]; then
-  rm -f "${INPUT_VIDEOS_DIR}/$(basename "$SOURCE_PATH")"
-fi
+# Cleanup any copied source files
+for f in "${CLEANUP_COPIES[@]}"; do
+  rm -f "$f"
+done
 
 echo "Done: $BLEND_OUTPUT"

@@ -36,28 +36,34 @@ uv run pytest
 ## Quick Start
 
 1. Put source media in `src_video/` (default input directory).
-2. Run the full pipeline (defaults resolve to `src_video/` and `output/`):
+2. Run the full pipeline — processes all videos in `src_video/` alphabetically:
 
 ```bash
-./scripts/run_pipeline.sh "myvideo.mp4" ja
+./scripts/run_pipeline.sh ja
+```
+
+Or target a single file with `--source`:
+
+```bash
+./scripts/run_pipeline.sh --source myvideo.mp4 ja
 ```
 
 Pass custom locations with options:
 
 ```bash
-./scripts/run_pipeline.sh --input-videos-dir my_videos --output-dir my_out "myvideo.mp4" ja
+./scripts/run_pipeline.sh --input-videos-dir my_videos --output-dir my_out ja
 ```
 
 Use a YAML config file to tune pipeline parameters (see `config.example.yml`):
 
 ```bash
-./scripts/run_pipeline.sh --config my_project.yml "myvideo.mp4" ja
+./scripts/run_pipeline.sh --config my_project.yml ja
 ```
 
 Override the alignment model (e.g. to revert to the WhisperX built-in default for Japanese):
 
 ```bash
-./scripts/run_pipeline.sh --align-model jonatasgrosman/wav2vec2-large-xlsr-53-japanese "myvideo.mp4" ja
+./scripts/run_pipeline.sh --align-model jonatasgrosman/wav2vec2-large-xlsr-53-japanese ja
 ```
 
 This produces outputs under `output/` (or your `--output-dir`), including:
@@ -66,7 +72,7 @@ This produces outputs under `output/` (or your `--output-dir`), including:
 - `myvideo.srt`
 - `myvideo.vtt`
 - `myvideo_intervals.json`
-- `myvideo_edited.blend`
+- `myvideo_edited.blend` (named after the first source file)
 
 ## Configuration
 
@@ -75,7 +81,7 @@ All pipeline parameters can be controlled via a YAML config file. Copy `config.e
 ```bash
 cp config.example.yml my_project.yml
 # edit my_project.yml as needed
-./scripts/run_pipeline.sh --config my_project.yml "myvideo.mp4" ja
+./scripts/run_pipeline.sh --config my_project.yml ja
 ```
 
 Parameters resolve in this priority order (highest wins):
@@ -89,12 +95,14 @@ The config file covers all sections (`general`, `stage1`, `stage2`, `stage3`, `p
 ## CLI
 
 ```bash
-./scripts/run_pipeline.sh [--config FILE] [--input-videos-dir DIR] [--output-dir DIR] [--pre-margin SEC] [--post-margin SEC] [--align-model MODEL] <source> <language> [silence_threshold] [min_keep]
+./scripts/run_pipeline.sh [OPTIONS] <language>
 ```
 
+Options:
+- `--source FILE` — source video file (may be repeated for multiple sources); when omitted, all videos in `--input-videos-dir` are processed alphabetically.
 - `--config FILE` — path to a YAML config file; config values fill in between CLI overrides and built-in defaults.
 - Defaults: input videos under `src_video/`, outputs under `output/`.
-- If `<source>` contains `/`, it is treated as the exact path; otherwise it is resolved inside `--input-videos-dir`.
+- If `--source` contains `/`, it is treated as the exact path; otherwise it is resolved inside `--input-videos-dir`.
 - `silence_threshold` and `min_keep` default to `1.5` and `1.0` (overridable via config).
 - `pre-margin`/`post-margin` extend keep intervals before/after by default `1.0s` and merge overlaps.
 - `--align-model` overrides the HuggingFace model used for WhisperX forced alignment. For Japanese (`ja`), defaults to `vumichien/wav2vec2-large-xlsr-japanese` which showed better alignment scores than the WhisperX built-in default (`jonatasgrosman/wav2vec2-large-xlsr-53-japanese`); for other languages the WhisperX built-in model is used.

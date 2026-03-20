@@ -15,6 +15,7 @@ def build_timeline_map(
     keep_intervals: list,
     effective_fps: float,
     source_fps: float,
+    start_cursor: int = 1,
 ) -> list:
     """
     Returns a list of dicts, each describing one placed keep interval:
@@ -24,7 +25,7 @@ def build_timeline_map(
     This must mirror the strip placement loop exactly.
     """
     mapping = []
-    cursor = 1
+    cursor = start_cursor
     for interval in keep_intervals:
         start_sec = float(interval["start"])
         end_sec = float(interval["end"])
@@ -54,14 +55,16 @@ def place_strips(
     source_path: str,
     sequence_collection: object,
     effective_fps: float,
+    start_cursor: int = 1,
+    idx_offset: int = 0,
 ) -> int:
     """Place video+audio strip pairs on the timeline.
 
     Returns the final timeline cursor position (one past the last frame).
     """
-    timeline_cursor = 1
+    timeline_cursor = start_cursor
 
-    for idx, interval in enumerate(keep_intervals, start=1):
+    for idx, interval in enumerate(keep_intervals, start=1 + idx_offset):
         start_sec = float(interval["start"])
         end_sec = float(interval["end"])
         if end_sec <= start_sec:

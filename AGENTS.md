@@ -70,6 +70,8 @@ Both `cli.py` (Stage 2) and `blender_cli.py` (Stage 3) accept a `--config <path>
 - After caption-based expansion, Stage 2 re-applies `stage2.min_keep` so tiny keep strips are expanded/merged when possible.
 - Stage 3 caption style (font size, alignment, position, shadow) is controlled by `stage3.caption_style.*` in the config.
 - Stage 3 fallback FPS (used when source metadata is unavailable) is controlled by `stage3.default_fps`.
+- Stage 3 supports multiple source files: `blender_cli.py` accepts repeated `--source`/`--intervals` flags; `place_strips()` and `build_timeline_map()` accept `start_cursor` and `idx_offset` to concatenate sources on a single timeline.
+- `run_pipeline.sh` discovers all video files (`mp4`, `mkv`, `mov`, `avi`, `webm`) in `INPUT_VIDEOS_DIR` alphabetically when `--source` is not provided. Multiple `--source` flags are also accepted.
 
 ## Python Execution
 
@@ -93,7 +95,10 @@ write/edit and runs:
 If environment allows, also validate with a full run:
 
 ```bash
-./scripts/run_pipeline.sh "input/<sample>.mp4" ja
+# Single source
+./scripts/run_pipeline.sh --source input/<sample>.mp4 ja
+# All videos in default directory
+./scripts/run_pipeline.sh ja
 ```
 
 ## Documentation Policy

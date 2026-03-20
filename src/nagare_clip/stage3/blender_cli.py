@@ -36,8 +36,14 @@ def parse_blender_args(argv: list[str]) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description="Build rough-cut VSE layout from keep intervals."
     )
-    parser.add_argument("--source", required=True, help="Source video file path")
-    parser.add_argument("--intervals", required=True, help="Intervals JSON path")
+    parser.add_argument(
+        "--source", required=True, action="append", dest="sources",
+        help="Source video file path (repeat for multiple sources)"
+    )
+    parser.add_argument(
+        "--intervals", required=True, action="append", dest="intervals_paths",
+        help="Intervals JSON path (repeat to match each --source)"
+    )
     parser.add_argument("--output", required=True, help="Output .blend path")
     parser.add_argument(
         "--config", dest="config_path", default=None, help="Path to YAML config file"
@@ -51,26 +57,35 @@ def main() -> None:
     config_path = Path(args.config_path) if args.config_path else None
     cfg = get_effective_config(config_path)
 
-    source_path = Path(args.source).expanduser().resolve()
-    intervals_path = Path(args.intervals).expanduser().resolve()
+    sources = [Path(s).expanduser().resolve() for s in args.sources]
+    intervals_paths = [Path(p).expanduser().resolve() for p in args.intervals_paths]
     output_path = Path(args.output).expanduser().resolve()
 
-    with intervals_path.open("r", encoding="utf-8") as f:
-        intervals_data = json.load(f)
+    if len(sources) != len(intervals_paths):
+        raise ValueError(
+            f"Number of --source ({len(sources)}) and --intervals "
+            f"({len(intervals_paths)}) arguments must match."
+        )
 
-    keep_intervals = intervals_data.get("keep_intervals", [])
+    # Load all intervals data upfront
+    all_intervals_data = []
+    for ivp in intervals_paths:
+        with ivp.open("r", encoding="utf-8") as f:
+            all_intervals_data.append(json.load(f))
+
     scene = reset_scene()
 
-    source_fps, source_width, source_height = load_source_metadata(
-        source_path, default_fps=cfg["stage3"]["default_fps"]
+    # Use first source for scene metadata
+    first_fps, first_width, first_height = load_source_metadata(
+        sources[0], default_fps=cfg["stage3"]["default_fps"]
     )
-    fps_int = max(1, int(round(source_fps)))
-    fps_base = fps_int / source_fps
+    fps_int = max(1, int(round(first_fps)))
+    fps_base = fps_int / first_fps
 
     scene.render.fps = fps_int
     scene.render.fps_base = fps_base
-    scene.render.resolution_x = source_width
-    scene.render.resolution_y = source_height
+    scene.render.resolution_x = first_width
+    scene.render.resolution_y = first_height
     scene.frame_start = 1
 
     sequence_editor = scene.sequence_editor
@@ -79,12 +94,43 @@ def main() -> None:
         sequence_collection = sequence_editor.strips
     effective_fps = scene.render.fps / scene.render.fps_base
 
-    timeline_cursor = place_strips(
-        keep_intervals,
-        str(source_path),
-        sequence_collection,
-        effective_fps,
-    )
+    # Warn if subsequent sources differ in resolution/FPS
+    for i, src in enumerate(sources[1:], start=1):
+        fps_i, w_i, h_i = load_source_metadata(
+            src, default_fps=cfg["stage3"]["default_fps"]
+        )
+        if abs(fps_i - first_fps) > 0.01 or w_i != first_width or h_i != first_height:
+            logging.warning(
+                "Source %d (%s) differs from first source: fps=%.3f vs %.3f, "
+                "resolution=%dx%d vs %dx%d",
+                i + 1, src.name, fps_i, first_fps, w_i, h_i, first_width, first_height,
+            )
+
+    # Loop over (source, intervals) pairs, accumulating timeline position
+    timeline_cursor = 1
+    idx_offset = 0
+    all_tl_maps = []
+    all_captions = []
+
+    for source_path, intervals_data in zip(sources, all_intervals_data):
+        keep_intervals = intervals_data.get("keep_intervals", [])
+        captions = intervals_data.get("captions", [])
+
+        tl_map = build_timeline_map(
+            keep_intervals, effective_fps, first_fps, start_cursor=timeline_cursor
+        )
+        all_tl_maps.extend(tl_map)
+        all_captions.extend(captions)
+
+        timeline_cursor = place_strips(
+            keep_intervals,
+            str(source_path),
+            sequence_collection,
+            effective_fps,
+            start_cursor=timeline_cursor,
+            idx_offset=idx_offset,
+        )
+        idx_offset += len(keep_intervals)
 
     for s in sequence_collection:
         s.select = False
@@ -93,12 +139,10 @@ def main() -> None:
     scene.frame_start = int(min(1, min_strip_frame))
     scene.frame_end = max(scene.frame_start, timeline_cursor - 1)
 
-    captions = intervals_data.get("captions", [])
-    if captions:
-        tl_map = build_timeline_map(keep_intervals, effective_fps, source_fps)
+    if all_captions:
         place_captions(
-            captions,
-            tl_map,
+            all_captions,
+            all_tl_maps,
             effective_fps,
             sequence_collection,
             caption_style=cfg["stage3"]["caption_style"],
@@ -106,9 +150,13 @@ def main() -> None:
 
     output_path.parent.mkdir(parents=True, exist_ok=True)
 
+    total_strips = sum(
+        len(d.get("keep_intervals", [])) for d in all_intervals_data
+    )
     logging.info(
-        "Done: %d strip(s) placed, scene ends at frame %d",
-        len(keep_intervals),
+        "Done: %d strip(s) across %d source(s), scene ends at frame %d",
+        total_strips,
+        len(sources),
         scene.frame_end,
     )
     bpy.ops.wm.save_as_mainfile(filepath=str(output_path))
