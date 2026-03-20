@@ -13,7 +13,7 @@ usage() {
   echo "  --source            FILE  Source video file (may be repeated; default: all videos in input-videos-dir)"
   echo "  --config            FILE  Path to YAML config file"
   echo "  --input-videos-dir  DIR   Directory containing source videos (default: src_video)"
-  echo "  --output-dir        DIR   Directory for all output artifacts (default: output)"
+  echo "  --output-dir        DIR   Root output directory; stage outputs go to stage1/, stage2/, stage3/ subdirs (default: output)"
   echo "  --pre-margin        SEC   Seconds to extend keep intervals before start (default: 1.0)"
   echo "  --post-margin       SEC   Seconds to extend keep intervals after end (default: 1.0)"
   echo "  --align-model       MODEL HuggingFace model ID for WhisperX alignment"
@@ -120,7 +120,11 @@ if [[ -z "$ALIGN_MODEL" ]]; then
   esac
 fi
 
-mkdir -p "$INPUT_VIDEOS_DIR" "$OUTPUT_DIR" "$PROJECT_ROOT/cache"
+STAGE1_DIR="${OUTPUT_DIR}/stage1"
+STAGE2_DIR="${OUTPUT_DIR}/stage2"
+STAGE3_DIR="${OUTPUT_DIR}/stage3"
+
+mkdir -p "$INPUT_VIDEOS_DIR" "$STAGE1_DIR" "$STAGE2_DIR" "$STAGE3_DIR" "$PROJECT_ROOT/cache"
 
 ABS_INPUT_VIDEOS="$(realpath "$INPUT_VIDEOS_DIR")"
 ABS_OUTPUT_DIR="$(realpath "$OUTPUT_DIR")"
@@ -221,8 +225,8 @@ INPUT_VIDEOS_DIR="$ABS_INPUT_VIDEOS" OUTPUT_DIR="$ABS_OUTPUT_DIR" \
 docker compose -f "$PROJECT_ROOT/docker-compose.yml" run --rm --user "0:0" whisperx \
   _ \
   "${ALL_RELATIVES[@]}" \
-  --output_dir /output \
-  --output_format json,txt \
+  --output_dir /output/stage1 \
+  --output_format all \
   --language "$LANGUAGE" \
   --compute_type "$COMPUTE_TYPE" \
   --batch_size "$BATCH_SIZE" \
@@ -231,8 +235,8 @@ docker compose -f "$PROJECT_ROOT/docker-compose.yml" run --rm --user "0:0" whisp
 # --- Stage 2: Keep interval computation (per source) ---
 for i in "${!ALL_STEMS[@]}"; do
   STEM="${ALL_STEMS[$i]}"
-  WHISPER_JSON="${OUTPUT_DIR}/${STEM}.json"
-  INTERVALS_JSON="${OUTPUT_DIR}/${STEM}_intervals.json"
+  WHISPER_JSON="${STAGE1_DIR}/${STEM}.json"
+  INTERVALS_JSON="${STAGE2_DIR}/${STEM}_intervals.json"
 
   echo "[Stage 2/3] Keep interval computation: ${ALL_STEMS[$i]}"
   uv run --project "$PROJECT_ROOT" python -m nagare_clip.cli \
@@ -245,7 +249,7 @@ for i in "${!ALL_STEMS[@]}"; do
 done
 
 # --- Stage 3: Blender VSE project generation ---
-BLEND_OUTPUT="${OUTPUT_DIR}/${FIRST_STEM}_edited.blend"
+BLEND_OUTPUT="${STAGE3_DIR}/${FIRST_STEM}_edited.blend"
 
 STAGE3_SOURCE_ARGS=()
 for src in "${ALL_SOURCE_PATHS[@]}"; do

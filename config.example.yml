@@ -40,4 +40,4 @@ stage3:
 
 pipeline:
   input_videos_dir: src_video
-  output_dir: output
+  output_dir: output   # Root dir; stage outputs go to stage1/, stage2/, stage3/ subdirs
