@@ -87,6 +87,8 @@ def place_strips(
     start_cursor: int = 1,
     idx_offset: int = 0,
     source_num: int | None = None,
+    use_proxy: bool = False,
+    proxy_size: int = 100,
 ) -> int:
     """Place video+audio strip pairs on the timeline.
 
@@ -110,6 +112,14 @@ def place_strips(
         channel=TEMPLATE_VIDEO_CH,
         frame_start=1,
     )
+    tmpl_video.use_proxy = use_proxy
+    if use_proxy:
+        proxy = tmpl_video.proxy
+        proxy.build_25 = proxy_size == 25
+        proxy.build_50 = proxy_size == 50
+        proxy.build_75 = proxy_size == 75
+        proxy.build_100 = proxy_size == 100
+        proxy.use_overwrite = False
     tmpl_video.mute = True
     full_duration = max(1, int(tmpl_video.frame_duration))
 

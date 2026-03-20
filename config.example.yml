@@ -30,6 +30,8 @@ stage2:
 
 stage3:
   default_fps: 30.0           # Fallback FPS when source metadata unavailable
+  use_proxy: true              # Enable proxy on movie strips for smooth VSE playback (bpy MovieStrip.use_proxy)
+  proxy_size: 100              # Proxy render size percentage: 25 | 50 | 75 | 100
   caption_style:
     font_size: 50
     alignment_x: CENTER        # LEFT | CENTER | RIGHT

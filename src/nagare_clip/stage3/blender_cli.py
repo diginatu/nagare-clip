@@ -131,6 +131,8 @@ def main() -> None:
             start_cursor=timeline_cursor,
             idx_offset=idx_offset,
             source_num=src_num,
+            use_proxy=cfg["stage3"]["use_proxy"],
+            proxy_size=cfg["stage3"]["proxy_size"],
         )
         idx_offset += len(keep_intervals)
 

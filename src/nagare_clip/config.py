@@ -38,6 +38,8 @@ DEFAULTS: Dict[str, Any] = {
     },
     "stage3": {
         "default_fps": 30.0,
+        "use_proxy": True,
+        "proxy_size": 100,
         "caption_style": {
             "font_size": 50,
             "alignment_x": "CENTER",
