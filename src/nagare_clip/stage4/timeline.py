@@ -132,7 +132,7 @@ def place_strips(
     tmpl_sound.mute = True
     sound_full_duration = max(1, int(tmpl_sound.frame_duration))
 
-    logging.info(
+    logging.debug(
         "%sTemplate strips created: video %d frames, sound %d frames",
         src_tag,
         full_duration,
@@ -326,7 +326,7 @@ def place_captions(
         text_strip.location[0] = style.get("location_x", 0.5)
         text_strip.location[1] = style.get("location_y", 0.05)
         text_strip.use_shadow = style.get("use_shadow", True)
-        logging.info(
+        logging.debug(
             "Caption '%s': timeline frames %d-%d",
             text[:40],
             tl_start,
