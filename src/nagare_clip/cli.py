@@ -1,4 +1,4 @@
-"""Stage 2 CLI entry point: compute keep intervals from WhisperX JSON."""
+"""Stage 3 CLI entry point: apply patches, sync JSON, compute keep intervals."""
 
 from __future__ import annotations
 
@@ -11,22 +11,30 @@ from typing import List, Tuple
 import spacy
 
 from nagare_clip.config import get_effective_config
-from nagare_clip.stage2.bunsetu import build_bunsetu_times
-from nagare_clip.stage2.captions import collect_captions
-from nagare_clip.stage2.intervals import (
+from nagare_clip.stage2.llm_filter import apply_patches_to_lines
+from nagare_clip.stage3.bunsetu import build_bunsetu_times
+from nagare_clip.stage3.captions import collect_captions
+from nagare_clip.stage3.intervals import (
     apply_margins,
     enforce_min_keep_duration,
     ensure_keep_covers_captions,
     invert_intervals,
     merge_intervals,
 )
-from nagare_clip.stage2.io import infer_source_file
-from nagare_clip.stage2.speech import build_speech_spans, get_duration_sec
+from nagare_clip.stage3.io import infer_source_file
+from nagare_clip.stage3.speech import build_speech_spans, get_duration_sec
+from nagare_clip.stage3.sync_json import sync_text_to_json
 
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="Compute keep intervals from WhisperX word-level JSON output."
+        description="Apply text patches, sync JSON, and compute keep intervals."
+    )
+    parser.add_argument(
+        "--edits-txt",
+        required=True,
+        dest="edits_txt",
+        help="Stage 2 _edits.txt path (may contain {{old->new}} markers)",
     )
     parser.add_argument(
         "--json", required=True, dest="json_path", help="WhisperX JSON path"
@@ -113,19 +121,19 @@ def _build_cli_overrides(args: argparse.Namespace) -> dict:
     """Build a nested override dict from explicitly-provided CLI arguments."""
     overrides: dict = {}
 
-    # Stage 2 flat keys
-    stage2_map = {
+    # Stage 3 flat keys
+    stage3_map = {
         "silence_threshold": "silence_threshold",
         "min_keep": "min_keep",
         "pre_margin": "pre_margin",
         "post_margin": "post_margin",
     }
-    for attr, key in stage2_map.items():
+    for attr, key in stage3_map.items():
         val = getattr(args, attr, None)
         if val is not None:
-            overrides.setdefault("stage2", {})[key] = val
+            overrides.setdefault("stage3", {})[key] = val
 
-    # Stage 2 caption keys
+    # Stage 3 caption keys
     caption_map = {
         "caption_max_bunsetu": "max_bunsetu",
         "caption_max_duration": "max_duration",
@@ -137,7 +145,7 @@ def _build_cli_overrides(args: argparse.Namespace) -> dict:
     for attr, key in caption_map.items():
         val = getattr(args, attr, None)
         if val is not None:
-            overrides.setdefault("stage2", {}).setdefault("caption", {})[key] = val
+            overrides.setdefault("stage3", {}).setdefault("caption", {})[key] = val
 
     # General
     if args.log_level is not None:
@@ -153,19 +161,29 @@ def main() -> None:
     cli_overrides = _build_cli_overrides(args)
     cfg = get_effective_config(config_path, cli_overrides)
 
-    s2 = cfg["stage2"]
-    cap = s2["caption"]
-    bun = s2["bunsetu"]
+    s3 = cfg["stage3"]
+    cap = s3["caption"]
+    bun = s3["bunsetu"]
 
     logging.basicConfig(
         level=cfg["general"]["log_level"], format="%(levelname)s: %(message)s"
     )
 
+    edits_txt = Path(args.edits_txt)
     json_path = Path(args.json_path)
     output_path = Path(args.output_path)
 
+    # --- Apply {{old->new}} patches from _edits.txt ---
+    edit_lines = edits_txt.read_text(encoding="utf-8").splitlines()
+    clean_lines = apply_patches_to_lines(edit_lines)
+    changes = sum(1 for e, c in zip(edit_lines, clean_lines) if e != c)
+    logging.info("Stage 3: applied patches from %s (%d lines changed)", edits_txt.name, changes)
+
+    # --- Sync clean text → JSON ---
     with json_path.open("r", encoding="utf-8") as f:
         whisperx_data = json.load(f)
+
+    whisperx_data = sync_text_to_json(whisperx_data, clean_lines)
 
     logging.info(
         "Loaded %d segment(s) from %s",
@@ -181,9 +199,8 @@ def main() -> None:
         silence_max_word_span=bun["silence_max_word_span"],
     )
 
-    words = all_bunsetu_times
     speech_spans = build_speech_spans(whisperx_data)
-    duration_sec = get_duration_sec(whisperx_data, words)
+    duration_sec = get_duration_sec(whisperx_data, all_bunsetu_times)
     logging.info("Duration: %.1fs, bunsetsu: %d", duration_sec, len(all_bunsetu_times))
 
     excludes: List[Tuple[float, float]] = []
@@ -193,14 +210,14 @@ def main() -> None:
         current_end = speech_spans[idx][1]
         next_start = speech_spans[idx + 1][0]
         gap = next_start - current_end
-        if gap > s2["silence_threshold"]:
+        if gap > s3["silence_threshold"]:
             logging.debug(
                 "Silence gap: %.3f-%.3f (%.3fs)", current_end, next_start, gap
             )
             excludes.append((current_end, next_start))
             silence_excludes += 1
 
-    if speech_spans and speech_spans[0][0] > s2["silence_threshold"]:
+    if speech_spans and speech_spans[0][0] > s3["silence_threshold"]:
         logging.debug(
             "Silence gap: 0.000-%.3f (%.3fs) [leading]",
             speech_spans[0][0],
@@ -209,7 +226,7 @@ def main() -> None:
         excludes.append((0.0, speech_spans[0][0]))
         silence_excludes += 1
 
-    if speech_spans and (duration_sec - speech_spans[-1][1]) > s2["silence_threshold"]:
+    if speech_spans and (duration_sec - speech_spans[-1][1]) > s3["silence_threshold"]:
         logging.debug(
             "Silence gap: %.3f-%.3f (%.3fs) [trailing]",
             speech_spans[-1][1],
@@ -231,20 +248,20 @@ def main() -> None:
     filtered_keep = [
         {"start": round(start, 3), "end": round(end, 3)}
         for start, end in keep_intervals
-        if (end - start) >= s2["min_keep"]
+        if (end - start) >= s3["min_keep"]
     ]
     logging.info("Keep intervals before margins: %d", len(filtered_keep))
 
     keep_intervals_dicts = apply_margins(
         filtered_keep,
-        pre_margin=s2["pre_margin"],
-        post_margin=s2["post_margin"],
+        pre_margin=s3["pre_margin"],
+        post_margin=s3["post_margin"],
         duration_sec=duration_sec,
     )
     logging.info(
         "After margins (pre=%.2fs post=%.2fs): %d interval(s)",
-        s2["pre_margin"],
-        s2["post_margin"],
+        s3["pre_margin"],
+        s3["post_margin"],
         len(keep_intervals_dicts),
     )
 
@@ -270,7 +287,7 @@ def main() -> None:
 
     keep_intervals_dicts = enforce_min_keep_duration(
         keep_intervals_dicts,
-        s2["min_keep"],
+        s3["min_keep"],
         duration_sec,
     )
     logging.info(

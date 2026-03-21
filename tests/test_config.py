@@ -16,9 +16,9 @@ class TestLoadConfig:
 
     def test_reads_yaml_file(self, tmp_path: Path):
         cfg_file = tmp_path / "cfg.yml"
-        cfg_file.write_text(yaml.dump({"stage2": {"silence_threshold": 2.0}}))
+        cfg_file.write_text(yaml.dump({"stage3": {"silence_threshold": 2.0}}))
         result = load_config(cfg_file)
-        assert result == {"stage2": {"silence_threshold": 2.0}}
+        assert result == {"stage3": {"silence_threshold": 2.0}}
 
     def test_missing_file_raises(self, tmp_path: Path):
         with pytest.raises(FileNotFoundError):
@@ -76,19 +76,19 @@ class TestGetEffectiveConfig:
 
     def test_config_overrides_defaults(self, tmp_path: Path):
         cfg_file = tmp_path / "cfg.yml"
-        cfg_file.write_text(yaml.dump({"stage2": {"silence_threshold": 2.5}}))
+        cfg_file.write_text(yaml.dump({"stage3": {"silence_threshold": 2.5}}))
         cfg = get_effective_config(cfg_file)
-        assert cfg["stage2"]["silence_threshold"] == 2.5
+        assert cfg["stage3"]["silence_threshold"] == 2.5
         # Other defaults intact
-        assert cfg["stage2"]["min_keep"] == 1.0
-        assert cfg["stage2"]["caption"]["max_bunsetu"] == 12
+        assert cfg["stage3"]["min_keep"] == 1.0
+        assert cfg["stage3"]["caption"]["max_bunsetu"] == 12
 
     def test_cli_overrides_config(self, tmp_path: Path):
         cfg_file = tmp_path / "cfg.yml"
-        cfg_file.write_text(yaml.dump({"stage2": {"silence_threshold": 2.5}}))
-        cli = {"stage2": {"silence_threshold": 3.0}}
+        cfg_file.write_text(yaml.dump({"stage3": {"silence_threshold": 2.5}}))
+        cli = {"stage3": {"silence_threshold": 3.0}}
         cfg = get_effective_config(cfg_file, cli)
-        assert cfg["stage2"]["silence_threshold"] == 3.0
+        assert cfg["stage3"]["silence_threshold"] == 3.0
 
     def test_full_precedence(self, tmp_path: Path):
         """CLI > config > defaults."""
@@ -96,50 +96,50 @@ class TestGetEffectiveConfig:
         cfg_file.write_text(
             yaml.dump(
                 {
-                    "stage2": {
+                    "stage3": {
                         "silence_threshold": 2.5,
                         "min_keep": 0.5,
                     }
                 }
             )
         )
-        cli = {"stage2": {"silence_threshold": 3.0}}
+        cli = {"stage3": {"silence_threshold": 3.0}}
         cfg = get_effective_config(cfg_file, cli)
         # CLI wins
-        assert cfg["stage2"]["silence_threshold"] == 3.0
+        assert cfg["stage3"]["silence_threshold"] == 3.0
         # Config wins over default
-        assert cfg["stage2"]["min_keep"] == 0.5
+        assert cfg["stage3"]["min_keep"] == 0.5
         # Default remains
-        assert cfg["stage2"]["pre_margin"] == 1.0
+        assert cfg["stage3"]["pre_margin"] == 1.0
 
     def test_partial_config(self, tmp_path: Path):
         cfg_file = tmp_path / "cfg.yml"
-        cfg_file.write_text(yaml.dump({"stage3": {"default_fps": 24.0}}))
+        cfg_file.write_text(yaml.dump({"stage4": {"default_fps": 24.0}}))
         cfg = get_effective_config(cfg_file)
-        assert cfg["stage3"]["default_fps"] == 24.0
+        assert cfg["stage4"]["default_fps"] == 24.0
         # All other sections still have defaults
-        assert cfg["stage2"]["silence_threshold"] == 1.5
+        assert cfg["stage3"]["silence_threshold"] == 1.5
         assert cfg["general"]["log_level"] == "INFO"
-        assert cfg["stage3"]["caption_style"]["font_size"] == 50
+        assert cfg["stage4"]["caption_style"]["font_size"] == 50
 
     def test_nested_caption_override(self, tmp_path: Path):
         cfg_file = tmp_path / "cfg.yml"
         cfg_file.write_text(
-            yaml.dump({"stage2": {"caption": {"max_bunsetu": 20}}})
+            yaml.dump({"stage3": {"caption": {"max_bunsetu": 20}}})
         )
         cfg = get_effective_config(cfg_file)
-        assert cfg["stage2"]["caption"]["max_bunsetu"] == 20
+        assert cfg["stage3"]["caption"]["max_bunsetu"] == 20
         # Other caption defaults intact
-        assert cfg["stage2"]["caption"]["max_duration"] == 4.0
+        assert cfg["stage3"]["caption"]["max_duration"] == 4.0
 
     def test_caption_style_override(self, tmp_path: Path):
         cfg_file = tmp_path / "cfg.yml"
         cfg_file.write_text(
-            yaml.dump({"stage3": {"caption_style": {"font_size": 72}}})
+            yaml.dump({"stage4": {"caption_style": {"font_size": 72}}})
         )
         cfg = get_effective_config(cfg_file)
-        assert cfg["stage3"]["caption_style"]["font_size"] == 72
-        assert cfg["stage3"]["caption_style"]["alignment_x"] == "CENTER"
+        assert cfg["stage4"]["caption_style"]["font_size"] == 72
+        assert cfg["stage4"]["caption_style"]["alignment_x"] == "CENTER"
 
     def test_unknown_keys_preserved(self, tmp_path: Path):
         cfg_file = tmp_path / "cfg.yml"
@@ -147,4 +147,4 @@ class TestGetEffectiveConfig:
         cfg = get_effective_config(cfg_file)
         assert cfg["custom_section"]["key"] == "value"
         # Defaults still present
-        assert "stage2" in cfg
+        assert "stage3" in cfg

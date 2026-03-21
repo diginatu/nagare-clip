@@ -1,4 +1,4 @@
-"""Stage 3 CLI entry point: build rough-cut VSE layout in Blender."""
+"""Stage 4 CLI entry point: build rough-cut VSE layout in Blender."""
 
 from __future__ import annotations
 
@@ -18,8 +18,8 @@ if str(_SRC) not in sys.path:
 import bpy
 
 from nagare_clip.config import get_effective_config
-from nagare_clip.stage3.scene import load_source_metadata, reset_scene
-from nagare_clip.stage3.timeline import (
+from nagare_clip.stage4.scene import load_source_metadata, reset_scene
+from nagare_clip.stage4.timeline import (
     build_timeline_map,
     place_captions,
     place_strips,
@@ -77,7 +77,7 @@ def main() -> None:
 
     # Use first source for scene metadata
     first_fps, first_width, first_height = load_source_metadata(
-        sources[0], default_fps=cfg["stage3"]["default_fps"]
+        sources[0], default_fps=cfg["stage4"]["default_fps"]
     )
     fps_int = max(1, int(round(first_fps)))
     fps_base = fps_int / first_fps
@@ -97,7 +97,7 @@ def main() -> None:
     # Warn if subsequent sources differ in resolution/FPS
     for i, src in enumerate(sources[1:], start=1):
         fps_i, w_i, h_i = load_source_metadata(
-            src, default_fps=cfg["stage3"]["default_fps"]
+            src, default_fps=cfg["stage4"]["default_fps"]
         )
         if abs(fps_i - first_fps) > 0.01 or w_i != first_width or h_i != first_height:
             logging.warning(
@@ -131,8 +131,8 @@ def main() -> None:
             start_cursor=timeline_cursor,
             idx_offset=idx_offset,
             source_num=src_num,
-            use_proxy=cfg["stage3"]["use_proxy"],
-            proxy_size=cfg["stage3"]["proxy_size"],
+            use_proxy=cfg["stage4"]["use_proxy"],
+            proxy_size=cfg["stage4"]["proxy_size"],
         )
         idx_offset += len(keep_intervals)
 
@@ -145,7 +145,7 @@ def main() -> None:
                 tl_map,
                 effective_fps,
                 sequence_collection,
-                caption_style=cfg["stage3"]["caption_style"],
+                caption_style=cfg["stage4"]["caption_style"],
             )
 
     for s in sequence_collection:

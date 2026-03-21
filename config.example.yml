@@ -11,17 +11,17 @@ stage1:
   batch_size: 16
   # align_model: vumichien/wav2vec2-large-xlsr-japanese
 
-stage1_5:
-  enabled: false               # Enable LLM text filter between Stage 1 and Stage 2
+stage2:
+  use_llm: false               # Enable LLM text filter for Stage 2 text editing
   api_base: "http://localhost:11434/v1"  # OpenAI-compatible API base URL (Ollama default)
-  model: "gemma3:12b"           # Model name for chat completions
+  model: "qwen3.5:4b"          # Model name for chat completions
   api_key: ""                  # API key (empty = no auth, for local Ollama)
   batch_size: 10               # Number of transcript segments per LLM call
   timeout: 60                  # API request timeout in seconds
   # prompt: "..."              # System prompt for LLM (has sensible default for Japanese)
   temperature: 0.1             # LLM sampling temperature
 
-stage2:
+stage3:
   silence_threshold: 1.5     # Silence gap threshold in seconds
   min_keep: 1.0              # Minimum keep interval length in seconds
   pre_margin: 1.0            # Seconds to extend intervals before start
@@ -38,7 +38,7 @@ stage2:
   #   char_eps: 0.02
   #   silence_max_word_span: 0.6
 
-stage3:
+stage4:
   default_fps: 30.0           # Fallback FPS when source metadata unavailable
   use_proxy: true              # Enable proxy on movie strips for smooth VSE playback (bpy MovieStrip.use_proxy)
   proxy_size: 100              # Proxy render size percentage: 25 | 50 | 75 | 100
@@ -52,5 +52,5 @@ stage3:
 
 pipeline:
   input_videos_dir: src_video
-  output_dir: output   # Root dir; stage outputs go to stage1/, stage2/, stage3/ subdirs
-  from_stage: 1        # Start from this stage (1, 2, or 3); reuses earlier stage outputs
+  output_dir: output   # Root dir; stage outputs go to stage1/, stage2/, stage3/, stage4/ subdirs
+  from_stage: 1        # Start from this stage (1, 2, 3, or 4); reuses earlier stage outputs

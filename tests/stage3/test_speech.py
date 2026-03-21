@@ -2,7 +2,7 @@
 
 import pytest
 
-from nagare_clip.stage2.speech import build_speech_spans
+from nagare_clip.stage3.speech import build_speech_spans
 
 
 def test_build_speech_spans_caps_inflated_word_end_for_gap_detection():

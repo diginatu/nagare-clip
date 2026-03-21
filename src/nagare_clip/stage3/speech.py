@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import List, Sequence, Tuple
 
-from nagare_clip.stage2.bunsetu import CHAR_EPS, SILENCE_MAX_WORD_SPAN
+from nagare_clip.stage3.bunsetu import CHAR_EPS, SILENCE_MAX_WORD_SPAN
 
 
 def build_speech_spans(whisperx_data: dict) -> List[Tuple[float, float]]:

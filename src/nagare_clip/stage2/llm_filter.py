@@ -12,12 +12,31 @@ from typing import Any, Dict, List, Tuple
 logger = logging.getLogger(__name__)
 
 _PATCH_RE = re.compile(r"\{\{([^}]*?)->(.*?)\}\}")
+_LINE_RE = re.compile(r"^(\d+):\s?(.*)")
+
+
+def apply_patches_to_lines(lines: List[str]) -> List[str]:
+    """Apply {{old->new}} patches in each line, returning clean text.
+
+    Lines without patches are returned as-is.  For each line that contains
+    markers, the ``old`` part is replaced with ``new`` and the marker syntax
+    is stripped.  If validation fails for a line, the original text (with
+    markers removed by keeping ``old``) is returned instead.
+    """
+    clean: List[str] = []
+    for line in lines:
+        original = _PATCH_RE.sub(r"\1", line)
+        result = _apply_patches(line, original)
+        clean.append(result if result is not None else original)
+    return clean
 
 
 def filter_transcript(lines: List[str], cfg: Dict[str, Any]) -> List[str]:
-    """Send transcript lines to LLM in batches and return corrected lines.
+    """Send transcript lines to LLM in batches, return lines with {{old->new}} markers.
 
-    Falls back to original lines on any API or parse failure.
+    The returned lines preserve the ``{{old->new}}`` patch syntax so that
+    a human can review and further edit the markers before they are applied
+    by Stage 3.  Falls back to original lines on any API or parse failure.
     """
     if not lines:
         return []
@@ -92,19 +111,19 @@ def _call_llm(messages: List[Dict[str, str]], cfg: Dict[str, Any]) -> str:
 def _parse_response(
     response: str, original_batch: List[Tuple[int, str]]
 ) -> Dict[int, str]:
-    """Parse LLM response lines, apply {{old->new}} patches.
+    """Parse LLM response lines, validate {{old->new}} markers.
 
-    Returns a mapping from original index to corrected text.
-    Falls back to original for lines that can't be parsed or validated.
+    Returns a mapping from original index to response text with markers
+    preserved.  Lines whose markers fail validation are omitted (caller
+    keeps the original).
     """
     original_map = {idx: text for idx, text in original_batch}
     result: Dict[int, str] = {}
 
     # Parse response lines with line-number prefix
-    line_re = re.compile(r"^(\d+):\s?(.*)")
     response_lines: Dict[int, str] = {}
     for raw_line in response.splitlines():
-        m = line_re.match(raw_line)
+        m = _LINE_RE.match(raw_line)
         if m:
             line_num = int(m.group(1)) - 1  # convert to 0-indexed
             response_lines[line_num] = m.group(2)
@@ -119,11 +138,30 @@ def _parse_response(
             continue
 
         response_text = response_lines[idx]
-        corrected = _apply_patches(response_text, original_text)
-        if corrected is not None:
-            result[idx] = corrected
+        if _validate_patches(response_text, original_text):
+            result[idx] = response_text
 
     return result
+
+
+def _validate_patches(response_text: str, original_text: str) -> bool:
+    """Check that all {{old->new}} markers in response_text are valid.
+
+    Returns True if the response can be accepted (markers are valid or absent).
+    """
+    markers = list(_PATCH_RE.finditer(response_text))
+    if not markers:
+        return True
+    for m in markers:
+        old = m.group(1)
+        if old and old not in original_text:
+            logger.warning(
+                "Patch old text %r not found in original %r, keeping original",
+                old,
+                original_text,
+            )
+            return False
+    return True
 
 
 def _apply_patches(response_text: str, original_text: str) -> str | None:
@@ -137,22 +175,13 @@ def _apply_patches(response_text: str, original_text: str) -> str | None:
         # No patches — LLM returned text as-is (possibly unchanged)
         return response_text
 
-    # Validate that all 'old' parts exist in the original text
-    for m in markers:
-        old = m.group(1)
-        if old and old not in original_text:
-            logger.warning(
-                "Patch old text %r not found in original %r, keeping original",
-                old,
-                original_text,
-            )
-            return None
+    if not _validate_patches(response_text, original_text):
+        return None
 
     # Build the corrected text by replacing markers with 'new' part
     # and stripping the marker syntax
     corrected = response_text
     for m in reversed(markers):  # reverse to preserve positions
-        new = m.group(2)
-        corrected = corrected[: m.start()] + new + corrected[m.end() :]
+        corrected = corrected[: m.start()] + m.group(2) + corrected[m.end() :]
 
     return corrected

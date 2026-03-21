@@ -18,10 +18,10 @@ DEFAULTS: Dict[str, Any] = {
         "batch_size": 16,
         "align_model": "",
     },
-    "stage1_5": {
-        "enabled": False,
+    "stage2": {
+        "use_llm": False,
         "api_base": "http://localhost:11434/v1",
-        "model": "gemma3:12b",
+        "model": "qwen3.5:4b",
         "api_key": "",
         "batch_size": 10,
         "timeout": 60,
@@ -48,7 +48,7 @@ DEFAULTS: Dict[str, Any] = {
         ),
         "temperature": 0.1,
     },
-    "stage2": {
+    "stage3": {
         "silence_threshold": 1.5,
         "min_keep": 1.0,
         "pre_margin": 1.0,
@@ -66,7 +66,7 @@ DEFAULTS: Dict[str, Any] = {
             "silence_max_word_span": 0.6,
         },
     },
-    "stage3": {
+    "stage4": {
         "default_fps": 30.0,
         "use_proxy": True,
         "proxy_size": 100,

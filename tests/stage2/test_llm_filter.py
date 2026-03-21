@@ -1,4 +1,4 @@
-"""Tests for Stage 1.5 LLM filter."""
+"""Tests for Stage 2 LLM filter."""
 
 from __future__ import annotations
 
@@ -6,11 +6,13 @@ from unittest.mock import patch
 
 import pytest
 
-from nagare_clip.stage1_5.llm_filter import (
+from nagare_clip.stage2.llm_filter import (
     _apply_patches,
     _batch_lines,
     _format_batch,
     _parse_response,
+    _validate_patches,
+    apply_patches_to_lines,
     filter_transcript,
 )
 
@@ -98,13 +100,24 @@ class TestApplyPatches:
         assert result == "追加テスト"
 
 
+class TestValidatePatches:
+    def test_valid_patches(self):
+        assert _validate_patches("{{急->今日}}はいい天気ですね", "急はいい天気ですね")
+
+    def test_no_patches(self):
+        assert _validate_patches("plain text", "plain text")
+
+    def test_invalid_old(self):
+        assert not _validate_patches("{{存在しない->修正}}テスト", "テスト")
+
+
 class TestParseResponse:
-    def test_basic_parse(self):
+    def test_basic_parse_preserves_markers(self):
         batch = [(0, "あのー今日は"), (1, "えーとはい")]
         response = "1: {{あのー->}}今日は\n2: {{えーと->}}はい"
         result = _parse_response(response, batch)
-        assert result[0] == "今日は"
-        assert result[1] == "はい"
+        assert result[0] == "{{あのー->}}今日は"
+        assert result[1] == "{{えーと->}}はい"
 
     def test_missing_line_skipped(self):
         batch = [(0, "line one"), (1, "line two")]
@@ -124,21 +137,47 @@ class TestParseResponse:
         result = _parse_response(response, batch)
         assert result[0] == "unchanged"
 
+    def test_invalid_patch_rejected(self):
+        batch = [(0, "テスト")]
+        response = "1: {{存在しない->修正}}テスト"
+        result = _parse_response(response, batch)
+        assert 0 not in result
+
+
+class TestApplyPatchesToLines:
+    def test_applies_patches(self):
+        lines = ["{{えーと->}}今日は", "plain line"]
+        result = apply_patches_to_lines(lines)
+        assert result == ["今日は", "plain line"]
+
+    def test_multiple_patches_per_line(self):
+        lines = ["{{えーと->}}回り始めるようになっ{{てた->ていた}}と思います"]
+        result = apply_patches_to_lines(lines)
+        assert result == ["回り始めるようになっていたと思います"]
+
+    def test_no_patches(self):
+        lines = ["clean line"]
+        result = apply_patches_to_lines(lines)
+        assert result == ["clean line"]
+
+    def test_empty_input(self):
+        assert apply_patches_to_lines([]) == []
+
 
 class TestFilterTranscript:
     def test_empty_input(self):
         assert filter_transcript([], {}) == []
 
-    @patch("nagare_clip.stage1_5.llm_filter._call_llm")
-    def test_successful_filter(self, mock_llm):
+    @patch("nagare_clip.stage2.llm_filter._call_llm")
+    def test_successful_filter_preserves_markers(self, mock_llm):
         mock_llm.return_value = "1: {{えーと->}}今日は\n2: line two"
         lines = ["えーと今日は", "line two"]
         cfg = {"batch_size": 10, "prompt": "fix"}
         result = filter_transcript(lines, cfg)
-        assert result[0] == "今日は"
+        assert result[0] == "{{えーと->}}今日は"
         assert result[1] == "line two"
 
-    @patch("nagare_clip.stage1_5.llm_filter._call_llm")
+    @patch("nagare_clip.stage2.llm_filter._call_llm")
     def test_api_failure_keeps_originals(self, mock_llm):
         mock_llm.side_effect = ConnectionError("timeout")
         lines = ["original line"]
@@ -146,7 +185,7 @@ class TestFilterTranscript:
         result = filter_transcript(lines, cfg)
         assert result == ["original line"]
 
-    @patch("nagare_clip.stage1_5.llm_filter._call_llm")
+    @patch("nagare_clip.stage2.llm_filter._call_llm")
     def test_garbled_response_keeps_originals(self, mock_llm):
         mock_llm.return_value = "garbled nonsense without line numbers"
         lines = ["original"]
@@ -154,11 +193,11 @@ class TestFilterTranscript:
         result = filter_transcript(lines, cfg)
         assert result == ["original"]
 
-    @patch("nagare_clip.stage1_5.llm_filter._call_llm")
-    def test_added_text_allowed(self, mock_llm):
-        """LLM may add helpful text — no edit distance limit."""
+    @patch("nagare_clip.stage2.llm_filter._call_llm")
+    def test_added_text_preserves_markers(self, mock_llm):
+        """LLM may add helpful text — markers are preserved."""
         mock_llm.return_value = "1: {{短い->短い文を長い説明に変える}}テスト"
         lines = ["短いテスト"]
         cfg = {"batch_size": 10, "prompt": "fix"}
         result = filter_transcript(lines, cfg)
-        assert result[0] == "短い文を長い説明に変えるテスト"
+        assert result[0] == "{{短い->短い文を長い説明に変える}}テスト"

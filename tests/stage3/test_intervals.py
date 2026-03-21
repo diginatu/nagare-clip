@@ -2,7 +2,7 @@
 
 import pytest
 
-from nagare_clip.stage2.intervals import (
+from nagare_clip.stage3.intervals import (
     apply_margins,
     enforce_min_keep_duration,
     ensure_keep_covers_captions,

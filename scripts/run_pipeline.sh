@@ -13,10 +13,10 @@ usage() {
   echo "  --source            FILE  Source video file (may be repeated; default: all videos in input-videos-dir)"
   echo "  --config            FILE  Path to YAML config file"
   echo "  --input-videos-dir  DIR   Directory containing source videos (default: src_video)"
-  echo "  --output-dir        DIR   Root output directory; stage outputs go to stage1/, stage2/, stage3/ subdirs (default: output)"
+  echo "  --output-dir        DIR   Root output directory; stage outputs go to stage1/, stage2/, stage3/, stage4/ subdirs (default: output)"
   echo "  --pre-margin        SEC   Seconds to extend keep intervals before start (default: 1.0)"
   echo "  --post-margin       SEC   Seconds to extend keep intervals after end (default: 1.0)"
-  echo "  --from-stage        N     Start from stage N (1, 1.5, 2, or 3); reuses earlier stage outputs"
+  echo "  --from-stage        N     Start from stage N (1, 2, 3, or 4); reuses earlier stage outputs"
   echo "  --align-model       MODEL HuggingFace model ID for WhisperX alignment"
   echo "                            Japanese default: vumichien/wav2vec2-large-xlsr-japanese"
   echo "                            English default: (whisperx built-in)"
@@ -78,7 +78,7 @@ CFG_MIN_KEEP=""
 CFG_FROM_STAGE=""
 CFG_COMPUTE_TYPE=""
 CFG_BATCH_SIZE=""
-CFG_STAGE1_5_ENABLED=""
+CFG_USE_LLM=""
 
 if [[ -n "$CONFIG_FILE" ]]; then
   if [[ ! -f "$CONFIG_FILE" ]]; then
@@ -90,8 +90,8 @@ import yaml, sys, shlex
 with open(sys.argv[1]) as f:
     c = yaml.safe_load(f) or {}
 s1 = c.get('stage1', {})
-s15 = c.get('stage1_5', {})
 s2 = c.get('stage2', {})
+s3 = c.get('stage3', {})
 p  = c.get('pipeline', {})
 def out(name, val):
     if val is not None and val != '':
@@ -99,11 +99,11 @@ def out(name, val):
 out('CFG_COMPUTE_TYPE', s1.get('compute_type'))
 out('CFG_BATCH_SIZE', s1.get('batch_size'))
 out('CFG_ALIGN_MODEL', s1.get('align_model'))
-out('CFG_SILENCE_THRESHOLD', s2.get('silence_threshold'))
-out('CFG_MIN_KEEP', s2.get('min_keep'))
-out('CFG_PRE_MARGIN', s2.get('pre_margin'))
-out('CFG_POST_MARGIN', s2.get('post_margin'))
-out('CFG_STAGE1_5_ENABLED', str(bool(s15.get('enabled', False))).lower())
+out('CFG_SILENCE_THRESHOLD', s3.get('silence_threshold'))
+out('CFG_MIN_KEEP', s3.get('min_keep'))
+out('CFG_PRE_MARGIN', s3.get('pre_margin'))
+out('CFG_POST_MARGIN', s3.get('post_margin'))
+out('CFG_USE_LLM', str(bool(s2.get('use_llm', False))).lower())
 out('CFG_INPUT_VIDEOS_DIR', p.get('input_videos_dir'))
 out('CFG_OUTPUT_DIR', p.get('output_dir'))
 out('CFG_FROM_STAGE', p.get('from_stage'))
@@ -122,8 +122,8 @@ COMPUTE_TYPE="${CFG_COMPUTE_TYPE:-float16}"
 BATCH_SIZE="${CFG_BATCH_SIZE:-16}"
 FROM_STAGE="${CLI_FROM_STAGE:-${CFG_FROM_STAGE:-1}}"
 
-if [[ "$FROM_STAGE" != "1" && "$FROM_STAGE" != "1.5" && "$FROM_STAGE" != "2" && "$FROM_STAGE" != "3" ]]; then
-  echo "Invalid --from-stage value: $FROM_STAGE (must be 1, 1.5, 2, or 3)" >&2
+if [[ "$FROM_STAGE" != "1" && "$FROM_STAGE" != "2" && "$FROM_STAGE" != "3" && "$FROM_STAGE" != "4" ]]; then
+  echo "Invalid --from-stage value: $FROM_STAGE (must be 1, 2, 3, or 4)" >&2
   exit 1
 fi
 
@@ -137,8 +137,9 @@ fi
 STAGE1_DIR="${OUTPUT_DIR}/stage1"
 STAGE2_DIR="${OUTPUT_DIR}/stage2"
 STAGE3_DIR="${OUTPUT_DIR}/stage3"
+STAGE4_DIR="${OUTPUT_DIR}/stage4"
 
-mkdir -p "$INPUT_VIDEOS_DIR" "$STAGE1_DIR" "$STAGE2_DIR" "$STAGE3_DIR" "$PROJECT_ROOT/cache"
+mkdir -p "$INPUT_VIDEOS_DIR" "$STAGE1_DIR" "$STAGE2_DIR" "$STAGE3_DIR" "$STAGE4_DIR" "$PROJECT_ROOT/cache"
 
 ABS_INPUT_VIDEOS="$(realpath "$INPUT_VIDEOS_DIR")"
 ABS_OUTPUT_DIR="$(realpath "$OUTPUT_DIR")"
@@ -184,19 +185,19 @@ if [[ -n "$CONFIG_FILE" ]]; then
   CONFIG_ARGS=("--config" "$(realpath "$CONFIG_FILE")")
 fi
 
-# Build Stage 2 CLI override args (only explicitly-set values)
-STAGE2_OVERRIDE_ARGS=()
+# Build Stage 3 CLI override args (only explicitly-set values)
+STAGE3_OVERRIDE_ARGS=()
 if [[ -n "$CLI_SILENCE_THRESHOLD" ]]; then
-  STAGE2_OVERRIDE_ARGS+=("--silence_threshold" "$CLI_SILENCE_THRESHOLD")
+  STAGE3_OVERRIDE_ARGS+=("--silence_threshold" "$CLI_SILENCE_THRESHOLD")
 fi
 if [[ -n "$CLI_MIN_KEEP" ]]; then
-  STAGE2_OVERRIDE_ARGS+=("--min_keep" "$CLI_MIN_KEEP")
+  STAGE3_OVERRIDE_ARGS+=("--min_keep" "$CLI_MIN_KEEP")
 fi
 if [[ -n "$CLI_PRE_MARGIN" ]]; then
-  STAGE2_OVERRIDE_ARGS+=("--pre_margin" "$CLI_PRE_MARGIN")
+  STAGE3_OVERRIDE_ARGS+=("--pre_margin" "$CLI_PRE_MARGIN")
 fi
 if [[ -n "$CLI_POST_MARGIN" ]]; then
-  STAGE2_OVERRIDE_ARGS+=("--post_margin" "$CLI_POST_MARGIN")
+  STAGE3_OVERRIDE_ARGS+=("--post_margin" "$CLI_POST_MARGIN")
 fi
 
 # Build align model args
@@ -235,7 +236,7 @@ done
 
 # --- Stage 1: WhisperX transcription (single container run for all sources) ---
 if [ "$FROM_STAGE" = "1" ]; then
-  echo "[Stage 1/3] WhisperX transcription: ${ALL_RELATIVES[*]}"
+  echo "[Stage 1/4] WhisperX transcription: ${ALL_RELATIVES[*]}"
   INPUT_VIDEOS_DIR="$ABS_INPUT_VIDEOS" OUTPUT_DIR="$ABS_OUTPUT_DIR" \
   docker compose -f "$PROJECT_ROOT/docker-compose.yml" run --rm --user "0:0" whisperx \
     _ \
@@ -247,91 +248,87 @@ if [ "$FROM_STAGE" = "1" ]; then
     --batch_size "$BATCH_SIZE" \
     "${ALIGN_MODEL_ARGS[@]}"
 else
-  echo "[Stage 1/3] Skipped (--from-stage $FROM_STAGE)"
+  echo "[Stage 1/4] Skipped (--from-stage $FROM_STAGE)"
   # Validate that Stage 1 outputs exist for all sources
   for STEM in "${ALL_STEMS[@]}"; do
     if [[ ! -f "${STAGE1_DIR}/${STEM}.json" ]]; then
       echo "Missing Stage 1 output: ${STAGE1_DIR}/${STEM}.json (required when skipping Stage 1)" >&2
       exit 1
     fi
-    if [[ "$FROM_STAGE" = "1.5" && ! -f "${STAGE1_DIR}/${STEM}.txt" ]]; then
-      echo "Missing Stage 1 output: ${STAGE1_DIR}/${STEM}.txt (required for Stage 1.5)" >&2
+    if [[ "$FROM_STAGE" = "2" && ! -f "${STAGE1_DIR}/${STEM}.txt" ]]; then
+      echo "Missing Stage 1 output: ${STAGE1_DIR}/${STEM}.txt (required for Stage 2)" >&2
       exit 1
     fi
   done
 fi
 
-# --- Stage 1.5: LLM text filter (per source, optional) ---
-STAGE1_5_ENABLED="${CFG_STAGE1_5_ENABLED:-false}"
-
-if [[ "$FROM_STAGE" = "1" || "$FROM_STAGE" = "1.5" ]] && [ "$STAGE1_5_ENABLED" = "true" ]; then
+# --- Stage 2: Text editing checkpoint (mandatory, per source) ---
+if [[ "$FROM_STAGE" = "1" || "$FROM_STAGE" = "2" ]]; then
   for i in "${!ALL_STEMS[@]}"; do
     STEM="${ALL_STEMS[$i]}"
-    echo "[Stage 1.5/3] LLM text filter: ${STEM}"
-    uv run --project "$PROJECT_ROOT" python -m nagare_clip.stage1_5.cli \
+    echo "[Stage 2/4] Text editing checkpoint: ${STEM}"
+    uv run --project "$PROJECT_ROOT" python -m nagare_clip.stage2.cli \
       --txt "${STAGE1_DIR}/${STEM}.txt" \
-      --json "${STAGE1_DIR}/${STEM}.json" \
-      --output-txt "${STAGE1_DIR}/${STEM}_filtered.txt" \
-      --output-json "${STAGE1_DIR}/${STEM}_filtered.json" \
+      --output-txt "${STAGE2_DIR}/${STEM}_edits.txt" \
       "${CONFIG_ARGS[@]}"
   done
-elif [[ "$FROM_STAGE" = "1" || "$FROM_STAGE" = "1.5" ]]; then
-  echo "[Stage 1.5/3] Skipped (disabled)"
 else
-  echo "[Stage 1.5/3] Skipped (--from-stage $FROM_STAGE)"
+  echo "[Stage 2/4] Skipped (--from-stage $FROM_STAGE)"
+  # Validate that Stage 2 outputs exist
+  for STEM in "${ALL_STEMS[@]}"; do
+    if [[ ! -f "${STAGE2_DIR}/${STEM}_edits.txt" ]]; then
+      echo "Missing Stage 2 output: ${STAGE2_DIR}/${STEM}_edits.txt (required when skipping Stage 2)" >&2
+      exit 1
+    fi
+  done
 fi
 
-# --- Stage 2: Keep interval computation (per source) ---
-if [[ "$FROM_STAGE" = "1" || "$FROM_STAGE" = "1.5" || "$FROM_STAGE" = "2" ]]; then
+# --- Stage 3: Patch application + keep interval computation (per source) ---
+if [[ "$FROM_STAGE" = "1" || "$FROM_STAGE" = "2" || "$FROM_STAGE" = "3" ]]; then
   for i in "${!ALL_STEMS[@]}"; do
     STEM="${ALL_STEMS[$i]}"
-    # Use filtered JSON if stage 1.5 produced it, otherwise original
-    if [ "$STAGE1_5_ENABLED" = "true" ] && [ -f "${STAGE1_DIR}/${STEM}_filtered.json" ]; then
-      WHISPER_JSON="${STAGE1_DIR}/${STEM}_filtered.json"
-    else
-      WHISPER_JSON="${STAGE1_DIR}/${STEM}.json"
-    fi
-    INTERVALS_JSON="${STAGE2_DIR}/${STEM}_intervals.json"
+    INTERVALS_JSON="${STAGE3_DIR}/${STEM}_intervals.json"
 
-    echo "[Stage 2/3] Keep interval computation: ${ALL_STEMS[$i]}"
+    echo "[Stage 3/4] Patch application + keep intervals: ${STEM}"
     uv run --project "$PROJECT_ROOT" python -m nagare_clip.cli \
-      --json "$WHISPER_JSON" \
+      --edits-txt "${STAGE2_DIR}/${STEM}_edits.txt" \
+      --json "${STAGE1_DIR}/${STEM}.json" \
       "${CONFIG_ARGS[@]}" \
-      "${STAGE2_OVERRIDE_ARGS[@]}" \
+      "${STAGE3_OVERRIDE_ARGS[@]}" \
       --output "$INTERVALS_JSON"
 
     ALL_INTERVALS+=("$(realpath "$INTERVALS_JSON")")
   done
 else
-  echo "[Stage 2/3] Skipped (--from-stage $FROM_STAGE)"
-  # Validate that Stage 2 outputs exist and collect interval paths
+  echo "[Stage 3/4] Skipped (--from-stage $FROM_STAGE)"
+  # Validate that Stage 3 outputs exist and collect interval paths
   for STEM in "${ALL_STEMS[@]}"; do
-    INTERVALS_JSON="${STAGE2_DIR}/${STEM}_intervals.json"
+    INTERVALS_JSON="${STAGE3_DIR}/${STEM}_intervals.json"
     if [[ ! -f "$INTERVALS_JSON" ]]; then
-      echo "Missing Stage 2 output: $INTERVALS_JSON (required when skipping Stage 2)" >&2
+      echo "Missing Stage 3 output: $INTERVALS_JSON (required when skipping Stage 3)" >&2
       exit 1
     fi
     ALL_INTERVALS+=("$(realpath "$INTERVALS_JSON")")
   done
 fi
 
-# --- Stage 3: Blender VSE project generation ---
-BLEND_OUTPUT="${STAGE3_DIR}/${FIRST_STEM}_edited.blend"
+# --- Stage 4: Blender VSE project generation ---
+BLEND_OUTPUT="${STAGE4_DIR}/${FIRST_STEM}_edited.blend"
 
-STAGE3_SOURCE_ARGS=()
+STAGE4_SOURCE_ARGS=()
 for src in "${ALL_SOURCE_PATHS[@]}"; do
-  STAGE3_SOURCE_ARGS+=("--source" "$src")
+  STAGE4_SOURCE_ARGS+=("--source" "$src")
 done
 
-STAGE3_INTERVALS_ARGS=()
+STAGE4_INTERVALS_ARGS=()
 for ivp in "${ALL_INTERVALS[@]}"; do
-  STAGE3_INTERVALS_ARGS+=("--intervals" "$ivp")
+  STAGE4_INTERVALS_ARGS+=("--intervals" "$ivp")
 done
 
-echo "[Stage 3/3] Blender VSE project generation"
-blender --background --factory-startup --python-exit-code 1 --python "$PROJECT_ROOT/src/nagare_clip/stage3/blender_cli.py" -- \
-  "${STAGE3_SOURCE_ARGS[@]}" \
-  "${STAGE3_INTERVALS_ARGS[@]}" \
+echo "[Stage 4/4] Blender VSE project generation"
+blender --background --factory-startup --python-exit-code 1 --python "$PROJECT_ROOT/src/nagare_clip/stage4/blender_cli.py" -- \
+  "${STAGE4_SOURCE_ARGS[@]}" \
+  "${STAGE4_INTERVALS_ARGS[@]}" \
   --output "$BLEND_OUTPUT" \
   "${CONFIG_ARGS[@]}"
 

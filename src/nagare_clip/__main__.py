@@ -1,4 +1,4 @@
-"""Allow running Stage 2 via ``python -m nagare_clip``."""
+"""Allow running Stage 3 via ``python -m nagare_clip``."""
 
 from nagare_clip.cli import main
 

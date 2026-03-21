@@ -1,8 +1,8 @@
-"""Tests for Stage 1.5 JSON sync."""
+"""Tests for Stage 3 JSON sync."""
 
 from __future__ import annotations
 
-from nagare_clip.stage1_5.sync_json import sync_text_to_json
+from nagare_clip.stage3.sync_json import sync_text_to_json
 
 
 def _make_segment(text: str, words: list) -> dict:

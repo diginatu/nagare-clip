@@ -1,4 +1,4 @@
-"""Integration tests for Stage 3 timeline strip placement.
+"""Integration tests for Stage 4 timeline strip placement.
 
 Tests run place_strips() inside a real Blender process via
 ``blender --background --python`` and assert on the resulting strip data.

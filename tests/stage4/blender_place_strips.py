@@ -1,7 +1,7 @@
 """Blender-side integration test for place_strips().
 
 Run inside Blender:
-  blender --background --python tests/stage3/blender_place_strips.py -- <video> <output_json>
+  blender --background --python tests/stage4/blender_place_strips.py -- <video> <output_json>
 
 Produces a JSON file with strip data for the pytest wrapper to assert on.
 """
@@ -18,8 +18,8 @@ sys.path.insert(0, str(_SRC))
 
 import bpy
 
-from nagare_clip.stage3.scene import reset_scene
-from nagare_clip.stage3.timeline import place_strips
+from nagare_clip.stage4.scene import reset_scene
+from nagare_clip.stage4.timeline import place_strips
 
 
 def main() -> None:

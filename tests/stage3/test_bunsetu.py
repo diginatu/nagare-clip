@@ -3,9 +3,9 @@
 import pytest
 from unittest.mock import patch
 
-from nagare_clip.stage2.bunsetu import build_bunsetu_times, flatten_bunsetu
+from nagare_clip.stage3.bunsetu import build_bunsetu_times, flatten_bunsetu
 
-from tests.stage2.conftest import make_nlp
+from tests.stage3.conftest import make_nlp
 
 
 def bunsetu_spans_from_doc(doc):

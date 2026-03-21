@@ -7,9 +7,17 @@ The pipeline creates a rough-cut Blender project for human review and fine-tunin
 ## Pipeline Stages
 
 1. Stage 1: WhisperX in Docker -> transcript outputs (`json`, `srt`, `vtt`, etc.)
-1.5. Stage 1.5 (optional): LLM text filter -> corrected `_filtered.json` / `_filtered.txt`
-2. Stage 2: Python interval logic -> `*_intervals.json` keep ranges
-3. Stage 3: Blender headless -> `.blend` with VSE strips arranged back-to-back
+2. Stage 2: Text editing checkpoint -> `_edits.txt` (copy of `.txt`, or LLM-corrected with `{{old->new}}` markers)
+3. Stage 3: Patch application + keep intervals -> `*_intervals.json` keep ranges
+4. Stage 4: Blender headless -> `.blend` with VSE strips arranged back-to-back
+
+## Human Editing Workflow
+
+1. Run stages 1–2: `./scripts/run_pipeline.sh --from-stage 1 ja` (or just stages 1–2)
+2. Edit `output/stage2/{stem}_edits.txt` — add/modify `{{old->new}}` patch markers
+3. Resume: `./scripts/run_pipeline.sh --from-stage 3 --source myvideo.mp4 ja`
+
+The `{{old->new}}` syntax replaces `old` with `new` in the transcript. Use `{{delete->}}` to remove text, `{{->insert}}` to insert text.
 
 ## Requirements
 
@@ -64,11 +72,14 @@ Use a YAML config file to tune pipeline parameters (see `config.example.yml`):
 Re-run from a specific stage (skip expensive earlier stages when iterating on config):
 
 ```bash
-# Skip Stage 1, reuse existing WhisperX output, re-run Stage 2 + 3
+# Skip Stage 1, reuse existing WhisperX output, re-run Stage 2 + 3 + 4
 ./scripts/run_pipeline.sh --from-stage 2 --source myvideo.mp4 ja
 
-# Skip Stage 1 and 2, only regenerate the Blender project
+# Skip Stage 1–2, apply edits and regenerate intervals + Blender project
 ./scripts/run_pipeline.sh --from-stage 3 --source myvideo.mp4 ja
+
+# Skip Stage 1–3, only regenerate the Blender project
+./scripts/run_pipeline.sh --from-stage 4 --source myvideo.mp4 ja
 ```
 
 Override the alignment model (e.g. to revert to the WhisperX built-in default for Japanese):
@@ -79,11 +90,10 @@ Override the alignment model (e.g. to revert to the WhisperX built-in default fo
 
 This produces outputs under `output/` (or your `--output-dir`), including:
 
-- `myvideo.json`
-- `myvideo.srt`
-- `myvideo.vtt`
-- `myvideo_intervals.json`
-- `myvideo_edited.blend` (named after the first source file)
+- `stage1/myvideo.json`, `stage1/myvideo.txt`
+- `stage2/myvideo_edits.txt`
+- `stage3/myvideo_intervals.json`
+- `stage4/myvideo_edited.blend` (named after the first source file)
 
 ## Configuration
 
@@ -101,20 +111,20 @@ Parameters resolve in this priority order (highest wins):
 2. Config file values
 3. Built-in defaults
 
-The config file covers all sections (`general`, `stage1`, `stage1_5`, `stage2`, `stage3`, `pipeline`). See `config.example.yml` for the full list of keys and their defaults.
+The config file covers all sections (`general`, `stage1`, `stage2`, `stage3`, `stage4`, `pipeline`). See `config.example.yml` for the full list of keys and their defaults.
 
-### Stage 1.5: LLM Text Filter (optional)
+### Stage 2: Text Editing (LLM optional)
 
-Enable LLM-based transcription correction by setting `stage1_5.enabled: true` in your config file. This uses an OpenAI-compatible API (default: Ollama at `localhost:11434`) to fix common speech recognition errors.
+Stage 2 always produces `{stem}_edits.txt`. When `stage2.use_llm` is `false` (default), it copies the Stage 1 `.txt` as-is. When enabled, it runs LLM-based transcription correction and writes output with `{{old->new}}` markers preserved for human review.
 
 ```yaml
-stage1_5:
-  enabled: true
+stage2:
+  use_llm: true
   api_base: "http://localhost:11434/v1"
   model: "gemma3:4b"
 ```
 
-The LLM uses `{{old->new}}` inline patch syntax to mark corrections, with automatic fallback to the original text on any failure. Stage 1.5 runs between Stage 1 and Stage 2. Use `--from-stage 1.5` to skip Stage 1 and re-run Stage 1.5 with existing WhisperX output.
+The LLM uses `{{old->new}}` inline patch syntax to mark corrections. Human editors can then review and modify the markers in `_edits.txt` before Stage 3 applies them.
 
 ## CLI
 
@@ -125,7 +135,7 @@ The LLM uses `{{old->new}}` inline patch syntax to mark corrections, with automa
 Options:
 - `--source FILE` — source video file (may be repeated for multiple sources); when omitted, all videos in `--input-videos-dir` are processed alphabetically.
 - `--config FILE` — path to a YAML config file; config values fill in between CLI overrides and built-in defaults.
-- `--from-stage N` — start from stage N (1, 1.5, 2, or 3); reuses earlier stage outputs. Also settable via `pipeline.from_stage` in config.
+- `--from-stage N` — start from stage N (1, 2, 3, or 4); reuses earlier stage outputs. Also settable via `pipeline.from_stage` in config.
 - Defaults: input videos under `src_video/`, outputs under `output/`.
 - If `--source` contains `/`, it is treated as the exact path; otherwise it is resolved inside `--input-videos-dir`.
 - `silence_threshold` and `min_keep` default to `1.5` and `1.0` (overridable via config).
@@ -154,20 +164,22 @@ Notes:
 - This image tag does not accept `--word_timestamps`.
 - No diarization flags are used.
 
-### Stage 2 only (interval generation)
+### Stage 3 only (patch application + interval generation)
 
 ```bash
 uv run python -m nagare_clip.cli \
-  --json output/myvideo.json \
+  --edits-txt output/stage2/myvideo_edits.txt \
+  --json output/stage1/myvideo.json \
   --config my_project.yml \
-  --output output/myvideo_intervals.json
+  --output output/stage3/myvideo_intervals.json
 ```
 
 CLI flags override config file values:
 
 ```bash
 uv run python -m nagare_clip.cli \
-  --json output/myvideo.json \
+  --edits-txt output/stage2/myvideo_edits.txt \
+  --json output/stage1/myvideo.json \
   --silence_threshold 1.5 \
   --min_keep 1.0 \
   --pre_margin 1.0 \
@@ -177,18 +189,18 @@ uv run python -m nagare_clip.cli \
   --caption_max_duration 4.0 \
   --caption_min_duration 1.5 \
   --caption_silence_flush 1.5 \
-  --output output/myvideo_intervals.json
+  --output output/stage3/myvideo_intervals.json
 
-Keep-interval silence detection uses WhisperX word timings (`word.start`/`word.end`) with a per-word max-span cap (0.6s) so inflated token ends do not mask real pauses. Bunsetsu timing uses `ginza.bunsetu_spans(doc)` (GiNZA/spaCy) so particles and auxiliaries are attached to the preceding content word, producing natural subtitle line-break units. It detects large intra-bunsetsu character gaps (> 0.6s) caused by WhisperX misalignment and snaps the bunsetsu start forward to the later character cluster so silence is not hidden inside a single bunsetsu. Caption chunks use bunsetsu-level timing (`end = min(start+0.02s, next_bunsetu_start)`) and are split on detected silence gaps and keep-boundary crossings. Captions are preserved as transcript chunks and Stage 2 expands keep intervals to include caption spans so subtitle text is not dropped at Stage 3, then re-applies minimum keep duration (`--min_keep`) to avoid tiny strips. Tune chunking with `--caption_max_bunsetu`, `--caption_min_bunsetu`, `--caption_max_duration`, `--caption_min_duration`, and `--caption_silence_flush`.
+Keep-interval silence detection uses WhisperX word timings (`word.start`/`word.end`) with a per-word max-span cap (0.6s) so inflated token ends do not mask real pauses. Bunsetsu timing uses `ginza.bunsetu_spans(doc)` (GiNZA/spaCy) so particles and auxiliaries are attached to the preceding content word, producing natural subtitle line-break units. It detects large intra-bunsetsu character gaps (> 0.6s) caused by WhisperX misalignment and snaps the bunsetsu start forward to the later character cluster so silence is not hidden inside a single bunsetsu. Caption chunks use bunsetsu-level timing (`end = min(start+0.02s, next_bunsetu_start)`) and are split on detected silence gaps and keep-boundary crossings. Captions are preserved as transcript chunks and Stage 3 expands keep intervals to include caption spans so subtitle text is not dropped at Stage 4, then re-applies minimum keep duration (`--min_keep`) to avoid tiny strips. Tune chunking with `--caption_max_bunsetu`, `--caption_min_bunsetu`, `--caption_max_duration`, `--caption_min_duration`, and `--caption_silence_flush`.
 ```
 
-### Stage 3 only (Blender VSE project)
+### Stage 4 only (Blender VSE project)
 
 ```bash
-blender --background --factory-startup --python-exit-code 1 --python src/nagare_clip/stage3/blender_cli.py -- \
+blender --background --factory-startup --python-exit-code 1 --python src/nagare_clip/stage4/blender_cli.py -- \
   --source src_video/myvideo.mp4 \
-  --intervals output/myvideo_intervals.json \
-  --output output/myvideo_edited.blend \
+  --intervals output/stage3/myvideo_intervals.json \
+  --output output/stage4/myvideo_edited.blend \
   --config my_project.yml
 ```
 
