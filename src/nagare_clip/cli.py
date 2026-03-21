@@ -11,7 +11,6 @@ from typing import List, Tuple
 import spacy
 
 from nagare_clip.config import get_effective_config
-from nagare_clip.stage2.llm_filter import apply_patches_to_lines
 from nagare_clip.stage3.bunsetu import build_bunsetu_times
 from nagare_clip.stage3.captions import collect_captions
 from nagare_clip.stage3.intervals import (
@@ -173,17 +172,14 @@ def main() -> None:
     json_path = Path(args.json_path)
     output_path = Path(args.output_path)
 
-    # --- Apply {{old->new}} patches from _edits.txt ---
+    # --- Sync edit lines → JSON (applies {{old->new}} patches internally) ---
     edit_lines = edits_txt.read_text(encoding="utf-8").splitlines()
-    clean_lines = apply_patches_to_lines(edit_lines)
-    changes = sum(1 for e, c in zip(edit_lines, clean_lines) if e != c)
-    logging.info("Stage 3: applied patches from %s (%d lines changed)", edits_txt.name, changes)
+    logging.info("Stage 3: syncing edits from %s", edits_txt.name)
 
-    # --- Sync clean text → JSON ---
     with json_path.open("r", encoding="utf-8") as f:
         whisperx_data = json.load(f)
 
-    whisperx_data = sync_text_to_json(whisperx_data, clean_lines)
+    whisperx_data = sync_text_to_json(whisperx_data, edit_lines)
 
     logging.info(
         "Loaded %d segment(s) from %s",

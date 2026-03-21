@@ -11,7 +11,7 @@ from typing import Any, Dict, List, Tuple
 
 logger = logging.getLogger(__name__)
 
-_PATCH_RE = re.compile(r"\{\{([^}]*?)->(.*?)\}\}")
+PATCH_RE = re.compile(r"\{\{([^}]*?)->(.*?)\}\}")
 _LINE_RE = re.compile(r"^(\d+):\s?(.*)")
 
 
@@ -25,7 +25,7 @@ def apply_patches_to_lines(lines: List[str]) -> List[str]:
     """
     clean: List[str] = []
     for line in lines:
-        original = _PATCH_RE.sub(r"\1", line)
+        original = PATCH_RE.sub(r"\1", line)
         result = _apply_patches(line, original)
         clean.append(result if result is not None else original)
     return clean
@@ -149,7 +149,7 @@ def _validate_patches(response_text: str, original_text: str) -> bool:
 
     Returns True if the response can be accepted (markers are valid or absent).
     """
-    markers = list(_PATCH_RE.finditer(response_text))
+    markers = list(PATCH_RE.finditer(response_text))
     if not markers:
         return True
     for m in markers:
@@ -169,7 +169,7 @@ def _apply_patches(response_text: str, original_text: str) -> str | None:
 
     Returns the corrected text, or None if validation fails.
     """
-    markers = list(_PATCH_RE.finditer(response_text))
+    markers = list(PATCH_RE.finditer(response_text))
 
     if not markers:
         # No patches — LLM returned text as-is (possibly unchanged)
