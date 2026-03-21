@@ -106,7 +106,7 @@ Both `cli.py` (Stage 3) and `blender_cli.py` (Stage 4) accept a `--config <path>
 
 ## Current Runtime Quirks
 
-- Stage 2 is a mandatory text editing checkpoint. When `use_llm: false` (default), copies Stage 1 `.txt` to `_edits.txt`. When `use_llm: true`, runs LLM filter via OpenAI-compatible chat API (default: Ollama at `localhost:11434`) and preserves `{{old->new}}` markers in output. Falls back to original text on any LLM or parse failure. `stage2.thinking` (default `false`) controls Ollama thinking mode: when `true`, sends `"think": true` in the request; Ollama returns the reasoning trace in a separate field and the pipeline uses only `message.content`.
+- Stage 2 is a mandatory text editing checkpoint. When `use_llm: false` (default), copies Stage 1 `.txt` to `_edits.txt`. When `use_llm: true`, runs LLM filter via Ollama native chat API (default: `localhost:11434`) and preserves `{{old->new}}` markers in output. Falls back to original text on any LLM or parse failure. `stage2.thinking` (default `false`) controls thinking mode: accepts `true`/`false` or a string level (`"low"`, `"medium"`, `"high"`) for models that support it (e.g. Qwen 3.5); the value is sent as `"think"` in the API request.
 - Stage 3 reads `_edits.txt`, applies `{{old->new}}` patches via `apply_patches_to_lines()`, syncs clean text back into WhisperX JSON via `sync_text_to_json()`, then computes intervals.
 - Stage 3 keep intervals are expanded by configurable pre/post margins (defaults 1.0s) and merged before Blender export.
 - Stage 3 silence-based keep-interval detection uses WhisperX word timings (`word.start`/`word.end`) with a 0.6s per-word span cap so inflated token ends do not hide pauses. The cap is controlled by `stage3.bunsetu.silence_max_word_span` in the config.

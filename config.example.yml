@@ -22,7 +22,7 @@ stage2:
   timeout: 60                  # API request timeout in seconds
   # prompt: "..."              # System prompt for LLM (has sensible default for Japanese)
   temperature: 0.1             # LLM sampling temperature
-  thinking: false              # Enable Ollama thinking mode ("think": true in API request)
+  thinking: false              # Thinking mode: true/false, or string level ("low", "medium", "high") for models that support it
 
 stage3:
   silence_threshold: 1.5     # Silence gap threshold in seconds

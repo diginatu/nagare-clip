@@ -266,3 +266,12 @@ class TestCallLlmThinking:
         _call_llm([{"role": "user", "content": "hi"}], cfg)
         body = json.loads(mock_urlopen.call_args[0][0].data.decode("utf-8"))
         assert body.get("think") is False
+
+    @patch("urllib.request.urlopen")
+    def test_think_string_level(self, mock_urlopen):
+        """thinking accepts string levels like 'low' for models that support it."""
+        mock_urlopen.return_value = _make_urlopen_mock("1: ok")
+        cfg = {"thinking": "low", "model": "test-model", "api_base": "http://localhost"}
+        _call_llm([{"role": "user", "content": "hi"}], cfg)
+        body = json.loads(mock_urlopen.call_args[0][0].data.decode("utf-8"))
+        assert body.get("think") == "low"

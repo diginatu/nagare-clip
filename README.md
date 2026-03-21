@@ -128,12 +128,12 @@ stage2:
   use_llm: true
   api_base: "http://localhost:11434/v1"
   model: "qwen3.5:4b"
-  thinking: false   # set true to enable Ollama thinking mode
+  thinking: "low"   # thinking mode: true/false, or "low"/"medium"/"high" for supported models
 ```
 
 The LLM uses `{{old->new}}` inline patch syntax to mark corrections. Human editors can then review and modify the markers in `_edits.txt` before Stage 3 applies them.
 
-`thinking: true` sends `"think": true` in the API request, enabling chain-of-thought reasoning for supported models (e.g. qwen3, deepseek-r1). Ollama returns the reasoning trace in a separate field; the pipeline uses only the final answer.
+`thinking` sends `"think"` in the Ollama API request, enabling chain-of-thought reasoning for supported models (e.g. qwen3, deepseek-r1). Set `true`/`false`, or a string level like `"low"`, `"medium"`, `"high"` for models that support granular control (e.g. Qwen 3.5). Ollama returns the reasoning trace in a separate field; the pipeline uses only the final answer.
 
 ## CLI
 
