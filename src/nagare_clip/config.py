@@ -98,7 +98,6 @@ DEFAULTS: Dict[str, Any] = {
             "anchor_y": "BOTTOM",
             "location_x": 0.5,
             "location_y": 0.05,
-            "use_shadow": True,
         },
     },
     "pipeline": {

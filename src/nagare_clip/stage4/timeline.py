@@ -328,7 +328,20 @@ def place_captions(
         text_strip.anchor_y = style.get("anchor_y", "BOTTOM")
         text_strip.location[0] = style.get("location_x", 0.5)
         text_strip.location[1] = style.get("location_y", 0.05)
-        text_strip.use_shadow = style.get("use_shadow", True)
+        if "use_shadow" in style:
+            text_strip.use_shadow = style["use_shadow"]
+        if "wrap_width" in style:
+            text_strip.wrap_width = style["wrap_width"]
+        if "use_outline" in style:
+            text_strip.use_outline = style["use_outline"]
+        if "outline_color" in style:
+            text_strip.outline_color = style["outline_color"]
+        if "outline_width" in style:
+            text_strip.outline_width = style["outline_width"]
+        if "use_box" in style:
+            text_strip.use_box = style["use_box"]
+        if "box_color" in style:
+            text_strip.box_color = style["box_color"]
         logging.debug(
             "Caption '%s': timeline frames %d-%d",
             text[:40],

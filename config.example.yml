@@ -60,7 +60,13 @@ stage4:
     anchor_y: BOTTOM           # TOP | CENTER | BOTTOM
     location_x: 0.5           # Horizontal position (0.0 - 1.0)
     location_y: 0.05          # Vertical position (0.0 - 1.0)
-    use_shadow: true
+    use_shadow: true            # Enable text shadow
+    wrap_width: 0.90            # Text wrap width (0.0 = no wrap, 0.0 - 1.0)
+    # use_outline: false          # Enable text outline
+    # outline_color: [0, 0, 0, 1] # Outline color (RGBA, 0.0 - 1.0)
+    # outline_width: 1.0          # Outline width
+    # use_box: false              # Enable background box behind text
+    # box_color: [0, 0, 0, 0.5]  # Box color (RGBA, 0.0 - 1.0)
 
 pipeline:
   input_videos_dir: src_video
