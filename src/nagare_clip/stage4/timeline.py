@@ -151,7 +151,7 @@ def place_strips(
         src_start_frame = max(0, sec_to_frames(start_sec, effective_fps))
         src_end_frame = max(src_start_frame + 1, sec_to_frames(end_sec, effective_fps))
 
-        logging.info(
+        logging.debug(
             "%sStrip %d: source %.3fs-%.3fs -> frames %d-%d",
             src_tag,
             idx,
@@ -245,7 +245,7 @@ def place_strips(
                 keep_frame_count,
             )
 
-        logging.info(
+        logging.debug(
             "%sStrip %d: frame_start=%d frame_offset_start=%d frame_offset_end=%d "
             "keep_frames=%d timeline_cursor=%d",
             src_tag,
@@ -265,7 +265,7 @@ def place_strips(
     tmpl_sound.select = True
 
     if _sequencer_op(window, sequencer_area, bpy.ops.sequencer.delete):
-        logging.info("%sTemplate strips deleted.", src_tag)
+        logging.debug("%sTemplate strips deleted.", src_tag)
     else:
         logging.warning(
             "%sCould not delete template strips: no SEQUENCE_EDITOR area.", src_tag
