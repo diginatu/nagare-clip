@@ -147,9 +147,20 @@ def _parse_response(
 
         response_text = response_lines[idx]
         if _validate_patches(response_text, original_text):
-            result[idx] = response_text
+            result[idx] = _strip_noop_markers(response_text)
 
     return result
+
+
+def _strip_noop_markers(text: str) -> str:
+    """Remove {{X->X}} markers where old and new are identical."""
+
+    def _replace(m: re.Match) -> str:
+        if m.group(1) == m.group(2):
+            return m.group(1)
+        return m.group(0)
+
+    return PATCH_RE.sub(_replace, text)
 
 
 def _validate_patches(response_text: str, original_text: str) -> bool:

@@ -158,6 +158,20 @@ class TestParseResponse:
         result = _parse_response(response, batch)
         assert result[0] == "unchanged"
 
+    def test_noop_markers_stripped(self):
+        """Markers where old == new (no actual change) should be stripped."""
+        batch = [(0, "テストはいって感じ")]
+        response = "1: テスト{{はいって->はいって}}感じ"
+        result = _parse_response(response, batch)
+        assert result[0] == "テストはいって感じ"
+
+    def test_noop_markers_stripped_mixed(self):
+        """Mix of real and no-op markers: only no-op ones are stripped."""
+        batch = [(0, "こいつが2メートルはいって感じ")]
+        response = "1: {{こいつが->は}}2メートル{{はいって->はいって}}感じ"
+        result = _parse_response(response, batch)
+        assert result[0] == "{{こいつが->は}}2メートルはいって感じ"
+
     def test_invalid_patch_rejected(self):
         batch = [(0, "テスト")]
         response = "1: {{存在しない->修正}}テスト"
