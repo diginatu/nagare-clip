@@ -73,8 +73,8 @@ DEFAULTS: Dict[str, Any] = {
     "stage3": {
         "silence_threshold": 1.5,
         "min_keep": 1.0,
-        "pre_margin": 1.0,
-        "post_margin": 1.0,
+        "keep_pre_margin": 1.0,
+        "keep_post_margin": 1.0,
         "caption": {
             "max_bunsetu": 12,
             "max_duration": 4.0,
@@ -82,6 +82,8 @@ DEFAULTS: Dict[str, Any] = {
             "min_duration": 1.5,
             "silence_flush": 1.5,
             "bunsetu_separator": " ",
+            "pre_margin": 0.0,
+            "post_margin": 0.0,
         },
         "bunsetu": {
             "char_eps": 0.02,

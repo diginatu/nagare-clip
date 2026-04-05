@@ -36,8 +36,8 @@ stage2:
 stage3:
   silence_threshold: 1.5     # Silence gap threshold in seconds
   min_keep: 1.0              # Minimum keep interval length in seconds
-  pre_margin: 1.0            # Seconds to extend intervals before start
-  post_margin: 1.0           # Seconds to extend intervals after end
+  keep_pre_margin: 1.0       # Seconds to extend keep intervals before start
+  keep_post_margin: 1.0      # Seconds to extend keep intervals after end
   caption:
     max_bunsetu: 12           # Maximum bunsetsu units per caption chunk
     max_duration: 4.0         # Maximum seconds per caption chunk
@@ -45,6 +45,8 @@ stage3:
     min_duration: 1.5         # Minimum seconds before flushing chunk
     silence_flush: 1.5        # Silence duration that forces chunk flush
     bunsetu_separator: " "    # Separator between bunsetsu units
+    pre_margin: 0.0           # Seconds to extend each caption before its start (clamped to previous caption's end)
+    post_margin: 0.0          # Seconds to extend each caption after its end (clamped to next caption's start)
   # Advanced: bunsetsu timing parameters (rarely need changing)
   # bunsetu:
   #   char_eps: 0.02

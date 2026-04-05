@@ -74,6 +74,53 @@ def expand_short_captions(
     return result
 
 
+def apply_caption_margins(
+    captions: List[dict],
+    pre_margin: float,
+    post_margin: float,
+    duration_sec: float,
+) -> List[dict]:
+    """Extend each caption by pre/post margins, clamped to neighbors.
+
+    Each caption's start is expanded backward by ``pre_margin`` (clamped to
+    the previous caption's end, or 0.0 for the first) and its end is expanded
+    forward by ``post_margin`` (clamped to the next caption's start, or
+    ``duration_sec`` for the last). The ``text`` field is preserved.
+    Returns the input unchanged when both margins are 0.0 or captions is empty.
+    """
+    if not captions or (pre_margin <= 0.0 and post_margin <= 0.0):
+        return captions
+
+    result: List[dict] = []
+    n = len(captions)
+    for i, cap in enumerate(captions):
+        start = float(cap["start"])
+        end = float(cap["end"])
+
+        lo = float(result[-1]["end"]) if result else 0.0
+        hi = float(captions[i + 1]["start"]) if i < n - 1 else duration_sec
+
+        new_start = max(start - pre_margin, lo)
+        new_end = min(end + post_margin, hi)
+
+        logging.debug(
+            "Caption margin [%.3f-%.3f] -> [%.3f-%.3f]: %r",
+            start,
+            end,
+            new_start,
+            new_end,
+            cap.get("text", "")[:40],
+        )
+        result.append(
+            {
+                "start": round(new_start, 3),
+                "end": round(new_end, 3),
+                "text": cap["text"],
+            }
+        )
+    return result
+
+
 def collect_captions(
     morpheme_times: List[Tuple[float, float, str]],
     keep_intervals: List[dict],

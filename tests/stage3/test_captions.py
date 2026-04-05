@@ -2,7 +2,11 @@
 
 import pytest
 
-from nagare_clip.stage3.captions import collect_captions, expand_short_captions
+from nagare_clip.stage3.captions import (
+    apply_caption_margins,
+    collect_captions,
+    expand_short_captions,
+)
 
 
 def test_collect_captions_flush_and_preserve_silence_split_chunks():
@@ -178,3 +182,53 @@ def test_expand_short_consecutive_no_overlap():
             f"Overlap between caption {j} (end={result[j]['end']}) "
             f"and caption {j + 1} (start={result[j + 1]['start']})"
         )
+
+
+# --- apply_caption_margins tests ---
+
+
+def test_apply_caption_margins_basic_expansion_preserves_text():
+    captions = [{"start": 5.0, "end": 6.0, "text": "hi"}]
+    result = apply_caption_margins(captions, 0.3, 0.4, duration_sec=20.0)
+    assert result == [{"start": 4.7, "end": 6.4, "text": "hi"}]
+
+
+def test_apply_caption_margins_clamps_duration_bounds():
+    captions = [
+        {"start": 0.1, "end": 1.0, "text": "head"},
+        {"start": 18.5, "end": 19.9, "text": "tail"},
+    ]
+    result = apply_caption_margins(captions, 0.5, 0.5, duration_sec=20.0)
+    assert result[0]["start"] == pytest.approx(0.0)
+    assert result[1]["end"] == pytest.approx(20.0)
+
+
+def test_apply_caption_margins_clamps_to_neighbors():
+    captions = [
+        {"start": 1.0, "end": 2.0, "text": "a"},
+        {"start": 2.2, "end": 3.0, "text": "b"},
+        {"start": 3.1, "end": 4.0, "text": "c"},
+    ]
+    result = apply_caption_margins(captions, 1.0, 1.0, duration_sec=20.0)
+    # Each caption's end must not exceed the ORIGINAL next caption's start
+    # and its start must not precede the ORIGINAL previous caption's end.
+    for j, cap in enumerate(result):
+        if j + 1 < len(result):
+            assert cap["end"] <= captions[j + 1]["start"] + 1e-9
+        if j > 0:
+            assert cap["start"] >= captions[j - 1]["end"] - 1e-9
+    # Concrete expected values: symmetric 1.0s margin clamped to neighbors.
+    # Each caption's backward expansion is clamped to the previous caption's
+    # already-expanded end (so cap[1].start is clamped to cap[0].end=2.2).
+    assert result[0] == {"start": 0.0, "end": 2.2, "text": "a"}
+    assert result[1] == {"start": 2.2, "end": 3.1, "text": "b"}
+    assert result[2] == {"start": 3.1, "end": 5.0, "text": "c"}
+
+
+def test_apply_caption_margins_zero_margins_no_change():
+    captions = [{"start": 5.0, "end": 6.0, "text": "x"}]
+    assert apply_caption_margins(captions, 0.0, 0.0, duration_sec=20.0) == captions
+
+
+def test_apply_caption_margins_empty_list():
+    assert apply_caption_margins([], 1.0, 1.0, duration_sec=20.0) == []

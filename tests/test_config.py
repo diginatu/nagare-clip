@@ -110,7 +110,7 @@ class TestGetEffectiveConfig:
         # Config wins over default
         assert cfg["stage3"]["min_keep"] == 0.5
         # Default remains
-        assert cfg["stage3"]["pre_margin"] == 1.0
+        assert cfg["stage3"]["keep_pre_margin"] == 1.0
 
     def test_partial_config(self, tmp_path: Path):
         cfg_file = tmp_path / "cfg.yml"

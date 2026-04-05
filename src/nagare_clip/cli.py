@@ -13,7 +13,7 @@ import spacy
 from nagare_clip.config import get_effective_config
 from nagare_clip.logging_setup import setup_logging
 from nagare_clip.stage3.bunsetu import build_bunsetu_times
-from nagare_clip.stage3.captions import collect_captions
+from nagare_clip.stage3.captions import apply_caption_margins, collect_captions
 from nagare_clip.stage3.intervals import (
     apply_margins,
     enforce_min_keep_duration,
@@ -58,13 +58,13 @@ def parse_args() -> argparse.Namespace:
         help="Minimum keep interval length in seconds",
     )
     parser.add_argument(
-        "--pre_margin",
+        "--keep_pre_margin",
         type=float,
         default=None,
         help="Seconds to extend each keep interval before its start (default: 1.0)",
     )
     parser.add_argument(
-        "--post_margin",
+        "--keep_post_margin",
         type=float,
         default=None,
         help="Seconds to extend each keep interval after its end (default: 1.0)",
@@ -106,6 +106,18 @@ def parse_args() -> argparse.Namespace:
         help="Separator inserted between bunsetsu units in caption text; use empty string to disable (default: ' ')",
     )
     parser.add_argument(
+        "--caption_pre_margin",
+        type=float,
+        default=None,
+        help="Seconds to extend each caption before its start (default: 0.0)",
+    )
+    parser.add_argument(
+        "--caption_post_margin",
+        type=float,
+        default=None,
+        help="Seconds to extend each caption after its end (default: 0.0)",
+    )
+    parser.add_argument(
         "--output", required=True, dest="output_path", help="Output JSON path"
     )
     parser.add_argument(
@@ -130,8 +142,8 @@ def _build_cli_overrides(args: argparse.Namespace) -> dict:
     stage3_map = {
         "silence_threshold": "silence_threshold",
         "min_keep": "min_keep",
-        "pre_margin": "pre_margin",
-        "post_margin": "post_margin",
+        "keep_pre_margin": "keep_pre_margin",
+        "keep_post_margin": "keep_post_margin",
     }
     for attr, key in stage3_map.items():
         val = getattr(args, attr, None)
@@ -146,6 +158,8 @@ def _build_cli_overrides(args: argparse.Namespace) -> dict:
         "caption_min_duration": "min_duration",
         "caption_silence_flush": "silence_flush",
         "caption_bunsetu_separator": "bunsetu_separator",
+        "caption_pre_margin": "pre_margin",
+        "caption_post_margin": "post_margin",
     }
     for attr, key in caption_map.items():
         val = getattr(args, attr, None)
@@ -257,14 +271,14 @@ def main() -> None:
 
     keep_intervals_dicts = apply_margins(
         filtered_keep,
-        pre_margin=s3["pre_margin"],
-        post_margin=s3["post_margin"],
+        pre_margin=s3["keep_pre_margin"],
+        post_margin=s3["keep_post_margin"],
         duration_sec=duration_sec,
     )
     logging.info(
-        "After margins (pre=%.2fs post=%.2fs): %d interval(s)",
-        s3["pre_margin"],
-        s3["post_margin"],
+        "After keep margins (pre=%.2fs post=%.2fs): %d interval(s)",
+        s3["keep_pre_margin"],
+        s3["keep_post_margin"],
         len(keep_intervals_dicts),
     )
 
@@ -280,6 +294,20 @@ def main() -> None:
         bunsetu_separator=cap["bunsetu_separator"],
     )
     logging.info("Captions: %d chunk(s)", len(captions))
+
+    if cap["pre_margin"] > 0.0 or cap["post_margin"] > 0.0:
+        captions = apply_caption_margins(
+            captions,
+            pre_margin=cap["pre_margin"],
+            post_margin=cap["post_margin"],
+            duration_sec=duration_sec,
+        )
+        logging.info(
+            "After caption margins (pre=%.2fs post=%.2fs): %d caption(s)",
+            cap["pre_margin"],
+            cap["post_margin"],
+            len(captions),
+        )
 
     keep_intervals_dicts = ensure_keep_covers_captions(
         keep_intervals_dicts,

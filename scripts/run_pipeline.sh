@@ -15,8 +15,8 @@ usage() {
   echo "  --language          LANG  Language code for WhisperX (default: ja)"
   echo "  --input-videos-dir  DIR   Directory containing source videos (default: src_video)"
   echo "  --output-dir        DIR   Root output directory; stage outputs go to stage1/, stage2/, stage3/, stage4/ subdirs (default: output)"
-  echo "  --pre-margin        SEC   Seconds to extend keep intervals before start (default: 1.0)"
-  echo "  --post-margin       SEC   Seconds to extend keep intervals after end (default: 1.0)"
+  echo "  --keep-pre-margin   SEC   Seconds to extend keep intervals before start (default: 1.0)"
+  echo "  --keep-post-margin  SEC   Seconds to extend keep intervals after end (default: 1.0)"
   echo "  --from-stage        N     Start from stage N (1, 2, 3, or 4); reuses earlier stage outputs"
   echo "  --align-model       MODEL HuggingFace model ID for WhisperX alignment"
   echo "                            Japanese default: vumichien/wav2vec2-large-xlsr-japanese"
@@ -26,15 +26,15 @@ usage() {
 CONFIG_FILE=""
 INPUT_VIDEOS_DIR=""
 OUTPUT_DIR=""
-PRE_MARGIN=""
-POST_MARGIN=""
+KEEP_PRE_MARGIN=""
+KEEP_POST_MARGIN=""
 ALIGN_MODEL=""
 
 # Track which values were explicitly set on CLI
 CLI_INPUT_VIDEOS_DIR=""
 CLI_OUTPUT_DIR=""
-CLI_PRE_MARGIN=""
-CLI_POST_MARGIN=""
+CLI_KEEP_PRE_MARGIN=""
+CLI_KEEP_POST_MARGIN=""
 CLI_ALIGN_MODEL=""
 CLI_LANGUAGE=""
 CLI_SILENCE_THRESHOLD=""
@@ -49,8 +49,8 @@ while [[ $# -gt 0 ]]; do
     --from-stage) CLI_FROM_STAGE="$2"; shift 2 ;;
     --input-videos-dir) CLI_INPUT_VIDEOS_DIR="$2"; shift 2 ;;
     --output-dir) CLI_OUTPUT_DIR="$2"; shift 2 ;;
-    --pre-margin) CLI_PRE_MARGIN="$2"; shift 2 ;;
-    --post-margin) CLI_POST_MARGIN="$2"; shift 2 ;;
+    --keep-pre-margin) CLI_KEEP_PRE_MARGIN="$2"; shift 2 ;;
+    --keep-post-margin) CLI_KEEP_POST_MARGIN="$2"; shift 2 ;;
     --align-model) CLI_ALIGN_MODEL="$2"; shift 2 ;;
     --language) CLI_LANGUAGE="$2"; shift 2 ;;
     --help|-h) usage; exit 0 ;;
@@ -63,8 +63,8 @@ done
 # --- Resolve config file values for pipeline/stage1 settings ---
 CFG_INPUT_VIDEOS_DIR=""
 CFG_OUTPUT_DIR=""
-CFG_PRE_MARGIN=""
-CFG_POST_MARGIN=""
+CFG_KEEP_PRE_MARGIN=""
+CFG_KEEP_POST_MARGIN=""
 CFG_ALIGN_MODEL=""
 CFG_LANGUAGE=""
 CFG_SILENCE_THRESHOLD=""
@@ -96,8 +96,8 @@ out('CFG_ALIGN_MODEL', s1.get('align_model'))
 out('CFG_LANGUAGE', s1.get('language'))
 out('CFG_SILENCE_THRESHOLD', s3.get('silence_threshold'))
 out('CFG_MIN_KEEP', s3.get('min_keep'))
-out('CFG_PRE_MARGIN', s3.get('pre_margin'))
-out('CFG_POST_MARGIN', s3.get('post_margin'))
+out('CFG_KEEP_PRE_MARGIN', s3.get('keep_pre_margin'))
+out('CFG_KEEP_POST_MARGIN', s3.get('keep_post_margin'))
 out('CFG_USE_LLM', str(bool(s2.get('use_llm', False))).lower())
 out('CFG_INPUT_VIDEOS_DIR', p.get('input_videos_dir'))
 out('CFG_OUTPUT_DIR', p.get('output_dir'))
@@ -109,8 +109,8 @@ fi
 LANGUAGE="${CLI_LANGUAGE:-${CFG_LANGUAGE:-ja}}"
 INPUT_VIDEOS_DIR="${CLI_INPUT_VIDEOS_DIR:-${CFG_INPUT_VIDEOS_DIR:-src_video}}"
 OUTPUT_DIR="${CLI_OUTPUT_DIR:-${CFG_OUTPUT_DIR:-output}}"
-PRE_MARGIN="${CLI_PRE_MARGIN:-${CFG_PRE_MARGIN:-1.0}}"
-POST_MARGIN="${CLI_POST_MARGIN:-${CFG_POST_MARGIN:-1.0}}"
+KEEP_PRE_MARGIN="${CLI_KEEP_PRE_MARGIN:-${CFG_KEEP_PRE_MARGIN:-1.0}}"
+KEEP_POST_MARGIN="${CLI_KEEP_POST_MARGIN:-${CFG_KEEP_POST_MARGIN:-1.0}}"
 ALIGN_MODEL="${CLI_ALIGN_MODEL:-${CFG_ALIGN_MODEL:-}}"
 SILENCE_THRESHOLD="${CLI_SILENCE_THRESHOLD:-${CFG_SILENCE_THRESHOLD:-1.5}}"
 MIN_KEEP="${CLI_MIN_KEEP:-${CFG_MIN_KEEP:-1.0}}"
@@ -190,11 +190,11 @@ fi
 if [[ -n "$CLI_MIN_KEEP" ]]; then
   STAGE3_OVERRIDE_ARGS+=("--min_keep" "$CLI_MIN_KEEP")
 fi
-if [[ -n "$CLI_PRE_MARGIN" ]]; then
-  STAGE3_OVERRIDE_ARGS+=("--pre_margin" "$CLI_PRE_MARGIN")
+if [[ -n "$CLI_KEEP_PRE_MARGIN" ]]; then
+  STAGE3_OVERRIDE_ARGS+=("--keep_pre_margin" "$CLI_KEEP_PRE_MARGIN")
 fi
-if [[ -n "$CLI_POST_MARGIN" ]]; then
-  STAGE3_OVERRIDE_ARGS+=("--post_margin" "$CLI_POST_MARGIN")
+if [[ -n "$CLI_KEEP_POST_MARGIN" ]]; then
+  STAGE3_OVERRIDE_ARGS+=("--keep_post_margin" "$CLI_KEEP_POST_MARGIN")
 fi
 
 # Build align model args

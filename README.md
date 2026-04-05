@@ -206,8 +206,8 @@ uv run python -m nagare_clip.cli \
   --json output/stage1/myvideo.json \
   --silence_threshold 1.5 \
   --min_keep 1.0 \
-  --pre_margin 1.0 \
-  --post_margin 1.0 \
+  --keep_pre_margin 1.0 \
+  --keep_post_margin 1.0 \
   --caption_max_bunsetu 12 \
   --caption_min_bunsetu 3 \
   --caption_max_duration 4.0 \
