@@ -10,6 +10,7 @@ from typing import List, Tuple
 
 import spacy
 
+from nagare_clip.audio_silence.cuts_file import read_cuts
 from nagare_clip.config import get_effective_config
 from nagare_clip.logging_setup import setup_logging
 from nagare_clip.stage3.bunsetu import build_bunsetu_times
@@ -38,6 +39,12 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--json", required=True, dest="json_path", help="WhisperX JSON path"
+    )
+    parser.add_argument(
+        "--cuts-txt",
+        dest="cuts_txt",
+        default=None,
+        help="Stage 2 audio-silence cut list; ranges are unioned into excludes",
     )
     parser.add_argument(
         "--config",
@@ -254,6 +261,15 @@ def main() -> None:
         silence_excludes += 1
 
     logging.info("Silence excluded: %d interval(s)", silence_excludes)
+
+    if args.cuts_txt:
+        cut_ranges = read_cuts(Path(args.cuts_txt))
+        excludes.extend(cut_ranges)
+        logging.info(
+            "Audio-silence cuts unioned: %d range(s) from %s",
+            len(cut_ranges),
+            Path(args.cuts_txt).name,
+        )
 
     bounded_excludes = [
         (max(0.0, start), min(duration_sec, end))

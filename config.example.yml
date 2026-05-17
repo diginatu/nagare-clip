@@ -13,8 +13,19 @@ stage1:
   language: ja              # ISO 639-1 language code passed to WhisperX (e.g. ja, en)
   # align_model: vumichien/wav2vec2-large-xlsr-japanese
 
+# Pipeline Stage 2: audio-silence (jump-cut) detection.
+# Runs ffmpeg silencedetect on the waveform and writes an editable
+# {stem}_cuts.txt checkpoint. NOTE: this is acoustic silence, distinct
+# from stage3.silence_threshold (which is a WhisperX word-gap heuristic).
+audio_silence:
+  enabled: true       # false = write an empty cut list (no audio cuts applied)
+  noise: -30.0        # ffmpeg silencedetect noise threshold, in dB
+  min_silence: 0.8    # ffmpeg silencedetect minimum silence duration, seconds
+
+# Pipeline Stage 3: text editing checkpoint (config section name kept as
+# 'stage2' to avoid churn; see AGENTS.md for the number<->section mapping).
 stage2:
-  use_llm: false               # Enable LLM text filter for Stage 2 text editing
+  use_llm: false               # Enable LLM text filter for the text-editing checkpoint
   api_base: "http://localhost:11434/v1"  # OpenAI-compatible API base URL (Ollama default)
   model: "qwen3.5:4b"          # Model name for chat completions
   api_key: ""                  # API key (empty = no auth, for local Ollama)
@@ -33,8 +44,10 @@ stage2:
     timeout: 120                 # Longer timeout since full transcript is sent
     # prompt: "..."              # System prompt for summary LLM (has sensible default)
 
+# Pipeline Stage 4: patch application + keep-interval merge (config section
+# name kept as 'stage3'). Audio cuts from audio_silence are unioned here.
 stage3:
-  silence_threshold: 1.5     # Silence gap threshold in seconds
+  silence_threshold: 1.5     # WhisperX word-gap silence threshold, seconds (NOT the audio_silence detector)
   min_keep: 1.0              # Minimum keep interval length in seconds
   keep_pre_margin: 1.0       # Seconds to extend keep intervals before start
   keep_post_margin: 1.0      # Seconds to extend keep intervals after end
@@ -72,5 +85,5 @@ stage4:
 
 pipeline:
   input_videos_dir: src_video
-  output_dir: output   # Root dir; stage outputs go to stage1/, stage2/, stage3/, stage4/ subdirs
-  from_stage: 1        # Start from this stage (1, 2, 3, or 4); reuses earlier stage outputs
+  output_dir: output   # Root dir; stage outputs go to stage1/ .. stage5/ subdirs
+  from_stage: 1        # Start from this stage (1-5); reuses earlier stage outputs

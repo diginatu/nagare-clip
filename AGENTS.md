@@ -7,11 +7,20 @@ Agent guidance for this repository.
 Maintain and improve a multi-stage rough-cut pipeline:
 
 1. WhisperX transcription in Docker
-2. Text editing checkpoint — copies `.txt` or runs LLM filter with `{{old->new}}` markers
-3. Patch application + keep-interval computation in Python
-4. Blender VSE auto-layout in headless mode
+2. Audio-silence (jump-cut) detection — ffmpeg `silencedetect`, editable cut list
+3. Text editing checkpoint — copies `.txt` or runs LLM filter with `{{old->new}}` markers
+4. Patch application + keep-interval computation in Python (audio cuts unioned in)
+5. Blender VSE auto-layout in headless mode
 
 Final deliverable is a `.blend` project for human editing.
+
+> **Naming convention:** user-facing pipeline stage numbers were renumbered to
+> 5, but Python package and config-section names are **functional, not
+> stage-numbered** (renaming `stage2/`→`stage3/` etc. would be pure churn).
+> Mapping: pipeline Stage 2 = `audio_silence/` package + `audio_silence:`
+> config; pipeline Stage 3 = `stage2/` package + `stage2:` config; pipeline
+> Stage 4 = `stage3/` package + `stage3:` config + top-level `cli.py`;
+> pipeline Stage 5 = `stage4/` package + `stage4:` config.
 
 ## Pipeline Overview
 
@@ -24,21 +33,28 @@ Speech-to-text with word-level alignment. Runs in a single Docker container for 
 - **Inputs:** source video files (mp4/mkv/mov/avi/webm)
 - **Outputs:** `{stem}.json` (word timings), `{stem}.txt` (plain text)
 
-### Stage 2 — Text Editing Checkpoint (mandatory)
+### Stage 2 — Audio-Silence (Jump-Cut) Detection
+
+Runs ffmpeg `silencedetect` on the waveform **inside the whisperx Docker image** (`docker compose run --entrypoint ffmpeg whisperx`, mirroring Stage 1 — no host/Python ffmpeg dependency). `run_pipeline.sh` captures ffmpeg stderr; `nagare_clip.audio_silence.cli` parses it (`--raw`) and writes an editable `{stem}_cuts.txt`. With `audio_silence.enabled: false` (or no `--raw`) it writes a header-only file (downstream union is a no-op).
+
+- **Inputs:** source video file
+- **Outputs:** `{stem}_cuts.txt` (one `START - END` silent span per line; delete a line to keep that span)
+
+### Stage 3 — Text Editing Checkpoint (mandatory)
 
 Produces `{stem}_edits.txt` for human review. When `stage2.use_llm` is `false` (default), copies the Stage 1 `.txt` as-is. When enabled, runs LLM filter and writes output with `{{old->new}}` markers preserved.
 
 - **Inputs:** `{stem}.txt`
 - **Outputs:** `{stem}_edits.txt`
 
-### Stage 3 — Patch Application + Keep-Interval Computation
+### Stage 4 — Patch Application + Keep-Interval Computation
 
-Applies `{{old->new}}` patches from `_edits.txt`, syncs corrected text back into WhisperX JSON timing data, then runs NLP analysis (GiNZA/spaCy bunsetsu segmentation) to compute keep intervals. Runs per source via `uv run`.
+Applies `{{old->new}}` patches from `_edits.txt`, syncs corrected text back into WhisperX JSON timing data, then runs NLP analysis (GiNZA/spaCy bunsetsu segmentation) to compute keep intervals. The Stage 2 `_cuts.txt` ranges are unioned into the exclude set (via `--cuts-txt`) before inversion, so all existing caption/min_keep/margin safeguards still apply. Runs per source via `uv run`.
 
-- **Inputs:** `{stem}_edits.txt`, `{stem}.json` (Stage 1 original)
+- **Inputs:** `{stem}_edits.txt`, `{stem}.json` (Stage 1 original), `{stem}_cuts.txt` (Stage 2)
 - **Outputs:** `{stem}_intervals.json` (keep intervals + captions)
 
-### Stage 4 — Blender VSE Layout
+### Stage 5 — Blender VSE Layout
 
 Auto-assembles the rough cut in headless Blender. References original media in-place (no re-encoding). Concatenates all sources onto a single timeline.
 
@@ -47,16 +63,17 @@ Auto-assembles the rough cut in headless Blender. References original media in-p
 
 ### Human Editing Workflow
 
-1. Run stages 1–2 → Stage 2 produces `{stem}_edits.txt`
-2. Human edits `_edits.txt` using `{{old->new}}` patch syntax
-3. Resume with `--from-stage 3` → applies patches, syncs JSON, computes intervals, runs Stage 4
+1. Run stages 1–3 → Stage 2 produces `{stem}_cuts.txt`, Stage 3 produces `{stem}_edits.txt`
+2. Human edits `_cuts.txt` (delete/adjust silent spans) and `_edits.txt` (`{{old->new}}` patch syntax)
+3. Resume with `--from-stage 4` → unions cuts, applies patches, syncs JSON, computes intervals, runs Blender
 
 ## Hard Constraints
 
 - Dependency management uses uv + pyproject.toml.
 - Runtime NLP dependency is `ginza` + `ja_ginza` (spaCy-based).
-- Preserve Stage 3 interval JSON as human-editable contract for Stage 4.
-- Stage 4 must reference original media; do not re-encode/copy source media.
+- Route media tooling (ffmpeg) through the existing whisperx Docker image; do not add host binaries or new Python audio deps.
+- Preserve the interval JSON (`stage3/` package) as the human-editable contract for the Blender stage.
+- The Blender stage must reference original media; do not re-encode/copy source media.
 
 ## Project Structure
 
@@ -64,13 +81,17 @@ Auto-assembles the rough cut in headless Blender. References original media in-p
 config.example.yml            # Documented YAML config template with all defaults
 src/nagare_clip/          # Main Python package (src layout)
   config.py                   # Centralised config loading/merging (DEFAULTS dict)
-  cli.py                      # Stage 3 CLI entry point
+  cli.py                      # Pipeline Stage 4 CLI entry point (patch + intervals; --cuts-txt)
   __main__.py                 # python -m nagare_clip support
-  stage2/                     # Stage 2 modules (text editing checkpoint)
-    cli.py                    # Stage 2 CLI entry point
+  audio_silence/              # Pipeline Stage 2 (audio-silence detection)
+    detect.py                 # parse_silencedetect_output(), build_ffmpeg_args() (pure)
+    cuts_file.py              # write_cuts() / read_cuts() — editable cut-list format
+    cli.py                    # Pipeline Stage 2 CLI (consumes --raw ffmpeg stderr)
+  stage2/                     # Pipeline Stage 3 modules (text editing checkpoint)
+    cli.py                    # text-editing checkpoint CLI entry point
     llm_filter.py             # LLM API calls, {{old->new}} patch parsing, apply_patches_to_lines()
     summary_llm.py            # Summary LLM: generates transcript summary + keywords for filter context
-  stage3/                     # Stage 3 modules (patch application + intervals)
+  stage3/                     # Pipeline Stage 4 modules (patch application + intervals)
     sync_json.py              # Sync corrected text back into WhisperX JSON
     bunsetu.py                # Bunsetsu-level timing (GiNZA)
     speech.py                 # Speech span extraction
@@ -78,17 +99,19 @@ src/nagare_clip/          # Main Python package (src layout)
     captions.py               # Caption chunking
     filler.py                 # Filler word config (unused at runtime)
     io.py                     # Source file inference
-  stage4/                     # Stage 4 modules
-    blender_cli.py            # Stage 4 CLI (runs inside Blender)
+  stage4/                     # Pipeline Stage 5 modules (Blender VSE)
+    blender_cli.py            # Blender-stage CLI (runs inside Blender)
     scene.py                  # Blender scene setup
     timeline.py               # Strip and caption placement
 scripts/
-  run_pipeline.sh             # Main orchestrator
+  run_pipeline.sh             # Main orchestrator (5 stages)
 tests/
   test_config.py              # Config module unit tests
-  stage2/                     # Stage 2 unit tests
-  stage3/                     # Stage 3 unit tests
-  stage4/                     # Stage 4 tests
+  test_cli_cuts_merge.py      # --cuts-txt union into interval excludes
+  audio_silence/              # Stage 2 (detect / cuts_file / cli) unit tests
+  stage2/                     # text-editing checkpoint unit tests
+  stage3/                     # interval-stage unit tests
+  stage4/                     # Blender-stage tests
 ```
 
 ## Configuration System
@@ -101,13 +124,15 @@ All tunable parameters are centralised in `src/nagare_clip/config.py`:
 
 **Priority order (highest first):** CLI flags > YAML config file > built-in defaults.
 
-Both `cli.py` (Stage 3) and `blender_cli.py` (Stage 4) accept a `--config <path>` flag that is passed through by `scripts/run_pipeline.sh` when `--config` is provided.
+`cli.py` (interval stage), `audio_silence/cli.py` (Stage 2), and `blender_cli.py` (Blender stage) all accept a `--config <path>` flag that is passed through by `scripts/run_pipeline.sh` when `--config` is provided.
 
-`scripts/run_pipeline.sh` also reads `pipeline.*` and `stage1.*` config keys directly via Python/yaml for Docker Compose arguments that are not forwarded to a Python CLI. This includes `stage1.language` (default `ja`).
+`scripts/run_pipeline.sh` also reads `pipeline.*`, `stage1.*`, and `audio_silence.*` config keys directly via Python/yaml for arguments that are not forwarded to a Python CLI: `stage1.language` (default `ja`), and `audio_silence.enabled/noise/min_silence` (which decide whether to run the docker ffmpeg call and with what filter params).
 
 ## Current Runtime Quirks
 
-- Stage 2 is a mandatory text editing checkpoint. When `use_llm: false` (default), copies Stage 1 `.txt` to `_edits.txt`. When `use_llm: true`, runs LLM filter via Ollama native chat API (default: `localhost:11434`) and preserves `{{old->new}}` markers in output. Falls back to original text on any LLM or parse failure. `stage2.thinking` (default `false`) controls thinking mode: accepts `true`/`false` or a string level (`"low"`, `"medium"`, `"high"`) for models that support it (e.g. Qwen 3.5); the value is sent as `"think"` in the API request.
+- Pipeline Stage 2 (audio-silence) detects acoustic silence via ffmpeg `silencedetect` run in the whisperx container. `run_pipeline.sh` redirects ffmpeg stderr to `{stem}_silencedetect.log`; `audio_silence/detect.py` parses it (duration from ffmpeg's own `Duration:` line — no ffprobe) and `cuts_file.py` writes `{stem}_cuts.txt`. Config: `audio_silence.enabled` (default `true`), `audio_silence.noise` (dB, default `-30.0`), `audio_silence.min_silence` (s, default `0.8`). NOTE: this is acoustic silence, distinct from `stage3.silence_threshold` (a WhisperX word-gap heuristic in the interval stage). `_cuts.txt` is human-editable: blank/`#` lines and malformed/`start>=end` lines are skipped (with a warning) by `read_cuts()`.
+- The interval stage (`nagare_clip.cli`) accepts an optional `--cuts-txt`; the parsed ranges are appended to the word-timing `excludes` before clamp/merge/invert, giving a union with the existing detection. Omitting `--cuts-txt` reproduces the prior behaviour exactly (backward compatible; regression-guarded by `tests/test_cli_cuts_merge.py`).
+- The config section name `stage2` drives the pipeline-Stage-3 text checkpoint. When `use_llm: false` (default), copies Stage 1 `.txt` to `_edits.txt`. When `use_llm: true`, runs LLM filter via Ollama native chat API (default: `localhost:11434`) and preserves `{{old->new}}` markers in output. Falls back to original text on any LLM or parse failure. `stage2.thinking` (default `false`) controls thinking mode: accepts `true`/`false` or a string level (`"low"`, `"medium"`, `"high"`) for models that support it (e.g. Qwen 3.5); the value is sent as `"think"` in the API request.
 - Stage 2 optionally runs a **summary LLM** (`stage2.summary_llm.enabled: true`) before filtering. It sends the full transcript to a (potentially different) LLM that returns a JSON object with `summary` and `keywords` (rare/domain-specific words). These are appended to the filter LLM's system prompt so it can better correct mis-dictated rare words. Uses Ollama `format: "json"` for reliable parsing. The summary LLM has its own independent config (model, api_base, temperature, etc.). Falls back gracefully if the summary call fails.
 - Stage 3 reads `_edits.txt`, applies `{{old->new}}` patches via `apply_patches_to_lines()`, syncs clean text back into WhisperX JSON via `sync_text_to_json()`, then computes intervals.
 - Stage 3 keep intervals are expanded by configurable `stage3.keep_pre_margin` / `stage3.keep_post_margin` (defaults 1.0s) and merged before Blender export. Captions have independent `stage3.caption.pre_margin` / `stage3.caption.post_margin` (defaults 0.0s) that extend each caption's display time, clamped against neighbouring caption boundaries so captions never overlap.
@@ -120,8 +145,8 @@ Both `cli.py` (Stage 3) and `blender_cli.py` (Stage 4) accept a `--config <path>
 - Stage 4 fallback FPS (used when source metadata is unavailable) is controlled by `stage4.default_fps`.
 - Stage 4 supports multiple source files: `blender_cli.py` accepts repeated `--source`/`--intervals` flags; `place_strips()` and `build_timeline_map()` accept `start_cursor` and `idx_offset` to concatenate sources on a single timeline.
 - `run_pipeline.sh` discovers all video files (`mp4`, `mkv`, `mov`, `avi`, `webm`) in `INPUT_VIDEOS_DIR` alphabetically when `--source` is not provided. Multiple `--source` flags are also accepted.
-- `run_pipeline.sh` accepts `--from-stage N` (1, 2, 3, or 4) to skip expensive earlier stages and reuse their outputs. Also configurable via `pipeline.from_stage` in YAML config. When skipping stages, the script validates that required intermediate outputs exist.
-- Stage 1 (WhisperX) runs in a **single container** for all source files, passing all relative paths as positional arguments. This avoids model reload overhead between videos. Stage 3 still loops per-source after the single Stage 1 completes.
+- `run_pipeline.sh` accepts `--from-stage N` (1-5) to skip expensive earlier stages and reuse their outputs. Also configurable via `pipeline.from_stage` in YAML config. When skipping stages, the script validates that required intermediate outputs exist. Output dirs are `output/stage1`..`output/stage5` (cuts → stage2, edits → stage3, intervals → stage4, blend → stage5); resuming pre-renumber projects requires moving files or rerunning from Stage 1.
+- Stage 1 (WhisperX) runs in a **single container** for all source files, passing all relative paths as positional arguments. This avoids model reload overhead between videos. Stages 2/3/4 still loop per-source after the single Stage 1 completes.
 
 ## Python Execution
 

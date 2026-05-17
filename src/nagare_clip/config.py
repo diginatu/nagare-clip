@@ -70,6 +70,11 @@ DEFAULTS: Dict[str, Any] = {
             ),
         },
     },
+    "audio_silence": {
+        "enabled": True,
+        "noise": -30.0,
+        "min_silence": 0.8,
+    },
     "stage3": {
         "silence_threshold": 1.5,
         "min_keep": 1.0,

@@ -14,10 +14,10 @@ usage() {
   echo "  --config            FILE  Path to YAML config file"
   echo "  --language          LANG  Language code for WhisperX (default: ja)"
   echo "  --input-videos-dir  DIR   Directory containing source videos (default: src_video)"
-  echo "  --output-dir        DIR   Root output directory; stage outputs go to stage1/, stage2/, stage3/, stage4/ subdirs (default: output)"
+  echo "  --output-dir        DIR   Root output directory; stage outputs go to stage1/ .. stage5/ subdirs (default: output)"
   echo "  --keep-pre-margin   SEC   Seconds to extend keep intervals before start (default: 1.0)"
   echo "  --keep-post-margin  SEC   Seconds to extend keep intervals after end (default: 1.0)"
-  echo "  --from-stage        N     Start from stage N (1, 2, 3, or 4); reuses earlier stage outputs"
+  echo "  --from-stage        N     Start from stage N (1-5); reuses earlier stage outputs"
   echo "  --align-model       MODEL HuggingFace model ID for WhisperX alignment"
   echo "                            Japanese default: vumichien/wav2vec2-large-xlsr-japanese"
   echo "                            English default: (whisperx built-in)"
@@ -73,6 +73,9 @@ CFG_FROM_STAGE=""
 CFG_COMPUTE_TYPE=""
 CFG_BATCH_SIZE=""
 CFG_USE_LLM=""
+CFG_AUDIO_SILENCE_ENABLED=""
+CFG_AUDIO_SILENCE_NOISE=""
+CFG_AUDIO_SILENCE_MIN_SILENCE=""
 
 if [[ -n "$CONFIG_FILE" ]]; then
   if [[ ! -f "$CONFIG_FILE" ]]; then
@@ -86,6 +89,7 @@ with open(sys.argv[1]) as f:
 s1 = c.get('stage1', {})
 s2 = c.get('stage2', {})
 s3 = c.get('stage3', {})
+asl = c.get('audio_silence', {})
 p  = c.get('pipeline', {})
 def out(name, val):
     if val is not None and val != '':
@@ -99,6 +103,10 @@ out('CFG_MIN_KEEP', s3.get('min_keep'))
 out('CFG_KEEP_PRE_MARGIN', s3.get('keep_pre_margin'))
 out('CFG_KEEP_POST_MARGIN', s3.get('keep_post_margin'))
 out('CFG_USE_LLM', str(bool(s2.get('use_llm', False))).lower())
+if 'enabled' in asl:
+    out('CFG_AUDIO_SILENCE_ENABLED', str(bool(asl.get('enabled'))).lower())
+out('CFG_AUDIO_SILENCE_NOISE', asl.get('noise'))
+out('CFG_AUDIO_SILENCE_MIN_SILENCE', asl.get('min_silence'))
 out('CFG_INPUT_VIDEOS_DIR', p.get('input_videos_dir'))
 out('CFG_OUTPUT_DIR', p.get('output_dir'))
 out('CFG_FROM_STAGE', p.get('from_stage'))
@@ -117,9 +125,12 @@ MIN_KEEP="${CLI_MIN_KEEP:-${CFG_MIN_KEEP:-1.0}}"
 COMPUTE_TYPE="${CFG_COMPUTE_TYPE:-float16}"
 BATCH_SIZE="${CFG_BATCH_SIZE:-16}"
 FROM_STAGE="${CLI_FROM_STAGE:-${CFG_FROM_STAGE:-1}}"
+AUDIO_SILENCE_ENABLED="${CFG_AUDIO_SILENCE_ENABLED:-true}"
+AUDIO_SILENCE_NOISE="${CFG_AUDIO_SILENCE_NOISE:--30.0}"
+AUDIO_SILENCE_MIN_SILENCE="${CFG_AUDIO_SILENCE_MIN_SILENCE:-0.8}"
 
-if [[ "$FROM_STAGE" != "1" && "$FROM_STAGE" != "2" && "$FROM_STAGE" != "3" && "$FROM_STAGE" != "4" ]]; then
-  echo "Invalid --from-stage value: $FROM_STAGE (must be 1, 2, 3, or 4)" >&2
+if [[ "$FROM_STAGE" != "1" && "$FROM_STAGE" != "2" && "$FROM_STAGE" != "3" && "$FROM_STAGE" != "4" && "$FROM_STAGE" != "5" ]]; then
+  echo "Invalid --from-stage value: $FROM_STAGE (must be 1-5)" >&2
   exit 1
 fi
 
@@ -130,13 +141,14 @@ if [[ -z "$ALIGN_MODEL" ]]; then
   esac
 fi
 
-STAGE1_DIR="${OUTPUT_DIR}/stage1"
-STAGE2_DIR="${OUTPUT_DIR}/stage2"
-STAGE3_DIR="${OUTPUT_DIR}/stage3"
-STAGE4_DIR="${OUTPUT_DIR}/stage4"
+STAGE1_DIR="${OUTPUT_DIR}/stage1"   # WhisperX transcription
+STAGE2_DIR="${OUTPUT_DIR}/stage2"   # Audio-silence cut lists
+STAGE3_DIR="${OUTPUT_DIR}/stage3"   # Text editing checkpoint (_edits.txt)
+STAGE4_DIR="${OUTPUT_DIR}/stage4"   # Patch + keep-interval merge (_intervals.json)
+STAGE5_DIR="${OUTPUT_DIR}/stage5"   # Blender VSE project (.blend)
 LOG_FILE="${OUTPUT_DIR}/pipeline.log"
 
-mkdir -p "$INPUT_VIDEOS_DIR" "$STAGE1_DIR" "$STAGE2_DIR" "$STAGE3_DIR" "$STAGE4_DIR" "$PROJECT_ROOT/cache"
+mkdir -p "$INPUT_VIDEOS_DIR" "$STAGE1_DIR" "$STAGE2_DIR" "$STAGE3_DIR" "$STAGE4_DIR" "$STAGE5_DIR" "$PROJECT_ROOT/cache"
 
 ABS_INPUT_VIDEOS="$(realpath "$INPUT_VIDEOS_DIR")"
 ABS_OUTPUT_DIR="$(realpath "$OUTPUT_DIR")"
@@ -233,7 +245,7 @@ done
 
 # --- Stage 1: WhisperX transcription (single container run for all sources) ---
 if [ "$FROM_STAGE" = "1" ]; then
-  echo "[Stage 1/4] WhisperX transcription: ${ALL_RELATIVES[*]}"
+  echo "[Stage 1/5] WhisperX transcription: ${ALL_RELATIVES[*]}"
   INPUT_VIDEOS_DIR="$ABS_INPUT_VIDEOS" OUTPUT_DIR="$ABS_OUTPUT_DIR" \
   docker compose -f "$PROJECT_ROOT/docker-compose.yml" run --rm --user "0:0" whisperx \
     _ \
@@ -245,52 +257,87 @@ if [ "$FROM_STAGE" = "1" ]; then
     --batch_size "$BATCH_SIZE" \
     "${ALIGN_MODEL_ARGS[@]}"
 else
-  echo "[Stage 1/4] Skipped (--from-stage $FROM_STAGE)"
+  echo "[Stage 1/5] Skipped (--from-stage $FROM_STAGE)"
   # Validate that Stage 1 outputs exist for all sources
   for STEM in "${ALL_STEMS[@]}"; do
     if [[ ! -f "${STAGE1_DIR}/${STEM}.json" ]]; then
       echo "Missing Stage 1 output: ${STAGE1_DIR}/${STEM}.json (required when skipping Stage 1)" >&2
       exit 1
     fi
-    if [[ "$FROM_STAGE" = "2" && ! -f "${STAGE1_DIR}/${STEM}.txt" ]]; then
-      echo "Missing Stage 1 output: ${STAGE1_DIR}/${STEM}.txt (required for Stage 2)" >&2
+    if [[ ("$FROM_STAGE" = "2" || "$FROM_STAGE" = "3") && ! -f "${STAGE1_DIR}/${STEM}.txt" ]]; then
+      echo "Missing Stage 1 output: ${STAGE1_DIR}/${STEM}.txt (required for the text editing checkpoint)" >&2
       exit 1
     fi
   done
 fi
 
-# --- Stage 2: Text editing checkpoint (mandatory, per source) ---
+# --- Stage 2: Audio-silence (jump-cut) detection checkpoint (per source) ---
 if [[ "$FROM_STAGE" = "1" || "$FROM_STAGE" = "2" ]]; then
   for i in "${!ALL_STEMS[@]}"; do
     STEM="${ALL_STEMS[$i]}"
-    echo "[Stage 2/4] Text editing checkpoint: ${STEM}"
-    uv run --project "$PROJECT_ROOT" python -m nagare_clip.stage2.cli \
-      --txt "${STAGE1_DIR}/${STEM}.txt" \
-      --output-txt "${STAGE2_DIR}/${STEM}_edits.txt" \
+    CUTS_TXT="${STAGE2_DIR}/${STEM}_cuts.txt"
+    RAW_ARGS=()
+    echo "[Stage 2/5] Audio-silence detection: ${STEM}"
+    if [[ "$AUDIO_SILENCE_ENABLED" = "true" ]]; then
+      SD_LOG="${STAGE2_DIR}/${STEM}_silencedetect.log"
+      INPUT_VIDEOS_DIR="$ABS_INPUT_VIDEOS" OUTPUT_DIR="$ABS_OUTPUT_DIR" \
+      docker compose -f "$PROJECT_ROOT/docker-compose.yml" run --rm --user "0:0" \
+        --entrypoint ffmpeg whisperx \
+        -hide_banner -nostats -i "${ALL_RELATIVES[$i]}" \
+        -af "silencedetect=noise=${AUDIO_SILENCE_NOISE}dB:d=${AUDIO_SILENCE_MIN_SILENCE}" \
+        -f null - >/dev/null 2> "$SD_LOG"
+      RAW_ARGS=(--raw "$SD_LOG")
+    fi
+    uv run --project "$PROJECT_ROOT" python -m nagare_clip.audio_silence.cli \
+      "${RAW_ARGS[@]}" \
+      --output "$CUTS_TXT" \
       "${CONFIG_ARGS[@]}" \
       --log-file "$LOG_FILE"
   done
 else
-  echo "[Stage 2/4] Skipped (--from-stage $FROM_STAGE)"
+  echo "[Stage 2/5] Skipped (--from-stage $FROM_STAGE)"
   # Validate that Stage 2 outputs exist
   for STEM in "${ALL_STEMS[@]}"; do
-    if [[ ! -f "${STAGE2_DIR}/${STEM}_edits.txt" ]]; then
-      echo "Missing Stage 2 output: ${STAGE2_DIR}/${STEM}_edits.txt (required when skipping Stage 2)" >&2
+    if [[ ! -f "${STAGE2_DIR}/${STEM}_cuts.txt" ]]; then
+      echo "Missing Stage 2 output: ${STAGE2_DIR}/${STEM}_cuts.txt (required when skipping Stage 2)" >&2
       exit 1
     fi
   done
 fi
 
-# --- Stage 3: Patch application + keep interval computation (per source) ---
+# --- Stage 3: Text editing checkpoint (mandatory, per source) ---
 if [[ "$FROM_STAGE" = "1" || "$FROM_STAGE" = "2" || "$FROM_STAGE" = "3" ]]; then
   for i in "${!ALL_STEMS[@]}"; do
     STEM="${ALL_STEMS[$i]}"
-    INTERVALS_JSON="${STAGE3_DIR}/${STEM}_intervals.json"
+    echo "[Stage 3/5] Text editing checkpoint: ${STEM}"
+    uv run --project "$PROJECT_ROOT" python -m nagare_clip.stage2.cli \
+      --txt "${STAGE1_DIR}/${STEM}.txt" \
+      --output-txt "${STAGE3_DIR}/${STEM}_edits.txt" \
+      "${CONFIG_ARGS[@]}" \
+      --log-file "$LOG_FILE"
+  done
+else
+  echo "[Stage 3/5] Skipped (--from-stage $FROM_STAGE)"
+  # Validate that Stage 3 outputs exist
+  for STEM in "${ALL_STEMS[@]}"; do
+    if [[ ! -f "${STAGE3_DIR}/${STEM}_edits.txt" ]]; then
+      echo "Missing Stage 3 output: ${STAGE3_DIR}/${STEM}_edits.txt (required when skipping Stage 3)" >&2
+      exit 1
+    fi
+  done
+fi
 
-    echo "[Stage 3/4] Patch application + keep intervals: ${STEM}"
+# --- Stage 4: Patch application + keep interval computation (per source) ---
+if [[ "$FROM_STAGE" = "1" || "$FROM_STAGE" = "2" || "$FROM_STAGE" = "3" || "$FROM_STAGE" = "4" ]]; then
+  for i in "${!ALL_STEMS[@]}"; do
+    STEM="${ALL_STEMS[$i]}"
+    INTERVALS_JSON="${STAGE4_DIR}/${STEM}_intervals.json"
+
+    echo "[Stage 4/5] Patch application + keep intervals: ${STEM}"
     uv run --project "$PROJECT_ROOT" python -m nagare_clip.cli \
-      --edits-txt "${STAGE2_DIR}/${STEM}_edits.txt" \
+      --edits-txt "${STAGE3_DIR}/${STEM}_edits.txt" \
       --json "${STAGE1_DIR}/${STEM}.json" \
+      --cuts-txt "${STAGE2_DIR}/${STEM}_cuts.txt" \
       "${CONFIG_ARGS[@]}" \
       "${STAGE3_OVERRIDE_ARGS[@]}" \
       --output "$INTERVALS_JSON" \
@@ -299,20 +346,20 @@ if [[ "$FROM_STAGE" = "1" || "$FROM_STAGE" = "2" || "$FROM_STAGE" = "3" ]]; then
     ALL_INTERVALS+=("$(realpath "$INTERVALS_JSON")")
   done
 else
-  echo "[Stage 3/4] Skipped (--from-stage $FROM_STAGE)"
-  # Validate that Stage 3 outputs exist and collect interval paths
+  echo "[Stage 4/5] Skipped (--from-stage $FROM_STAGE)"
+  # Validate that Stage 4 outputs exist and collect interval paths
   for STEM in "${ALL_STEMS[@]}"; do
-    INTERVALS_JSON="${STAGE3_DIR}/${STEM}_intervals.json"
+    INTERVALS_JSON="${STAGE4_DIR}/${STEM}_intervals.json"
     if [[ ! -f "$INTERVALS_JSON" ]]; then
-      echo "Missing Stage 3 output: $INTERVALS_JSON (required when skipping Stage 3)" >&2
+      echo "Missing Stage 4 output: $INTERVALS_JSON (required when skipping Stage 4)" >&2
       exit 1
     fi
     ALL_INTERVALS+=("$(realpath "$INTERVALS_JSON")")
   done
 fi
 
-# --- Stage 4: Blender VSE project generation ---
-BLEND_OUTPUT="${STAGE4_DIR}/${FIRST_STEM}_edited.blend"
+# --- Stage 5: Blender VSE project generation ---
+BLEND_OUTPUT="${STAGE5_DIR}/${FIRST_STEM}_edited.blend"
 
 STAGE4_SOURCE_ARGS=()
 for src in "${ALL_SOURCE_PATHS[@]}"; do
@@ -324,7 +371,7 @@ for ivp in "${ALL_INTERVALS[@]}"; do
   STAGE4_INTERVALS_ARGS+=("--intervals" "$ivp")
 done
 
-echo "[Stage 4/4] Blender VSE project generation"
+echo "[Stage 5/5] Blender VSE project generation"
 blender --background --factory-startup --python-exit-code 1 --python "$PROJECT_ROOT/src/nagare_clip/stage4/blender_cli.py" -- \
   "${STAGE4_SOURCE_ARGS[@]}" \
   "${STAGE4_INTERVALS_ARGS[@]}" \
