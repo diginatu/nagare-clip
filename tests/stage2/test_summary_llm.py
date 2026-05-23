@@ -73,6 +73,28 @@ class TestParseSummaryResponse:
         response = json.dumps({"summary": 123, "keywords": ["w1"]})
         assert parse_summary_response(response) is None
 
+    def test_markdown_json_fence_stripped(self):
+        payload = json.dumps({"summary": "概要", "keywords": ["w1"]})
+        response = f"```json\n{payload}\n```"
+        result = parse_summary_response(response)
+        assert result is not None
+        assert result.summary == "概要"
+        assert result.keywords == ["w1"]
+
+    def test_markdown_plain_fence_stripped(self):
+        payload = json.dumps({"summary": "概要", "keywords": ["w1"]})
+        response = f"```\n{payload}\n```"
+        result = parse_summary_response(response)
+        assert result is not None
+        assert result.summary == "概要"
+
+    def test_fence_with_surrounding_whitespace(self):
+        payload = json.dumps({"summary": "概要", "keywords": ["w1"]})
+        response = f"  \n```json\n{payload}\n```  \n"
+        result = parse_summary_response(response)
+        assert result is not None
+        assert result.summary == "概要"
+
 
 class TestBuildEnhancedPrompt:
     def test_appends_summary_and_keywords(self):

@@ -4,8 +4,11 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 from dataclasses import dataclass
 from typing import Any, Dict, List
+
+_FENCE_RE = re.compile(r"^\s*```(?:json)?\s*\n(.*?)\n```\s*$", re.DOTALL | re.IGNORECASE)
 
 from nagare_clip.stage2.llm_filter import _call_llm
 
@@ -20,6 +23,10 @@ class SummaryResult:
 
 def parse_summary_response(response: str) -> SummaryResult | None:
     """Parse JSON response with ``summary`` and ``keywords`` fields."""
+    if isinstance(response, str):
+        m = _FENCE_RE.match(response)
+        if m:
+            response = m.group(1)
     try:
         data = json.loads(response)
     except (json.JSONDecodeError, TypeError):
