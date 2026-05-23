@@ -27,6 +27,8 @@ DEFAULTS: Dict[str, Any] = {
         "api_key": "",
         "batch_size": 10,
         "timeout": 60,
+        "retry_on_invalid": True,
+        "retry_min_batch_size": 1,
         "prompt": (
             "Fix speech recognition errors in Japanese text.\n"
             "Remove filler words (あのー, えーと) and noise like (雑音).\n"

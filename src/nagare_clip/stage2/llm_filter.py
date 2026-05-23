@@ -46,24 +46,58 @@ def filter_transcript(lines: List[str], cfg: Dict[str, Any]) -> List[str]:
     result = list(lines)  # copy
 
     for batch in batches:
-        try:
-            prompt_text = _format_batch(batch)
-            messages = [
-                {"role": "system", "content": cfg.get("prompt", "")},
-                {"role": "user", "content": prompt_text},
-            ]
-            response = _call_llm(messages, cfg)
-            patches = _parse_response(response, batch)
-            for idx, corrected in patches.items():
-                result[idx] = corrected
-        except Exception:
-            logger.warning(
-                "LLM filter failed for batch starting at line %d, keeping originals",
-                batch[0][0] + 1,
-                exc_info=True,
-            )
+        _process_batch(batch, result, cfg, batch_size)
 
     return result
+
+
+def _process_batch(
+    batch: List[Tuple[int, str]],
+    result: List[str],
+    cfg: Dict[str, Any],
+    current_size: int,
+) -> None:
+    """Run one LLM call for ``batch``; on any line missing from the parse
+    result, recursively retry the failed lines with a halved batch size
+    (down to ``retry_min_batch_size``)."""
+    try:
+        prompt_text = _format_batch(batch)
+        messages = [
+            {"role": "system", "content": cfg.get("prompt", "")},
+            {"role": "user", "content": prompt_text},
+        ]
+        response = _call_llm(messages, cfg)
+        patches = _parse_response(response, batch)
+    except Exception:
+        logger.warning(
+            "LLM filter failed for batch starting at line %d, keeping originals",
+            batch[0][0] + 1,
+            exc_info=True,
+        )
+        return
+
+    for idx, corrected in patches.items():
+        result[idx] = corrected
+
+    if not cfg.get("retry_on_invalid", True):
+        return
+    min_size = max(1, int(cfg.get("retry_min_batch_size", 1)))
+    if current_size <= min_size:
+        return
+    failed = [(idx, text) for idx, text in batch if idx not in patches]
+    if not failed:
+        return
+    new_size = max(min_size, current_size // 2)
+    if new_size >= current_size:
+        return
+    logger.info(
+        "Retrying %d failed line(s) with batch_size=%d (was %d)",
+        len(failed),
+        new_size,
+        current_size,
+    )
+    for i in range(0, len(failed), new_size):
+        _process_batch(failed[i : i + new_size], result, cfg, new_size)
 
 
 def _batch_lines(

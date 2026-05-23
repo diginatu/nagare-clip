@@ -161,6 +161,12 @@ class TestGetEffectiveConfig:
         # Other stage1 defaults intact
         assert cfg["stage1"]["compute_type"] == "float16"
 
+    def test_retry_defaults_present(self):
+        cfg = get_effective_config(None)
+        s2 = cfg["stage2"]
+        assert s2["retry_on_invalid"] is True
+        assert s2["retry_min_batch_size"] == 1
+
     def test_summary_llm_defaults_present(self):
         cfg = get_effective_config(None)
         slm = cfg["stage2"]["summary_llm"]

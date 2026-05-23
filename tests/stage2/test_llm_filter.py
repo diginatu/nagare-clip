@@ -245,6 +245,97 @@ class TestFilterTranscript:
         assert result[0] == "{{短い->短い文を長い説明に変える}}テスト"
 
 
+class TestRetryOnInvalid:
+    @patch("nagare_clip.stage2.llm_filter._call_llm")
+    def test_no_retry_when_all_succeed(self, mock_llm):
+        mock_llm.return_value = "1: {{a->A}}\n2: {{b->B}}\n3: {{c->C}}\n4: {{d->D}}"
+        lines = ["a", "b", "c", "d"]
+        cfg = {"batch_size": 4, "prompt": "fix"}
+        result = filter_transcript(lines, cfg)
+        assert mock_llm.call_count == 1
+        assert result == ["{{a->A}}", "{{b->B}}", "{{c->C}}", "{{d->D}}"]
+
+    @patch("nagare_clip.stage2.llm_filter._call_llm")
+    def test_halving_retry_on_validation_failure(self, mock_llm):
+        """Line 2 changed outside markers on call #1; retry with just line 2 succeeds."""
+        mock_llm.side_effect = [
+            "1: {{a->A}}\n2: B_wrong\n3: {{c->C}}\n4: {{d->D}}",
+            "2: {{b->B}}",
+        ]
+        lines = ["a", "b", "c", "d"]
+        cfg = {"batch_size": 4, "prompt": "fix"}
+        result = filter_transcript(lines, cfg)
+        assert mock_llm.call_count == 2
+        retry_user_content = mock_llm.call_args_list[1][0][0][1]["content"]
+        assert retry_user_content == "2: b"
+        assert result == ["{{a->A}}", "{{b->B}}", "{{c->C}}", "{{d->D}}"]
+
+    @patch("nagare_clip.stage2.llm_filter._call_llm")
+    def test_recursive_shrink_to_size_one(self, mock_llm):
+        """4→2→1: all fail at 4, half succeed at 2, remaining succeed only at 1."""
+        mock_llm.side_effect = [
+            "1: A_wrong\n2: B_wrong\n3: C_wrong\n4: D_wrong",
+            "1: {{a->A}}\n2: {{b->B}}",
+            "3: C_wrong\n4: D_wrong",
+            "3: {{c->C}}",
+            "4: {{d->D}}",
+        ]
+        lines = ["a", "b", "c", "d"]
+        cfg = {"batch_size": 4, "prompt": "fix"}
+        result = filter_transcript(lines, cfg)
+        assert mock_llm.call_count == 5
+        assert result == ["{{a->A}}", "{{b->B}}", "{{c->C}}", "{{d->D}}"]
+
+    @patch("nagare_clip.stage2.llm_filter._call_llm")
+    def test_floor_honored(self, mock_llm):
+        """retry_min_batch_size=2 stops shrinking at 2 even if size-2 batch still fails."""
+        mock_llm.side_effect = [
+            "1: A_wrong\n2: B_wrong\n3: C_wrong\n4: D_wrong",
+            "1: A_wrong\n2: B_wrong",
+            "3: C_wrong\n4: D_wrong",
+        ]
+        lines = ["a", "b", "c", "d"]
+        cfg = {"batch_size": 4, "prompt": "fix", "retry_min_batch_size": 2}
+        result = filter_transcript(lines, cfg)
+        assert mock_llm.call_count == 3
+        assert result == ["a", "b", "c", "d"]
+
+    @patch("nagare_clip.stage2.llm_filter._call_llm")
+    def test_disabled_skips_retry(self, mock_llm):
+        mock_llm.return_value = "1: A_wrong\n2: B_wrong"
+        lines = ["a", "b"]
+        cfg = {"batch_size": 2, "prompt": "fix", "retry_on_invalid": False}
+        result = filter_transcript(lines, cfg)
+        assert mock_llm.call_count == 1
+        assert result == ["a", "b"]
+
+    @patch("nagare_clip.stage2.llm_filter._call_llm")
+    def test_retry_on_missing_line(self, mock_llm):
+        """LLM omits line 2 entirely; retry with just that line succeeds."""
+        mock_llm.side_effect = [
+            "1: {{a->A}}",
+            "2: {{b->B}}",
+        ]
+        lines = ["a", "b"]
+        cfg = {"batch_size": 2, "prompt": "fix"}
+        result = filter_transcript(lines, cfg)
+        assert mock_llm.call_count == 2
+        assert result == ["{{a->A}}", "{{b->B}}"]
+
+    @patch("nagare_clip.stage2.llm_filter._call_llm")
+    def test_exception_during_retry_keeps_partial_progress(self, mock_llm):
+        """Retry sub-call raises; lines that passed call #1 stay corrected."""
+        mock_llm.side_effect = [
+            "1: {{a->A}}\n2: B_wrong\n3: {{c->C}}\n4: D_wrong",
+            ConnectionError("timeout"),
+        ]
+        lines = ["a", "b", "c", "d"]
+        cfg = {"batch_size": 4, "prompt": "fix"}
+        result = filter_transcript(lines, cfg)
+        assert mock_llm.call_count == 2
+        assert result == ["{{a->A}}", "b", "{{c->C}}", "d"]
+
+
 def _make_urlopen_mock(content: str) -> MagicMock:
     resp_body = json.dumps({"message": {"content": content}, "done": True}).encode(
         "utf-8"
