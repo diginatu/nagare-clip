@@ -119,6 +119,20 @@ class TestBuildEnhancedPrompt:
         result = build_enhanced_prompt(base, summary)
         assert result.startswith(base)
 
+    def test_empty_summary_with_keywords_omits_summary_line(self):
+        base = "Fix errors."
+        summary = SummaryResult(summary="", keywords=["Foo", "Bar"])
+        result = build_enhanced_prompt(base, summary)
+        assert "Foo" in result
+        assert "Bar" in result
+        assert "Summary:" not in result
+
+    def test_empty_summary_no_keywords_returns_base(self):
+        base = "Fix errors."
+        summary = SummaryResult(summary="", keywords=[])
+        result = build_enhanced_prompt(base, summary)
+        assert result == base
+
 
 class TestGenerateSummary:
     @patch("nagare_clip.stage2.summary_llm._call_llm")

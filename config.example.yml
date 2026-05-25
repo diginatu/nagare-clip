@@ -38,6 +38,7 @@ stage2:
   thinking: false              # Thinking mode: true/false, or string level ("low", "medium", "high") for models that support it
   summary_llm:                   # Summary LLM: generates context (summary + keywords) for the filter LLM
     enabled: false               # Enable summary generation before filtering
+    # keywords: []               # Constant keywords always injected into the filter LLM prompt (e.g. domain-specific terms, proper nouns)
     api_base: "http://localhost:11434"  # API base URL (can differ from filter LLM)
     model: "qwen3.5:4b"         # Model for summarization (can use a larger model)
     api_key: ""                  # API key (empty = no auth)

@@ -54,6 +54,7 @@ DEFAULTS: Dict[str, Any] = {
         "thinking": False,
         "summary_llm": {
             "enabled": False,
+            "keywords": [],
             "api_base": "http://localhost:11434",
             "model": "qwen3.5:4b",
             "api_key": "",

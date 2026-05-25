@@ -49,8 +49,11 @@ def parse_summary_response(response: str) -> SummaryResult | None:
 
 def build_enhanced_prompt(base_prompt: str, summary: SummaryResult) -> str:
     """Append summary and keywords context to the filter LLM's base prompt."""
+    if not summary.summary and not summary.keywords:
+        return base_prompt
     parts = [base_prompt, "", "Context about this transcript:"]
-    parts.append(f"Summary: {summary.summary}")
+    if summary.summary:
+        parts.append(f"Summary: {summary.summary}")
     if summary.keywords:
         kw_str = ", ".join(summary.keywords)
         parts.append(f"Keywords (correct spellings): {kw_str}")

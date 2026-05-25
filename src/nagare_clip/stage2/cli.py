@@ -15,7 +15,7 @@ from nagare_clip.config import get_effective_config
 from nagare_clip.logging_setup import setup_logging
 from nagare_clip.stage2.llm_filter import filter_transcript
 from nagare_clip.stage2.rule_filter import remove_midstream_closing
-from nagare_clip.stage2.summary_llm import build_enhanced_prompt, generate_summary
+from nagare_clip.stage2.summary_llm import SummaryResult, build_enhanced_prompt, generate_summary
 
 
 def parse_args() -> argparse.Namespace:
@@ -90,9 +90,11 @@ def main() -> None:
         # Summary LLM — generate context for the filter LLM
         filter_cfg = dict(s2)
         summary_cfg = s2.get("summary_llm", {})
+        constant_keywords: list = summary_cfg.get("keywords", [])
         if summary_cfg.get("enabled", False):
             summary_result = generate_summary("\n".join(lines), summary_cfg)
             if summary_result is not None:
+                summary_result.keywords = constant_keywords + summary_result.keywords
                 filter_cfg["prompt"] = build_enhanced_prompt(
                     s2.get("prompt", ""), summary_result
                 )
@@ -100,6 +102,16 @@ def main() -> None:
                     "Stage 2: summary generated, %d keywords",
                     len(summary_result.keywords),
                 )
+            elif constant_keywords:
+                filter_cfg["prompt"] = build_enhanced_prompt(
+                    s2.get("prompt", ""),
+                    SummaryResult(summary="", keywords=constant_keywords),
+                )
+        elif constant_keywords:
+            filter_cfg["prompt"] = build_enhanced_prompt(
+                s2.get("prompt", ""),
+                SummaryResult(summary="", keywords=constant_keywords),
+            )
 
         # AI filter — returns lines with {{old->new}} markers preserved
         result_lines = filter_transcript(lines, filter_cfg)
