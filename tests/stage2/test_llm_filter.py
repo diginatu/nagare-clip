@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import logging
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -334,6 +335,71 @@ class TestRetryOnInvalid:
         result = filter_transcript(lines, cfg)
         assert mock_llm.call_count == 2
         assert result == ["{{a->A}}", "b", "{{c->C}}", "d"]
+
+
+_FILTER_LOGGER = "nagare_clip.stage2.llm_filter"
+
+
+class TestRetryStats:
+    @patch("nagare_clip.stage2.llm_filter._call_llm")
+    def test_all_succeed_per_size_log(self, mock_llm, caplog):
+        """All lines succeed at initial size: per-size log emitted, no 'total' retry line."""
+        mock_llm.return_value = "1: {{a->A}}\n2: {{b->B}}"
+        lines = ["a", "b"]
+        cfg = {"batch_size": 2, "prompt": "fix"}
+        with caplog.at_level(logging.INFO, logger=_FILTER_LOGGER):
+            filter_transcript(lines, cfg)
+        msgs = [r.message for r in caplog.records if "LLM filter" in r.message]
+        assert any("batch_size=2" in m and "2/2" in m and "(retry)" not in m for m in msgs)
+        assert not any("retries saved" in m for m in msgs)
+
+    @patch("nagare_clip.stage2.llm_filter._call_llm")
+    def test_retry_saved_count(self, mock_llm, caplog):
+        """Line 2 fails at batch=2, succeeds at batch=1: retry-saved=1 in total log."""
+        mock_llm.side_effect = [
+            "1: {{a->A}}\n2: B_wrong",
+            "2: {{b->B}}",
+        ]
+        lines = ["a", "b"]
+        cfg = {"batch_size": 2, "prompt": "fix"}
+        with caplog.at_level(logging.INFO, logger=_FILTER_LOGGER):
+            filter_transcript(lines, cfg)
+        msgs = [r.message for r in caplog.records if "LLM filter" in r.message]
+        assert any("batch_size=2" in m and "1/2" in m and "(retry)" not in m for m in msgs)
+        assert any("batch_size=1 (retry)" in m and "1/1" in m for m in msgs)
+        assert any("retries saved 1/1" in m for m in msgs)
+
+    @patch("nagare_clip.stage2.llm_filter._call_llm")
+    def test_retry_all_fail(self, mock_llm, caplog):
+        """Retry also fails: retries saved 0/N in total log."""
+        mock_llm.side_effect = [
+            "1: B_wrong\n2: C_wrong",
+            "1: B_wrong",
+            "2: C_wrong",
+        ]
+        lines = ["a", "b"]
+        cfg = {"batch_size": 2, "prompt": "fix"}
+        with caplog.at_level(logging.INFO, logger=_FILTER_LOGGER):
+            filter_transcript(lines, cfg)
+        msgs = [r.message for r in caplog.records if "LLM filter" in r.message]
+        assert any("retries saved 0/2" in m for m in msgs)
+
+    @patch("nagare_clip.stage2.llm_filter._call_llm")
+    def test_exception_path_counted(self, mock_llm, caplog):
+        """Exception during LLM call: lines counted as attempted with 0 succeeded."""
+        mock_llm.side_effect = ConnectionError("timeout")
+        lines = ["a", "b"]
+        cfg = {"batch_size": 2, "prompt": "fix"}
+        with caplog.at_level(logging.INFO, logger=_FILTER_LOGGER):
+            filter_transcript(lines, cfg)
+        msgs = [r.message for r in caplog.records if "LLM filter" in r.message]
+        assert any("batch_size=2" in m and "0/2" in m for m in msgs)
+
+    def test_empty_input_no_stats_log(self, caplog):
+        """Empty input: no stats log emitted."""
+        with caplog.at_level(logging.INFO, logger=_FILTER_LOGGER):
+            filter_transcript([], {})
+        assert not any("LLM filter" in r.message for r in caplog.records)
 
 
 def _make_urlopen_mock(content: str) -> MagicMock:

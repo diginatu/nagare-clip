@@ -7,7 +7,8 @@ import logging
 import re
 import urllib.error
 import urllib.request
-from typing import Any, Dict, List, Tuple
+from collections import defaultdict
+from typing import Any, Dict, List, Optional, Tuple
 
 logger = logging.getLogger(__name__)
 
@@ -45,9 +46,11 @@ def filter_transcript(lines: List[str], cfg: Dict[str, Any]) -> List[str]:
     batches = _batch_lines(lines, batch_size)
     result = list(lines)  # copy
 
+    stats: Dict[int, Dict[str, int]] = defaultdict(lambda: {"total": 0, "succeeded": 0})
     for batch in batches:
-        _process_batch(batch, result, cfg, batch_size)
+        _process_batch(batch, result, cfg, batch_size, stats)
 
+    _log_stats(stats, batch_size)
     return result
 
 
@@ -56,6 +59,7 @@ def _process_batch(
     result: List[str],
     cfg: Dict[str, Any],
     current_size: int,
+    stats: Optional[Dict[int, Dict[str, int]]] = None,
 ) -> None:
     """Run one LLM call for ``batch``; on any line missing from the parse
     result, recursively retry the failed lines with a halved batch size
@@ -69,12 +73,18 @@ def _process_batch(
         response = _call_llm(messages, cfg)
         patches = _parse_response(response, batch)
     except Exception:
+        if stats is not None:
+            stats[current_size]["total"] += len(batch)
         logger.warning(
             "LLM filter failed for batch starting at line %d, keeping originals",
             batch[0][0] + 1,
             exc_info=True,
         )
         return
+
+    if stats is not None:
+        stats[current_size]["total"] += len(batch)
+        stats[current_size]["succeeded"] += len(patches)
 
     for idx, corrected in patches.items():
         result[idx] = corrected
@@ -97,7 +107,27 @@ def _process_batch(
         current_size,
     )
     for i in range(0, len(failed), new_size):
-        _process_batch(failed[i : i + new_size], result, cfg, new_size)
+        _process_batch(failed[i : i + new_size], result, cfg, new_size, stats)
+
+
+def _log_stats(stats: Dict[int, Dict[str, int]], initial_size: int) -> None:
+    if not stats:
+        return
+    for size in sorted(stats.keys(), reverse=True):
+        s = stats[size]
+        label = f"batch_size={size}" if size == initial_size else f"batch_size={size} (retry)"
+        pct = 100.0 * s["succeeded"] / s["total"] if s["total"] else 0.0
+        logger.info("LLM filter %s: %d/%d succeeded (%.0f%%)", label, s["succeeded"], s["total"], pct)
+
+    retry_saved = sum(s["succeeded"] for sz, s in stats.items() if sz < initial_size)
+    retry_total = sum(s["total"] for sz, s in stats.items() if sz < initial_size)
+    all_total = sum(s["total"] for s in stats.values())
+    all_succeeded = sum(s["succeeded"] for s in stats.values())
+    if retry_total > 0:
+        logger.info(
+            "LLM filter total: %d/%d line-attempts succeeded; retries saved %d/%d lines (%.0f%%)",
+            all_succeeded, all_total, retry_saved, retry_total, 100.0 * retry_saved / retry_total,
+        )
 
 
 def _batch_lines(
