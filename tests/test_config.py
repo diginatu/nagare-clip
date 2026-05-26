@@ -16,9 +16,9 @@ class TestLoadConfig:
 
     def test_reads_yaml_file(self, tmp_path: Path):
         cfg_file = tmp_path / "cfg.yml"
-        cfg_file.write_text(yaml.dump({"stage3": {"silence_threshold": 2.0}}))
+        cfg_file.write_text(yaml.dump({"intervals": {"silence_threshold": 2.0}}))
         result = load_config(cfg_file)
-        assert result == {"stage3": {"silence_threshold": 2.0}}
+        assert result == {"intervals": {"silence_threshold": 2.0}}
 
     def test_missing_file_raises(self, tmp_path: Path):
         with pytest.raises(FileNotFoundError):
@@ -76,19 +76,19 @@ class TestGetEffectiveConfig:
 
     def test_config_overrides_defaults(self, tmp_path: Path):
         cfg_file = tmp_path / "cfg.yml"
-        cfg_file.write_text(yaml.dump({"stage3": {"silence_threshold": 2.5}}))
+        cfg_file.write_text(yaml.dump({"intervals": {"silence_threshold": 2.5}}))
         cfg = get_effective_config(cfg_file)
-        assert cfg["stage3"]["silence_threshold"] == 2.5
+        assert cfg["intervals"]["silence_threshold"] == 2.5
         # Other defaults intact
-        assert cfg["stage3"]["min_keep"] == 1.0
-        assert cfg["stage3"]["caption"]["max_bunsetu"] == 12
+        assert cfg["intervals"]["min_keep"] == 1.0
+        assert cfg["intervals"]["caption"]["max_bunsetu"] == 12
 
     def test_cli_overrides_config(self, tmp_path: Path):
         cfg_file = tmp_path / "cfg.yml"
-        cfg_file.write_text(yaml.dump({"stage3": {"silence_threshold": 2.5}}))
-        cli = {"stage3": {"silence_threshold": 3.0}}
+        cfg_file.write_text(yaml.dump({"intervals": {"silence_threshold": 2.5}}))
+        cli = {"intervals": {"silence_threshold": 3.0}}
         cfg = get_effective_config(cfg_file, cli)
-        assert cfg["stage3"]["silence_threshold"] == 3.0
+        assert cfg["intervals"]["silence_threshold"] == 3.0
 
     def test_full_precedence(self, tmp_path: Path):
         """CLI > config > defaults."""
@@ -96,50 +96,50 @@ class TestGetEffectiveConfig:
         cfg_file.write_text(
             yaml.dump(
                 {
-                    "stage3": {
+                    "intervals": {
                         "silence_threshold": 2.5,
                         "min_keep": 0.5,
                     }
                 }
             )
         )
-        cli = {"stage3": {"silence_threshold": 3.0}}
+        cli = {"intervals": {"silence_threshold": 3.0}}
         cfg = get_effective_config(cfg_file, cli)
         # CLI wins
-        assert cfg["stage3"]["silence_threshold"] == 3.0
+        assert cfg["intervals"]["silence_threshold"] == 3.0
         # Config wins over default
-        assert cfg["stage3"]["min_keep"] == 0.5
+        assert cfg["intervals"]["min_keep"] == 0.5
         # Default remains
-        assert cfg["stage3"]["keep_pre_margin"] == 1.0
+        assert cfg["intervals"]["keep_pre_margin"] == 1.0
 
     def test_partial_config(self, tmp_path: Path):
         cfg_file = tmp_path / "cfg.yml"
-        cfg_file.write_text(yaml.dump({"stage4": {"default_fps": 24.0}}))
+        cfg_file.write_text(yaml.dump({"blender": {"default_fps": 24.0}}))
         cfg = get_effective_config(cfg_file)
-        assert cfg["stage4"]["default_fps"] == 24.0
+        assert cfg["blender"]["default_fps"] == 24.0
         # All other sections still have defaults
-        assert cfg["stage3"]["silence_threshold"] == 1.5
+        assert cfg["intervals"]["silence_threshold"] == 1.5
         assert cfg["general"]["log_level"] == "INFO"
-        assert cfg["stage4"]["caption_style"]["font_size"] == 50
+        assert cfg["blender"]["caption_style"]["font_size"] == 50
 
     def test_nested_caption_override(self, tmp_path: Path):
         cfg_file = tmp_path / "cfg.yml"
         cfg_file.write_text(
-            yaml.dump({"stage3": {"caption": {"max_bunsetu": 20}}})
+            yaml.dump({"intervals": {"caption": {"max_bunsetu": 20}}})
         )
         cfg = get_effective_config(cfg_file)
-        assert cfg["stage3"]["caption"]["max_bunsetu"] == 20
+        assert cfg["intervals"]["caption"]["max_bunsetu"] == 20
         # Other caption defaults intact
-        assert cfg["stage3"]["caption"]["max_duration"] == 4.0
+        assert cfg["intervals"]["caption"]["max_duration"] == 4.0
 
     def test_caption_style_override(self, tmp_path: Path):
         cfg_file = tmp_path / "cfg.yml"
         cfg_file.write_text(
-            yaml.dump({"stage4": {"caption_style": {"font_size": 72}}})
+            yaml.dump({"blender": {"caption_style": {"font_size": 72}}})
         )
         cfg = get_effective_config(cfg_file)
-        assert cfg["stage4"]["caption_style"]["font_size"] == 72
-        assert cfg["stage4"]["caption_style"]["alignment_x"] == "CENTER"
+        assert cfg["blender"]["caption_style"]["font_size"] == 72
+        assert cfg["blender"]["caption_style"]["alignment_x"] == "CENTER"
 
     def test_unknown_keys_preserved(self, tmp_path: Path):
         cfg_file = tmp_path / "cfg.yml"
@@ -147,29 +147,29 @@ class TestGetEffectiveConfig:
         cfg = get_effective_config(cfg_file)
         assert cfg["custom_section"]["key"] == "value"
         # Defaults still present
-        assert "stage3" in cfg
+        assert "intervals" in cfg
 
-    def test_stage1_language_default(self):
+    def test_transcription_language_default(self):
         cfg = get_effective_config(None)
-        assert cfg["stage1"]["language"] == "ja"
+        assert cfg["transcription"]["language"] == "ja"
 
-    def test_stage1_language_config_override(self, tmp_path: Path):
+    def test_transcription_language_config_override(self, tmp_path: Path):
         cfg_file = tmp_path / "cfg.yml"
-        cfg_file.write_text(yaml.dump({"stage1": {"language": "en"}}))
+        cfg_file.write_text(yaml.dump({"transcription": {"language": "en"}}))
         cfg = get_effective_config(cfg_file)
-        assert cfg["stage1"]["language"] == "en"
-        # Other stage1 defaults intact
-        assert cfg["stage1"]["compute_type"] == "float16"
+        assert cfg["transcription"]["language"] == "en"
+        # Other transcription defaults intact
+        assert cfg["transcription"]["compute_type"] == "float16"
 
     def test_retry_defaults_present(self):
         cfg = get_effective_config(None)
-        s2 = cfg["stage2"]
+        s2 = cfg["text_filter"]
         assert s2["retry_on_invalid"] is True
         assert s2["retry_min_batch_size"] == 1
 
     def test_summary_llm_defaults_present(self):
         cfg = get_effective_config(None)
-        slm = cfg["stage2"]["summary_llm"]
+        slm = cfg["text_filter"]["summary_llm"]
         assert slm["enabled"] is False
         assert "model" in slm
         assert "api_base" in slm
@@ -179,11 +179,11 @@ class TestGetEffectiveConfig:
     def test_summary_llm_config_override(self, tmp_path: Path):
         cfg_file = tmp_path / "cfg.yml"
         cfg_file.write_text(
-            yaml.dump({"stage2": {"summary_llm": {"model": "gemma3:27b"}}})
+            yaml.dump({"text_filter": {"summary_llm": {"model": "gemma3:27b"}}})
         )
         cfg = get_effective_config(cfg_file)
-        assert cfg["stage2"]["summary_llm"]["model"] == "gemma3:27b"
+        assert cfg["text_filter"]["summary_llm"]["model"] == "gemma3:27b"
         # Other summary_llm defaults intact
-        assert cfg["stage2"]["summary_llm"]["enabled"] is False
-        # Other stage2 defaults intact
-        assert cfg["stage2"]["batch_size"] == 10
+        assert cfg["text_filter"]["summary_llm"]["enabled"] is False
+        # Other text_filter defaults intact
+        assert cfg["text_filter"]["batch_size"] == 10

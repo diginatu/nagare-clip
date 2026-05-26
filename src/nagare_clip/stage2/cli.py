@@ -66,7 +66,7 @@ def main() -> None:
         args.log_file or cfg["general"]["log_file"] or None,
     )
 
-    s2 = cfg["stage2"]
+    s2 = cfg["text_filter"]
 
     txt_path = Path(args.txt_path)
     output_txt = Path(args.output_txt)

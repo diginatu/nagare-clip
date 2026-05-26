@@ -86,9 +86,9 @@ if [[ -n "$CONFIG_FILE" ]]; then
 import yaml, sys, shlex
 with open(sys.argv[1]) as f:
     c = yaml.safe_load(f) or {}
-s1 = c.get('stage1', {})
-s2 = c.get('stage2', {})
-s3 = c.get('stage3', {})
+s1 = c.get('transcription', {})
+s2 = c.get('text_filter', {})
+s3 = c.get('intervals', {})
 asl = c.get('audio_silence', {})
 p  = c.get('pipeline', {})
 def out(name, val):

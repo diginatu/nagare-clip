@@ -155,7 +155,7 @@ def _build_cli_overrides(args: argparse.Namespace) -> dict:
     for attr, key in stage3_map.items():
         val = getattr(args, attr, None)
         if val is not None:
-            overrides.setdefault("stage3", {})[key] = val
+            overrides.setdefault("intervals", {})[key] = val
 
     # Stage 3 caption keys
     caption_map = {
@@ -171,7 +171,7 @@ def _build_cli_overrides(args: argparse.Namespace) -> dict:
     for attr, key in caption_map.items():
         val = getattr(args, attr, None)
         if val is not None:
-            overrides.setdefault("stage3", {}).setdefault("caption", {})[key] = val
+            overrides.setdefault("intervals", {}).setdefault("caption", {})[key] = val
 
     # General
     if args.log_level is not None:
@@ -187,7 +187,7 @@ def main() -> None:
     cli_overrides = _build_cli_overrides(args)
     cfg = get_effective_config(config_path, cli_overrides)
 
-    s3 = cfg["stage3"]
+    s3 = cfg["intervals"]
     cap = s3["caption"]
     bun = s3["bunsetu"]
 

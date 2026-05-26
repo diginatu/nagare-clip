@@ -34,7 +34,7 @@ def _setup(tmp_path):
     cfg.write_text(
         yaml.safe_dump(
             {
-                "stage3": {
+                "intervals": {
                     "silence_threshold": 1000.0,
                     "min_keep": 0.001,
                     "keep_pre_margin": 0.0,

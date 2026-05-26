@@ -56,7 +56,7 @@ def _run(tmp_path, s2_config, summary_result=None, lines=None):
 
     config = {
         "general": {"log_level": "WARNING", "log_file": ""},
-        "stage2": s2_config,
+        "text_filter": s2_config,
     }
 
     with (

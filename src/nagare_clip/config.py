@@ -14,13 +14,13 @@ DEFAULTS: Dict[str, Any] = {
         "log_level": "INFO",
         "log_file": "",
     },
-    "stage1": {
+    "transcription": {
         "compute_type": "float16",
         "batch_size": 16,
         "align_model": "",
         "language": "ja",
     },
-    "stage2": {
+    "text_filter": {
         "use_llm": False,
         "api_base": "http://localhost:11434",
         "model": "qwen3.5:4b",
@@ -78,7 +78,7 @@ DEFAULTS: Dict[str, Any] = {
         "noise": -30.0,
         "min_silence": 0.8,
     },
-    "stage3": {
+    "intervals": {
         "silence_threshold": 1.5,
         "min_keep": 1.0,
         "keep_pre_margin": 1.0,
@@ -98,7 +98,7 @@ DEFAULTS: Dict[str, Any] = {
             "silence_max_word_span": 0.6,
         },
     },
-    "stage4": {
+    "blender": {
         "default_fps": 30.0,
         "use_proxy": True,
         "proxy_size": 100,

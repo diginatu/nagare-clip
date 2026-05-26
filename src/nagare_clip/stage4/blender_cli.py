@@ -85,7 +85,7 @@ def main() -> None:
 
     # Use first source for scene metadata
     first_fps, first_width, first_height = load_source_metadata(
-        sources[0], default_fps=cfg["stage4"]["default_fps"]
+        sources[0], default_fps=cfg["blender"]["default_fps"]
     )
     fps_int = max(1, int(round(first_fps)))
     fps_base = fps_int / first_fps
@@ -105,7 +105,7 @@ def main() -> None:
     # Warn if subsequent sources differ in resolution/FPS
     for i, src in enumerate(sources[1:], start=1):
         fps_i, w_i, h_i = load_source_metadata(
-            src, default_fps=cfg["stage4"]["default_fps"]
+            src, default_fps=cfg["blender"]["default_fps"]
         )
         if abs(fps_i - first_fps) > 0.01 or w_i != first_width or h_i != first_height:
             logging.warning(
@@ -139,8 +139,8 @@ def main() -> None:
             start_cursor=timeline_cursor,
             idx_offset=idx_offset,
             source_num=src_num,
-            use_proxy=cfg["stage4"]["use_proxy"],
-            proxy_size=cfg["stage4"]["proxy_size"],
+            use_proxy=cfg["blender"]["use_proxy"],
+            proxy_size=cfg["blender"]["proxy_size"],
         )
         idx_offset += len(keep_intervals)
 
@@ -153,7 +153,7 @@ def main() -> None:
                 tl_map,
                 effective_fps,
                 sequence_collection,
-                caption_style=cfg["stage4"]["caption_style"],
+                caption_style=cfg["blender"]["caption_style"],
             )
 
     for s in sequence_collection:

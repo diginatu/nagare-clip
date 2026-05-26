@@ -7,7 +7,7 @@ general:
   log_level: INFO   # DEBUG | INFO | WARNING | ERROR | CRITICAL
   log_file: ""      # Path to log file; empty = console only (run_pipeline.sh sets this automatically)
 
-stage1:
+transcription:
   compute_type: float16
   batch_size: 16
   language: ja              # ISO 639-1 language code passed to WhisperX (e.g. ja, en)
@@ -16,15 +16,14 @@ stage1:
 # Pipeline Stage 2: audio-silence (jump-cut) detection.
 # Runs ffmpeg silencedetect on the waveform and writes an editable
 # {stem}_cuts.txt checkpoint. NOTE: this is acoustic silence, distinct
-# from stage3.silence_threshold (which is a WhisperX word-gap heuristic).
+# from intervals.silence_threshold (which is a WhisperX word-gap heuristic).
 audio_silence:
   enabled: true       # false = write an empty cut list (no audio cuts applied)
   noise: -30.0        # ffmpeg silencedetect noise threshold, in dB
   min_silence: 0.8    # ffmpeg silencedetect minimum silence duration, seconds
 
-# Pipeline Stage 3: text editing checkpoint (config section name kept as
-# 'stage2' to avoid churn; see AGENTS.md for the number<->section mapping).
-stage2:
+# Pipeline Stage 3: text editing checkpoint.
+text_filter:
   use_llm: false               # Enable LLM text filter for the text-editing checkpoint
   api_base: "http://localhost:11434/v1"  # OpenAI-compatible API base URL (Ollama default)
   model: "qwen3.5:4b"          # Model name for chat completions
@@ -47,9 +46,9 @@ stage2:
     timeout: 120                 # Longer timeout since full transcript is sent
     # prompt: "..."              # System prompt for summary LLM (has sensible default)
 
-# Pipeline Stage 4: patch application + keep-interval merge (config section
-# name kept as 'stage3'). Audio cuts from audio_silence are unioned here.
-stage3:
+# Pipeline Stage 4: patch application + keep-interval merge.
+# Audio cuts from audio_silence are unioned here.
+intervals:
   silence_threshold: 1.5     # WhisperX word-gap silence threshold, seconds (NOT the audio_silence detector)
   min_keep: 1.0              # Minimum keep interval length in seconds
   keep_pre_margin: 1.0       # Seconds to extend keep intervals before start
@@ -68,7 +67,8 @@ stage3:
   #   char_eps: 0.02
   #   silence_max_word_span: 0.6
 
-stage4:
+# Pipeline Stage 5: Blender VSE layout.
+blender:
   default_fps: 30.0           # Fallback FPS when source metadata unavailable
   use_proxy: true              # Enable proxy on movie strips for smooth VSE playback (bpy MovieStrip.use_proxy)
   proxy_size: 100              # Proxy render size percentage: 25 | 50 | 75 | 100
