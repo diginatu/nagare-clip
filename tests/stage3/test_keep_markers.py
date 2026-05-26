@@ -1,0 +1,178 @@
+"""Tests for <keep>...</keep> force-keep marker handling in Stage 3 sync."""
+
+from __future__ import annotations
+
+import pytest
+
+from nagare_clip.stage3.sync_json import (
+    extract_keep_ranges,
+    sync_text_to_json,
+)
+
+
+def _word(char: str, start: float, end: float, score: float = 0.9) -> dict:
+    return {"word": char, "start": start, "end": end, "score": score}
+
+
+def _segment(text: str, words: list) -> dict:
+    return {"text": text, "start": words[0]["start"], "end": words[-1]["end"], "words": words}
+
+
+def _whisperx(*segments: dict) -> dict:
+    all_words: list = []
+    for s in segments:
+        all_words.extend(s["words"])
+    return {"segments": list(segments), "word_segments": all_words}
+
+
+# --- sync_text_to_json strips <keep> tags from corrected text ---
+
+
+class TestSyncStripsKeepTags:
+    def test_pure_keep_only_line_keeps_words_unchanged(self):
+        """Wrapping text in <keep> with no other change should be a no-op for segment text & words."""
+        words = [
+            _word("あ", 0.0, 0.2),
+            _word("い", 0.2, 0.4),
+            _word("う", 0.4, 0.6),
+        ]
+        data = _whisperx(_segment("あいう", words))
+        result = sync_text_to_json(data, ["あ<keep>い</keep>う"])
+        assert result["segments"][0]["text"] == "あいう"
+        assert result["segments"][0]["words"] == words
+
+    def test_keep_tag_with_patch_inside(self):
+        """<keep> wrapping a patch: patch still applies, tag is stripped."""
+        words = [
+            _word("あ", 0.0, 0.2),
+            _word("え", 0.2, 0.4),
+            _word("ー", 0.4, 0.6),
+            _word("う", 0.6, 0.8),
+        ]
+        data = _whisperx(_segment("あえーう", words))
+        result = sync_text_to_json(data, ["あ<keep>{{えー->}}</keep>う"])
+        # Patch deletes "えー", <keep> tags do not appear in output
+        assert result["segments"][0]["text"] == "あう"
+        assert [w["word"] for w in result["segments"][0]["words"]] == ["あ", "う"]
+
+    def test_unclosed_keep_tag_is_stripped(self):
+        """An unclosed <keep> opener is still removed from the corrected text."""
+        words = [_word("あ", 0.0, 0.2), _word("い", 0.2, 0.4)]
+        data = _whisperx(_segment("あい", words))
+        result = sync_text_to_json(data, ["あ<keep>い"])
+        # Tag removed; no patch needed
+        assert result["segments"][0]["text"] == "あい"
+
+
+# --- extract_keep_ranges ---
+
+
+class TestExtractKeepRanges:
+    def test_no_keep_tags_returns_empty(self):
+        words = [_word("あ", 0.0, 0.2), _word("い", 0.2, 0.4)]
+        data = _whisperx(_segment("あい", words))
+        assert extract_keep_ranges(["あい"], data) == []
+
+    def test_single_keep_block_returns_word_time_span(self):
+        words = [
+            _word("あ", 0.0, 0.2),
+            _word("い", 0.2, 0.5),
+            _word("う", 0.5, 0.9),
+            _word("え", 0.9, 1.2),
+        ]
+        data = _whisperx(_segment("あいうえ", words))
+        ranges = extract_keep_ranges(["あ<keep>いう</keep>え"], data)
+        # Inside <keep>: chars "いう" → words[1] and words[2] → (0.2, 0.9)
+        assert ranges == [(0.2, 0.9)]
+
+    def test_multiple_keep_blocks_emit_multiple_ranges(self):
+        words = [
+            _word("あ", 0.0, 0.2),
+            _word("い", 0.2, 0.4),
+            _word("う", 0.4, 0.6),
+            _word("え", 0.6, 0.8),
+            _word("お", 0.8, 1.0),
+        ]
+        data = _whisperx(_segment("あいうえお", words))
+        ranges = extract_keep_ranges(["<keep>あ</keep>い<keep>うえ</keep>お"], data)
+        assert ranges == [(0.0, 0.2), (0.4, 0.8)]
+
+    def test_keep_with_patch_inside_uses_post_patch_words(self):
+        """A <keep> wrapping {{old->new}} should map to the timing of the wrapped post-patch chars."""
+        # Original: あえーう → after {{えー->}} patch: あう
+        # <keep>{{えー->}}</keep> → visible content is empty → no range
+        words = [
+            _word("あ", 0.0, 0.2),
+            _word("え", 0.2, 0.4),
+            _word("ー", 0.4, 0.6),
+            _word("う", 0.6, 0.8),
+        ]
+        data = _whisperx(_segment("あえーう", words))
+        synced = sync_text_to_json(data, ["あ<keep>{{えー->}}</keep>う"])
+        ranges = extract_keep_ranges(["あ<keep>{{えー->}}</keep>う"], synced)
+        # Empty visible content → no range
+        assert ranges == []
+
+    def test_keep_with_substitution_patch_inside(self):
+        """<keep> wrapping a substitution patch uses the patched word timings."""
+        # Original "今日わ" → patch {{わ->は}} → "今日は"
+        # <keep>今日{{わ->は}}</keep> → visible content "今日は" → range covers all 3 chars
+        words = [
+            _word("今", 1.0, 1.2),
+            _word("日", 1.2, 1.4),
+            _word("わ", 1.4, 1.7),
+        ]
+        data = _whisperx(_segment("今日わ", words))
+        synced = sync_text_to_json(data, ["<keep>今日{{わ->は}}</keep>"])
+        ranges = extract_keep_ranges(["<keep>今日{{わ->は}}</keep>"], synced)
+        assert len(ranges) == 1
+        start, end = ranges[0]
+        assert start == pytest.approx(1.0)
+        assert end == pytest.approx(1.7)
+
+    def test_empty_keep_block_skipped(self):
+        words = [_word("あ", 0.0, 0.2)]
+        data = _whisperx(_segment("あ", words))
+        assert extract_keep_ranges(["<keep></keep>あ"], data) == []
+
+    def test_unclosed_keep_skipped(self):
+        words = [_word("あ", 0.0, 0.2), _word("い", 0.2, 0.4)]
+        data = _whisperx(_segment("あい", words))
+        # `<keep>` with no `</keep>` produces no range
+        assert extract_keep_ranges(["<keep>あい"], data) == []
+
+    def test_unmatched_closing_keep_skipped(self):
+        words = [_word("あ", 0.0, 0.2), _word("い", 0.2, 0.4)]
+        data = _whisperx(_segment("あい", words))
+        assert extract_keep_ranges(["あい</keep>"], data) == []
+
+    def test_nested_keep_treats_outer_only(self):
+        """Nested <keep> tags: outer span is used, inner opener is ignored."""
+        words = [
+            _word("あ", 0.0, 0.2),
+            _word("い", 0.2, 0.4),
+            _word("う", 0.4, 0.6),
+            _word("え", 0.6, 0.8),
+        ]
+        data = _whisperx(_segment("あいうえ", words))
+        ranges = extract_keep_ranges(["あ<keep>い<keep>う</keep>え"], data)
+        # Outer opener at pos 1; first matched </keep> closes at pos 3 (after "いう")
+        # Inner <keep> is dropped (nested-opener warning); outer block = "いう"
+        assert ranges == [(0.2, 0.6)]
+
+    def test_multiple_segments(self):
+        """Edit lines correspond to segments; ranges are collected across segments."""
+        seg1_words = [_word("あ", 0.0, 0.2), _word("い", 0.2, 0.4)]
+        seg2_words = [_word("う", 1.0, 1.2), _word("え", 1.2, 1.4)]
+        data = _whisperx(_segment("あい", seg1_words), _segment("うえ", seg2_words))
+        ranges = extract_keep_ranges(
+            ["<keep>あい</keep>", "う<keep>え</keep>"], data
+        )
+        assert ranges == [(0.0, 0.4), (1.2, 1.4)]
+
+    def test_extra_edit_lines_ignored(self):
+        words = [_word("あ", 0.0, 0.2)]
+        data = _whisperx(_segment("あ", words))
+        # Second edit line has no matching segment
+        ranges = extract_keep_ranges(["あ", "<keep>extra</keep>"], data)
+        assert ranges == []

@@ -21,10 +21,11 @@ from nagare_clip.stage3.intervals import (
     ensure_keep_covers_captions,
     invert_intervals,
     merge_intervals,
+    subtract_intervals,
 )
 from nagare_clip.stage3.io import infer_source_file
 from nagare_clip.stage3.speech import build_speech_spans, get_duration_sec
-from nagare_clip.stage3.sync_json import sync_text_to_json
+from nagare_clip.stage3.sync_json import extract_keep_ranges, sync_text_to_json
 
 
 def parse_args() -> argparse.Namespace:
@@ -208,6 +209,11 @@ def main() -> None:
         whisperx_data = json.load(f)
 
     whisperx_data = sync_text_to_json(whisperx_data, edit_lines)
+    force_keep_ranges = extract_keep_ranges(edit_lines, whisperx_data)
+    if force_keep_ranges:
+        logging.info(
+            "Force-keep ranges from <keep>: %d", len(force_keep_ranges)
+        )
 
     logging.info(
         "Loaded %d segment(s) from %s",
@@ -276,6 +282,8 @@ def main() -> None:
         for start, end in excludes
         if end > start
     ]
+    if force_keep_ranges:
+        bounded_excludes = subtract_intervals(bounded_excludes, force_keep_ranges)
     merged_excludes = merge_intervals(bounded_excludes)
     keep_intervals = invert_intervals(merged_excludes, duration_sec)
     filtered_keep = [

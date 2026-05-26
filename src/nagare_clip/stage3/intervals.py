@@ -22,6 +22,38 @@ def merge_intervals(
     return merged
 
 
+def subtract_intervals(
+    base: Iterable[Tuple[float, float]],
+    cuts: Iterable[Tuple[float, float]],
+) -> List[Tuple[float, float]]:
+    """Carve *cuts* out of each interval in *base*.
+
+    Each base interval is shortened or split where a cut overlaps it.  Cuts
+    that merely touch a boundary (`cut.end == base.start` or
+    `cut.start == base.end`) are no-ops.  Zero-length residues are dropped.
+    Output is sorted by start.
+    """
+    merged_cuts = merge_intervals(cuts)
+    result: List[Tuple[float, float]] = []
+
+    for b_start, b_end in sorted(base, key=lambda x: x[0]):
+        cursor = b_start
+        for c_start, c_end in merged_cuts:
+            if c_end <= cursor:
+                continue
+            if c_start >= b_end:
+                break
+            if c_start > cursor:
+                result.append((cursor, min(c_start, b_end)))
+            cursor = max(cursor, c_end)
+            if cursor >= b_end:
+                break
+        if cursor < b_end:
+            result.append((cursor, b_end))
+
+    return result
+
+
 def invert_intervals(
     excludes: Sequence[Sequence[float]], duration_sec: float
 ) -> List[List[float]]:
