@@ -21,7 +21,7 @@ The pipeline creates a rough-cut Blender project for human review and fine-tunin
 
 The `{{old->new}}` syntax replaces `old` with `new` in the transcript. Use `{{delete->}}` to remove text, `{{->insert}}` to insert text.
 
-The `<keep>...</keep>` tag preserves the audio under the wrapped text — Stage 4 carves that time range out of both the word-gap silence detection and any overlapping `_cuts.txt` ranges, so dramatic pauses and intentional silences survive. The tag is added by the human (not the LLM) after `_edits.txt` is produced.
+The `<keep>...</keep>` tag preserves the audio under the wrapped text — Stage 4 carves that time range out of both the word-gap silence detection and any overlapping `_cuts.txt` ranges, so dramatic pauses and intentional silences survive. The tag may be opened on one line and closed on a later one, so a single `<keep>` block can span multiple lines and preserve the silences between them. The tag is added by the human (not the LLM) after `_edits.txt` is produced.
 
 ## Requirements
 
@@ -149,7 +149,7 @@ stage2:
 
 The LLM uses `{{old->new}}` inline patch syntax to mark corrections. Human editors can then review and modify the markers in `_edits.txt` before Stage 4 applies them.
 
-Human editors can also wrap a span in `<keep>...</keep>` to force-preserve the audio under that text. Stage 4 derives the time range from the first wrapped word's start to the last wrapped word's end and carves it out of both the word-gap silence and any overlapping `_cuts.txt` ranges. The marker is added after the LLM filter has produced `_edits.txt`, so the LLM never sees it.
+Human editors can also wrap a span in `<keep>...</keep>` to force-preserve the audio under that text. Stage 4 derives the time range from the first wrapped word's start to the last wrapped word's end and carves it out of both the word-gap silence and any overlapping `_cuts.txt` ranges. The marker may be opened on one line and closed on a later line, so a single `<keep>` block can span multiple WhisperX segments and preserve the silences between them. The marker is added after the LLM filter has produced `_edits.txt`, so the LLM never sees it.
 
 `thinking` sends `"think"` in the Ollama API request, enabling chain-of-thought reasoning for supported models (e.g. qwen3, deepseek-r1). Set `true`/`false`, or a string level like `"low"`, `"medium"`, `"high"` for models that support granular control (e.g. Qwen 3.5). Ollama returns the reasoning trace in a separate field; the pipeline uses only the final answer.
 

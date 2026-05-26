@@ -245,59 +245,58 @@ def _patched_visible_length(text: str) -> int:
     return sum(1 for ch in patched if not ch.isspace())
 
 
-def _extract_keep_ranges_for_line(
-    edit_line: str, words: List[Dict[str, Any]]
-) -> List[Tuple[float, float]]:
-    """Return (start, end) ranges for each `<keep>...</keep>` block in *edit_line*.
+def _first_word_at_or_after(
+    segments: List[Dict[str, Any]], seg_idx: int, pos: int
+) -> Optional[Dict[str, Any]]:
+    """First word at index >= pos in segments[seg_idx]; falls through to the
+    next segment's first word when pos is past the current segment's words."""
+    while seg_idx < len(segments):
+        words = segments[seg_idx].get("words", [])
+        if pos < len(words):
+            return words[pos]
+        seg_idx += 1
+        pos = 0
+    return None
 
-    Positions are tracked in the post-patch, whitespace-stripped character
-    stream, which is assumed to align 1:1 with *words* (single-character
-    WhisperX words).  Out-of-range positions are clamped.
+
+def _last_word_before(
+    segments: List[Dict[str, Any]], seg_idx: int, pos: int
+) -> Optional[Dict[str, Any]]:
+    """Last word at index < pos in segments[seg_idx]; falls back to the
+    previous segment's last word when pos is 0 (or all earlier indices are
+    out of range)."""
+    while seg_idx >= 0:
+        words = segments[seg_idx].get("words", [])
+        last_idx = min(pos, len(words)) - 1
+        if last_idx >= 0:
+            return words[last_idx]
+        seg_idx -= 1
+        if seg_idx >= 0:
+            pos = len(segments[seg_idx].get("words", []))
+    return None
+
+
+def _resolve_keep_range(
+    segments: List[Dict[str, Any]],
+    start_anchor: Tuple[int, int],
+    end_anchor: Tuple[int, int],
+) -> Optional[Tuple[float, float]]:
+    """Resolve `(segment_index, position)` anchors to `(start_time, end_time)`.
+
+    Returns ``None`` when the resolved range wraps no words, is missing
+    timings, or collapses to an empty/inverted interval.
     """
-    parts = _KEEP_SPLIT_RE.split(edit_line)
-    ranges: List[Tuple[float, float]] = []
-    output_pos = 0
-    in_keep = False
-    keep_start = 0
-
-    for part in parts:
-        if part == "<keep>":
-            if in_keep:
-                logger.warning("Nested <keep> opener; ignoring inner tag")
-                continue
-            in_keep = True
-            keep_start = output_pos
-        elif part == "</keep>":
-            if not in_keep:
-                logger.warning("Unmatched </keep>; ignoring")
-                continue
-            in_keep = False
-            keep_end = output_pos
-            if keep_end <= keep_start:
-                logger.warning("Empty <keep></keep> block; ignoring")
-                continue
-            if keep_start >= len(words):
-                logger.warning(
-                    "<keep> range start %d is past segment words (len=%d); ignoring",
-                    keep_start,
-                    len(words),
-                )
-                continue
-            last_idx = min(keep_end, len(words)) - 1
-            if last_idx < keep_start:
-                continue
-            first_word = words[keep_start]
-            last_word = words[last_idx]
-            if "start" not in first_word or "end" not in last_word:
-                continue
-            ranges.append((float(first_word["start"]), float(last_word["end"])))
-        else:
-            output_pos += _patched_visible_length(part)
-
-    if in_keep:
-        logger.warning("Unclosed <keep>; ignoring")
-
-    return ranges
+    first_word = _first_word_at_or_after(segments, *start_anchor)
+    last_word = _last_word_before(segments, *end_anchor)
+    if first_word is None or last_word is None:
+        return None
+    if "start" not in first_word or "end" not in last_word:
+        return None
+    start_t = float(first_word["start"])
+    end_t = float(last_word["end"])
+    if end_t <= start_t:
+        return None
+    return (start_t, end_t)
 
 
 def extract_keep_ranges(
@@ -305,19 +304,48 @@ def extract_keep_ranges(
 ) -> List[Tuple[float, float]]:
     """Extract force-keep time ranges from `<keep>...</keep>` blocks.
 
-    Each edit line corresponds to a segment in ``synced_json["segments"]``.
-    For each `<keep>...</keep>` block, the wrapped post-patch character span
-    is mapped to its word timings; the resulting `(start, end)` is appended
-    to the output list (one entry per block).
+    `<keep>` may be opened on one edit line and closed on a later one; the
+    resolved range spans from the first wrapped word's start to the last
+    wrapped word's end, with the in-between inter-segment silences falling
+    inside.  Positions are tracked in the post-patch, whitespace-stripped
+    character stream of each segment.
 
-    Empty / unclosed / unmatched / nested tags are skipped with a warning;
-    they do not raise.
+    Empty / unclosed (at EOF) / unmatched / nested / invalid-resolved tags
+    are skipped with a warning; they do not raise.
     """
     segments = synced_json.get("segments", [])
     ranges: List[Tuple[float, float]] = []
-    for i, line in enumerate(edit_lines):
-        if i >= len(segments):
+    # `keep_start = None` means no `<keep>` is currently open.
+    keep_start: Optional[Tuple[int, int]] = None
+
+    for seg_idx, line in enumerate(edit_lines):
+        if seg_idx >= len(segments):
             break
-        words = segments[i].get("words", [])
-        ranges.extend(_extract_keep_ranges_for_line(line, words))
+        output_pos = 0
+        for part in _KEEP_SPLIT_RE.split(line):
+            if part == "<keep>":
+                if keep_start is not None:
+                    logger.warning("Nested <keep> opener; ignoring inner tag")
+                    continue
+                keep_start = (seg_idx, output_pos)
+            elif part == "</keep>":
+                if keep_start is None:
+                    logger.warning("Unmatched </keep>; ignoring")
+                    continue
+                resolved = _resolve_keep_range(
+                    segments, keep_start, (seg_idx, output_pos)
+                )
+                keep_start = None
+                if resolved is None:
+                    logger.warning(
+                        "<keep> resolved to an empty/invalid range; ignoring"
+                    )
+                    continue
+                ranges.append(resolved)
+            else:
+                output_pos += _patched_visible_length(part)
+
+    if keep_start is not None:
+        logger.warning("Unclosed <keep>; ignoring")
+
     return ranges

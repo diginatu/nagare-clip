@@ -158,3 +158,56 @@ def test_keep_marker_with_internal_patch(tmp_path, monkeypatch):
     keep = data["keep_intervals"]
     # Word 'う' (1.8-2.0) must be in keep set
     assert _covers(keep, 1.9)
+
+
+def test_keep_marker_spans_multiple_segments(tmp_path, monkeypatch):
+    """`<keep>` opens in segment 0, closes in segment 2 — all inter-segment
+    silences inside the span survive, while trailing silence outside the span
+    is still cut."""
+    data_json = {
+        "duration": 15.0,
+        "segments": [
+            {
+                "start": 0.5,
+                "end": 1.1,
+                "text": "あい",
+                "words": [
+                    {"word": "あ", "start": 0.5, "end": 0.8},
+                    {"word": "い", "start": 0.8, "end": 1.1},
+                ],
+            },
+            {
+                "start": 4.0,
+                "end": 4.6,
+                "text": "うえ",
+                "words": [
+                    {"word": "う", "start": 4.0, "end": 4.3},
+                    {"word": "え", "start": 4.3, "end": 4.6},
+                ],
+            },
+            {
+                "start": 8.0,
+                "end": 8.6,
+                "text": "おか",
+                "words": [
+                    {"word": "お", "start": 8.0, "end": 8.3},
+                    {"word": "か", "start": 8.3, "end": 8.6},
+                ],
+            },
+        ],
+    }
+    json_path = tmp_path / "clip.json"
+    json_path.write_text(json.dumps(data_json), encoding="utf-8")
+    edits = tmp_path / "clip_edits.txt"
+    # <keep> opens in seg 0 (after 'あ'), closes in seg 2 (before 'か') →
+    # range = (start of 'い' = 0.8, end of 'お' = 8.3)
+    edits.write_text("あ<keep>い\nうえ\nお</keep>か\n", encoding="utf-8")
+    cfg = _config(tmp_path)
+    out = tmp_path / "intervals.json"
+    data = _run(monkeypatch, json_path, edits, cfg, out)
+    keep = data["keep_intervals"]
+    # Inside the span: both inter-segment silences (~2.5 and ~6.3) must be kept
+    assert _covers(keep, 2.5)
+    assert _covers(keep, 6.3)
+    # Outside the span: trailing silence after 'か' end (8.6) must still be cut
+    assert not _covers(keep, 12.0)

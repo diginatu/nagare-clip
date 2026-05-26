@@ -176,3 +176,93 @@ class TestExtractKeepRanges:
         # Second edit line has no matching segment
         ranges = extract_keep_ranges(["あ", "<keep>extra</keep>"], data)
         assert ranges == []
+
+
+class TestExtractKeepRangesCrossLine:
+    """`<keep>` opened on one line, closed on a later line — the resolved
+    range spans the wrapped words *and* the inter-segment silences."""
+
+    def test_open_in_seg0_close_in_seg1(self):
+        seg0 = [_word("あ", 0.0, 0.2), _word("い", 0.2, 0.4)]
+        seg1 = [_word("う", 1.0, 1.2), _word("え", 1.2, 1.4)]
+        data = _whisperx(_segment("あい", seg0), _segment("うえ", seg1))
+        ranges = extract_keep_ranges(
+            ["あ<keep>い", "う</keep>え"], data
+        )
+        # First wrapped word = seg0 'い' (start=0.2); last wrapped word = seg1 'う' (end=1.2)
+        assert ranges == [(0.2, 1.2)]
+
+    def test_open_in_seg0_close_in_seg2_middle_untagged(self):
+        seg0 = [_word("あ", 0.0, 0.2), _word("い", 0.2, 0.4)]
+        seg1 = [_word("う", 1.0, 1.2)]
+        seg2 = [_word("え", 2.0, 2.2), _word("お", 2.2, 2.4)]
+        data = _whisperx(
+            _segment("あい", seg0), _segment("う", seg1), _segment("えお", seg2)
+        )
+        ranges = extract_keep_ranges(
+            ["あ<keep>い", "う", "え</keep>お"], data
+        )
+        # First wrapped = seg0 'い' (0.2); last wrapped = seg2 'え' (2.2)
+        # The inter-segment silences fall inside the single (0.2, 2.2) range.
+        assert ranges == [(0.2, 2.2)]
+
+    def test_opener_at_end_of_segment_advances_to_next(self):
+        """`<keep>` placed after the last word of seg0 → first wrapped word
+        is the first word of seg1."""
+        seg0 = [_word("あ", 0.0, 0.2), _word("い", 0.2, 0.4)]
+        seg1 = [_word("う", 1.0, 1.2), _word("え", 1.2, 1.4)]
+        data = _whisperx(_segment("あい", seg0), _segment("うえ", seg1))
+        ranges = extract_keep_ranges(
+            ["あい<keep>", "う</keep>え"], data
+        )
+        # seg0 has no word at pos 2 → fall through to seg1[0] = 'う' (start=1.0)
+        assert ranges == [(1.0, 1.2)]
+
+    def test_closer_at_start_of_segment_falls_back_to_prev(self):
+        """`</keep>` placed before the first word of seg1 → last wrapped word
+        is the last word of seg0."""
+        seg0 = [_word("あ", 0.0, 0.2), _word("い", 0.2, 0.4)]
+        seg1 = [_word("う", 1.0, 1.2), _word("え", 1.2, 1.4)]
+        data = _whisperx(_segment("あい", seg0), _segment("うえ", seg1))
+        ranges = extract_keep_ranges(
+            ["あ<keep>い", "</keep>うえ"], data
+        )
+        # closer at seg1 pos 0 → fall back to seg0[-1] = 'い' (end=0.4)
+        assert ranges == [(0.2, 0.4)]
+
+    def test_boundary_only_span_skipped(self):
+        """Opener at end of seg0 + closer at start of seg1 wraps no words →
+        the resolved (first, last) would invert → skip with warning."""
+        seg0 = [_word("あ", 0.0, 0.2), _word("い", 0.2, 0.4)]
+        seg1 = [_word("う", 1.0, 1.2), _word("え", 1.2, 1.4)]
+        data = _whisperx(_segment("あい", seg0), _segment("うえ", seg1))
+        ranges = extract_keep_ranges(
+            ["あい<keep>", "</keep>うえ"], data
+        )
+        assert ranges == []
+
+    def test_unclosed_at_eof_skipped(self):
+        """`<keep>` opened with no `</keep>` anywhere in the file → drop."""
+        seg0 = [_word("あ", 0.0, 0.2)]
+        seg1 = [_word("い", 1.0, 1.2)]
+        data = _whisperx(_segment("あ", seg0), _segment("い", seg1))
+        ranges = extract_keep_ranges(["あ<keep>", "い"], data)
+        assert ranges == []
+
+    def test_mixed_single_line_and_cross_line(self):
+        """Single-line block in seg0 emits one range; later cross-line block
+        emits another. Both are reported."""
+        seg0 = [_word("あ", 0.0, 0.2), _word("い", 0.2, 0.4), _word("う", 0.4, 0.6)]
+        seg1 = [_word("え", 1.0, 1.2)]
+        seg2 = [_word("お", 2.0, 2.2), _word("か", 2.2, 2.4)]
+        data = _whisperx(
+            _segment("あいう", seg0),
+            _segment("え", seg1),
+            _segment("おか", seg2),
+        )
+        ranges = extract_keep_ranges(
+            ["<keep>あ</keep>い<keep>う", "え", "お</keep>か"], data
+        )
+        # First block: single-line, seg0 'あ' → (0.0, 0.2)
+        # Second block: cross-line, seg0 'う' → seg2 'お' → (0.4, 2.2)
+        assert ranges == [(0.0, 0.2), (0.4, 2.2)]
