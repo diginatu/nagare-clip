@@ -23,6 +23,7 @@ from nagare_clip.stage4.scene import load_source_metadata, reset_scene
 from nagare_clip.stage4.timeline import (
     build_timeline_map,
     place_captions,
+    place_overlays,
     place_strips,
 )
 
@@ -126,6 +127,7 @@ def main() -> None:
         )
         keep_intervals = intervals_data.get("keep_intervals", [])
         captions = intervals_data.get("captions", [])
+        overlays = intervals_data.get("overlays", [])
 
         tl_map = build_timeline_map(
             keep_intervals, effective_fps, first_fps, start_cursor=timeline_cursor
@@ -154,6 +156,21 @@ def main() -> None:
                 effective_fps,
                 sequence_collection,
                 caption_style=cfg["blender"]["caption_style"],
+            )
+
+        if overlays:
+            # Resolve overlay style: caption_style defaults overlaid with
+            # overlay_style overrides (overlay_style wins per key).
+            cap_style = cfg["blender"]["caption_style"]
+            ov_style = {**cap_style, **cfg["blender"]["overlay_style"]}
+            # Overlay channel sits above the caption channel (which is 3).
+            place_overlays(
+                overlays,
+                tl_map,
+                effective_fps,
+                sequence_collection,
+                overlay_style=ov_style,
+                channel=4,
             )
 
     for s in sequence_collection:
