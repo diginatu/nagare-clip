@@ -27,6 +27,7 @@ from nagare_clip.stage3.io import infer_source_file
 from nagare_clip.stage3.speech import build_speech_spans, get_duration_sec
 from nagare_clip.stage3.sync_json import (
     extract_keep_ranges,
+    extract_overlay_ranges,
     extract_speed_ranges,
     sync_text_to_json,
 )
@@ -215,6 +216,9 @@ def main() -> None:
     whisperx_data = sync_text_to_json(whisperx_data, edit_lines)
     force_keep_ranges = extract_keep_ranges(edit_lines, whisperx_data)
     speed_ranges = extract_speed_ranges(edit_lines, whisperx_data)
+    overlay_ranges = extract_overlay_ranges(edit_lines, whisperx_data)
+    if overlay_ranges:
+        logging.info("Overlay ranges from <overlay>: %d", len(overlay_ranges))
     if force_keep_ranges:
         logging.info(
             "Force-keep ranges from <keep>: %d", len(force_keep_ranges)
@@ -379,6 +383,11 @@ def main() -> None:
         "keep_intervals": keep_intervals_dicts,
         "captions": captions,
     }
+    if overlay_ranges:
+        output_data["overlays"] = [
+            {"start": round(s, 3), "end": round(e, 3), "text": t}
+            for s, e, t in overlay_ranges
+        ]
 
     output_path.parent.mkdir(parents=True, exist_ok=True)
     logging.info("Writing output to %s", output_path)
