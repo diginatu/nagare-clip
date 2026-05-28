@@ -370,3 +370,85 @@ def place_captions(
             tl_start,
             tl_end,
         )
+
+
+def place_overlays(
+    overlays: list,
+    tl_map: list,
+    effective_fps: float,
+    sequence_collection: object,
+    *,
+    overlay_style: dict | None = None,
+    channel: int = 4,
+) -> None:
+    """Place TEXT strips for <overlay> markers on a dedicated channel.
+
+    Overlays do NOT force-keep audio: if an overlay's source time falls
+    entirely outside the timeline map (e.g., the wrapped audio was cut),
+    it is silently skipped.  Partial overlaps are clamped to the matching
+    keep interval.  Speed-factor scaling mirrors place_captions().
+    """
+    for ov in overlays:
+        ov_src_start = float(ov["start"])
+        ov_src_end = float(ov["end"])
+        text = ov.get("text", "").strip()
+        if not text:
+            continue
+
+        tl_start = None
+        tl_end = None
+        length = None
+        for entry in tl_map:
+            if ov_src_start < entry["src_end"] and ov_src_end > entry["src_start"]:
+                speed = float(entry.get("speed_factor", 1.0))
+                clamped_start = max(ov_src_start, entry["src_start"])
+                clamped_end = min(ov_src_end, entry["src_end"])
+                offset_start = sec_to_frames(
+                    (clamped_start - entry["src_start"]) / speed, effective_fps
+                )
+                offset_end = sec_to_frames(
+                    (clamped_end - entry["src_start"]) / speed, effective_fps
+                )
+                tl_start = entry["tl_start"] + offset_start
+                tl_end = entry["tl_start"] + offset_end
+                length = max(1, tl_end - tl_start)
+                tl_end = tl_start + length
+                break
+
+        if tl_start is None or tl_end is None or length is None or tl_end <= tl_start:
+            logging.warning(
+                "Overlay skipped (no matching keep interval): %r", text[:60]
+            )
+            continue
+
+        text_strip = sequence_collection.new_effect(
+            name=f"ov_{ov_src_start:.3f}",
+            type="TEXT",
+            channel=channel,
+            frame_start=tl_start,
+            length=length,
+        )
+        style = overlay_style or {}
+        text_strip.text = text
+        text_strip.font_size = style.get("font_size", 50)
+        text_strip.alignment_x = style.get("alignment_x", "CENTER")
+        text_strip.anchor_y = style.get("anchor_y", "TOP")
+        text_strip.location[0] = style.get("location_x", 0.5)
+        text_strip.location[1] = style.get("location_y", 0.95)
+        if "use_shadow" in style:
+            text_strip.use_shadow = style["use_shadow"]
+        if "wrap_width" in style:
+            text_strip.wrap_width = style["wrap_width"]
+        if "use_outline" in style:
+            text_strip.use_outline = style["use_outline"]
+        if "outline_color" in style:
+            text_strip.outline_color = style["outline_color"]
+        if "outline_width" in style:
+            text_strip.outline_width = style["outline_width"]
+        if "use_box" in style:
+            text_strip.use_box = style["use_box"]
+        if "box_color" in style:
+            text_strip.box_color = style["box_color"]
+        logging.debug(
+            "Overlay '%s': timeline frames %d-%d", text[:40], tl_start, tl_end
+        )
