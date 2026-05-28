@@ -109,6 +109,10 @@ DEFAULTS: Dict[str, Any] = {
             "location_x": 0.5,
             "location_y": 0.05,
         },
+        "overlay_style": {
+            "anchor_y": "TOP",
+            "location_y": 0.95,
+        },
     },
     "pipeline": {
         "input_videos_dir": "src_video",

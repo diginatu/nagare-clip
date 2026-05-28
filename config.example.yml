@@ -85,6 +85,14 @@ blender:
     # outline_width: 1.0          # Outline width
     # use_box: false              # Enable background box behind text
     # box_color: [0, 0, 0, 0.5]  # Box color (RGBA, 0.0 - 1.0)
+  # Overlay TEXT strip style for <overlay text="..."> markers in _edits.txt.
+  # Any field not set here is inherited from caption_style.
+  overlay_style:
+    anchor_y: TOP              # default: TOP (overlays sit at top of frame)
+    location_y: 0.95           # default: 0.95
+    # font_size: 50            # inherits from caption_style if omitted
+    # alignment_x: CENTER
+    # location_x: 0.5
 
 pipeline:
   input_videos_dir: src_video
