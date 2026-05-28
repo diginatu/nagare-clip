@@ -209,10 +209,12 @@ def sync_text_to_json(
     markers are treated as unchanged.  A ``ValueError`` is raised if the
     corrected text differs from the original but no markers are present.
 
-    Any `<keep>...</keep>` force-keep markers are stripped from each edit line
-    before patches are applied; the wrapped text and inner `{{old->new}}`
-    markers are otherwise unaffected.  See :func:`extract_keep_ranges` for the
-    time-range extraction pass.
+    Any `<keep>...</keep>`, `<speed factor="N.N">...</speed>`, and
+    `<overlay text="...">...</overlay>` markers are stripped from each edit
+    line before patches are applied; the wrapped text and inner
+    `{{old->new}}` markers are otherwise unaffected.  See
+    :func:`extract_keep_ranges`, :func:`extract_speed_ranges`, and
+    :func:`extract_overlay_ranges` for the time-range extraction passes.
 
     Returns a new dict (deep copy).
     """
@@ -260,7 +262,7 @@ def sync_text_to_json(
 
 def _patched_visible_length(text: str) -> int:
     """Length in non-whitespace characters of `text` after applying patches
-    and stripping any <keep>/<speed> marker tags."""
+    and stripping any <keep>/<speed>/<overlay> marker tags."""
     cleaned = OVERLAY_TAG_RE.sub(
         "", SPEED_TAG_RE.sub("", KEEP_TAG_RE.sub("", text))
     )
