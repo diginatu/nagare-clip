@@ -45,6 +45,15 @@ Humans may additionally wrap a span in `<keep>...</keep>` to force-preserve the 
 
 `<speed factor="N.N">...</speed>` is a companion marker that **additionally** force-preserves the wrapped audio (same mechanism as `<keep>`) AND instructs Stage 5 to play the region at the given playback speed via a Blender VSE Speed Control effect strip. Multi-line spans, nesting/unmatched-tag warnings, and human-after-LLM authorship all follow the `<keep>` rules. `<keep>` is unchanged and remains the shorthand when no speed change is wanted.
 
+`<overlay text="...">...</overlay>` is a third companion marker that places
+an on-screen TEXT strip in Stage 5 at the wrapped span's time range. Unlike
+`<keep>` and `<speed>`, **it does not force-preserve audio** — if the wrapped
+audio is cut by silence detection, the overlay is silently skipped (it cannot
+display over content that does not exist on the timeline). Multi-line spans,
+nesting/unmatched-tag warnings, and human-after-LLM authorship follow the
+`<keep>` rules. Quotes inside the `text="..."` attribute value are not
+supported (regex uses `[^"]*`).
+
 - **Inputs:** `{stem}.txt`
 - **Outputs:** `{stem}_edits.txt`
 
@@ -65,7 +74,7 @@ Auto-assembles the rough cut in headless Blender. References original media in-p
 ### Human Editing Workflow
 
 1. Run stages 1–3 → Stage 2 produces `{stem}_cuts.txt`, Stage 3 produces `{stem}_edits.txt`
-2. Human edits `_cuts.txt` (delete/adjust silent spans) and `_edits.txt` (`{{old->new}}` patch syntax, optional `<keep>...</keep>` to force-preserve audio, and optional `<speed factor="N.N">...</speed>` to force-preserve **and** speed-modify a region in Stage 5)
+2. Human edits `_cuts.txt` (delete/adjust silent spans) and `_edits.txt` (`{{old->new}}` patch syntax, optional `<keep>...</keep>` to force-preserve audio, optional `<speed factor="N.N">...</speed>` to force-preserve **and** speed-modify a region in Stage 5, and optional `<overlay text="...">...</overlay>` to place an on-screen TEXT strip in Stage 5 without affecting audio)
 3. Resume with `--from-stage 4` → unions cuts, applies patches, syncs JSON, carves out `<keep>`/`<speed>` ranges, computes intervals, runs Blender (with Speed Control effects for `<speed>` regions)
 
 ## Hard Constraints
@@ -139,6 +148,16 @@ All tunable parameters are centralised in `src/nagare_clip/config.py`:
 - Stage 4 reads `_edits.txt`, applies `{{old->new}}` patches via `apply_patches_to_lines()`, syncs clean text back into WhisperX JSON via `sync_text_to_json()`, then computes intervals.
 - Stage 4 also extracts `<keep>...</keep>` ranges from `_edits.txt` via `extract_keep_ranges()` in `src/nagare_clip/stage3/sync_json.py`. The time range is `(first wrapped word.start, last wrapped word.end)` from the post-patch synced JSON; the open/close state is tracked across edit lines so a single `<keep>` block can span multiple segments (the inter-segment silences inside the span are then included in the range). `_first_word_at_or_after` and `_last_word_before` resolve out-of-segment anchor positions by walking to the next/previous segment's word list. Those ranges are subtracted from the unioned excludes (word-gap silence + `_cuts.txt`) via `subtract_intervals()` in `src/nagare_clip/stage3/intervals.py` before merge/invert, so the wrapped audio survives both silence sources. The keep margin config (`intervals.keep_pre_margin` / `keep_post_margin`) does not extend `<keep>` ranges. Empty / unclosed (at EOF) / unmatched / nested / invalid-resolved tags are skipped with a warning. The `<keep>` marker is added by the human after the LLM filter; the LLM never sees it.
 - Stage 4 additionally extracts `<speed factor="N.N">...</speed>` ranges via `extract_speed_ranges()` in the same file, returning `(start, end, factor)` triples. These ranges are unioned with `<keep>` ranges before the `subtract_intervals()` call, so a `<speed>` block force-keeps its audio just like `<keep>`. After all interval post-processing (margins, caption expansion, min_keep enforcement) is complete, each keep interval is annotated with `speed_factor` set to the factor of the speed range with the largest overlap (omitted when no overlap). Stage 5 reads `keep_intervals[i].get("speed_factor", 1.0)` to decide whether to apply a Blender VSE **Speed Control** effect strip (`type="SPEED"`, `input1=movie_strip`, `use_default_fade=False`, `speed_factor=N.N`) when laying out that interval; the timeline cursor advances by `round(keep_frame_count / speed)` so subsequent strips/captions line up correctly. `build_timeline_map()` and `place_captions()` both divide source-time offsets by `speed_factor` so captions inside a sped-up region display at the corresponding timeline frames.
+- Stage 4 additionally extracts `<overlay text="...">...</overlay>` ranges via
+  `extract_overlay_ranges()` in `src/nagare_clip/stage3/sync_json.py`, returning
+  `(start, end, text)` triples. Overlays do **not** participate in
+  `subtract_intervals()` or speed annotation; they are written verbatim to a
+  top-level `overlays` array in the intervals JSON. Stage 5 reads
+  `overlays`, maps each through `build_timeline_map()` (speed-aware,
+  same trick as captions), and calls `place_overlays()` to create a TEXT strip
+  on channel 4 (one above the caption channel). Overlays that fall on cut
+  content are silently skipped. Style is `caption_style` overlaid with
+  `blender.overlay_style` overrides (defaults: `anchor_y: TOP`, `location_y: 0.95`).
 - Stage 4 keep intervals are expanded by configurable `intervals.keep_pre_margin` / `intervals.keep_post_margin` (defaults 1.0s) and merged before Blender export. Captions have independent `intervals.caption.pre_margin` / `intervals.caption.post_margin` (defaults 0.0s) that extend each caption's display time, clamped against neighbouring caption boundaries so captions never overlap.
 - Stage 4 silence-based keep-interval detection uses WhisperX word timings (`word.start`/`word.end`) with a 0.6s per-word span cap so inflated token ends do not hide pauses. The cap is controlled by `intervals.bunsetu.silence_max_word_span` in the config.
 - Stage 4 bunsetsu timing (`build_bunsetu_times` in `src/nagare_clip/stage3/bunsetu.py`) uses `ginza.bunsetu_spans(doc)` so particles and auxiliaries attach to the preceding content word, producing natural subtitle line-break units. It detects large intra-bunsetsu character gaps (> 0.6s) caused by WhisperX misalignment and snaps the bunsetsu start forward to the later character cluster so the silence gap is not hidden inside a single bunsetsu. The gap threshold is `intervals.bunsetu.silence_max_word_span`; the end-offset epsilon is `intervals.bunsetu.char_eps`.
