@@ -160,6 +160,96 @@ def test_keep_marker_with_internal_patch(tmp_path, monkeypatch):
     assert _covers(keep, 1.9)
 
 
+def _interval_with_speed(intervals, t):
+    """Return the speed_factor of the interval containing time t, or None."""
+    for iv in intervals:
+        if iv["start"] <= t <= iv["end"]:
+            return iv.get("speed_factor")
+    return None
+
+
+def test_speed_marker_carves_silence_and_annotates_factor(tmp_path, monkeypatch):
+    """`<speed factor="2.0">いう</speed>` wraps the silent gap, force-keeps it,
+    AND the resulting keep interval is annotated with speed_factor=2.0."""
+    json_path, edits, cfg = _setup(
+        tmp_path, 'あ<speed factor="2.0">いう</speed>え\n'
+    )
+    out = tmp_path / "intervals.json"
+    data = _run(monkeypatch, json_path, edits, cfg, out)
+    keep = data["keep_intervals"]
+    # Force-keep survives silence
+    assert _covers(keep, 2.5)
+    # And the interval that contains the speed-marked time is annotated
+    assert _interval_with_speed(keep, 2.5) == 2.0
+
+
+def test_speed_marker_factor_below_one(tmp_path, monkeypatch):
+    """A factor < 1.0 (slow-motion) is preserved correctly."""
+    json_path, edits, cfg = _setup(
+        tmp_path, 'あ<speed factor="0.5">いう</speed>え\n'
+    )
+    out = tmp_path / "intervals.json"
+    data = _run(monkeypatch, json_path, edits, cfg, out)
+    keep = data["keep_intervals"]
+    assert _interval_with_speed(keep, 2.5) == 0.5
+
+
+def test_keep_and_speed_coexist(tmp_path, monkeypatch):
+    """A `<keep>` block and a `<speed>` block in the same _edits.txt:
+    both regions force-kept; only the <speed> region has speed_factor."""
+    # Two-segment fixture: seg0 has 'あい' with silence gap before seg1.
+    data_json = {
+        "duration": 15.0,
+        "segments": [
+            {
+                "start": 0.0,
+                "end": 1.0,
+                "text": "あい",
+                "words": [
+                    {"word": "あ", "start": 0.5, "end": 0.7},
+                    {"word": "い", "start": 0.7, "end": 1.0},
+                ],
+            },
+            {
+                "start": 5.0,
+                "end": 6.0,
+                "text": "うえ",
+                "words": [
+                    {"word": "う", "start": 5.0, "end": 5.5},
+                    {"word": "え", "start": 5.5, "end": 6.0},
+                ],
+            },
+        ],
+    }
+    json_path = tmp_path / "clip.json"
+    json_path.write_text(json.dumps(data_json), encoding="utf-8")
+    edits = tmp_path / "clip_edits.txt"
+    # <keep> wraps 'あい' in seg0 (no speed). <speed> wraps 'うえ' in seg1.
+    edits.write_text(
+        '<keep>あい</keep>\n<speed factor="3.0">うえ</speed>\n',
+        encoding="utf-8",
+    )
+    cfg = _config(tmp_path)
+    out = tmp_path / "intervals.json"
+    data = _run(monkeypatch, json_path, edits, cfg, out)
+    keep = data["keep_intervals"]
+    # <keep> region preserved, no speed_factor on it
+    assert _covers(keep, 0.6)
+    assert _interval_with_speed(keep, 0.6) is None
+    # <speed> region preserved, speed_factor=3.0 set
+    assert _covers(keep, 5.5)
+    assert _interval_with_speed(keep, 5.5) == 3.0
+
+
+def test_no_speed_marker_no_factor_field(tmp_path, monkeypatch):
+    """Control: without <speed>, intervals must not contain speed_factor."""
+    json_path, edits, cfg = _setup(tmp_path, "あいうえ\n")
+    out = tmp_path / "intervals.json"
+    data = _run(monkeypatch, json_path, edits, cfg, out)
+    for iv in data["keep_intervals"]:
+        assert "speed_factor" not in iv
+
+
 def test_keep_marker_spans_multiple_segments(tmp_path, monkeypatch):
     """`<keep>` opens in segment 0, closes in segment 2 — all inter-segment
     silences inside the span survive, while trailing silence outside the span

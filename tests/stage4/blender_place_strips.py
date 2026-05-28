@@ -47,11 +47,12 @@ def main() -> None:
         seq_col = sequence_editor.strips
     effective_fps = scene.render.fps / scene.render.fps_base
 
-    # Three intervals to test with
+    # Four intervals to test with; the 4th has speed_factor=2.0.
     intervals = [
         {"start": 0.0, "end": 1.0},
         {"start": 2.0, "end": 3.0},
         {"start": 4.0, "end": 5.0},
+        {"start": 6.0, "end": 7.0, "speed_factor": 2.0},
     ]
 
     cursor = place_strips(intervals, video_path, seq_col, effective_fps)
@@ -59,7 +60,7 @@ def main() -> None:
     # Collect strip info
     strips = []
     for s in seq_col:
-        strips.append({
+        strip_info = {
             "name": s.name,
             "type": s.type,
             "channel": s.channel,
@@ -68,7 +69,11 @@ def main() -> None:
             "frame_offset_end": s.frame_offset_end,
             "frame_final_duration": s.frame_final_duration,
             "mute": s.mute,
-        })
+        }
+        if s.type == "SPEED":
+            strip_info["speed_factor"] = getattr(s, "speed_factor", None)
+            strip_info["use_default_fade"] = getattr(s, "use_default_fade", None)
+        strips.append(strip_info)
 
     result = {
         "cursor": cursor,

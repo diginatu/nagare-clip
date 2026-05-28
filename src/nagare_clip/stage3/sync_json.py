@@ -21,6 +21,12 @@ _PATCH = "patch"
 KEEP_TAG_RE = re.compile(r"</?keep>")
 _KEEP_SPLIT_RE = re.compile(r"(<keep>|</keep>)")
 
+# <speed factor="N.N">...</speed> markers: like <keep> but additionally carry a
+# playback speed factor for Stage 5 (Blender VSE).
+SPEED_TAG_RE = re.compile(r'<speed\s+factor="[0-9.]+">|</speed>')
+_SPEED_SPLIT_RE = re.compile(r'(<speed\s+factor="[0-9.]+">|</speed>)')
+_SPEED_OPEN_RE = re.compile(r'<speed\s+factor="([0-9.]+)">')
+
 # Type alias: (kind, orig_start, orig_end, new_text)
 Region = Tuple[str, int, int, str]
 
@@ -202,7 +208,9 @@ def sync_text_to_json(
 
     Returns a new dict (deep copy).
     """
-    cleaned_lines = [KEEP_TAG_RE.sub("", line) for line in edit_lines]
+    cleaned_lines = [
+        SPEED_TAG_RE.sub("", KEEP_TAG_RE.sub("", line)) for line in edit_lines
+    ]
     corrected_lines = apply_patches_to_lines(cleaned_lines)
 
     result = copy.deepcopy(json_data)
@@ -240,8 +248,10 @@ def sync_text_to_json(
 
 
 def _patched_visible_length(text: str) -> int:
-    """Length in non-whitespace characters of `text` after applying patches."""
-    patched = PATCH_RE.sub(lambda m: m.group(2), text)
+    """Length in non-whitespace characters of `text` after applying patches
+    and stripping any <keep>/<speed> marker tags."""
+    cleaned = SPEED_TAG_RE.sub("", KEEP_TAG_RE.sub("", text))
+    patched = PATCH_RE.sub(lambda m: m.group(2), cleaned)
     return sum(1 for ch in patched if not ch.isspace())
 
 
@@ -347,5 +357,58 @@ def extract_keep_ranges(
 
     if keep_start is not None:
         logger.warning("Unclosed <keep>; ignoring")
+
+    return ranges
+
+
+def extract_speed_ranges(
+    edit_lines: List[str], synced_json: Dict[str, Any]
+) -> List[Tuple[float, float, float]]:
+    """Extract `(start, end, factor)` triples from `<speed factor="N.N">...</speed>` blocks.
+
+    Behaves like :func:`extract_keep_ranges` for span resolution (multi-line
+    spans, position tracking, error handling) but additionally returns the
+    speed factor parsed from each opening tag.
+    """
+    segments = synced_json.get("segments", [])
+    ranges: List[Tuple[float, float, float]] = []
+    # `speed_start = None` means no `<speed>` is currently open.
+    speed_start: Optional[Tuple[int, int]] = None
+    speed_factor: Optional[float] = None
+
+    for seg_idx, line in enumerate(edit_lines):
+        if seg_idx >= len(segments):
+            break
+        output_pos = 0
+        for part in _SPEED_SPLIT_RE.split(line):
+            open_match = _SPEED_OPEN_RE.fullmatch(part) if part else None
+            if open_match is not None:
+                if speed_start is not None:
+                    logger.warning("Nested <speed> opener; ignoring inner tag")
+                    continue
+                speed_start = (seg_idx, output_pos)
+                speed_factor = float(open_match.group(1))
+            elif part == "</speed>":
+                if speed_start is None:
+                    logger.warning("Unmatched </speed>; ignoring")
+                    continue
+                resolved = _resolve_keep_range(
+                    segments, speed_start, (seg_idx, output_pos)
+                )
+                factor = speed_factor
+                speed_start = None
+                speed_factor = None
+                if resolved is None or factor is None:
+                    logger.warning(
+                        "<speed> resolved to an empty/invalid range; ignoring"
+                    )
+                    continue
+                start_t, end_t = resolved
+                ranges.append((start_t, end_t, factor))
+            else:
+                output_pos += _patched_visible_length(part)
+
+    if speed_start is not None:
+        logger.warning("Unclosed <speed>; ignoring")
 
     return ranges

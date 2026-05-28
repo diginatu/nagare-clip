@@ -25,7 +25,11 @@ from nagare_clip.stage3.intervals import (
 )
 from nagare_clip.stage3.io import infer_source_file
 from nagare_clip.stage3.speech import build_speech_spans, get_duration_sec
-from nagare_clip.stage3.sync_json import extract_keep_ranges, sync_text_to_json
+from nagare_clip.stage3.sync_json import (
+    extract_keep_ranges,
+    extract_speed_ranges,
+    sync_text_to_json,
+)
 
 
 def parse_args() -> argparse.Namespace:
@@ -210,10 +214,13 @@ def main() -> None:
 
     whisperx_data = sync_text_to_json(whisperx_data, edit_lines)
     force_keep_ranges = extract_keep_ranges(edit_lines, whisperx_data)
+    speed_ranges = extract_speed_ranges(edit_lines, whisperx_data)
     if force_keep_ranges:
         logging.info(
             "Force-keep ranges from <keep>: %d", len(force_keep_ranges)
         )
+    if speed_ranges:
+        logging.info("Speed ranges from <speed>: %d", len(speed_ranges))
 
     logging.info(
         "Loaded %d segment(s) from %s",
@@ -282,8 +289,11 @@ def main() -> None:
         for start, end in excludes
         if end > start
     ]
-    if force_keep_ranges:
-        bounded_excludes = subtract_intervals(bounded_excludes, force_keep_ranges)
+    all_force_keep: List[Tuple[float, float]] = list(force_keep_ranges) + [
+        (s, e) for s, e, _ in speed_ranges
+    ]
+    if all_force_keep:
+        bounded_excludes = subtract_intervals(bounded_excludes, all_force_keep)
     merged_excludes = merge_intervals(bounded_excludes)
     keep_intervals = invert_intervals(merged_excludes, duration_sec)
     filtered_keep = [
@@ -348,6 +358,20 @@ def main() -> None:
     logging.info(
         "After min_keep enforcement: %d interval(s)", len(keep_intervals_dicts)
     )
+
+    if speed_ranges:
+        for iv in keep_intervals_dicts:
+            best_overlap = 0.0
+            best_factor: float | None = None
+            for sr_start, sr_end, factor in speed_ranges:
+                overlap = max(
+                    0.0, min(iv["end"], sr_end) - max(iv["start"], sr_start)
+                )
+                if overlap > best_overlap:
+                    best_overlap = overlap
+                    best_factor = factor
+            if best_factor is not None:
+                iv["speed_factor"] = best_factor
 
     output_data = {
         "source_file": infer_source_file(whisperx_data, json_path),

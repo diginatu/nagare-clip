@@ -70,8 +70,8 @@ def test_place_strips_channels(blender_result):
     video_strips = [s for s in blender_result["strips"] if s["type"] == "MOVIE"]
     sound_strips = [s for s in blender_result["strips"] if s["type"] == "SOUND"]
 
-    assert len(video_strips) == 3
-    assert len(sound_strips) == 3
+    assert len(video_strips) == 4
+    assert len(sound_strips) == 4
 
     for s in video_strips:
         assert s["channel"] == 1, f"{s['name']} on channel {s['channel']}, expected 1"
@@ -92,10 +92,12 @@ def test_place_strips_templates_deleted(blender_result):
 
 
 def test_place_strips_cursor_and_offsets(blender_result):
-    """Cursor advances correctly and offsets trim to the right source region."""
+    """Cursor advances correctly; sped-up interval shortens its timeline contribution."""
     fps = blender_result["effective_fps"]
+    fps_int = round(fps)
 
-    expected_total_frames = 3 * round(fps)
+    # 3 unsped 1-second intervals + 1 sped-up 1-second interval (speed=2.0)
+    expected_total_frames = 3 * fps_int + max(1, round(fps_int / 2.0))
     assert blender_result["cursor"] == 1 + expected_total_frames
 
     video_strips = sorted(
@@ -105,8 +107,17 @@ def test_place_strips_cursor_and_offsets(blender_result):
     assert video_strips[0]["frame_offset_start"] == 0
     assert video_strips[1]["frame_offset_start"] == round(2.0 * fps)
     assert video_strips[2]["frame_offset_start"] == round(4.0 * fps)
+    assert video_strips[3]["frame_offset_start"] == round(6.0 * fps)
 
 
 def test_place_strips_strip_count(blender_result):
-    """Exactly 3 video + 3 sound = 6 strips total (no templates left)."""
-    assert blender_result["strip_count"] == 6
+    """4 video + 4 sound + 1 SPEED effect = 9 strips total (no templates left)."""
+    assert blender_result["strip_count"] == 9
+
+
+def test_place_strips_speed_effect_created(blender_result):
+    """The speed_factor=2.0 interval produces a SPEED effect strip with the right factor."""
+    speed_strips = [s for s in blender_result["strips"] if s["type"] == "SPEED"]
+    assert len(speed_strips) == 1
+    assert speed_strips[0]["speed_factor"] == pytest.approx(2.0)
+    assert speed_strips[0]["use_default_fade"] is False

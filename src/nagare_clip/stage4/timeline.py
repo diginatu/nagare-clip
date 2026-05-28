@@ -31,19 +31,22 @@ def build_timeline_map(
         end_sec = float(interval["end"])
         if end_sec <= start_sec:
             continue
+        speed = float(interval.get("speed_factor", 1.0))
         src_start_frame = max(0, sec_to_frames(start_sec, effective_fps))
         src_end_frame = max(src_start_frame + 1, sec_to_frames(end_sec, effective_fps))
         # Mirror the clamping logic from the strip loop
         # full_duration is not available here, so use src_end_frame as
         # an upper bound — clamping only matters at the very end of the
         # source clip and will not affect most captions
-        keep_frame_count = src_end_frame - src_start_frame
+        src_frames = src_end_frame - src_start_frame
+        keep_frame_count = max(1, round(src_frames / speed))
         mapping.append(
             {
                 "src_start": start_sec,
                 "src_end": end_sec,
                 "tl_start": cursor,
                 "tl_end": cursor + keep_frame_count,
+                "speed_factor": speed,
             }
         )
         cursor += keep_frame_count
@@ -145,6 +148,7 @@ def place_strips(
     for idx, interval in enumerate(keep_intervals, start=1 + idx_offset):
         start_sec = float(interval["start"])
         end_sec = float(interval["end"])
+        speed = float(interval.get("speed_factor", 1.0))
         if end_sec <= start_sec:
             continue
 
@@ -245,19 +249,36 @@ def place_strips(
                 keep_frame_count,
             )
 
+        adjusted_frame_count = max(1, round(keep_frame_count / speed))
+        cursor_start = timeline_cursor
+
+        if speed != 1.0:
+            speed_strip = sequence_collection.new_effect(
+                name=f"speed_{idx:04d}",
+                type="SPEED",
+                channel=new_video.channel + 2,
+                frame_start=cursor_start,
+                length=adjusted_frame_count,
+                input1=new_video,
+            )
+            speed_strip.use_default_fade = False
+            speed_strip.speed_factor = speed
+
         logging.debug(
             "%sStrip %d: frame_start=%d frame_offset_start=%d frame_offset_end=%d "
-            "keep_frames=%d timeline_cursor=%d",
+            "keep_frames=%d speed=%.3f adjusted=%d timeline_cursor=%d",
             src_tag,
             idx,
             timeline_cursor - bounded_start,
             bounded_start,
             full_duration - bounded_end,
             keep_frame_count,
+            speed,
+            adjusted_frame_count,
             timeline_cursor,
         )
 
-        timeline_cursor += keep_frame_count
+        timeline_cursor += adjusted_frame_count
 
     # --- Phase C: delete template strips ---
     _deselect_all(sequence_collection)
@@ -295,13 +316,14 @@ def place_captions(
         length = None
         for entry in tl_map:
             if cap_src_start < entry["src_end"] and cap_src_end > entry["src_start"]:
+                speed = float(entry.get("speed_factor", 1.0))
                 clamped_start = max(cap_src_start, entry["src_start"])
                 clamped_end = min(cap_src_end, entry["src_end"])
                 offset_start = sec_to_frames(
-                    clamped_start - entry["src_start"], effective_fps
+                    (clamped_start - entry["src_start"]) / speed, effective_fps
                 )
                 offset_end = sec_to_frames(
-                    clamped_end - entry["src_start"], effective_fps
+                    (clamped_end - entry["src_start"]) / speed, effective_fps
                 )
                 tl_start = entry["tl_start"] + offset_start
                 tl_end = entry["tl_start"] + offset_end

@@ -16,12 +16,14 @@ The pipeline creates a rough-cut Blender project for human review and fine-tunin
 
 1. Run stages 1–3: `./scripts/run_pipeline.sh`
 2. Edit `output/stage2/{stem}_cuts.txt` — delete a line to keep that span, or adjust the `START - END` times
-3. Edit `output/stage3/{stem}_edits.txt` — add/modify `{{old->new}}` patch markers, or wrap text in `<keep>...</keep>` to force-keep its audio
+3. Edit `output/stage3/{stem}_edits.txt` — add/modify `{{old->new}}` patch markers, wrap text in `<keep>...</keep>` to force-keep its audio, or wrap text in `<speed factor="N.N">...</speed>` to force-keep **and** play that region at the given speed in Blender
 4. Resume: `./scripts/run_pipeline.sh --from-stage 4 --source myvideo.mp4`
 
 The `{{old->new}}` syntax replaces `old` with `new` in the transcript. Use `{{delete->}}` to remove text, `{{->insert}}` to insert text.
 
 The `<keep>...</keep>` tag preserves the audio under the wrapped text — Stage 4 carves that time range out of both the word-gap silence detection and any overlapping `_cuts.txt` ranges, so dramatic pauses and intentional silences survive. The tag may be opened on one line and closed on a later one, so a single `<keep>` block can span multiple lines and preserve the silences between them. The tag is added by the human (not the LLM) after `_edits.txt` is produced.
+
+The `<speed factor="N.N">...</speed>` tag does everything `<keep>` does **and** instructs Stage 5 to play the wrapped region at the given playback speed (e.g., `factor="2.0"` for 2× fast-forward, `factor="0.5"` for slow-motion) via a Blender VSE Speed Control effect strip. Captions inside the region are timed against the sped-up timeline so they stay in sync.
 
 ## Requirements
 
@@ -150,6 +152,8 @@ stage2:
 The LLM uses `{{old->new}}` inline patch syntax to mark corrections. Human editors can then review and modify the markers in `_edits.txt` before Stage 4 applies them.
 
 Human editors can also wrap a span in `<keep>...</keep>` to force-preserve the audio under that text. Stage 4 derives the time range from the first wrapped word's start to the last wrapped word's end and carves it out of both the word-gap silence and any overlapping `_cuts.txt` ranges. The marker may be opened on one line and closed on a later line, so a single `<keep>` block can span multiple WhisperX segments and preserve the silences between them. The marker is added after the LLM filter has produced `_edits.txt`, so the LLM never sees it.
+
+`<speed factor="N.N">...</speed>` is a companion marker with identical force-keep behavior **plus** a playback-speed annotation. Stage 4 records the factor on the corresponding keep interval (`speed_factor` field in `_intervals.json`), and Stage 5 adds a Blender VSE Speed Control effect strip over the video so that region plays at the requested speed in the final `.blend`.
 
 `thinking` sends `"think"` in the Ollama API request, enabling chain-of-thought reasoning for supported models (e.g. qwen3, deepseek-r1). Set `true`/`false`, or a string level like `"low"`, `"medium"`, `"high"` for models that support granular control (e.g. Qwen 3.5). Ollama returns the reasoning trace in a separate field; the pipeline uses only the final answer.
 
