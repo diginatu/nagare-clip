@@ -27,6 +27,14 @@ SPEED_TAG_RE = re.compile(r'<speed\s+factor="[0-9.]+">|</speed>')
 _SPEED_SPLIT_RE = re.compile(r'(<speed\s+factor="[0-9.]+">|</speed>)')
 _SPEED_OPEN_RE = re.compile(r'<speed\s+factor="([0-9.]+)">')
 
+# <overlay text="...">...</overlay> markers: place a Blender VSE TEXT strip
+# at the wrapped span's time range. Unlike <keep>/<speed>, overlay does NOT
+# affect audio retention; if the wrapped audio is cut, the overlay is skipped
+# in Stage 5.
+OVERLAY_TAG_RE = re.compile(r'<overlay\s+text="[^"]*">|</overlay>')
+_OVERLAY_SPLIT_RE = re.compile(r'(<overlay\s+text="[^"]*">|</overlay>)')
+_OVERLAY_OPEN_RE = re.compile(r'<overlay\s+text="([^"]*)">')
+
 # Type alias: (kind, orig_start, orig_end, new_text)
 Region = Tuple[str, int, int, str]
 
@@ -209,7 +217,10 @@ def sync_text_to_json(
     Returns a new dict (deep copy).
     """
     cleaned_lines = [
-        SPEED_TAG_RE.sub("", KEEP_TAG_RE.sub("", line)) for line in edit_lines
+        OVERLAY_TAG_RE.sub(
+            "", SPEED_TAG_RE.sub("", KEEP_TAG_RE.sub("", line))
+        )
+        for line in edit_lines
     ]
     corrected_lines = apply_patches_to_lines(cleaned_lines)
 
@@ -250,7 +261,9 @@ def sync_text_to_json(
 def _patched_visible_length(text: str) -> int:
     """Length in non-whitespace characters of `text` after applying patches
     and stripping any <keep>/<speed> marker tags."""
-    cleaned = SPEED_TAG_RE.sub("", KEEP_TAG_RE.sub("", text))
+    cleaned = OVERLAY_TAG_RE.sub(
+        "", SPEED_TAG_RE.sub("", KEEP_TAG_RE.sub("", text))
+    )
     patched = PATCH_RE.sub(lambda m: m.group(2), cleaned)
     return sum(1 for ch in patched if not ch.isspace())
 
@@ -412,3 +425,10 @@ def extract_speed_ranges(
         logger.warning("Unclosed <speed>; ignoring")
 
     return ranges
+
+
+def extract_overlay_ranges(
+    edit_lines: List[str], synced_json: Dict[str, Any]
+) -> List[Tuple[float, float, str]]:
+    """Stub — implemented in Task 2."""
+    return []
