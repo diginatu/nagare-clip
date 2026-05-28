@@ -58,6 +58,8 @@ def _run_cli(monkeypatch, tmp_path, edits_text: str):
     out_path = tmp_path / "out.json"
     cfg_path = _config(tmp_path)
 
+    monkeypatch.setattr(stage_cli.spacy, "load", lambda *a, **k: object())
+    monkeypatch.setattr(stage_cli, "build_bunsetu_times", lambda *a, **k: [])
     monkeypatch.setattr(
         sys,
         "argv",

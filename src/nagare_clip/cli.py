@@ -217,14 +217,14 @@ def main() -> None:
     force_keep_ranges = extract_keep_ranges(edit_lines, whisperx_data)
     speed_ranges = extract_speed_ranges(edit_lines, whisperx_data)
     overlay_ranges = extract_overlay_ranges(edit_lines, whisperx_data)
-    if overlay_ranges:
-        logging.info("Overlay ranges from <overlay>: %d", len(overlay_ranges))
     if force_keep_ranges:
         logging.info(
             "Force-keep ranges from <keep>: %d", len(force_keep_ranges)
         )
     if speed_ranges:
         logging.info("Speed ranges from <speed>: %d", len(speed_ranges))
+    if overlay_ranges:
+        logging.info("Overlay ranges from <overlay>: %d", len(overlay_ranges))
 
     logging.info(
         "Loaded %d segment(s) from %s",
