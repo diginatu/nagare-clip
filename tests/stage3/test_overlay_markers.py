@@ -140,9 +140,13 @@ class TestExtractOverlayRanges:
                 ['<overlay text="A">あい<overlay text="B">う</overlay>え</overlay>'],
                 data,
             )
-        # Outer span resolves; inner opener is warned and dropped
-        assert ranges == [(0.0, 0.8, "A")]
+        # Mirrors <keep>/<speed> nesting behavior:
+        # - Outer opener at pos 0; inner opener nested → warn, dropped (pos unchanged)
+        # - "う" advances pos to 3; first </overlay> closes outer → range covers "あいう" = (0.0, 0.6)
+        # - "え" advances pos to 4; trailing </overlay> is unmatched → warn
+        assert ranges == [(0.0, 0.6, "A")]
         assert "Nested <overlay>" in caplog.text
+        assert "Unmatched <" "/overlay>" in caplog.text
 
     def test_overlay_coexists_with_keep_and_speed(self):
         words = [

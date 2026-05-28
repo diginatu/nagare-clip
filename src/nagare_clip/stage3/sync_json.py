@@ -441,17 +441,12 @@ def extract_overlay_ranges(
     on-screen TEXT strips only.
 
     Empty ``text=""`` attributes are treated as invalid and skipped with a
-    warning (an overlay with no text would have nothing to display).  Nested
-    openers are dropped with a warning; the closer that would have matched
-    the dropped opener is also absorbed so that the outer overlay closes at
-    its actual matching tag.
+    warning (an overlay with no text would have nothing to display).
     """
     segments = synced_json.get("segments", [])
     ranges: List[Tuple[float, float, str]] = []
     overlay_start: Optional[Tuple[int, int]] = None
     overlay_text: Optional[str] = None
-    # Tracks number of nested opener tags whose closers must be absorbed.
-    nested_depth = 0
 
     for seg_idx, line in enumerate(edit_lines):
         if seg_idx >= len(segments):
@@ -464,15 +459,10 @@ def extract_overlay_ranges(
                     logger.warning(
                         "Nested <overlay> opener; ignoring inner tag"
                     )
-                    nested_depth += 1
                     continue
                 overlay_start = (seg_idx, output_pos)
                 overlay_text = open_match.group(1)
             elif part == "</overlay>":
-                if nested_depth > 0:
-                    # Absorb the closer that pairs with a dropped nested opener.
-                    nested_depth -= 1
-                    continue
                 if overlay_start is None:
                     logger.warning("Unmatched </overlay>; ignoring")
                     continue
