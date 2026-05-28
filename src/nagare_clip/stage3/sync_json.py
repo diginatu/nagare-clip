@@ -432,5 +432,67 @@ def extract_speed_ranges(
 def extract_overlay_ranges(
     edit_lines: List[str], synced_json: Dict[str, Any]
 ) -> List[Tuple[float, float, str]]:
-    """Stub — implemented in Task 2."""
-    return []
+    """Extract `(start, end, text)` triples from `<overlay text="...">...</overlay>` blocks.
+
+    Behaves like :func:`extract_speed_ranges` for span resolution (multi-line
+    spans, position tracking, error handling) but returns the overlay text
+    parsed from each opening tag instead of a numeric factor.  Overlays do
+    NOT affect audio retention; they are consumed by Stage 5 to place
+    on-screen TEXT strips only.
+
+    Empty ``text=""`` attributes are treated as invalid and skipped with a
+    warning (an overlay with no text would have nothing to display).  Nested
+    openers are dropped with a warning; the closer that would have matched
+    the dropped opener is also absorbed so that the outer overlay closes at
+    its actual matching tag.
+    """
+    segments = synced_json.get("segments", [])
+    ranges: List[Tuple[float, float, str]] = []
+    overlay_start: Optional[Tuple[int, int]] = None
+    overlay_text: Optional[str] = None
+    # Tracks number of nested opener tags whose closers must be absorbed.
+    nested_depth = 0
+
+    for seg_idx, line in enumerate(edit_lines):
+        if seg_idx >= len(segments):
+            break
+        output_pos = 0
+        for part in _OVERLAY_SPLIT_RE.split(line):
+            open_match = _OVERLAY_OPEN_RE.fullmatch(part) if part else None
+            if open_match is not None:
+                if overlay_start is not None:
+                    logger.warning(
+                        "Nested <overlay> opener; ignoring inner tag"
+                    )
+                    nested_depth += 1
+                    continue
+                overlay_start = (seg_idx, output_pos)
+                overlay_text = open_match.group(1)
+            elif part == "</overlay>":
+                if nested_depth > 0:
+                    # Absorb the closer that pairs with a dropped nested opener.
+                    nested_depth -= 1
+                    continue
+                if overlay_start is None:
+                    logger.warning("Unmatched </overlay>; ignoring")
+                    continue
+                resolved = _resolve_keep_range(
+                    segments, overlay_start, (seg_idx, output_pos)
+                )
+                text = overlay_text
+                overlay_start = None
+                overlay_text = None
+                if resolved is None or not text:
+                    logger.warning(
+                        "<overlay> resolved to an empty/invalid range; ignoring"
+                    )
+                    continue
+                start_t, end_t = resolved
+                ranges.append((start_t, end_t, text))
+            else:
+                output_pos += _patched_visible_length(part)
+
+    if overlay_start is not None:
+        logger.warning("Unclosed <overlay>; ignoring")
+
+    return ranges
