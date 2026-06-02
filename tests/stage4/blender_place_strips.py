@@ -64,10 +64,10 @@ def main() -> None:
             "name": s.name,
             "type": s.type,
             "channel": s.channel,
-            "frame_start": s.frame_start,
-            "frame_offset_start": s.frame_offset_start,
-            "frame_offset_end": s.frame_offset_end,
-            "frame_final_duration": s.frame_final_duration,
+            "frame_start": s.content_start,
+            "frame_offset_start": s.left_handle_offset,
+            "frame_offset_end": s.right_handle_offset,
+            "frame_final_duration": s.duration,
             "mute": s.mute,
         }
         if s.type == "SPEED":

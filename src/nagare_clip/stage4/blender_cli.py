@@ -176,7 +176,7 @@ def main() -> None:
     for s in sequence_collection:
         s.select = False
 
-    min_strip_frame = min((s.frame_start for s in sequence_collection), default=1)
+    min_strip_frame = min((s.content_start for s in sequence_collection), default=1)
     scene.frame_start = int(min(1, min_strip_frame))
     scene.frame_end = max(scene.frame_start, timeline_cursor - 1)
 

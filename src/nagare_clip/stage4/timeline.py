@@ -124,7 +124,7 @@ def place_strips(
         proxy.build_100 = proxy_size == 100
         proxy.use_overwrite = False
     tmpl_video.mute = True
-    full_duration = max(1, int(tmpl_video.frame_duration))
+    full_duration = max(1, int(tmpl_video.content_duration))
 
     tmpl_sound = sequence_collection.new_sound(
         name="_tmpl_sound",
@@ -133,7 +133,7 @@ def place_strips(
         frame_start=1,
     )
     tmpl_sound.mute = True
-    sound_full_duration = max(1, int(tmpl_sound.frame_duration))
+    sound_full_duration = max(1, int(tmpl_sound.content_duration))
 
     logging.debug(
         "%sTemplate strips created: video %d frames, sound %d frames",
@@ -217,21 +217,21 @@ def place_strips(
         # trimmed range and does not reject channel 1 due to overlap.
         new_video.name = f"keep_{idx:04d}"
         new_video.mute = False
-        new_video.frame_start = timeline_cursor - bounded_start
-        new_video.frame_offset_start = bounded_start
-        new_video.frame_offset_end = full_duration - bounded_end
+        new_video.content_start = timeline_cursor - bounded_start
+        new_video.left_handle_offset = bounded_start
+        new_video.right_handle_offset = full_duration - bounded_end
         new_video.channel = 1
 
         # Configure the duplicated sound strip
         new_sound.name = f"keep_{idx:04d}_audio"
         new_sound.mute = False
-        new_sound.frame_start = timeline_cursor - bounded_start
-        new_sound.frame_offset_start = bounded_start
-        new_sound.frame_offset_end = sound_full_duration - (
+        new_sound.content_start = timeline_cursor - bounded_start
+        new_sound.left_handle_offset = bounded_start
+        new_sound.right_handle_offset = sound_full_duration - (
             bounded_start + keep_frame_count
         )
-        if new_sound.frame_offset_end < 0:
-            new_sound.frame_offset_end = 0
+        if new_sound.right_handle_offset < 0:
+            new_sound.right_handle_offset = 0
         new_sound.channel = 2
 
         # Connect the video+audio pair
@@ -240,12 +240,12 @@ def place_strips(
         new_sound.select = True
         _sequencer_op(window, sequencer_area, bpy.ops.sequencer.connect, toggle=False)
 
-        if new_video.frame_final_duration != keep_frame_count:
+        if new_video.duration != keep_frame_count:
             logging.warning(
-                "%sStrip %d: frame_final_duration=%d differs from keep_frame_count=%d",
+                "%sStrip %d: duration=%d differs from keep_frame_count=%d",
                 src_tag,
                 idx,
-                new_video.frame_final_duration,
+                new_video.duration,
                 keep_frame_count,
             )
 
