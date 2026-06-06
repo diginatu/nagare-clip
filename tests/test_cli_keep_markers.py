@@ -160,17 +160,17 @@ def test_keep_marker_with_internal_patch(tmp_path, monkeypatch):
     assert _covers(keep, 1.9)
 
 
-def _interval_with_speed(intervals, t):
-    """Return the speed_factor of the interval containing time t, or None."""
-    for iv in intervals:
-        if iv["start"] <= t <= iv["end"]:
-            return iv.get("speed_factor")
+def _speed_at(speed_ranges, t):
+    """Return the factor of the speed range containing time t, or None."""
+    for sr in speed_ranges:
+        if sr["start"] <= t <= sr["end"]:
+            return sr["factor"]
     return None
 
 
-def test_speed_marker_carves_silence_and_annotates_factor(tmp_path, monkeypatch):
+def test_speed_marker_carves_silence_and_emits_range(tmp_path, monkeypatch):
     """`<speed factor="2.0">いう</speed>` wraps the silent gap, force-keeps it,
-    AND the resulting keep interval is annotated with speed_factor=2.0."""
+    AND a top-level speed_ranges entry with factor=2.0 covers that time."""
     json_path, edits, cfg = _setup(
         tmp_path, 'あ<speed factor="2.0">いう</speed>え\n'
     )
@@ -179,8 +179,9 @@ def test_speed_marker_carves_silence_and_annotates_factor(tmp_path, monkeypatch)
     keep = data["keep_intervals"]
     # Force-keep survives silence
     assert _covers(keep, 2.5)
-    # And the interval that contains the speed-marked time is annotated
-    assert _interval_with_speed(keep, 2.5) == 2.0
+    # speed_ranges is a top-level array independent of keep_intervals
+    assert "speed_factor" not in keep[0]
+    assert _speed_at(data["speed_ranges"], 2.5) == 2.0
 
 
 def test_speed_marker_factor_below_one(tmp_path, monkeypatch):
@@ -190,13 +191,12 @@ def test_speed_marker_factor_below_one(tmp_path, monkeypatch):
     )
     out = tmp_path / "intervals.json"
     data = _run(monkeypatch, json_path, edits, cfg, out)
-    keep = data["keep_intervals"]
-    assert _interval_with_speed(keep, 2.5) == 0.5
+    assert _speed_at(data["speed_ranges"], 2.5) == 0.5
 
 
 def test_keep_and_speed_coexist(tmp_path, monkeypatch):
     """A `<keep>` block and a `<speed>` block in the same _edits.txt:
-    both regions force-kept; only the <speed> region has speed_factor."""
+    both regions force-kept; only the <speed> region appears in speed_ranges."""
     # Two-segment fixture: seg0 has 'あい' with silence gap before seg1.
     data_json = {
         "duration": 15.0,
@@ -233,19 +233,20 @@ def test_keep_and_speed_coexist(tmp_path, monkeypatch):
     out = tmp_path / "intervals.json"
     data = _run(monkeypatch, json_path, edits, cfg, out)
     keep = data["keep_intervals"]
-    # <keep> region preserved, no speed_factor on it
+    # <keep> region preserved, not in speed_ranges
     assert _covers(keep, 0.6)
-    assert _interval_with_speed(keep, 0.6) is None
-    # <speed> region preserved, speed_factor=3.0 set
+    assert _speed_at(data["speed_ranges"], 0.6) is None
+    # <speed> region preserved, factor=3.0 emitted
     assert _covers(keep, 5.5)
-    assert _interval_with_speed(keep, 5.5) == 3.0
+    assert _speed_at(data["speed_ranges"], 5.5) == 3.0
 
 
-def test_no_speed_marker_no_factor_field(tmp_path, monkeypatch):
-    """Control: without <speed>, intervals must not contain speed_factor."""
+def test_no_speed_marker_no_speed_ranges_field(tmp_path, monkeypatch):
+    """Control: without <speed>, no speed_ranges key and no speed_factor."""
     json_path, edits, cfg = _setup(tmp_path, "あいうえ\n")
     out = tmp_path / "intervals.json"
     data = _run(monkeypatch, json_path, edits, cfg, out)
+    assert "speed_ranges" not in data
     for iv in data["keep_intervals"]:
         assert "speed_factor" not in iv
 

@@ -363,26 +363,20 @@ def main() -> None:
         "After min_keep enforcement: %d interval(s)", len(keep_intervals_dicts)
     )
 
-    if speed_ranges:
-        for iv in keep_intervals_dicts:
-            best_overlap = 0.0
-            best_factor: float | None = None
-            for sr_start, sr_end, factor in speed_ranges:
-                overlap = max(
-                    0.0, min(iv["end"], sr_end) - max(iv["start"], sr_start)
-                )
-                if overlap > best_overlap:
-                    best_overlap = overlap
-                    best_factor = factor
-            if best_factor is not None:
-                iv["speed_factor"] = best_factor
-
     output_data = {
         "source_file": infer_source_file(whisperx_data, json_path),
         "duration_sec": round(duration_sec, 3),
         "keep_intervals": keep_intervals_dicts,
         "captions": captions,
     }
+    if speed_ranges:
+        # Speed ranges are emitted as an independent top-level array (like
+        # overlays); Stage 5 splits keep intervals at these boundaries so a
+        # speed range may cover an arbitrary sub-range of a keep interval.
+        output_data["speed_ranges"] = [
+            {"start": round(s, 3), "end": round(e, 3), "factor": f}
+            for s, e, f in speed_ranges
+        ]
     if overlay_ranges:
         output_data["overlays"] = [
             {"start": round(s, 3), "end": round(e, 3), "text": t}

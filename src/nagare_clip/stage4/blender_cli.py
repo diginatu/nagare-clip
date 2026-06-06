@@ -25,6 +25,7 @@ from nagare_clip.stage4.timeline import (
     place_captions,
     place_overlays,
     place_strips,
+    split_intervals_by_speed,
 )
 
 def parse_blender_args(argv: list[str]) -> argparse.Namespace:
@@ -128,6 +129,12 @@ def main() -> None:
         keep_intervals = intervals_data.get("keep_intervals", [])
         captions = intervals_data.get("captions", [])
         overlays = intervals_data.get("overlays", [])
+        speed_ranges = intervals_data.get("speed_ranges", [])
+
+        # Split keep intervals at speed-range boundaries so each placed strip
+        # has a single uniform speed_factor (a speed range may cover only part
+        # of a keep interval, or span several).
+        keep_intervals = split_intervals_by_speed(keep_intervals, speed_ranges)
 
         tl_map = build_timeline_map(
             keep_intervals, effective_fps, first_fps, start_cursor=timeline_cursor
@@ -183,7 +190,12 @@ def main() -> None:
     output_path.parent.mkdir(parents=True, exist_ok=True)
 
     total_strips = sum(
-        len(d.get("keep_intervals", [])) for d in all_intervals_data
+        len(
+            split_intervals_by_speed(
+                d.get("keep_intervals", []), d.get("speed_ranges", [])
+            )
+        )
+        for d in all_intervals_data
     )
     logging.info(
         "Done: %d strip(s) across %d source(s), scene ends at frame %d",

@@ -11,6 +11,48 @@ def sec_to_frames(seconds: float, fps: float) -> int:
     return int(round(seconds * fps))
 
 
+def split_intervals_by_speed(keep_intervals: list, speed_ranges: list) -> list:
+    """Split keep intervals at speed-range boundaries.
+
+    ``speed_ranges`` is the top-level array from the intervals JSON, each item
+    ``{"start", "end", "factor"}``. A speed range may cover an arbitrary
+    sub-range of a keep interval (or span several), so each keep interval is
+    cut at every speed boundary that falls strictly inside it. Each resulting
+    sub-interval carries ``speed_factor`` equal to the factor of the speed
+    range covering its midpoint (omitted when the factor is 1.0 / uncovered),
+    matching the ``interval.get("speed_factor", 1.0)`` default used downstream.
+
+    Returns a fresh list of dicts; input dicts are never mutated.
+    """
+    if not speed_ranges:
+        return [dict(iv) for iv in keep_intervals]
+
+    result: list = []
+    for iv in keep_intervals:
+        start = float(iv["start"])
+        end = float(iv["end"])
+        boundaries = {start, end}
+        for sr in speed_ranges:
+            for edge in (float(sr["start"]), float(sr["end"])):
+                if start < edge < end:
+                    boundaries.add(edge)
+        points = sorted(boundaries)
+        for a, b in zip(points, points[1:]):
+            seg = dict(iv)
+            seg.pop("speed_factor", None)
+            seg["start"] = a
+            seg["end"] = b
+            mid = (a + b) / 2.0
+            for sr in speed_ranges:
+                if float(sr["start"]) <= mid < float(sr["end"]):
+                    factor = float(sr["factor"])
+                    if factor != 1.0:
+                        seg["speed_factor"] = factor
+                    break
+            result.append(seg)
+    return result
+
+
 def build_timeline_map(
     keep_intervals: list,
     effective_fps: float,
