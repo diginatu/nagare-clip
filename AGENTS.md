@@ -155,8 +155,11 @@ All tunable parameters are centralised in `src/nagare_clip/config.py`:
   top-level `overlays` array in the intervals JSON. Stage 5 reads
   `overlays`, maps each through `build_timeline_map()` (speed-aware,
   same trick as captions), and calls `place_overlays()` to create a TEXT strip
-  on channel 4 (one above the caption channel). Overlays that fall on cut
-  content are silently skipped. Style is `caption_style` overlaid with
+  on channel 4 (one above the caption channel). An overlay spanning multiple
+  keep intervals renders as one contiguous TEXT strip across all covered
+  intervals (`place_overlays()` accumulates the min `tl_start` / max `tl_end`
+  over every matching `tl_map` entry); only an overlay that falls entirely on
+  cut content is silently skipped. Style is `caption_style` overlaid with
   `blender.overlay_style` overrides (defaults: `anchor_y: TOP`, `location_y: 0.95`).
 - Stage 4 keep intervals are expanded by configurable `intervals.keep_pre_margin` / `intervals.keep_post_margin` (defaults 1.0s) and merged before Blender export. Captions have independent `intervals.caption.pre_margin` / `intervals.caption.post_margin` (defaults 0.0s) that extend each caption's display time, clamped against neighbouring caption boundaries so captions never overlap.
 - Stage 4 silence-based keep-interval detection uses WhisperX word timings (`word.start`/`word.end`) with a 0.6s per-word span cap so inflated token ends do not hide pauses. The cap is controlled by `intervals.bunsetu.silence_max_word_span` in the config.

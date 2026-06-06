@@ -437,9 +437,11 @@ def place_overlays(
         if not text:
             continue
 
+        # Accumulate across ALL matching keep intervals so an overlay spanning
+        # several intervals renders as one contiguous strip (intervals are
+        # concatenated with no gaps, so tl_end of one == tl_start of the next).
         tl_start = None
         tl_end = None
-        length = None
         for entry in tl_map:
             if ov_src_start < entry["src_end"] and ov_src_end > entry["src_start"]:
                 speed = float(entry.get("speed_factor", 1.0))
@@ -451,17 +453,20 @@ def place_overlays(
                 offset_end = sec_to_frames(
                     (clamped_end - entry["src_start"]) / speed, effective_fps
                 )
-                tl_start = entry["tl_start"] + offset_start
-                tl_end = entry["tl_start"] + offset_end
-                length = max(1, tl_end - tl_start)
-                tl_end = tl_start + length
-                break
+                entry_tl_start = entry["tl_start"] + offset_start
+                entry_tl_end = entry["tl_start"] + offset_end
+                tl_start = (
+                    entry_tl_start if tl_start is None else min(tl_start, entry_tl_start)
+                )
+                tl_end = entry_tl_end if tl_end is None else max(tl_end, entry_tl_end)
 
-        if tl_start is None or tl_end is None or length is None or tl_end <= tl_start:
+        if tl_start is None or tl_end is None:
             logging.warning(
                 "Overlay skipped (no matching keep interval): %r", text[:60]
             )
             continue
+        length = max(1, tl_end - tl_start)
+        tl_end = tl_start + length
 
         text_strip = sequence_collection.new_effect(
             name=f"ov_{ov_src_start:.3f}",

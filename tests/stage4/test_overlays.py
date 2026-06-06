@@ -153,6 +153,32 @@ def test_overlay_partial_overlap_clamps_to_interval():
     assert kw["length"] == 30
 
 
+def test_overlay_spanning_multiple_keep_intervals():
+    """Overlay covering several keep intervals renders one contiguous strip."""
+    fps = 30.0
+    tl_map = build_timeline_map(
+        [{"start": 0.0, "end": 2.0}, {"start": 4.0, "end": 6.0}],
+        effective_fps=fps,
+        source_fps=fps,
+    )
+    # interval 1: tl 1-61; interval 2: tl 61-121 (contiguous on timeline)
+    overlays = [{"start": 1.0, "end": 5.0, "text": "Banner"}]
+    seq, captured = _seq_with_capture()
+    place_overlays(
+        overlays,
+        tl_map,
+        effective_fps=fps,
+        sequence_collection=seq,
+        overlay_style={},
+        channel=4,
+    )
+    assert len(captured) == 1
+    kw = captured[0]
+    # start = 1 + 30 (1.0s into interval 1); end = 61 + 30 (5.0s, 1.0s into interval 2)
+    assert kw["frame_start"] == 31
+    assert kw["length"] == 60
+
+
 def test_empty_overlay_text_is_skipped():
     fps = 30.0
     tl_map = _simple_tl_map(fps)
