@@ -170,7 +170,7 @@ def main() -> None:
             # overlay_style overrides (overlay_style wins per key).
             cap_style = cfg["blender"]["caption_style"]
             ov_style = {**cap_style, **cfg["blender"]["overlay_style"]}
-            # Overlay channel sits above the caption channel (which is 3).
+            # Overlay channel sits above the caption channel (ch3).
             place_overlays(
                 overlays,
                 tl_map,

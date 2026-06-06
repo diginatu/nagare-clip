@@ -73,6 +73,8 @@ def main() -> None:
         if s.type == "SPEED":
             strip_info["speed_factor"] = getattr(s, "speed_factor", None)
             strip_info["use_default_fade"] = getattr(s, "use_default_fade", None)
+        if s.type == "SOUND":
+            strip_info["pitch_correction"] = getattr(s, "pitch_correction", None)
         strips.append(strip_info)
 
     result = {

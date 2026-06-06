@@ -127,3 +127,39 @@ def test_place_captions_speed_factor_half_doubles_offset_and_length():
     assert kwargs["frame_start"] == 1 + 60
     # Caption duration: (2.0s / 0.5) * 30fps = 120 frames
     assert kwargs["length"] == 120
+
+
+def test_place_captions_spanning_speed_boundary_accumulates():
+    """Caption spanning a speed-boundary split accumulates across both sub-intervals.
+
+    When split_intervals_by_speed produces [0-5s, speed=1.0] + [5-10s, speed=2.0],
+    a caption at [4-6s] must extend from its start in the first sub-interval to its
+    end in the second — not be truncated at the first sub-interval's src_end.
+    """
+    fps = 30.0
+    tl_map = build_timeline_map(
+        [
+            {"start": 0.0, "end": 5.0},
+            {"start": 5.0, "end": 10.0, "speed_factor": 2.0},
+        ],
+        effective_fps=fps,
+        source_fps=fps,
+    )
+    # tl_map[0]: tl [1, 151]  (5s * 30fps = 150 frames)
+    # tl_map[1]: tl [151, 226] (5s/2 * 30fps = 75 frames)
+    captions = [{"start": 4.0, "end": 6.0, "text": "boundary"}]
+    placed: list = []
+    seq = MagicMock()
+
+    def capture(**kwargs):
+        placed.append(kwargs)
+        return MagicMock()
+
+    seq.new_effect = capture
+    place_captions(captions, tl_map, fps, seq)
+
+    assert len(placed) == 1
+    # Part in [0,5,speed=1]: clamped [4,5] → offset_start=120 frames → tl_start=121
+    # Part in [5,10,speed=2]: clamped [5,6] → offset_end=15 frames  → tl_end=166
+    assert placed[0]["frame_start"] == 121
+    assert placed[0]["length"] == 45  # 166 - 121

@@ -292,19 +292,21 @@ def place_strips(
             )
 
         adjusted_frame_count = max(1, round(keep_frame_count / speed))
-        cursor_start = timeline_cursor
 
         if speed != 1.0:
-            speed_strip = sequence_collection.new_effect(
-                name=f"speed_{idx:04d}",
-                type="SPEED",
-                channel=new_video.channel + 2,
-                frame_start=cursor_start,
-                length=adjusted_frame_count,
-                input1=new_video,
-            )
-            speed_strip.use_default_fade = False
-            speed_strip.speed_factor = speed
+            # Blender 5.1 retiming via sequencer operators.
+            # Direct RetimingKey.timeline_frame writes crash in multi-strip
+            # scenes (Blender bug: strip.retiming_keys is a shared pointer).
+            # retiming_segment_speed_set on the single auto-created segment
+            # (the full strip) is safe and correctly adjusts the duration.
+            se = bpy.context.scene.sequence_editor
+            for strip in (new_video, new_sound):
+                se.active_strip = strip
+                strip.show_retiming_keys = True
+                _sequencer_op(window, sequencer_area,
+                              bpy.ops.sequencer.retiming_segment_speed_set,
+                              speed=speed * 100.0)
+                strip.show_retiming_keys = False
 
         logging.debug(
             "%sStrip %d: frame_start=%d frame_offset_start=%d frame_offset_end=%d "
@@ -355,7 +357,6 @@ def place_captions(
 
         tl_start = None
         tl_end = None
-        length = None
         for entry in tl_map:
             if cap_src_start < entry["src_end"] and cap_src_end > entry["src_start"]:
                 speed = float(entry.get("speed_factor", 1.0))
@@ -367,17 +368,19 @@ def place_captions(
                 offset_end = sec_to_frames(
                     (clamped_end - entry["src_start"]) / speed, effective_fps
                 )
-                tl_start = entry["tl_start"] + offset_start
-                tl_end = entry["tl_start"] + offset_end
-                length = max(1, tl_end - tl_start)
-                tl_end = tl_start + length
-                break
+                entry_tl_start = entry["tl_start"] + offset_start
+                entry_tl_end = entry["tl_start"] + offset_end
+                tl_start = (
+                    entry_tl_start if tl_start is None else min(tl_start, entry_tl_start)
+                )
+                tl_end = entry_tl_end if tl_end is None else max(tl_end, entry_tl_end)
 
-        if tl_start is None or tl_end is None or length is None or tl_end <= tl_start:
+        if tl_start is None or tl_end is None or tl_end <= tl_start:
             logging.warning(
                 "Caption skipped (no matching keep interval): %r", text[:60]
             )
             continue
+        length = max(1, tl_end - tl_start)
         text_strip = sequence_collection.new_effect(
             name=f"cap_{cap_src_start:.3f}",
             type="TEXT",

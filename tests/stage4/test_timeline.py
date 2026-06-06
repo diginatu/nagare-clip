@@ -49,7 +49,7 @@ def blender_result(test_video, tmp_path_factory) -> dict:
     out_json = tmp_path_factory.mktemp("blender") / "result.json"
     result = subprocess.run(
         [
-            BLENDER, "--background", "--python", str(SCRIPT),
+            BLENDER, "--background", "--factory-startup", "--python", str(SCRIPT),
             "--", str(test_video), str(out_json),
         ],
         capture_output=True,
@@ -80,7 +80,7 @@ def test_place_strips_channels(blender_result):
 
 
 def test_place_strips_not_muted(blender_result):
-    """No output strips should be muted."""
+    """Output strips are not muted."""
     for s in blender_result["strips"]:
         assert not s["mute"], f"{s['name']} should not be muted"
 
@@ -111,13 +111,51 @@ def test_place_strips_cursor_and_offsets(blender_result):
 
 
 def test_place_strips_strip_count(blender_result):
-    """4 video + 4 sound + 1 SPEED effect = 9 strips total (no templates left)."""
-    assert blender_result["strip_count"] == 9
+    """4 video + 4 sound = 8 strips total (retiming, no Speed Control effects)."""
+    assert blender_result["strip_count"] == 8
 
 
-def test_place_strips_speed_effect_created(blender_result):
-    """The speed_factor=2.0 interval produces a SPEED effect strip with the right factor."""
+def test_place_strips_no_speed_effects(blender_result):
+    """Retiming replaces Speed Control effect strips — none should be present."""
     speed_strips = [s for s in blender_result["strips"] if s["type"] == "SPEED"]
-    assert len(speed_strips) == 1
-    assert speed_strips[0]["speed_factor"] == pytest.approx(2.0)
-    assert speed_strips[0]["use_default_fade"] is False
+    assert len(speed_strips) == 0
+
+
+def test_place_strips_retiming_duration_halved(blender_result):
+    """Sped-up video strip duration = round(keep_frames / speed) via retiming."""
+    movie_strips = sorted(
+        [s for s in blender_result["strips"] if s["type"] == "MOVIE"],
+        key=lambda s: s["name"],
+    )
+    sped_strip = movie_strips[3]  # keep_0004: source [6,7] speed_factor=2.0
+    fps_int = round(blender_result["effective_fps"])
+    adjusted = max(1, round(fps_int / 2.0))
+    assert sped_strip["frame_final_duration"] == adjusted
+
+
+def test_place_strips_retiming_sound_duration_halved(blender_result):
+    """Sped-up sound strip duration also halved via retiming (no muting needed)."""
+    sound_strips = sorted(
+        [s for s in blender_result["strips"] if s["type"] == "SOUND"],
+        key=lambda s: s["name"],
+    )
+    sped_sound = sound_strips[3]  # keep_0004_audio: speed_factor=2.0
+    fps_int = round(blender_result["effective_fps"])
+    adjusted = max(1, round(fps_int / 2.0))
+    assert sped_sound["frame_final_duration"] == adjusted
+
+
+def test_place_strips_unsped_sound_not_muted(blender_result):
+    """Sound strips in non-sped intervals are not muted."""
+    sound_by_name = {s["name"]: s for s in blender_result["strips"] if s["type"] == "SOUND"}
+    for name, s in sound_by_name.items():
+        if name != "keep_0004_audio":
+            assert not s["mute"], f"{name} should not be muted"
+
+
+def test_place_strips_sound_pitch_correction_preserved(blender_result):
+    """Source sound strip in sped interval keeps pitch_correction=True (Blender auto-pitch)."""
+    sound_by_name = {s["name"]: s for s in blender_result["strips"] if s["type"] == "SOUND"}
+    sped_sound = sound_by_name.get("keep_0004_audio")
+    assert sped_sound is not None, "keep_0004_audio not found in strips"
+    assert sped_sound["pitch_correction"] is True
