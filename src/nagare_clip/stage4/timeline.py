@@ -186,6 +186,10 @@ def place_strips(
 
     window, sequencer_area = _get_sequencer_context()
 
+    # Records (video, sound, intended_timeline_start) for every placed strip so
+    # positions can be re-asserted after all operators have run (see Phase D).
+    placed: list[tuple[object, object, int]] = []
+
     # --- Phase B: duplicate templates for each keep interval ---
     for idx, interval in enumerate(keep_intervals, start=1 + idx_offset):
         start_sec = float(interval["start"])
@@ -322,6 +326,7 @@ def place_strips(
             timeline_cursor,
         )
 
+        placed.append((new_video, new_sound, timeline_cursor))
         timeline_cursor += adjusted_frame_count
 
     # --- Phase C: delete template strips ---
@@ -335,6 +340,25 @@ def place_strips(
         logging.warning(
             "%sCould not delete template strips: no SEQUENCE_EDITOR area.", src_tag
         )
+
+    # --- Phase D: re-assert strip positions ---
+    # WORKAROUND (remove once the underlying Blender bug is fixed): the Blender
+    # 5.1 retiming operators (Phase B) corrupt the placed strips' content_start
+    # in scenes with several retimed strips: the visible start jumps to
+    # ``content_start + right-trim`` and neighbouring strips are displaced too
+    # (the shared retiming_keys C-pointer bug). Durations stay correct, only
+    # positions drift. Now that every operator has run, re-pin each strip's
+    # visible start (``content_start + left_handle_offset``) to the timeline
+    # position it was placed at. Idempotent for uncorrupted strips — so once
+    # Blender places retimed strips correctly, this pass becomes a no-op and can
+    # be deleted along with its regression test.
+    for video, sound, intended_start in placed:
+        for strip in (video, sound):
+            if strip is None:
+                continue
+            desired_content_start = intended_start - strip.left_handle_offset
+            if strip.content_start != desired_content_start:
+                strip.content_start = desired_content_start
 
     return timeline_cursor
 
