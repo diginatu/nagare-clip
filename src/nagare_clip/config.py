@@ -113,6 +113,15 @@ DEFAULTS: Dict[str, Any] = {
             "anchor_y": "TOP",
             "location_y": 0.95,
         },
+        "speed_mark": {
+            "enabled": True,
+            "template": "x{factor}",
+            "font_size": 35,
+            "alignment_x": "RIGHT",
+            "anchor_y": "TOP",
+            "location_x": 0.95,
+            "location_y": 0.95,
+        },
     },
     "pipeline": {
         "input_videos_dir": "src_video",
