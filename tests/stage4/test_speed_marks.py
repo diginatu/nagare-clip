@@ -7,7 +7,13 @@ from unittest.mock import MagicMock
 
 sys.modules.setdefault("bpy", MagicMock())
 
-from nagare_clip.stage4.timeline import build_timeline_map, place_speed_marks
+from nagare_clip.stage4.timeline import (
+    CAPTION_CHANNEL,
+    OVERLAY_CHANNEL,
+    SPEED_MARK_CHANNEL,
+    build_timeline_map,
+    place_speed_marks,
+)
 
 
 def _seq_with_capture():
@@ -40,7 +46,14 @@ class _AttrTracker:
             raise AttributeError(name)
 
 
-def test_speed_mark_creates_text_strip_on_channel_5():
+def test_speed_mark_channel_is_below_caption_and_overlay():
+    # The badge must render UNDER captions and overlays so it is the text
+    # strip that gets hidden when they overlap.
+    assert SPEED_MARK_CHANNEL < CAPTION_CHANNEL
+    assert SPEED_MARK_CHANNEL < OVERLAY_CHANNEL
+
+
+def test_speed_mark_creates_text_strip_on_speed_mark_channel():
     fps = 30.0
     tl_map = build_timeline_map(
         [{"start": 0.0, "end": 4.0, "speed_factor": 2.0}],
@@ -56,12 +69,12 @@ def test_speed_mark_creates_text_strip_on_channel_5():
         sequence_collection=seq,
         template="x{factor}",
         mark_style={},
-        channel=5,
+        channel=SPEED_MARK_CHANNEL,
     )
     assert len(captured) == 1
     kw = captured[0]
     assert kw["type"] == "TEXT"
-    assert kw["channel"] == 5
+    assert kw["channel"] == SPEED_MARK_CHANNEL
 
 
 def test_speed_mark_factor_formatted_one_decimal():
@@ -82,7 +95,7 @@ def test_speed_mark_factor_formatted_one_decimal():
         sequence_collection=seq,
         template="x{factor}",
         mark_style={},
-        channel=5,
+        channel=SPEED_MARK_CHANNEL,
     )
     assert strip.text == "x2.0"
 
@@ -105,7 +118,7 @@ def test_speed_mark_custom_template():
         sequence_collection=seq,
         template="⏩{factor}x",
         mark_style={},
-        channel=5,
+        channel=SPEED_MARK_CHANNEL,
     )
     assert strip.text == "⏩1.5x"
 
@@ -127,7 +140,7 @@ def test_speed_mark_scales_offsets_inside_sped_up_interval():
         sequence_collection=seq,
         template="x{factor}",
         mark_style={},
-        channel=5,
+        channel=SPEED_MARK_CHANNEL,
     )
     assert len(captured) == 1
     kw = captured[0]
@@ -158,7 +171,7 @@ def test_speed_mark_spanning_multiple_keep_intervals():
         sequence_collection=seq,
         template="x{factor}",
         mark_style={},
-        channel=5,
+        channel=SPEED_MARK_CHANNEL,
     )
     assert len(captured) == 1
     kw = captured[0]
@@ -180,7 +193,7 @@ def test_speed_mark_outside_any_keep_interval_is_skipped():
         sequence_collection=seq,
         template="x{factor}",
         mark_style={},
-        channel=5,
+        channel=SPEED_MARK_CHANNEL,
     )
     assert captured == []
 
@@ -203,7 +216,7 @@ def test_speed_mark_style_overrides_applied():
         sequence_collection=seq,
         template="x{factor}",
         mark_style={"font_size": 40, "alignment_x": "RIGHT", "location_x": 0.9},
-        channel=5,
+        channel=SPEED_MARK_CHANNEL,
     )
     assert strip.font_size == 40
     assert strip.alignment_x == "RIGHT"
@@ -228,7 +241,7 @@ def test_speed_mark_color_applied_when_present():
         sequence_collection=seq,
         template="x{factor}",
         mark_style={"color": [1.0, 0.0, 0.0, 1.0]},
-        channel=5,
+        channel=SPEED_MARK_CHANNEL,
     )
     assert strip.color == [1.0, 0.0, 0.0, 1.0]
 
@@ -251,6 +264,6 @@ def test_speed_mark_color_not_set_when_absent():
         sequence_collection=seq,
         template="x{factor}",
         mark_style={"font_size": 40},
-        channel=5,
+        channel=SPEED_MARK_CHANNEL,
     )
     assert "color" not in strip._assigned

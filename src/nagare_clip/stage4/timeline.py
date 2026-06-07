@@ -6,6 +6,14 @@ import logging
 
 import bpy
 
+# Text-strip channels (higher channel renders on top in Blender VSE).
+# The speed-mark badge sits on the LOWEST text channel so captions and
+# overlays render over it when they overlap — the badge is the least
+# important text and is the one that should be hidden.
+SPEED_MARK_CHANNEL = 3
+CAPTION_CHANNEL = 4
+OVERLAY_CHANNEL = 5
+
 
 def sec_to_frames(seconds: float, fps: float) -> int:
     return int(round(seconds * fps))
@@ -371,7 +379,7 @@ def place_captions(
     *,
     caption_style: dict | None = None,
 ) -> None:
-    """Place text caption strips on channel 3 of the timeline."""
+    """Place text caption strips on the caption channel of the timeline."""
     for cap in captions:
         cap_src_start = float(cap["start"])
         cap_src_end = float(cap["end"])
@@ -408,7 +416,7 @@ def place_captions(
         text_strip = sequence_collection.new_effect(
             name=f"cap_{cap_src_start:.3f}",
             type="TEXT",
-            channel=3,
+            channel=CAPTION_CHANNEL,
             frame_start=tl_start,
             length=length,
         )
@@ -450,7 +458,7 @@ def place_overlays(
     sequence_collection: object,
     *,
     overlay_style: dict | None = None,
-    channel: int = 4,
+    channel: int = OVERLAY_CHANNEL,
 ) -> None:
     """Place TEXT strips for <overlay> markers on a dedicated channel.
 
@@ -540,7 +548,7 @@ def place_speed_marks(
     *,
     template: str = "x{factor}",
     mark_style: dict | None = None,
-    channel: int = 5,
+    channel: int = SPEED_MARK_CHANNEL,
 ) -> None:
     """Place a TEXT badge (e.g. ``x2.0``) over each ``<speed>`` region.
 

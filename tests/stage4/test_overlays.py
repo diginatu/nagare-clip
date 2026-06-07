@@ -7,7 +7,11 @@ from unittest.mock import MagicMock
 
 sys.modules.setdefault("bpy", MagicMock())
 
-from nagare_clip.stage4.timeline import build_timeline_map, place_overlays
+from nagare_clip.stage4.timeline import (
+    OVERLAY_CHANNEL,
+    build_timeline_map,
+    place_overlays,
+)
 
 
 def _seq_with_capture():
@@ -43,12 +47,12 @@ def test_overlay_within_keep_interval_creates_text_strip():
         effective_fps=fps,
         sequence_collection=seq,
         overlay_style={},
-        channel=4,
+        channel=OVERLAY_CHANNEL,
     )
     assert len(captured) == 1
     kw = captured[0]
     assert kw["type"] == "TEXT"
-    assert kw["channel"] == 4
+    assert kw["channel"] == OVERLAY_CHANNEL
     assert kw["frame_start"] == 1 + 30  # 1.0s * 30fps offset within interval (tl_start=1)
     assert kw["length"] == 60           # 2.0s duration
 
@@ -83,7 +87,7 @@ def test_overlay_text_assigned_to_strip():
         effective_fps=fps,
         sequence_collection=seq,
         overlay_style={"font_size": 70, "location_y": 0.95},
-        channel=4,
+        channel=OVERLAY_CHANNEL,
     )
     assert seq.new_effect.call_count == 1
     assert strip.text == "Hello"
@@ -104,7 +108,7 @@ def test_overlay_color_applied_when_present():
         effective_fps=fps,
         sequence_collection=seq,
         overlay_style={"color": [0.0, 1.0, 0.5, 1.0]},
-        channel=4,
+        channel=OVERLAY_CHANNEL,
     )
     assert strip.color == [0.0, 1.0, 0.5, 1.0]
 
@@ -122,7 +126,7 @@ def test_overlay_color_not_set_when_absent():
         effective_fps=fps,
         sequence_collection=seq,
         overlay_style={"font_size": 70},
-        channel=4,
+        channel=OVERLAY_CHANNEL,
     )
     assert "color" not in strip._assigned
 
@@ -138,7 +142,7 @@ def test_overlay_outside_any_keep_interval_is_skipped():
         effective_fps=fps,
         sequence_collection=seq,
         overlay_style={},
-        channel=4,
+        channel=OVERLAY_CHANNEL,
     )
     assert captured == []
 
@@ -158,7 +162,7 @@ def test_overlay_inside_sped_up_interval_scales_offsets():
         effective_fps=fps,
         sequence_collection=seq,
         overlay_style={},
-        channel=4,
+        channel=OVERLAY_CHANNEL,
     )
     assert len(captured) == 1
     kw = captured[0]
@@ -180,7 +184,7 @@ def test_overlay_partial_overlap_clamps_to_interval():
         effective_fps=fps,
         sequence_collection=seq,
         overlay_style={},
-        channel=4,
+        channel=OVERLAY_CHANNEL,
     )
     assert len(captured) == 1
     kw = captured[0]
@@ -206,7 +210,7 @@ def test_overlay_spanning_multiple_keep_intervals():
         effective_fps=fps,
         sequence_collection=seq,
         overlay_style={},
-        channel=4,
+        channel=OVERLAY_CHANNEL,
     )
     assert len(captured) == 1
     kw = captured[0]
@@ -226,6 +230,6 @@ def test_empty_overlay_text_is_skipped():
         effective_fps=fps,
         sequence_collection=seq,
         overlay_style={},
-        channel=4,
+        channel=OVERLAY_CHANNEL,
     )
     assert captured == []

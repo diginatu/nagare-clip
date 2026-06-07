@@ -21,6 +21,8 @@ from nagare_clip.config import get_effective_config
 from nagare_clip.logging_setup import setup_logging
 from nagare_clip.stage4.scene import load_source_metadata, reset_scene
 from nagare_clip.stage4.timeline import (
+    OVERLAY_CHANNEL,
+    SPEED_MARK_CHANNEL,
     build_timeline_map,
     place_captions,
     place_overlays,
@@ -183,14 +185,14 @@ def main() -> None:
             # overlay_style overrides (overlay_style wins per key).
             cap_style = cfg["blender"]["caption_style"]
             ov_style = {**cap_style, **cfg["blender"]["overlay_style"]}
-            # Overlay channel sits above the caption channel (ch3).
+            # Overlay channel sits above the caption channel.
             place_overlays(
                 overlays,
                 tl_map,
                 effective_fps,
                 sequence_collection,
                 overlay_style=ov_style,
-                channel=4,
+                channel=OVERLAY_CHANNEL,
             )
 
         speed_mark_cfg = cfg["blender"]["speed_mark"]
@@ -204,7 +206,7 @@ def main() -> None:
                 mark_style=resolve_speed_mark_style(
                     cfg["blender"]["caption_style"], speed_mark_cfg
                 ),
-                channel=5,
+                channel=SPEED_MARK_CHANNEL,
             )
 
     for s in sequence_collection:
