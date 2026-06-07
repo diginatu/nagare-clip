@@ -526,3 +526,90 @@ def place_overlays(
         logging.debug(
             "Overlay '%s': timeline frames %d-%d", text[:40], tl_start, tl_end
         )
+
+
+def place_speed_marks(
+    speed_ranges: list,
+    tl_map: list,
+    effective_fps: float,
+    sequence_collection: object,
+    *,
+    template: str = "x{factor}",
+    mark_style: dict | None = None,
+    channel: int = 5,
+) -> None:
+    """Place a TEXT badge (e.g. ``x2.0``) over each ``<speed>`` region.
+
+    Auto-derived from ``speed_ranges`` (``{start, end, factor}``).  The span is
+    mapped through the speed-aware ``tl_map`` exactly like ``place_overlays()``
+    (offsets divided by each interval's ``speed_factor``; min ``tl_start`` /
+    max ``tl_end`` accumulated so a span crossing several keep intervals renders
+    as one contiguous strip).  Badge text is ``template.format(factor=...)``
+    with the factor rendered to one decimal.
+    """
+    for sr in speed_ranges:
+        sr_src_start = float(sr["start"])
+        sr_src_end = float(sr["end"])
+        factor = float(sr["factor"])
+        text = template.format(factor=f"{factor:.1f}").strip()
+        if not text:
+            continue
+
+        tl_start = None
+        tl_end = None
+        for entry in tl_map:
+            if sr_src_start < entry["src_end"] and sr_src_end > entry["src_start"]:
+                speed = float(entry.get("speed_factor", 1.0))
+                clamped_start = max(sr_src_start, entry["src_start"])
+                clamped_end = min(sr_src_end, entry["src_end"])
+                offset_start = sec_to_frames(
+                    (clamped_start - entry["src_start"]) / speed, effective_fps
+                )
+                offset_end = sec_to_frames(
+                    (clamped_end - entry["src_start"]) / speed, effective_fps
+                )
+                entry_tl_start = entry["tl_start"] + offset_start
+                entry_tl_end = entry["tl_start"] + offset_end
+                tl_start = (
+                    entry_tl_start if tl_start is None else min(tl_start, entry_tl_start)
+                )
+                tl_end = entry_tl_end if tl_end is None else max(tl_end, entry_tl_end)
+
+        if tl_start is None or tl_end is None:
+            logging.warning(
+                "Speed mark skipped (no matching keep interval): %r", text[:60]
+            )
+            continue
+        length = max(1, tl_end - tl_start)
+
+        text_strip = sequence_collection.new_effect(
+            name=f"spd_{sr_src_start:.3f}",
+            type="TEXT",
+            channel=channel,
+            frame_start=tl_start,
+            length=length,
+        )
+        style = mark_style or {}
+        text_strip.text = text
+        text_strip.font_size = style.get("font_size", 35)
+        text_strip.alignment_x = style.get("alignment_x", "RIGHT")
+        text_strip.anchor_y = style.get("anchor_y", "TOP")
+        text_strip.location[0] = style.get("location_x", 0.95)
+        text_strip.location[1] = style.get("location_y", 0.95)
+        if "use_shadow" in style:
+            text_strip.use_shadow = style["use_shadow"]
+        if "wrap_width" in style:
+            text_strip.wrap_width = style["wrap_width"]
+        if "use_outline" in style:
+            text_strip.use_outline = style["use_outline"]
+        if "outline_color" in style:
+            text_strip.outline_color = style["outline_color"]
+        if "outline_width" in style:
+            text_strip.outline_width = style["outline_width"]
+        if "use_box" in style:
+            text_strip.use_box = style["use_box"]
+        if "box_color" in style:
+            text_strip.box_color = style["box_color"]
+        logging.debug(
+            "Speed mark '%s': timeline frames %d-%d", text, tl_start, tl_start + length
+        )
