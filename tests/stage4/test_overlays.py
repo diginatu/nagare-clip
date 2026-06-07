@@ -91,6 +91,42 @@ def test_overlay_text_assigned_to_strip():
     assert strip.location[1] == 0.95
 
 
+def test_overlay_color_applied_when_present():
+    fps = 30.0
+    tl_map = _simple_tl_map(fps)
+    overlays = [{"start": 0.5, "end": 1.5, "text": "Hello"}]
+    seq = MagicMock()
+    strip = _AttrTracker()
+    seq.new_effect = MagicMock(return_value=strip)
+    place_overlays(
+        overlays,
+        tl_map,
+        effective_fps=fps,
+        sequence_collection=seq,
+        overlay_style={"color": [0.0, 1.0, 0.5, 1.0]},
+        channel=4,
+    )
+    assert strip.color == [0.0, 1.0, 0.5, 1.0]
+
+
+def test_overlay_color_not_set_when_absent():
+    fps = 30.0
+    tl_map = _simple_tl_map(fps)
+    overlays = [{"start": 0.5, "end": 1.5, "text": "Hello"}]
+    seq = MagicMock()
+    strip = _AttrTracker()
+    seq.new_effect = MagicMock(return_value=strip)
+    place_overlays(
+        overlays,
+        tl_map,
+        effective_fps=fps,
+        sequence_collection=seq,
+        overlay_style={"font_size": 70},
+        channel=4,
+    )
+    assert "color" not in strip._assigned
+
+
 def test_overlay_outside_any_keep_interval_is_skipped():
     fps = 30.0
     tl_map = _simple_tl_map(fps)  # covers source 0-4s

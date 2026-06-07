@@ -208,3 +208,49 @@ def test_speed_mark_style_overrides_applied():
     assert strip.font_size == 40
     assert strip.alignment_x == "RIGHT"
     assert strip.location[0] == 0.9
+
+
+def test_speed_mark_color_applied_when_present():
+    fps = 30.0
+    tl_map = build_timeline_map(
+        [{"start": 0.0, "end": 4.0, "speed_factor": 2.0}],
+        effective_fps=fps,
+        source_fps=fps,
+    )
+    speed_ranges = [{"start": 0.0, "end": 4.0, "factor": 2.0}]
+    seq = MagicMock()
+    strip = _AttrTracker()
+    seq.new_effect = MagicMock(return_value=strip)
+    place_speed_marks(
+        speed_ranges,
+        tl_map,
+        effective_fps=fps,
+        sequence_collection=seq,
+        template="x{factor}",
+        mark_style={"color": [1.0, 0.0, 0.0, 1.0]},
+        channel=5,
+    )
+    assert strip.color == [1.0, 0.0, 0.0, 1.0]
+
+
+def test_speed_mark_color_not_set_when_absent():
+    fps = 30.0
+    tl_map = build_timeline_map(
+        [{"start": 0.0, "end": 4.0, "speed_factor": 2.0}],
+        effective_fps=fps,
+        source_fps=fps,
+    )
+    speed_ranges = [{"start": 0.0, "end": 4.0, "factor": 2.0}]
+    seq = MagicMock()
+    strip = _AttrTracker()
+    seq.new_effect = MagicMock(return_value=strip)
+    place_speed_marks(
+        speed_ranges,
+        tl_map,
+        effective_fps=fps,
+        sequence_collection=seq,
+        template="x{factor}",
+        mark_style={"font_size": 40},
+        channel=5,
+    )
+    assert "color" not in strip._assigned

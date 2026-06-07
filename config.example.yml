@@ -78,6 +78,7 @@ blender:
     anchor_y: BOTTOM           # TOP | CENTER | BOTTOM
     location_x: 0.5           # Horizontal position (0.0 - 1.0)
     location_y: 0.05          # Vertical position (0.0 - 1.0)
+    # color: [1, 1, 1, 1]       # Font fill color (RGBA, 0.0 - 1.0); default white
     use_shadow: true            # Enable text shadow
     wrap_width: 0.90            # Text wrap width (0.0 = no wrap, 0.0 - 1.0)
     # use_outline: false          # Enable text outline
@@ -93,6 +94,7 @@ blender:
     # font_size: 50            # inherits from caption_style if omitted
     # alignment_x: CENTER
     # location_x: 0.5
+    # color: [1, 1, 1, 1]      # Font fill color (RGBA); overrides caption_style
   # Speed-up mark: auto on-screen badge over every <speed> region.
   speed_mark:
     enabled: true            # set false to disable all speed badges
@@ -102,6 +104,7 @@ blender:
     anchor_y: TOP
     location_x: 0.95
     location_y: 0.95
+    # color: [1, 1, 1, 1]     # Font fill color (RGBA); overrides caption_style
 
 pipeline:
   input_videos_dir: src_video

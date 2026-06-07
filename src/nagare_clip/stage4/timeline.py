@@ -419,6 +419,8 @@ def place_captions(
         text_strip.anchor_y = style.get("anchor_y", "BOTTOM")
         text_strip.location[0] = style.get("location_x", 0.5)
         text_strip.location[1] = style.get("location_y", 0.05)
+        if "color" in style:
+            text_strip.color = style["color"]
         if "use_shadow" in style:
             text_strip.use_shadow = style["use_shadow"]
         if "wrap_width" in style:
@@ -509,6 +511,8 @@ def place_overlays(
         text_strip.anchor_y = style.get("anchor_y", "TOP")
         text_strip.location[0] = style.get("location_x", 0.5)
         text_strip.location[1] = style.get("location_y", 0.95)
+        if "color" in style:
+            text_strip.color = style["color"]
         if "use_shadow" in style:
             text_strip.use_shadow = style["use_shadow"]
         if "wrap_width" in style:
@@ -596,6 +600,8 @@ def place_speed_marks(
         text_strip.anchor_y = style.get("anchor_y", "TOP")
         text_strip.location[0] = style.get("location_x", 0.95)
         text_strip.location[1] = style.get("location_y", 0.95)
+        if "color" in style:
+            text_strip.color = style["color"]
         if "use_shadow" in style:
             text_strip.use_shadow = style["use_shadow"]
         if "wrap_width" in style:

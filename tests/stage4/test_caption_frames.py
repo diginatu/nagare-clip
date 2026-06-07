@@ -84,6 +84,7 @@ def _place_single_caption(caption_style=None):
 def test_new_style_options_applied_when_present():
     """New caption style options are set on the strip when provided."""
     style = {
+        "color": [1.0, 0.8, 0.0, 1.0],
         "use_shadow": True,
         "wrap_width": 0.8,
         "use_outline": True,
@@ -93,6 +94,7 @@ def test_new_style_options_applied_when_present():
         "box_color": [0.0, 0.0, 0.0, 0.7],
     }
     strip = _place_single_caption(caption_style=style)
+    assert strip.color == [1.0, 0.8, 0.0, 1.0]
     assert strip.use_shadow is True
     assert strip.wrap_width == 0.8
     assert strip.use_outline is True
@@ -106,6 +108,7 @@ def test_new_style_options_not_set_when_absent():
     """New caption style options are NOT touched when not in config."""
     strip = _place_single_caption(caption_style={"font_size": 50})
     optional_attrs = (
+        "color",
         "use_shadow",
         "wrap_width",
         "use_outline",
