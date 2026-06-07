@@ -187,3 +187,15 @@ class TestGetEffectiveConfig:
         assert cfg["text_filter"]["summary_llm"]["enabled"] is False
         # Other text_filter defaults intact
         assert cfg["text_filter"]["batch_size"] == 10
+
+
+def test_speed_mark_defaults_present():
+    cfg = get_effective_config(None, {})
+    sm = cfg["blender"]["speed_mark"]
+    assert sm["enabled"] is True
+    assert sm["template"] == "x{factor}"
+    assert sm["font_size"] == 35
+    assert sm["alignment_x"] == "RIGHT"
+    assert sm["anchor_y"] == "TOP"
+    assert sm["location_x"] == 0.95
+    assert sm["location_y"] == 0.95

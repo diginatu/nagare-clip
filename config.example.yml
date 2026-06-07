@@ -93,6 +93,15 @@ blender:
     # font_size: 50            # inherits from caption_style if omitted
     # alignment_x: CENTER
     # location_x: 0.5
+  # Speed-up mark: auto on-screen badge over every <speed> region.
+  speed_mark:
+    enabled: true            # set false to disable all speed badges
+    template: "x{factor}"   # {factor} is the speed factor (one decimal, e.g. 2.0)
+    font_size: 35
+    alignment_x: RIGHT
+    anchor_y: TOP
+    location_x: 0.95
+    location_y: 0.95
 
 pipeline:
   input_videos_dir: src_video

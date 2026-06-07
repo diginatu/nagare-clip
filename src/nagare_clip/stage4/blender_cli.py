@@ -24,6 +24,7 @@ from nagare_clip.stage4.timeline import (
     build_timeline_map,
     place_captions,
     place_overlays,
+    place_speed_marks,
     place_strips,
     split_intervals_by_speed,
 )
@@ -54,6 +55,18 @@ def parse_blender_args(argv: list[str]) -> argparse.Namespace:
         help="Path to log file; appends to existing file (default: console only)",
     )
     return parser.parse_args(user_args)
+
+
+def resolve_speed_mark_style(caption_style: dict, speed_mark_cfg: dict) -> dict:
+    """caption_style defaults overlaid with speed_mark style overrides.
+
+    Non-style config keys (``enabled``, ``template``) are excluded so they do
+    not leak onto the TEXT strip.
+    """
+    overrides = {
+        k: v for k, v in speed_mark_cfg.items() if k not in ("enabled", "template")
+    }
+    return {**caption_style, **overrides}
 
 
 def main() -> None:
@@ -178,6 +191,20 @@ def main() -> None:
                 sequence_collection,
                 overlay_style=ov_style,
                 channel=4,
+            )
+
+        speed_mark_cfg = cfg["blender"]["speed_mark"]
+        if speed_mark_cfg["enabled"] and speed_ranges:
+            place_speed_marks(
+                speed_ranges,
+                tl_map,
+                effective_fps,
+                sequence_collection,
+                template=speed_mark_cfg["template"],
+                mark_style=resolve_speed_mark_style(
+                    cfg["blender"]["caption_style"], speed_mark_cfg
+                ),
+                channel=5,
             )
 
     for s in sequence_collection:
