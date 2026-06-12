@@ -57,6 +57,8 @@ supported (regex uses `[^"]*`).
 - **Inputs:** `{stem}.txt`
 - **Outputs:** `{stem}_edits.txt`
 
+Humans can validate a hand-edited `_edits.txt` before resuming Stage 4 with the standalone checker `python -m nagare_clip.stage3.check_edits --edits-txt <file> --json <file>` (`src/nagare_clip/stage3/check_edits.py`). Unlike Stage 4's fail-fast `ValueError`, it collects and reports **every** problem at once (line-numbered, exit 1 if any): line-count vs. JSON segments, `{{old->new}}` patch syntax (empty `{{old->}}` deletions allowed; only `{{->}}` flagged), decomposition integrity (reuses `_diagnose_decomposition`, mirroring `sync_json._decompose_edit_line`), and `<keep>`/`<speed>`/`<overlay>` tag balance / factor>0 / non-empty overlay text / malformed tags. Pure `check_edits(edit_lines, json_data) -> list[Problem]` never raises.
+
 ### Stage 4 — Patch Application + Keep-Interval Computation
 
 Applies `{{old->new}}` patches from `_edits.txt`, syncs corrected text back into WhisperX JSON timing data, then runs NLP analysis (GiNZA/spaCy bunsetsu segmentation) to compute keep intervals. The Stage 2 `_cuts.txt` ranges are unioned into the exclude set (via `--cuts-txt`) before inversion. Any `<keep>...</keep>` and `<speed factor="...">...</speed>` ranges from `_edits.txt` are then subtracted from the unioned excludes so the wrapped audio survives both silence sources. Speed-marked spans are written verbatim to a top-level `speed_ranges` array in the output JSON (independent of `keep_intervals`); Stage 5 splits keep intervals at those boundaries. All existing caption/min_keep/margin safeguards still apply. Runs per source via `uv run`.
@@ -102,6 +104,7 @@ src/nagare_clip/          # Main Python package (src layout)
     llm_filter.py             # LLM API calls, {{old->new}} patch parsing, apply_patches_to_lines()
     summary_llm.py            # Summary LLM: generates transcript summary + keywords for filter context
   stage3/                     # Pipeline Stage 4 modules (patch application + intervals)
+    check_edits.py            # Standalone _edits.txt integrity checker (reports ALL problems at once)
     sync_json.py              # Sync corrected text back into WhisperX JSON
     bunsetu.py                # Bunsetsu-level timing (GiNZA)
     speech.py                 # Speech span extraction

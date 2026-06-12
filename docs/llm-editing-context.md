@@ -136,3 +136,37 @@ Notes:
 - Preserve the original line numbers and any non-marker text exactly. The
   downstream sync step matches lines by number and re-aligns timing from the
   corrected text.
+
+## Validating your edits
+
+Before resuming the pipeline you can check a hand-edited `_edits.txt` against
+its original WhisperX JSON with the standalone checker. Unlike the downstream
+sync step (which fails fast on the *first* error), the checker collects and
+reports **every** problem at once, each tied to a line number, so you can fix
+them all in one pass:
+
+```bash
+uv run python -m nagare_clip.stage3.check_edits \
+  --edits-txt output/stage3/myvideo_edits.txt \
+  --json output/stage1/myvideo.json
+```
+
+It prints one `line N: <message>` per problem, then a count, and exits `1` if
+any problem was found (exit `0` and `no problems found` when clean). The checks
+mirror what the downstream stages actually do, so a clean result means the file
+will sync without error:
+
+- **Line count** — the number of lines must match the number of JSON segments
+  (lines map 1:1 to segments).
+- **`{{old->new}}` patch syntax** — unbalanced/missing braces are flagged; an
+  empty no-op `{{->}}` is flagged. An empty `new` (`{{old->}}`, a deletion) is
+  **valid** and is not flagged.
+- **Decomposition integrity** — text changed without a patch marker, an `old`
+  side that does not match the original transcript at that point, or a line
+  that does not cover the full segment text.
+- **`<keep>` / `<speed>` / `<overlay>` tags** — balance (nested, unmatched, or
+  unclosed-at-EOF tags), `<speed>` factor greater than 0, non-empty
+  `<overlay>` text, and malformed tags.
+
+A syntax error on a line suppresses the (otherwise confusing) decomposition
+message for that same line, so fix the reported syntax first and re-run.

@@ -21,6 +21,16 @@ The pipeline creates a rough-cut Blender project for human review and fine-tunin
 
 The `{{old->new}}` syntax replaces `old` with `new` in the transcript. Use `{{delete->}}` to remove text, `{{->insert}}` to insert text.
 
+Before resuming, you can validate your edits in one pass (reports **every** problem at once, with line numbers, instead of failing on the first like Stage 4 does):
+
+```bash
+uv run python -m nagare_clip.stage3.check_edits \
+  --edits-txt output/stage3/myvideo_edits.txt \
+  --json output/stage1/myvideo.json
+```
+
+It checks line-count vs. JSON segments, `{{old->new}}` patch syntax (empty `{{old->}}` deletions are allowed), decomposition integrity against the original transcript, and `<keep>`/`<speed>`/`<overlay>` tag balance and well-formedness. Exit code is non-zero when any problem is found.
+
 The `<keep>...</keep>` tag preserves the audio under the wrapped text — Stage 4 carves that time range out of both the word-gap silence detection and any overlapping `_cuts.txt` ranges, so dramatic pauses and intentional silences survive. The tag may be opened on one line and closed on a later one, so a single `<keep>` block can span multiple lines and preserve the silences between them. The tag is added by the human (not the LLM) after `_edits.txt` is produced.
 
 The `<speed factor="N.N">...</speed>` tag does everything `<keep>` does **and** instructs Stage 5 to play the wrapped region at the given playback speed (e.g., `factor="2.0"` for 2× fast-forward, `factor="0.5"` for slow-motion) via a Blender VSE Speed Control effect strip. Captions inside the region are timed against the sped-up timeline so they stay in sync. Stage 5 also automatically renders a small top-right badge (e.g. `x2.0`) on-screen over every `<speed>` region — disable via `blender.speed_mark.enabled: false`, restyle via `blender.speed_mark.*`, or change the wording via `blender.speed_mark.template` (the `{factor}` placeholder is rendered to one decimal place).
