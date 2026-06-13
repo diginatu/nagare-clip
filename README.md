@@ -25,7 +25,7 @@ Stages are referenced by name (`--from-stage <name>`); the director/guided_edit 
 
 The `{{old->new}}` syntax replaces `old` with `new` in the transcript. Use `{{delete->}}` to remove text, `{{->insert}}` to insert text.
 
-The optional `director` + `guided_edit` stages automate steps like the above with LLMs: enable `director.enabled`/`guided_edit.enabled` in config, then a larger LLM proposes edits (cut/speed/overlay/keep/edit) into a reviewable `output/director/{stem}_director.json`, and a small LLM applies them — any op it cannot apply cleanly is listed in `output/guided_edit/{stem}_unapplied.txt`.
+The optional `director` + `guided_edit` stages automate steps like the above with LLMs: enable `director.enabled`/`guided_edit.enabled` in config, then a larger LLM proposes edits (cut/speed/overlay/keep/edit) into a reviewable `output/director/{stem}_director.json`, and a small LLM applies them — any op it cannot apply cleanly is listed in `output/guided_edit/{stem}_unapplied.txt`. Both stages retry a failed LLM call (the director on a connection error / unparseable JSON, guided_edit per op on an error / failed verification), nudging the temperature up each attempt; tune `max_retries`, `retry_temp_step`, and `retry_temp_cap` per stage (`max_retries: 0` disables retry).
 
 Before resuming, you can validate your edits in one pass (reports **every** problem at once, with line numbers, instead of failing on the first like Stage 4 does):
 

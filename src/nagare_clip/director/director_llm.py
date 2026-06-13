@@ -15,6 +15,7 @@ import re
 from dataclasses import dataclass, field
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
+from nagare_clip.llm_retry import cfg_for_attempt, retry_attempts
 from nagare_clip.stage2.llm_filter import _call_llm, apply_patches_to_lines
 from nagare_clip.stage3.sync_json import (
     CUT_TAG_RE,
@@ -97,11 +98,16 @@ def _parse_op(raw: Any, num_lines: int) -> Optional[DirectorOp]:
     return DirectorOp(type=op_type, lines=lines, note=note, factor=factor, text=text)
 
 
-def parse_director_response(response: str, num_lines: int) -> List[DirectorOp]:
-    """Parse the director LLM response into validated ops.
+def try_parse_director_response(
+    response: str, num_lines: int
+) -> Optional[List[DirectorOp]]:
+    """Parse the director LLM response, distinguishing failure from empty.
 
-    Returns ``[]`` on any JSON/shape failure; individual malformed ops are
-    skipped (logged) rather than aborting the whole list.
+    Returns ``None`` on a *hard* parse failure (invalid JSON / no ``ops``
+    array) so the caller can retry; returns the (possibly empty) validated op
+    list otherwise.  A valid ``{"ops": []}`` is a legitimate "no edits" result
+    and yields ``[]`` (not ``None``).  Individual malformed ops are skipped
+    (logged) rather than aborting the whole list.
     """
     text = response.strip()
     fence = _FENCE_RE.match(text)
@@ -111,10 +117,10 @@ def parse_director_response(response: str, num_lines: int) -> List[DirectorOp]:
         data = json.loads(text)
     except (ValueError, TypeError):
         logger.warning("Director response is not valid JSON; ignoring")
-        return []
+        return None
     if not isinstance(data, dict) or not isinstance(data.get("ops"), list):
         logger.warning("Director response has no 'ops' array; ignoring")
-        return []
+        return None
 
     ops: List[DirectorOp] = []
     for raw in data["ops"]:
@@ -122,6 +128,15 @@ def parse_director_response(response: str, num_lines: int) -> List[DirectorOp]:
         if op is not None:
             ops.append(op)
     return ops
+
+
+def parse_director_response(response: str, num_lines: int) -> List[DirectorOp]:
+    """Parse the director LLM response into validated ops.
+
+    Thin wrapper over :func:`try_parse_director_response` that collapses a hard
+    parse failure to ``[]`` (backward-compatible).
+    """
+    return try_parse_director_response(response, num_lines) or []
 
 
 def ops_from_dict(data: Any, num_lines: int) -> List[DirectorOp]:
@@ -189,17 +204,33 @@ def generate_director_ops(
 ) -> List[DirectorOp]:
     """Run the director LLM over the transcript and return validated ops.
 
-    Returns ``[]`` on any LLM/parse failure (graceful no-op), so the pipeline
-    proceeds with the unedited transcript.
+    Retries (config ``max_retries``) on an LLM exception or a hard parse
+    failure, nudging temperature up each attempt.  A valid empty op list is
+    accepted without retry.  Returns ``[]`` after all attempts fail (graceful
+    no-op), so the pipeline proceeds with the unedited transcript.
     """
     clean_lines = clean_for_display(edit_lines)
     messages = [
         {"role": "system", "content": cfg.get("prompt", "")},
         {"role": "user", "content": format_numbered_transcript(clean_lines)},
     ]
-    try:
-        response = call_llm(messages, cfg)
-    except Exception:
-        logger.warning("Director LLM call failed; proceeding with no ops", exc_info=True)
-        return []
-    return parse_director_response(response, num_lines=len(clean_lines))
+    attempts = retry_attempts(cfg)
+    for attempt in range(attempts):
+        try:
+            response = call_llm(messages, cfg_for_attempt(cfg, attempt))
+        except Exception:
+            logger.warning(
+                "Director LLM call failed (attempt %d/%d)",
+                attempt + 1,
+                attempts,
+                exc_info=True,
+            )
+            continue
+        ops = try_parse_director_response(response, num_lines=len(clean_lines))
+        if ops is not None:
+            return ops
+        logger.warning(
+            "Director response unparseable (attempt %d/%d)", attempt + 1, attempts
+        )
+    logger.warning("Director: all %d attempt(s) failed; proceeding with no ops", attempts)
+    return []

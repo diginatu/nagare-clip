@@ -80,14 +80,14 @@ Humans can validate a hand-edited `_edits.txt` before resuming the intervals sta
 
 ### director — LLM High-Level Edit Operations (Pass A)
 
-A larger LLM (config `director:`, disabled by default) reads the whole numbered transcript and emits a JSON op list `{stem}_director.json` — `{"ops": [{type, lines:[a,b], factor?, text?, note}]}`, `type ∈ {cut, speed, overlay, keep, edit}`, lines 1-based. It **never re-outputs the transcript text**, which structurally avoids the "format breakage" and "original modification" failure modes of whole-file editing. `director_llm.parse_director_response()`/`ops_from_dict()` drop any malformed/out-of-range op (logged) so one bad op never derails the rest. Disabled → empty op list (no-op). `_director.json` is a human-reviewable/editable intermediate.
+A larger LLM (config `director:`, disabled by default) reads the whole numbered transcript and emits a JSON op list `{stem}_director.json` — `{"ops": [{type, lines:[a,b], factor?, text?, note}]}`, `type ∈ {cut, speed, overlay, keep, edit}`, lines 1-based. It **never re-outputs the transcript text**, which structurally avoids the "format breakage" and "original modification" failure modes of whole-file editing. `director_llm.parse_director_response()`/`ops_from_dict()` drop any malformed/out-of-range op (logged) so one bad op never derails the rest. The LLM call is retried (config `director.max_retries`, default 2) on a connection error or a **hard parse failure**; `director_llm.try_parse_director_response()` returns `None` only on hard failure (invalid JSON / no `ops` array), so a valid empty `{"ops": []}` is accepted without retry. Each retry nudges temperature up via `nagare_clip.llm_retry.cfg_for_attempt()` (`+retry_temp_step` per attempt, capped at `retry_temp_cap`). After all attempts fail → empty op list (no-op). `_director.json` is a human-reviewable/editable intermediate.
 
 - **Inputs:** `{stem}_edits.txt` (from text_filter)
 - **Outputs:** `{stem}_director.json`
 
 ### guided_edit — Apply Director Ops (Pass B2)
 
-A small local LLM (config `guided_edit:`, disabled by default) applies each director op with **one call over just the op's boundary line(s)** (wide ranges show only the first and last line with an omission marker; the open/close tags on the boundaries span the middle automatically). It inserts `<cut>/<speed>/<overlay>/<keep>` tags (and `{{old->new}}` patches for `edit` ops) at the precise position. `reconcile.verify_op()` then checks, per op, that the underlying transcript text was NOT altered (`clean_old()` strips tags + resolves patches to `old`, compared before/after) and that the op was actually reflected; a failing op is reverted and recorded in `{stem}_unapplied.txt`. Disabled → copies `_edits.txt` through unchanged. A final `check_edits` pass (when `--json` is given) logs any residual problems.
+A small local LLM (config `guided_edit:`, disabled by default) applies each director op with **one call over just the op's boundary line(s)** (wide ranges show only the first and last line with an omission marker; the open/close tags on the boundaries span the middle automatically). It inserts `<cut>/<speed>/<overlay>/<keep>` tags (and `{{old->new}}` patches for `edit` ops) at the precise position. `reconcile.verify_op()` then checks, per op, that the underlying transcript text was NOT altered (`clean_old()` strips tags + resolves patches to `old`, compared before/after) and that the op was actually reflected; a failing op is retried (config `guided_edit.max_retries`, default 2) on an LLM error or a failed verification, nudging temperature up each attempt via `nagare_clip.llm_retry.cfg_for_attempt()` (`+retry_temp_step`, capped at `retry_temp_cap`). After all attempts fail the op is reverted and recorded in `{stem}_unapplied.txt` with the last failure reason. Disabled → copies `_edits.txt` through unchanged. A final `check_edits` pass (when `--json` is given) logs any residual problems.
 
 - **Inputs:** `{stem}_edits.txt` (text_filter), `{stem}_director.json`, `{stem}.json`
 - **Outputs:** augmented `{stem}_edits.txt`, `{stem}_unapplied.txt`
@@ -126,6 +126,7 @@ Auto-assembles the rough cut in headless Blender. References original media in-p
 config.example.yml            # Documented YAML config template with all defaults
 src/nagare_clip/          # Main Python package (src layout)
   config.py                   # Centralised config loading/merging (DEFAULTS dict)
+  llm_retry.py                # Shared bounded-retry helpers (director/guided_edit): retry_attempts(), cfg_for_attempt()
   cli.py                      # Pipeline Stage 4 CLI entry point (patch + intervals; --cuts-txt)
   __main__.py                 # python -m nagare_clip support
   audio_silence/              # Pipeline Stage 2 (audio-silence detection)

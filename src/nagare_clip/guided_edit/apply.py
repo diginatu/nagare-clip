@@ -14,6 +14,7 @@ from typing import Any, Callable, Dict, List, Tuple
 
 from nagare_clip.director.director_llm import DirectorOp
 from nagare_clip.guided_edit.reconcile import verify_op
+from nagare_clip.llm_retry import cfg_for_attempt, retry_attempts
 from nagare_clip.stage2.llm_filter import _call_llm
 
 logger = logging.getLogger(__name__)
@@ -102,23 +103,46 @@ def apply_ops(
     """Apply ops sequentially; return (new_lines, unapplied).
 
     Each op is verified after application; if it altered the underlying text or
-    was not reflected, it is reverted and added to *unapplied*.
+    was not reflected, the attempt is retried (config ``max_retries``) with a
+    nudged temperature.  After all attempts fail the op is reverted and added
+    to *unapplied* with the last failure reason.
     """
     lines = list(edit_lines)
     unapplied: List[Unapplied] = []
+    attempts = retry_attempts(cfg)
     for op in ops:
-        try:
-            candidate = _apply_one_op(lines, op, cfg, call_llm)
-        except Exception as e:  # noqa: BLE001 - LLM/parse failures are recoverable
-            logger.warning("guided_edit: op %s failed: %s", op.type, e)
-            unapplied.append((op, f"LLM/apply error: {e}"))
-            continue
-        reason = verify_op(lines, candidate, op)
-        if reason is None:
-            lines = candidate
-        else:
-            logger.warning("guided_edit: op %s reverted: %s", op.type, reason)
-            unapplied.append((op, reason))
+        last_reason = f"{op.type} op not applied"
+        applied = False
+        for attempt in range(attempts):
+            try:
+                candidate = _apply_one_op(
+                    lines, op, cfg_for_attempt(cfg, attempt), call_llm
+                )
+            except Exception as e:  # noqa: BLE001 - LLM/parse failures are recoverable
+                last_reason = f"LLM/apply error: {e}"
+                logger.warning(
+                    "guided_edit: op %s attempt %d/%d failed: %s",
+                    op.type,
+                    attempt + 1,
+                    attempts,
+                    e,
+                )
+                continue
+            reason = verify_op(lines, candidate, op)
+            if reason is None:
+                lines = candidate
+                applied = True
+                break
+            last_reason = reason
+            logger.warning(
+                "guided_edit: op %s attempt %d/%d reverted: %s",
+                op.type,
+                attempt + 1,
+                attempts,
+                reason,
+            )
+        if not applied:
+            unapplied.append((op, last_reason))
     return lines, unapplied
 
 

@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import pytest
+
 from nagare_clip.director.director_llm import (
     DirectorOp,
     clean_for_display,
@@ -9,7 +11,26 @@ from nagare_clip.director.director_llm import (
     generate_director_ops,
     ops_to_dict,
     parse_director_response,
+    try_parse_director_response,
 )
+
+
+def _seq_llm(items, temps=None):
+    """Fake call_llm that yields *items* in order; an ``Exception`` item is
+    raised. Records each call's temperature into *temps* if given."""
+    box = {"i": 0}
+
+    def fake(_messages, cfg):
+        if temps is not None:
+            temps.append(cfg.get("temperature"))
+        item = items[box["i"]]
+        box["i"] += 1
+        if isinstance(item, Exception):
+            raise item
+        return item
+
+    fake.calls = box
+    return fake
 
 
 class TestParseValid:
@@ -107,3 +128,85 @@ class TestGenerate:
             raise ConnectionError("down")
 
         assert generate_director_ops(["あ"], {"prompt": "P"}, call_llm=boom) == []
+
+
+class TestTryParse:
+    def test_hard_failure_returns_none(self):
+        assert try_parse_director_response("not json", num_lines=5) is None
+        assert try_parse_director_response('{"foo": 1}', num_lines=5) is None
+
+    def test_valid_empty_ops_returns_empty_list(self):
+        assert try_parse_director_response('{"ops": []}', num_lines=5) == []
+
+    def test_valid_ops_returned(self):
+        ops = try_parse_director_response(
+            '{"ops": [{"type": "cut", "lines": [1, 1]}]}', num_lines=5
+        )
+        assert ops is not None and ops[0].type == "cut"
+
+
+class TestRetry:
+    def test_retries_on_llm_error_then_succeeds(self):
+        fake = _seq_llm(
+            [ConnectionError("x"), '{"ops": [{"type": "cut", "lines": [1, 1]}]}']
+        )
+        ops = generate_director_ops(
+            ["あ"], {"prompt": "P", "max_retries": 2}, call_llm=fake
+        )
+        assert fake.calls["i"] == 2
+        assert ops[0].type == "cut"
+
+    def test_retries_on_unparseable_then_succeeds(self):
+        fake = _seq_llm(
+            ["garbage", "still bad", '{"ops": [{"type": "keep", "lines": [1, 1]}]}']
+        )
+        ops = generate_director_ops(
+            ["あ"], {"prompt": "P", "max_retries": 2}, call_llm=fake
+        )
+        assert fake.calls["i"] == 3
+        assert ops[0].type == "keep"
+
+    def test_all_attempts_fail_returns_empty(self):
+        fake = _seq_llm([ConnectionError("x")] * 3)
+        ops = generate_director_ops(
+            ["あ"], {"prompt": "P", "max_retries": 2}, call_llm=fake
+        )
+        assert ops == []
+        assert fake.calls["i"] == 3
+
+    def test_valid_empty_ops_does_not_retry(self):
+        fake = _seq_llm(['{"ops": []}'])
+        ops = generate_director_ops(
+            ["あ"], {"prompt": "P", "max_retries": 2}, call_llm=fake
+        )
+        assert ops == []
+        assert fake.calls["i"] == 1
+
+    def test_max_retries_zero_is_single_attempt(self):
+        fake = _seq_llm([ConnectionError("x")])
+        ops = generate_director_ops(
+            ["あ"], {"prompt": "P", "max_retries": 0}, call_llm=fake
+        )
+        assert ops == []
+        assert fake.calls["i"] == 1
+
+    def test_temperature_nudged_per_attempt(self):
+        temps: list = []
+        fake = _seq_llm([ConnectionError("x")] * 4, temps=temps)
+        generate_director_ops(
+            ["あ"],
+            {
+                "prompt": "P",
+                "temperature": 0.2,
+                "max_retries": 3,
+                "retry_temp_step": 0.2,
+                "retry_temp_cap": 0.8,
+            },
+            call_llm=fake,
+        )
+        assert temps == [
+            pytest.approx(0.2),
+            pytest.approx(0.4),
+            pytest.approx(0.6),
+            pytest.approx(0.8),
+        ]

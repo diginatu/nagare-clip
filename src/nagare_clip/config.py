@@ -86,6 +86,9 @@ DEFAULTS: Dict[str, Any] = {
         "thinking": False,
         "timeout": 300,
         "response_format": "json",
+        "max_retries": 2,
+        "retry_temp_step": 0.2,
+        "retry_temp_cap": 0.8,
         "prompt": (
             "You are a video editor. You receive a Japanese transcript as "
             "numbered lines (one line per subtitle segment). Decide high-level "
@@ -129,6 +132,9 @@ DEFAULTS: Dict[str, Any] = {
         "thinking": False,
         "timeout": 60,
         "context_lines": 1,
+        "max_retries": 2,
+        "retry_temp_step": 0.2,
+        "retry_temp_cap": 0.8,
         "prompt": (
             "You apply ONE editing instruction to Japanese subtitle lines.\n"
             "You are given numbered lines and an instruction. Insert the "
