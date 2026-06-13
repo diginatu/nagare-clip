@@ -164,6 +164,30 @@ class TestTagBalance:
         assert any("malformed" in m for m in _messages(_on_line(problems, 1)))
 
 
+class TestCutTag:
+    def test_valid_cut_no_problems(self):
+        lines = ["<cut>hello</cut>", "world", "foo bar"]
+        assert check_edits(lines, _fixture()) == []
+
+    def test_valid_cross_line_cut_no_problems(self):
+        # <cut> opened on line 1, closed on line 3 (spans the middle segment).
+        lines = ["he<cut>llo", "world", "foo</cut> bar"]
+        assert check_edits(lines, _fixture()) == []
+
+    def test_nested_cut_reported(self):
+        lines = ["<cut>hello", "<cut>world</cut>", "foo bar</cut>"]
+        problems = check_edits(lines, _fixture())
+        assert any("nested" in m for m in _messages(_on_line(problems, 2)))
+
+    def test_unmatched_cut_close_reported(self):
+        problems = check_edits(["hello", "world</cut>", "foo bar"], _fixture())
+        assert any("unmatched" in m for m in _messages(_on_line(problems, 2)))
+
+    def test_unclosed_cut_reported_at_opening_line(self):
+        problems = check_edits(["<cut>hello", "world", "foo bar"], _fixture())
+        assert any("unclosed" in m for m in _messages(_on_line(problems, 1)))
+
+
 class TestProblemOrdering:
     def test_problems_sorted_by_line(self):
         lines = ["word", "{{x->y}}", "foo bar"]  # seg0 no-marker, seg1 old mismatch

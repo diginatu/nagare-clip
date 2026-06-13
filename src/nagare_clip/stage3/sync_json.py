@@ -35,6 +35,16 @@ OVERLAY_TAG_RE = re.compile(r'<overlay\s+text="[^"]*">|</overlay>')
 _OVERLAY_SPLIT_RE = re.compile(r'(<overlay\s+text="[^"]*">|</overlay>)')
 _OVERLAY_OPEN_RE = re.compile(r'<overlay\s+text="([^"]*)">')
 
+# <cut>...</cut> deletion-shorthand markers (added by humans / guided_edit).
+# A <cut> span deletes the wrapped text; it desugars to a {{wrapped->}}
+# deletion patch before the normal patch flow, so the existing
+# patch/decompose/timing machinery removes those words.  Removing a large
+# span then falls out of the timeline via the interval stage's silence-gap
+# mechanism.  A <cut> may open on one edit line and close on a later one.
+CUT_TAG_RE = re.compile(r"</?cut>")
+_CUT_SPLIT_RE = re.compile(r"(<cut>|</cut>)")
+_CUT_PAIR_RE = re.compile(r"<cut>.*?</cut>")
+
 # Type alias: (kind, orig_start, orig_end, new_text)
 Region = Tuple[str, int, int, str]
 
@@ -116,6 +126,47 @@ def _decompose_edit_line(
         return None
 
     return regions
+
+
+def _expand_cut_tags(edit_lines: List[str]) -> List[str]:
+    """Desugar `<cut>...</cut>` spans into `{{wrapped->}}` deletion patches.
+
+    The wrapped text (with any inner ``{{old->new}}`` markers resolved back to
+    their *old* side) becomes the ``old`` of a deletion patch, so the existing
+    patch/decompose/timing machinery removes those words.  A `<cut>` may open
+    on one line and close on a later one; text on fully-wrapped intermediate
+    lines is deleted in whole.
+
+    Unmatched `</cut>`, nested `<cut>`, and an unclosed `<cut>` at EOF are
+    ignored with a warning (the offending tag is dropped, surrounding text
+    kept); the function never raises.
+    """
+    result: List[str] = []
+    cut_open = False
+    for line in edit_lines:
+        out: List[str] = []
+        for part in _CUT_SPLIT_RE.split(line):
+            if part == "<cut>":
+                if cut_open:
+                    logger.warning("Nested <cut> opener; ignoring inner tag")
+                    continue
+                cut_open = True
+            elif part == "</cut>":
+                if not cut_open:
+                    logger.warning("Unmatched </cut>; ignoring")
+                    continue
+                cut_open = False
+            elif part:
+                if cut_open:
+                    original = PATCH_RE.sub(r"\1", part)
+                    if original:
+                        out.append("{{" + original + "->}}")
+                else:
+                    out.append(part)
+        result.append("".join(out))
+    if cut_open:
+        logger.warning("Unclosed <cut>; ignoring")
+    return result
 
 
 def _word_time_span(
@@ -218,11 +269,12 @@ def sync_text_to_json(
 
     Returns a new dict (deep copy).
     """
+    expanded_lines = _expand_cut_tags(edit_lines)
     cleaned_lines = [
         OVERLAY_TAG_RE.sub(
             "", SPEED_TAG_RE.sub("", KEEP_TAG_RE.sub("", line))
         )
-        for line in edit_lines
+        for line in expanded_lines
     ]
     corrected_lines = apply_patches_to_lines(cleaned_lines)
 
@@ -262,9 +314,16 @@ def sync_text_to_json(
 
 def _patched_visible_length(text: str) -> int:
     """Length in non-whitespace characters of `text` after applying patches
-    and stripping any <keep>/<speed>/<overlay> marker tags."""
+    and stripping any <keep>/<speed>/<overlay>/<cut> marker tags.
+
+    `<cut>...</cut>` spans are removed *including* their inner text (those
+    words are deleted from the synced JSON), so positions of any neighbouring
+    keep/speed/overlay tags on the same line stay aligned with the reduced
+    word list."""
+    cleaned = _CUT_PAIR_RE.sub("", text)
+    cleaned = CUT_TAG_RE.sub("", cleaned)
     cleaned = OVERLAY_TAG_RE.sub(
-        "", SPEED_TAG_RE.sub("", KEEP_TAG_RE.sub("", text))
+        "", SPEED_TAG_RE.sub("", KEEP_TAG_RE.sub("", cleaned))
     )
     patched = PATCH_RE.sub(lambda m: m.group(2), cleaned)
     return sum(1 for ch in patched if not ch.isspace())

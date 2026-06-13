@@ -46,7 +46,37 @@ text_filter:
     timeout: 120                 # Longer timeout since full transcript is sent
     # prompt: "..."              # System prompt for summary LLM (has sensible default)
 
-# Pipeline Stage 4: patch application + keep-interval merge.
+# director stage (Pass A): a larger LLM reads the whole numbered transcript and
+# emits high-level edit operations (cut / speed / overlay / keep / edit) as
+# {stem}_director.json — a human-reviewable intermediate. It never re-outputs
+# the transcript text. Disabled by default (writes an empty op list = no-op).
+director:
+  enabled: false               # Enable the director LLM
+  api_base: "http://localhost:11434"
+  model: "gpt-oss:120b"        # A larger model for editorial judgement
+  api_key: ""
+  temperature: 0.2
+  thinking: false
+  timeout: 300
+  response_format: "json"      # Ollama JSON mode for reliable parsing
+  # prompt: "..."              # System prompt (has a sensible default)
+
+# guided_edit stage (Pass B2): a small local LLM applies each director op,
+# inserting <cut>/<speed>/<overlay>/<keep> tags (and {{old->new}} patches for
+# "edit" ops) into the verbatim _edits.txt at the precise position. A
+# deterministic reconciler verifies every op and writes {stem}_unapplied.txt
+# for any that could not be applied. Disabled by default (copies edits through).
+guided_edit:
+  enabled: false               # Enable applying director ops
+  api_base: "http://localhost:11434"
+  model: "qwen3.5:4b"          # The same small model as text_filter is fine
+  api_key: ""
+  temperature: 0.1
+  thinking: false
+  timeout: 60
+  # prompt: "..."              # System prompt (has a sensible default)
+
+# intervals stage: patch application + keep-interval merge.
 # Audio cuts from audio_silence are unioned here.
 intervals:
   silence_threshold: 1.5     # WhisperX word-gap silence threshold, seconds (NOT the audio_silence detector)

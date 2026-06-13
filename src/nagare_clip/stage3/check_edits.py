@@ -34,6 +34,7 @@ from typing import Any, Dict, List, NamedTuple, Optional
 
 from nagare_clip.stage2.llm_filter import PATCH_RE, apply_patches_to_lines
 from nagare_clip.stage3.sync_json import (
+    CUT_TAG_RE,
     KEEP_TAG_RE,
     OVERLAY_TAG_RE,
     SPEED_TAG_RE,
@@ -58,17 +59,27 @@ _ANY_TAG_RE = re.compile(
     r'<keep>|</keep>'
     r'|<speed\s+factor="[0-9.]+">|</speed>'
     r'|<overlay\s+text="[^"]*">|</overlay>'
+    r'|<cut>|</cut>'
 )
 # A tag-like fragment that survives stripping the valid tags above → malformed.
-_TAGLIKE_RE = re.compile(r"</?(?:keep|speed|overlay)\b")
+_TAGLIKE_RE = re.compile(r"</?(?:keep|speed|overlay|cut)\b")
 
 _SPEED_FACTOR_RE = re.compile(r'<speed\s+factor="([0-9.]+)">')
 _OVERLAY_TEXT_RE = re.compile(r'<overlay\s+text="([^"]*)">')
 
 
 def _strip_tags(line: str) -> str:
-    """Remove keep/speed/overlay marker tags, leaving wrapped text + patches."""
-    return OVERLAY_TAG_RE.sub("", SPEED_TAG_RE.sub("", KEEP_TAG_RE.sub("", line)))
+    """Remove keep/speed/overlay/cut marker tags, leaving wrapped text + patches.
+
+    `<cut>` tags are stripped leaving their wrapped text in place; the wrapped
+    text must still match the original (Stage 4 desugars `<cut>` to a
+    `{{wrapped->}}` deletion, whose ``old`` side must decompose against the
+    original), so the standard keep-text decomposition check covers it.
+    """
+    stripped = OVERLAY_TAG_RE.sub(
+        "", SPEED_TAG_RE.sub("", KEEP_TAG_RE.sub("", line))
+    )
+    return CUT_TAG_RE.sub("", stripped)
 
 
 def _check_patch_syntax(cleaned_line: str) -> List[str]:
@@ -144,7 +155,12 @@ def _check_tags(edit_lines: List[str]) -> List[Problem]:
     """
     problems: List[Problem] = []
     # tag name -> opening line number (None == not open)
-    open_at: Dict[str, Optional[int]] = {"keep": None, "speed": None, "overlay": None}
+    open_at: Dict[str, Optional[int]] = {
+        "keep": None,
+        "speed": None,
+        "overlay": None,
+        "cut": None,
+    }
 
     for idx, line in enumerate(edit_lines):
         lineno = idx + 1
@@ -179,7 +195,7 @@ def _check_tags(edit_lines: List[str]) -> List[Problem]:
         # Malformed tags: tag-like fragments left after removing valid tags.
         if _TAGLIKE_RE.search(_ANY_TAG_RE.sub("", line)):
             problems.append(
-                Problem(lineno, "malformed <keep>/<speed>/<overlay> tag")
+                Problem(lineno, "malformed <keep>/<speed>/<overlay>/<cut> tag")
             )
 
     for name, opened in open_at.items():

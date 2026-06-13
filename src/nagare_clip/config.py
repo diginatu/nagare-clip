@@ -73,6 +73,84 @@ DEFAULTS: Dict[str, Any] = {
             ),
         },
     },
+    # Pipeline "director" stage (Pass A): a larger LLM reads the whole
+    # numbered transcript and emits a JSON list of high-level edit operations
+    # (cut / speed / overlay / keep / edit) referenced by line number.  It
+    # never re-outputs the transcript text.  Disabled by default (no-op).
+    "director": {
+        "enabled": False,
+        "api_base": "http://localhost:11434",
+        "model": "gpt-oss:120b",
+        "api_key": "",
+        "temperature": 0.2,
+        "thinking": False,
+        "timeout": 300,
+        "response_format": "json",
+        "prompt": (
+            "You are a video editor. You receive a Japanese transcript as "
+            "numbered lines (one line per subtitle segment). Decide high-level "
+            "edits to tighten the video. Do NOT rewrite or output the "
+            "transcript text. Output ONLY a JSON object.\n"
+            "\n"
+            "Operations (reference lines by their 1-based numbers, inclusive):\n"
+            "- cut: remove a boring/redundant span entirely (deletes audio+video).\n"
+            '- speed: play a span faster; give "factor" (e.g. 2.0).\n'
+            '- overlay: show an on-screen caption over a span; give "text".\n'
+            "- keep: protect an important span from being cut.\n"
+            '- edit: request a fine within-line text deletion/fix; describe it in "note".\n'
+            "\n"
+            "JSON shape:\n"
+            '{"ops": [\n'
+            '  {"type": "cut", "lines": [12, 18], "note": "why / where precisely"},\n'
+            '  {"type": "speed", "lines": [30, 34], "factor": 2.0, "note": "..."},\n'
+            '  {"type": "overlay", "lines": [5, 5], "text": "ポイント", "note": ""},\n'
+            '  {"type": "keep", "lines": [40, 42], "note": "..."},\n'
+            '  {"type": "edit", "lines": [7, 7], "note": "delete the redundant restatement"}\n'
+            "]}\n"
+            "\n"
+            "Rules:\n"
+            '- "lines" must be within the transcript range.\n'
+            '- Use "note" to describe in natural language precisely WHERE in the '
+            "line(s) the edit starts and ends, so a downstream editor can place "
+            "it exactly.\n"
+            "- Output only the JSON object, no other text."
+        ),
+    },
+    # Pipeline "guided_edit" stage (Pass B2): a small local LLM applies the
+    # director's operations one at a time, inserting <cut>/<speed>/<overlay>/
+    # <keep> tags (and {{old->new}} patches for "edit" ops) into the verbatim
+    # _edits.txt at the precise position.  Disabled by default (no-op).
+    "guided_edit": {
+        "enabled": False,
+        "api_base": "http://localhost:11434",
+        "model": "qwen3.5:4b",
+        "api_key": "",
+        "temperature": 0.1,
+        "thinking": False,
+        "timeout": 60,
+        "context_lines": 1,
+        "prompt": (
+            "You apply ONE editing instruction to Japanese subtitle lines.\n"
+            "You are given numbered lines and an instruction. Insert the "
+            "requested marker into the line text at the precise position "
+            "described, and return the lines unchanged otherwise.\n"
+            "\n"
+            "Markers:\n"
+            "- Cut a span:    wrap it in <cut>...</cut>\n"
+            '- Speed up:      wrap it in <speed factor="N.N">...</speed>\n'
+            '- Overlay text:  wrap it in <overlay text="...">...</overlay>\n'
+            "- Keep/protect:  wrap it in <keep>...</keep>\n"
+            "- Delete words within a line: {{old->}} (old copied verbatim)\n"
+            "- Fix words within a line:    {{old->new}}\n"
+            "\n"
+            "Rules:\n"
+            "- Copy each line fully with its number. Change ONLY by inserting "
+            "markers or {{old->new}}; never rephrase or reorder the original text.\n"
+            "- For a span across multiple lines, open the tag on the first line "
+            "and close it on the last line.\n"
+            "- Output the same numbered lines, nothing else."
+        ),
+    },
     "audio_silence": {
         "enabled": True,
         "noise": -30.0,

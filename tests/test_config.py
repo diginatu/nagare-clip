@@ -199,3 +199,31 @@ def test_speed_mark_defaults_present():
     assert sm["anchor_y"] == "TOP"
     assert sm["location_x"] == 0.95
     assert sm["location_y"] == 0.95
+
+
+def test_director_defaults_present():
+    cfg = get_effective_config(None, {})
+    d = cfg["director"]
+    assert d["enabled"] is False
+    assert d["api_base"] == "http://localhost:11434"
+    assert "model" in d
+    assert d["response_format"] == "json"
+    assert isinstance(d["prompt"], str) and d["prompt"]
+
+
+def test_guided_edit_defaults_present():
+    cfg = get_effective_config(None, {})
+    g = cfg["guided_edit"]
+    assert g["enabled"] is False
+    assert g["api_base"] == "http://localhost:11434"
+    assert "model" in g
+    assert isinstance(g["prompt"], str) and g["prompt"]
+
+
+def test_director_override_keeps_other_defaults(tmp_path):
+    cfg_file = tmp_path / "cfg.yml"
+    cfg_file.write_text(yaml.dump({"director": {"enabled": True, "model": "gpt-oss:120b"}}))
+    cfg = get_effective_config(cfg_file)
+    assert cfg["director"]["enabled"] is True
+    assert cfg["director"]["model"] == "gpt-oss:120b"
+    assert cfg["director"]["temperature"] == 0.2

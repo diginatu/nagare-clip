@@ -9,15 +9,22 @@ Maintain and improve a multi-stage rough-cut pipeline:
 1. WhisperX transcription in Docker
 2. Audio-silence (jump-cut) detection — ffmpeg `silencedetect`, editable cut list
 3. Text editing checkpoint — copies `.txt` or runs LLM filter with `{{old->new}}` markers
-4. Patch application + keep-interval computation in Python (audio cuts unioned in)
-5. Blender VSE auto-layout in headless mode
+4. director — a larger LLM proposes high-level edits (cut/speed/overlay/keep/edit) as a reviewable JSON op list
+5. guided_edit — a small LLM applies the director's ops into `_edits.txt`, deterministically verified
+6. Patch application + keep-interval computation in Python (audio cuts unioned in)
+7. Blender VSE auto-layout in headless mode
 
 Final deliverable is a `.blend` project for human editing.
 
-> **Naming convention:** Python package dirs (`stage2/`, `stage3/`, `stage4/`)
-> are kept as-is to avoid churn, but **config-section names are functional**:
-> `transcription:` (Stage 1), `audio_silence:` (Stage 2), `text_filter:`
-> (Stage 3), `intervals:` (Stage 4), `blender:` (Stage 5).
+> **Naming convention:** Stages are identified by **functional name**, not
+> number (numbers are being phased out — new stages are inserted by name so
+> existing stages never need renumbering). Config-section names are the
+> identifiers: `transcription:`, `audio_silence:`, `text_filter:`,
+> `director:`, `guided_edit:`, `intervals:`, `blender:`. Some Python package
+> dirs (`stage2/`, `stage3/`, `stage4/`) keep their legacy numeric names to
+> avoid churn; `director/` and `guided_edit/` are name-only. `run_pipeline.sh`
+> `--from-stage` accepts a stage name (legacy numbers 1-5 still map to
+> transcription/audio_silence/text_filter/intervals/blender).
 
 ## Pipeline Overview
 
@@ -54,10 +61,36 @@ nesting/unmatched-tag warnings, and human-after-LLM authorship follow the
 `<keep>` rules. Quotes inside the `text="..."` attribute value are not
 supported (regex uses `[^"]*`).
 
+`<cut>...</cut>` is a fourth companion marker — a **deletion shorthand**. It
+deletes the wrapped text (it desugars to `{{wrapped->}}` deletion patches in
+`sync_json._expand_cut_tags`, including whole-line deletion of fully-wrapped
+intermediate lines for a multi-line span). There is no separate timeline-exclude
+logic: removing the words from the JSON opens a gap between the surviving
+neighbours that the interval stage's word-gap silence detection cuts (so a
+`<cut>` shorter than `intervals.silence_threshold` may not actually cut — it is
+meant for larger deletions). Because the text is deleted, no caption is
+generated for it, so caption re-expansion cannot un-cut it. Balance/nesting
+rules follow `<keep>`. Do **not** overlap `<cut>` with `<keep>/<speed>/<overlay>`
+on the same span.
+
 - **Inputs:** `{stem}.txt`
 - **Outputs:** `{stem}_edits.txt`
 
-Humans can validate a hand-edited `_edits.txt` before resuming Stage 4 with the standalone checker `python -m nagare_clip.stage3.check_edits --edits-txt <file> --json <file>` (`src/nagare_clip/stage3/check_edits.py`). Unlike Stage 4's fail-fast `ValueError`, it collects and reports **every** problem at once (line-numbered, exit 1 if any): line-count vs. JSON segments, `{{old->new}}` patch syntax (empty `{{old->}}` deletions allowed; only `{{->}}` flagged), decomposition integrity (reuses `_diagnose_decomposition`, mirroring `sync_json._decompose_edit_line`), and `<keep>`/`<speed>`/`<overlay>` tag balance / factor>0 / non-empty overlay text / malformed tags. Pure `check_edits(edit_lines, json_data) -> list[Problem]` never raises.
+Humans can validate a hand-edited `_edits.txt` before resuming the intervals stage with the standalone checker `python -m nagare_clip.stage3.check_edits --edits-txt <file> --json <file>` (`src/nagare_clip/stage3/check_edits.py`). Unlike the interval stage's fail-fast `ValueError`, it collects and reports **every** problem at once (line-numbered, exit 1 if any): line-count vs. JSON segments, `{{old->new}}` patch syntax (empty `{{old->}}` deletions allowed; only `{{->}}` flagged), decomposition integrity (reuses `_diagnose_decomposition`, mirroring `sync_json._decompose_edit_line`), and `<keep>`/`<speed>`/`<overlay>`/`<cut>` tag balance / factor>0 / non-empty overlay text / malformed tags. Pure `check_edits(edit_lines, json_data) -> list[Problem]` never raises.
+
+### director — LLM High-Level Edit Operations (Pass A)
+
+A larger LLM (config `director:`, disabled by default) reads the whole numbered transcript and emits a JSON op list `{stem}_director.json` — `{"ops": [{type, lines:[a,b], factor?, text?, note}]}`, `type ∈ {cut, speed, overlay, keep, edit}`, lines 1-based. It **never re-outputs the transcript text**, which structurally avoids the "format breakage" and "original modification" failure modes of whole-file editing. `director_llm.parse_director_response()`/`ops_from_dict()` drop any malformed/out-of-range op (logged) so one bad op never derails the rest. Disabled → empty op list (no-op). `_director.json` is a human-reviewable/editable intermediate.
+
+- **Inputs:** `{stem}_edits.txt` (from text_filter)
+- **Outputs:** `{stem}_director.json`
+
+### guided_edit — Apply Director Ops (Pass B2)
+
+A small local LLM (config `guided_edit:`, disabled by default) applies each director op with **one call over just the op's boundary line(s)** (wide ranges show only the first and last line with an omission marker; the open/close tags on the boundaries span the middle automatically). It inserts `<cut>/<speed>/<overlay>/<keep>` tags (and `{{old->new}}` patches for `edit` ops) at the precise position. `reconcile.verify_op()` then checks, per op, that the underlying transcript text was NOT altered (`clean_old()` strips tags + resolves patches to `old`, compared before/after) and that the op was actually reflected; a failing op is reverted and recorded in `{stem}_unapplied.txt`. Disabled → copies `_edits.txt` through unchanged. A final `check_edits` pass (when `--json` is given) logs any residual problems.
+
+- **Inputs:** `{stem}_edits.txt` (text_filter), `{stem}_director.json`, `{stem}.json`
+- **Outputs:** augmented `{stem}_edits.txt`, `{stem}_unapplied.txt`
 
 ### Stage 4 — Patch Application + Keep-Interval Computation
 
@@ -99,11 +132,18 @@ src/nagare_clip/          # Main Python package (src layout)
     detect.py                 # parse_silencedetect_output(), build_ffmpeg_args() (pure)
     cuts_file.py              # write_cuts() / read_cuts() — editable cut-list format
     cli.py                    # Pipeline Stage 2 CLI (consumes --raw ffmpeg stderr)
-  stage2/                     # Pipeline Stage 3 modules (text editing checkpoint)
+  stage2/                     # text_filter stage modules (text editing checkpoint)
     cli.py                    # text-editing checkpoint CLI entry point
     llm_filter.py             # LLM API calls, {{old->new}} patch parsing, apply_patches_to_lines()
     summary_llm.py            # Summary LLM: generates transcript summary + keywords for filter context
-  stage3/                     # Pipeline Stage 4 modules (patch application + intervals)
+  director/                   # director stage (Pass A): high-level edit ops
+    director_llm.py           # DirectorOp, parse/validate JSON ops, generate via LLM
+    cli.py                    # director CLI (writes _director.json)
+  guided_edit/                # guided_edit stage (Pass B2): apply director ops
+    apply.py                  # per-op LLM call + splice + revert-on-failure
+    reconcile.py              # verify_op(): verbatim-safety + op-reflection checks
+    cli.py                    # guided_edit CLI (writes augmented _edits.txt + _unapplied.txt)
+  stage3/                     # intervals stage modules (patch application + intervals)
     check_edits.py            # Standalone _edits.txt integrity checker (reports ALL problems at once)
     sync_json.py              # Sync corrected text back into WhisperX JSON
     bunsetu.py                # Bunsetsu-level timing (GiNZA)
@@ -112,19 +152,22 @@ src/nagare_clip/          # Main Python package (src layout)
     captions.py               # Caption chunking
     filler.py                 # Filler word config (unused at runtime)
     io.py                     # Source file inference
-  stage4/                     # Pipeline Stage 5 modules (Blender VSE)
+  stage4/                     # blender stage modules (Blender VSE)
     blender_cli.py            # Blender-stage CLI (runs inside Blender)
     scene.py                  # Blender scene setup
     timeline.py               # Strip and caption placement
 scripts/
-  run_pipeline.sh             # Main orchestrator (5 stages)
+  run_pipeline.sh             # Main orchestrator (name-based stages; --from-stage by name)
 tests/
   test_config.py              # Config module unit tests
   test_cli_cuts_merge.py      # --cuts-txt union into interval excludes
   test_cli_keep_markers.py    # <keep>...</keep> force-keep markers (CLI integration)
-  audio_silence/              # Stage 2 (detect / cuts_file / cli) unit tests
+  test_cli_cut_marker.py      # <cut>...</cut> deletion → silence-gap cut (CLI integration)
+  audio_silence/              # audio_silence (detect / cuts_file / cli) unit tests
   stage2/                     # text-editing checkpoint unit tests
-  stage3/                     # interval-stage unit tests
+  director/                   # director op parsing/generation + CLI tests
+  guided_edit/                # guided_edit apply/reconcile + CLI tests
+  stage3/                     # interval-stage unit tests (incl. <cut> desugar)
   stage4/                     # Blender-stage tests
 ```
 
@@ -165,6 +208,7 @@ All tunable parameters are centralised in `src/nagare_clip/config.py`:
   over every matching `tl_map` entry); only an overlay that falls entirely on
   cut content is silently skipped. Style is `caption_style` overlaid with
   `blender.overlay_style` overrides (defaults: `anchor_y: TOP`, `location_y: 0.95`).
+- `<cut>...</cut>` is handled entirely in `sync_json._expand_cut_tags()` (called first in `sync_text_to_json`, before the keep/speed/overlay tag-strip): each `<cut>` span is rewritten to `{{wrapped->}}` deletion patches (the wrapped text, with inner patches resolved to their `old` side, becomes the deleted `old`; fully-wrapped intermediate lines become whole-line deletions). The deleted words are then dropped by the existing patch/decompose/timing machinery. There is **no** `extract_cut_ranges()` and **no** intervals-stage change — the cut materialises through word-gap silence detection (`cli.py:250-258`), so it is threshold-dependent and intended for larger deletions. `_patched_visible_length()` strips `<cut>...</cut>` (inner included) so a same-line `<cut>` does not shift neighbouring keep/speed/overlay positions; cross-tag overlap on the same span is unsupported. `check_edits` validates `<cut>` balance via the same `_check_tags` `open_at` mechanism (`"cut"` key). Guarded by `tests/stage3/test_cut_tag.py` and `tests/test_cli_cut_marker.py`.
 - Stage 5 reads the existing `speed_ranges` array and, when `blender.speed_mark.enabled` (default true), calls `place_speed_marks()` (`src/nagare_clip/stage4/timeline.py`) once per source after `place_overlays()`. It creates a TEXT badge on the **lowest text channel** (`SPEED_MARK_CHANNEL = 3`, below captions ch4 and overlays ch5) for each speed range, so when the badge overlaps a caption or overlay the badge is the one hidden (it is the least important text). Text = `template.format(factor=f"{factor:.1f}")` (default template `"x{factor}"` → `x2.0`), styled as `caption_style` overlaid with `blender.speed_mark` overrides (default small top-right badge). The three text channels are named constants in `timeline.py` (`SPEED_MARK_CHANNEL = 3` < `CAPTION_CHANNEL = 4` < `OVERLAY_CHANNEL = 5`; video is ch1, audio ch2). Timeline mapping is speed-aware and multi-interval-contiguous, identical to `place_overlays()`. No Stage 1–4 changes — purely a Stage 5 consumer of `speed_ranges`. `resolve_speed_mark_style()` in `blender_cli.py` merges the style and strips the non-style `enabled`/`template` keys.
 - Stage 4 keep intervals are expanded by configurable `intervals.keep_pre_margin` / `intervals.keep_post_margin` (defaults 1.0s) and merged before Blender export. Captions have independent `intervals.caption.pre_margin` / `intervals.caption.post_margin` (defaults 0.0s) that extend each caption's display time, clamped against neighbouring caption boundaries so captions never overlap.
 - Stage 4 silence-based keep-interval detection uses WhisperX word timings (`word.start`/`word.end`) with a 0.6s per-word span cap so inflated token ends do not hide pauses. The cap is controlled by `intervals.bunsetu.silence_max_word_span` in the config.
@@ -176,7 +220,8 @@ All tunable parameters are centralised in `src/nagare_clip/config.py`:
 - Stage 5 fallback FPS (used when source metadata is unavailable) is controlled by `blender.default_fps`.
 - Stage 5 supports multiple source files: `blender_cli.py` accepts repeated `--source`/`--intervals` flags; `place_strips()` and `build_timeline_map()` accept `start_cursor` and `idx_offset` to concatenate sources on a single timeline.
 - `run_pipeline.sh` discovers all video files (`mp4`, `mkv`, `mov`, `avi`, `webm`) in `INPUT_VIDEOS_DIR` alphabetically when `--source` is not provided. Multiple `--source` flags are also accepted.
-- `run_pipeline.sh` accepts `--from-stage N` (1-5) to skip expensive earlier stages and reuse their outputs. Also configurable via `pipeline.from_stage` in YAML config. When skipping stages, the script validates that required intermediate outputs exist. Output dirs are `output/stage1`..`output/stage5` (cuts → stage2, edits → stage3, intervals → stage4, blend → stage5); resuming pre-renumber projects requires moving files or rerunning from Stage 1.
+- `run_pipeline.sh` accepts `--from-stage S` where `S` is a stage **name** (`transcription`, `audio_silence`, `text_filter`, `director`, `guided_edit`, `intervals`, `blender`) to skip expensive earlier stages and reuse their outputs; legacy numbers 1-5 still map to transcription/audio_silence/text_filter/intervals/blender. Stage execution order is the `STAGE_ORDER` array; each stage runs when `FROM_ORDER <= its order`. Also configurable via `pipeline.from_stage` in YAML config. When skipping stages, the script validates that required intermediate outputs exist. Output dirs: legacy `output/stage1`..`output/stage5` for transcription/audio_silence/text_filter/intervals/blender, plus name-only `output/director/` and `output/guided_edit/`. The intervals stage reads the **guided_edit** `_edits.txt` (which is the text_filter edits passed through when guided_edit is disabled).
+- `director` and `guided_edit` **always run** in a full pipeline (they are cheap no-ops when disabled: director writes an empty op list, guided_edit copies the edits through), so `output/guided_edit/{stem}_edits.txt` always exists for the intervals stage to consume.
 - Stage 1 (WhisperX) runs in a **single container** for all source files, passing all relative paths as positional arguments. This avoids model reload overhead between videos. Stages 2/3/4 still loop per-source after the single Stage 1 completes.
 
 ## Python Execution
@@ -195,7 +240,7 @@ defined in `.opencode/plugin/validate.ts`. It triggers after every file
 write/edit and runs:
 
 - `docker compose config --services`
-- `python -m py_compile` on all Stage 2, Stage 3, and Stage 4 Python modules
+- `python -m py_compile` on the Python modules (text_filter `stage2/`, `director/`, `guided_edit/`, intervals `stage3/`, blender `stage4/`)
 - `bash -n scripts/run_pipeline.sh`
 
 If environment allows, also validate with a full run:
