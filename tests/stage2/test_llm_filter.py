@@ -5,12 +5,9 @@ from __future__ import annotations
 import logging
 from unittest.mock import patch
 
-import pytest
-
 from nagare_clip.stage2.llm_filter import (
     _apply_patches,
     _batch_lines,
-    _call_llm,
     _format_batch,
     _parse_response,
     _validate_patches,
