@@ -15,10 +15,10 @@ from __future__ import annotations
 import logging
 import re
 import shutil
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Union
 
 import yaml
 
@@ -60,7 +60,7 @@ def _fence(text: str) -> List[str]:
 
 class Recorder:
     def __init__(
-        self, stage: str, report_dir: Optional[Any], enabled: bool = True
+        self, stage: str, report_dir: Optional[Union[str, Path]], enabled: bool = True
     ) -> None:
         self.stage = stage
         self.report_dir = Path(report_dir) if report_dir else None
@@ -75,6 +75,7 @@ class Recorder:
     def clear(self) -> None:
         if not self.enabled:
             return
+        assert self._stage_dir is not None
         try:
             if self._stage_dir.exists():
                 shutil.rmtree(self._stage_dir)
@@ -118,6 +119,7 @@ class Recorder:
     def flush_unit(self, unit: str, *, outcome: str, reason: str = "") -> None:
         if not self.enabled:
             return
+        assert self._stage_dir is not None
         attempts = self._buffers.pop(unit, [])
         started = self._started.pop(unit, datetime.now())
         duration_ms = int((datetime.now() - started).total_seconds() * 1000)
