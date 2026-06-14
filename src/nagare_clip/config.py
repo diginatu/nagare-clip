@@ -24,7 +24,8 @@ DEFAULTS: Dict[str, Any] = {
     },
     "text_filter": {
         "use_llm": False,
-        "api_base": "http://localhost:11434",
+        "provider": "ollama_chat",
+        "api_base": "",
         "model": "qwen3.5:4b",
         "api_key": "",
         "batch_size": 10,
@@ -57,7 +58,8 @@ DEFAULTS: Dict[str, Any] = {
         "summary_llm": {
             "enabled": False,
             "keywords": [],
-            "api_base": "http://localhost:11434",
+            "provider": "ollama_chat",
+            "api_base": "",
             "model": "qwen3.5:4b",
             "api_key": "",
             "temperature": 0.3,
@@ -82,7 +84,8 @@ DEFAULTS: Dict[str, Any] = {
     # Disabled by default (writes an empty summary = no-op).
     "summary": {
         "enabled": False,
-        "api_base": "http://localhost:11434",
+        "provider": "ollama_chat",
+        "api_base": "",
         "model": "gpt-oss:120b",
         "api_key": "",
         "temperature": 0.3,
@@ -124,7 +127,8 @@ DEFAULTS: Dict[str, Any] = {
     # "director".  Disabled by default (writes an empty plan = no-op).
     "plan": {
         "enabled": False,
-        "api_base": "http://localhost:11434",
+        "provider": "ollama_chat",
+        "api_base": "",
         "model": "gpt-oss:120b",
         "api_key": "",
         "temperature": 0.3,
@@ -161,7 +165,8 @@ DEFAULTS: Dict[str, Any] = {
     # never re-outputs the transcript text.  Disabled by default (no-op).
     "director": {
         "enabled": False,
-        "api_base": "http://localhost:11434",
+        "provider": "ollama_chat",
+        "api_base": "",
         "model": "gpt-oss:120b",
         "api_key": "",
         "temperature": 0.2,
@@ -207,7 +212,8 @@ DEFAULTS: Dict[str, Any] = {
     # _edits.txt at the precise position.  Disabled by default (no-op).
     "guided_edit": {
         "enabled": False,
-        "api_base": "http://localhost:11434",
+        "provider": "ollama_chat",
+        "api_base": "",
         "model": "qwen3.5:4b",
         "api_key": "",
         "temperature": 0.1,

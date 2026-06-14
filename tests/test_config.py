@@ -205,7 +205,8 @@ def test_director_defaults_present():
     cfg = get_effective_config(None, {})
     d = cfg["director"]
     assert d["enabled"] is False
-    assert d["api_base"] == "http://localhost:11434"
+    assert d["provider"] == "ollama_chat"
+    assert d["api_base"] == ""
     assert "model" in d
     assert d["response_format"] == "json"
     assert isinstance(d["prompt"], str) and d["prompt"]
@@ -215,7 +216,8 @@ def test_guided_edit_defaults_present():
     cfg = get_effective_config(None, {})
     g = cfg["guided_edit"]
     assert g["enabled"] is False
-    assert g["api_base"] == "http://localhost:11434"
+    assert g["provider"] == "ollama_chat"
+    assert g["api_base"] == ""
     assert "model" in g
     assert isinstance(g["prompt"], str) and g["prompt"]
 
@@ -235,3 +237,19 @@ def test_llm_report_defaults():
     cfg = get_effective_config(None, {})
     assert cfg["general"]["llm_report"] is True
     assert cfg["general"]["llm_report_dir"] == "output/llm_report"
+
+
+def test_llm_sections_default_provider_and_empty_api_base():
+    from nagare_clip.config import DEFAULTS
+
+    sections = [
+        DEFAULTS["text_filter"],
+        DEFAULTS["text_filter"]["summary_llm"],
+        DEFAULTS["summary"],
+        DEFAULTS["plan"],
+        DEFAULTS["director"],
+        DEFAULTS["guided_edit"],
+    ]
+    for sec in sections:
+        assert sec["provider"] == "ollama_chat"
+        assert sec["api_base"] == ""
