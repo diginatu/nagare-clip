@@ -53,6 +53,16 @@ def test_cloud_provider_with_empty_api_base_passes_none():
     assert "api_base" not in m.call_args.kwargs
 
 
+def test_temperature_forwarded_when_set():
+    _, m = _call({"provider": "openai", "model": "x", "temperature": 0.2})
+    assert m.call_args.kwargs["temperature"] == 0.2
+
+
+def test_temperature_omitted_lets_provider_default_apply():
+    _, m = _call({"provider": "openai", "model": "x"})
+    assert "temperature" not in m.call_args.kwargs
+
+
 def test_response_format_json_translated():
     _, m = _call({"provider": "openai", "model": "x", "response_format": "json"})
     assert m.call_args.kwargs["response_format"] == {"type": "json_object"}

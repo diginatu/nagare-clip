@@ -30,10 +30,16 @@ def cfg_for_attempt(cfg: Dict[str, Any], attempt: int) -> Dict[str, Any]:
     Attempt 0 keeps the configured temperature.  Each retry adds
     ``retry_temp_step``, capped at ``retry_temp_cap``.  The base *cfg* is never
     mutated.
+
+    When no temperature is configured (absent or ``None``), there is nothing to
+    nudge: the request rides the provider's own default on every attempt, so
+    *cfg* is returned unchanged (the client never forwards a fabricated value).
     """
     if attempt <= 0:
         return cfg
-    base = float(cfg.get("temperature", 0.1))
+    if cfg.get("temperature") is None:
+        return cfg
+    base = float(cfg["temperature"])
     step = float(cfg.get("retry_temp_step", DEFAULT_RETRY_TEMP_STEP))
     cap = float(cfg.get("retry_temp_cap", DEFAULT_RETRY_TEMP_CAP))
     out = dict(cfg)

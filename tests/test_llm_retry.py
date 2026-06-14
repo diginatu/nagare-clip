@@ -39,3 +39,14 @@ class TestCfgForAttempt:
         cfg = {"temperature": 0.1}
         cfg_for_attempt(cfg, 3)
         assert cfg["temperature"] == pytest.approx(0.1)
+
+    def test_absent_temperature_not_fabricated_on_retry(self):
+        # No configured temperature -> rides the provider default on every
+        # attempt; the retry must not inject one.
+        assert "temperature" not in cfg_for_attempt({}, 1)
+
+    def test_null_temperature_not_nudged_and_no_crash(self):
+        # temperature: null (the escape hatch for temp-restricted models) must
+        # survive a retry without a float(None) crash and without being nudged.
+        out = cfg_for_attempt({"temperature": None}, 2)
+        assert out["temperature"] is None

@@ -32,9 +32,17 @@ def call_llm(messages: List[Dict[str, str]], cfg: Dict[str, Any]) -> str:
     kwargs: Dict[str, Any] = {
         "model": f"{provider}/{model}",
         "messages": messages,
-        "temperature": cfg.get("temperature", 0.1),
         "timeout": cfg.get("timeout", 300),
     }
+
+    # Forward temperature only when set, so a provider's own default applies
+    # when it is omitted/null (and temperature-restricted reasoning models do
+    # not error on a forced value).  The retry ladder in ``llm_retry`` follows
+    # the same opt-in rule, so an unset temperature rides the default on every
+    # attempt rather than being fabricated on retry.
+    temperature = cfg.get("temperature")
+    if temperature is not None:
+        kwargs["temperature"] = temperature
 
     api_base = cfg.get("api_base", "")
     if not api_base and provider.startswith("ollama"):
