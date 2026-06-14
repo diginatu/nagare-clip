@@ -1,0 +1,62 @@
+"""Unified LLM client backed by LiteLLM.
+
+Routes every stage's chat call through ``litellm.completion`` so a stage can
+target OpenAI, Gemini, Anthropic, or a local Ollama purely from config. The
+provider is chosen by ``cfg['provider']`` (a LiteLLM prefix, default
+``"ollama_chat"``); the model id handed to LiteLLM is ``f"{provider}/{model}"``.
+"""
+
+from __future__ import annotations
+
+import logging
+from typing import Any, Dict, List
+
+import litellm
+
+logger = logging.getLogger(__name__)
+
+DEFAULT_OLLAMA_API_BASE = "http://localhost:11434"
+
+
+def call_llm(messages: List[Dict[str, str]], cfg: Dict[str, Any]) -> str:
+    """Send chat ``messages`` to the configured provider, return text content.
+
+    Falls back to the local Ollama base URL when an Ollama provider is selected
+    with an empty ``api_base``. Any LiteLLM error is re-raised as
+    ``ConnectionError`` so the stages' existing broad-``Exception`` retry loops
+    treat it like the old urllib transport did.
+    """
+    provider = cfg.get("provider", "ollama_chat")
+    model = cfg.get("model", "")
+
+    kwargs: Dict[str, Any] = {
+        "model": f"{provider}/{model}",
+        "messages": messages,
+        "temperature": cfg.get("temperature", 0.1),
+        "timeout": cfg.get("timeout", 300),
+    }
+
+    api_base = cfg.get("api_base", "")
+    if not api_base and provider.startswith("ollama"):
+        api_base = DEFAULT_OLLAMA_API_BASE
+    if api_base:
+        kwargs["api_base"] = api_base
+
+    api_key = cfg.get("api_key", "")
+    if api_key:
+        kwargs["api_key"] = api_key
+
+    if cfg.get("response_format") == "json":
+        kwargs["response_format"] = {"type": "json_object"}
+
+    thinking = cfg.get("thinking", False)
+    if thinking:
+        kwargs["reasoning_effort"] = thinking if isinstance(thinking, str) else "low"
+
+    logger.debug("LLM request model=%s", kwargs["model"])
+    try:
+        response = litellm.completion(**kwargs)
+    except Exception as e:  # noqa: BLE001 - normalize for the stages' retry loops
+        raise ConnectionError(f"LLM API request failed: {e}") from e
+
+    return response.choices[0].message.content
