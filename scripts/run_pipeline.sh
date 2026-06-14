@@ -348,15 +348,20 @@ fi
 
 # --- text_filter: Text editing checkpoint (mandatory, per source) ---
 if (( FROM_ORDER <= ORD_TEXT_FILTER )); then
+  REPORT_CLEARED_TF=0
   for i in "${!ALL_STEMS[@]}"; do
     STEM="${ALL_STEMS[$i]}"
+    REPORT_KEEP_TF=()
+    if (( REPORT_CLEARED_TF )); then REPORT_KEEP_TF+=(--llm-report-no-clear); fi
+    REPORT_CLEARED_TF=1
     echo "[text_filter] Text editing checkpoint: ${STEM}"
     uv run --project "$PROJECT_ROOT" python -m nagare_clip.stage2.cli \
       --txt "${STAGE1_DIR}/${STEM}.txt" \
       --output-txt "${STAGE3_DIR}/${STEM}_edits.txt" \
       "${CONFIG_ARGS[@]}" \
       --log-file "$LOG_FILE" \
-      --llm-report-dir "$LLM_REPORT_DIR"
+      --llm-report-dir "$LLM_REPORT_DIR" \
+      "${REPORT_KEEP_TF[@]}"
   done
 else
   echo "[text_filter] Skipped (--from-stage $FROM_STAGE)"
@@ -412,7 +417,11 @@ fi
 # --- director: LLM high-level edit operations (per source) ---
 # Always runs (a no-op when director.enabled is false, writing an empty op list).
 if (( FROM_ORDER <= ORD_DIRECTOR )); then
+  REPORT_CLEARED_DIR=0
   for STEM in "${ALL_STEMS[@]}"; do
+    REPORT_KEEP_DIR=()
+    if (( REPORT_CLEARED_DIR )); then REPORT_KEEP_DIR+=(--llm-report-no-clear); fi
+    REPORT_CLEARED_DIR=1
     echo "[director] Edit operations: ${STEM}"
     uv run --project "$PROJECT_ROOT" python -m nagare_clip.director.cli \
       --edits-txt "${STAGE3_DIR}/${STEM}_edits.txt" \
@@ -422,7 +431,8 @@ if (( FROM_ORDER <= ORD_DIRECTOR )); then
       --stem "${STEM}" \
       "${CONFIG_ARGS[@]}" \
       --log-file "$LOG_FILE" \
-      --llm-report-dir "$LLM_REPORT_DIR"
+      --llm-report-dir "$LLM_REPORT_DIR" \
+      "${REPORT_KEEP_DIR[@]}"
   done
 else
   echo "[director] Skipped (--from-stage $FROM_STAGE)"
@@ -437,7 +447,11 @@ fi
 # --- guided_edit: apply director ops into _edits.txt (per source) ---
 # Always runs (a no-op when guided_edit.enabled is false, copying edits through).
 if (( FROM_ORDER <= ORD_GUIDED_EDIT )); then
+  REPORT_CLEARED_GE=0
   for STEM in "${ALL_STEMS[@]}"; do
+    REPORT_KEEP_GE=()
+    if (( REPORT_CLEARED_GE )); then REPORT_KEEP_GE+=(--llm-report-no-clear); fi
+    REPORT_CLEARED_GE=1
     echo "[guided_edit] Applying director ops: ${STEM}"
     uv run --project "$PROJECT_ROOT" python -m nagare_clip.guided_edit.cli \
       --edits-txt "${STAGE3_DIR}/${STEM}_edits.txt" \
@@ -447,7 +461,8 @@ if (( FROM_ORDER <= ORD_GUIDED_EDIT )); then
       --json "${STAGE1_DIR}/${STEM}.json" \
       "${CONFIG_ARGS[@]}" \
       --log-file "$LOG_FILE" \
-      --llm-report-dir "$LLM_REPORT_DIR"
+      --llm-report-dir "$LLM_REPORT_DIR" \
+      "${REPORT_KEEP_GE[@]}"
   done
 else
   echo "[guided_edit] Skipped (--from-stage $FROM_STAGE)"

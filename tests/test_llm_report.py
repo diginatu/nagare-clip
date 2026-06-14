@@ -129,3 +129,27 @@ class TestIndex:
         index = (tmp_path / "index.md").read_text(encoding="utf-8")
         assert index.count("director/vid_a.md") == 1
         assert VERIFY_FAIL in index
+
+    def test_separate_processes_accumulate_when_second_does_not_clear(self, tmp_path):
+        # process 1: clears, writes vid_a
+        r1 = Recorder("director", tmp_path, enabled=True)
+        r1.clear()
+        r1.attempt(
+            unit="vid_a", attempt=0, total=1,
+            messages=[{"role": "user", "content": "x"}],
+            response="y", outcome=OK, cfg={"temperature": 0.0, "model": "m"},
+        )
+        r1.flush_unit("vid_a", outcome=OK)
+        # process 2: does NOT clear (simulates a later loop iteration), writes vid_b
+        r2 = Recorder("director", tmp_path, enabled=True)
+        r2.attempt(
+            unit="vid_b", attempt=0, total=1,
+            messages=[{"role": "user", "content": "x"}],
+            response="y", outcome=OK, cfg={"temperature": 0.0, "model": "m"},
+        )
+        r2.flush_unit("vid_b", outcome=OK)
+        rebuild_index(tmp_path)
+        assert (tmp_path / "director" / "vid_a.md").exists()
+        assert (tmp_path / "director" / "vid_b.md").exists()
+        index = (tmp_path / "index.md").read_text(encoding="utf-8")
+        assert "vid_a" in index and "vid_b" in index

@@ -52,6 +52,10 @@ def parse_args() -> argparse.Namespace:
         help="Override directory for LLM report output",
     )
     parser.add_argument(
+        "--llm-report-no-clear", action="store_true", dest="llm_report_no_clear",
+        help="Do not wipe this stage's report subdir at startup (for per-source loop iterations after the first)",
+    )
+    parser.add_argument(
         "--log-level",
         default=None,
         choices=["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"],
@@ -85,7 +89,8 @@ def main() -> None:
     )
 
     recorder = recorder_from_config("guided_edit", cfg, override_dir=args.llm_report_dir)
-    recorder.clear()
+    if not args.llm_report_no_clear:
+        recorder.clear()
 
     if not ge_cfg.get("enabled", False):
         logging.info("guided_edit: disabled, copying edits through")
