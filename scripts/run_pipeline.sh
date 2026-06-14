@@ -184,6 +184,7 @@ DIRECTOR_DIR="${OUTPUT_DIR}/director"      # director ops (_director.json)
 GUIDED_DIR="${OUTPUT_DIR}/guided_edit"     # augmented _edits.txt + _unapplied.txt
 STAGE4_DIR="${OUTPUT_DIR}/stage4"          # Patch + keep-interval merge (_intervals.json)
 STAGE5_DIR="${OUTPUT_DIR}/stage5"          # Blender VSE project (.blend)
+LLM_REPORT_DIR="${OUTPUT_DIR}/llm_report"  # Per-call LLM report (index.md + detail files)
 LOG_FILE="${OUTPUT_DIR}/pipeline.log"
 
 mkdir -p "$INPUT_VIDEOS_DIR" "$STAGE1_DIR" "$STAGE2_DIR" "$STAGE3_DIR" \
@@ -354,7 +355,8 @@ if (( FROM_ORDER <= ORD_TEXT_FILTER )); then
       --txt "${STAGE1_DIR}/${STEM}.txt" \
       --output-txt "${STAGE3_DIR}/${STEM}_edits.txt" \
       "${CONFIG_ARGS[@]}" \
-      --log-file "$LOG_FILE"
+      --log-file "$LOG_FILE" \
+      --llm-report-dir "$LLM_REPORT_DIR"
   done
 else
   echo "[text_filter] Skipped (--from-stage $FROM_STAGE)"
@@ -379,7 +381,8 @@ if (( FROM_ORDER <= ORD_SUMMARY )); then
     "${EDITS_ARGS[@]}" \
     --output "${SUMMARY_DIR}/summary.json" \
     "${CONFIG_ARGS[@]}" \
-    --log-file "$LOG_FILE"
+    --log-file "$LOG_FILE" \
+    --llm-report-dir "$LLM_REPORT_DIR"
 else
   echo "[summary] Skipped (--from-stage $FROM_STAGE)"
   if [[ ! -f "${SUMMARY_DIR}/summary.json" ]]; then
@@ -396,7 +399,8 @@ if (( FROM_ORDER <= ORD_PLAN )); then
     --summary "${SUMMARY_DIR}/summary.json" \
     --output "${PLAN_DIR}/plan.json" \
     "${CONFIG_ARGS[@]}" \
-    --log-file "$LOG_FILE"
+    --log-file "$LOG_FILE" \
+    --llm-report-dir "$LLM_REPORT_DIR"
 else
   echo "[plan] Skipped (--from-stage $FROM_STAGE)"
   if [[ ! -f "${PLAN_DIR}/plan.json" ]]; then
@@ -417,7 +421,8 @@ if (( FROM_ORDER <= ORD_DIRECTOR )); then
       --plan "${PLAN_DIR}/plan.json" \
       --stem "${STEM}" \
       "${CONFIG_ARGS[@]}" \
-      --log-file "$LOG_FILE"
+      --log-file "$LOG_FILE" \
+      --llm-report-dir "$LLM_REPORT_DIR"
   done
 else
   echo "[director] Skipped (--from-stage $FROM_STAGE)"
@@ -441,7 +446,8 @@ if (( FROM_ORDER <= ORD_GUIDED_EDIT )); then
       --unapplied "${GUIDED_DIR}/${STEM}_unapplied.txt" \
       --json "${STAGE1_DIR}/${STEM}.json" \
       "${CONFIG_ARGS[@]}" \
-      --log-file "$LOG_FILE"
+      --log-file "$LOG_FILE" \
+      --llm-report-dir "$LLM_REPORT_DIR"
   done
 else
   echo "[guided_edit] Skipped (--from-stage $FROM_STAGE)"
