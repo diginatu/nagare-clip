@@ -207,5 +207,71 @@ def recorder_from_config(
 NULL_RECORDER = Recorder("", None, enabled=False)
 
 
+def _read_front_matter(path: Path) -> Optional[Dict[str, Any]]:
+    try:
+        text = path.read_text(encoding="utf-8")
+    except OSError:
+        return None
+    if not text.startswith("---"):
+        return None
+    parts = text.split("---", 2)
+    if len(parts) < 3:
+        return None
+    try:
+        data = yaml.safe_load(parts[1])
+    except yaml.YAMLError:
+        return None
+    return data if isinstance(data, dict) else None
+
+
+def _stage_rank(stage: str) -> int:
+    return STAGE_ORDER.index(stage) if stage in STAGE_ORDER else len(STAGE_ORDER)
+
+
+def _cell(value: Any) -> str:
+    return str(value).replace("|", r"\|").replace("\n", " ")
+
+
 def rebuild_index(report_dir: Any) -> None:
-    raise NotImplementedError
+    report_dir = Path(report_dir)
+    rows: List[tuple] = []
+    try:
+        detail_files = sorted(report_dir.glob("*/*.md"))
+    except OSError:
+        return
+    for path in detail_files:
+        fm = _read_front_matter(path)
+        if fm is None:
+            continue
+        rows.append((fm, path.relative_to(report_dir)))
+    rows.sort(key=lambda r: (_stage_rank(str(r[0].get("stage", ""))), str(r[1])))
+
+    counts: Dict[str, int] = {}
+    for fm, _ in rows:
+        counts[str(fm.get("outcome", ""))] = counts.get(str(fm.get("outcome", "")), 0) + 1
+    totals = ", ".join(f"{k}: {v}" for k, v in sorted(counts.items())) or "no calls recorded"
+
+    lines = [
+        "# LLM Report",
+        "",
+        f"{len(rows)} call(s) — {totals}",
+        "",
+        "| Stage | Unit | Attempts | Outcome | Reason | Detail |",
+        "|---|---|---|---|---|---|",
+    ]
+    for fm, rel in rows:
+        lines.append(
+            "| {stage} | {unit} | {attempts} | {outcome} | {reason} | [detail]({link}) |".format(
+                stage=_cell(fm.get("stage", "")),
+                unit=_cell(fm.get("unit", "")),
+                attempts=_cell(fm.get("attempts", "")),
+                outcome=_cell(fm.get("outcome", "")),
+                reason=_cell(fm.get("reason", "")),
+                link=str(rel).replace("\\", "/"),
+            )
+        )
+    try:
+        report_dir.mkdir(parents=True, exist_ok=True)
+        (report_dir / "index.md").write_text("\n".join(lines) + "\n", encoding="utf-8")
+    except OSError as e:
+        logger.warning("llm_report: could not write index: %s", e)

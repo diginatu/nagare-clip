@@ -10,6 +10,7 @@ from nagare_clip.llm_report import (
     NULL_RECORDER,
     OK,
     OK_EMPTY,
+    VERIFY_FAIL,
     Recorder,
     recorder_from_config,
     rebuild_index,
@@ -89,3 +90,42 @@ class TestDisabled:
         NULL_RECORDER.flush_unit("u", outcome=OK)
         # nothing to assert beyond "did not raise"; NULL_RECORDER has no dir
         assert NULL_RECORDER.enabled is False
+
+
+class TestIndex:
+    def _write_unit(self, tmp_path, stage, unit, outcome, reason=""):
+        rec = Recorder(stage, tmp_path, enabled=True)
+        rec.attempt(
+            unit=unit, attempt=0, total=1,
+            messages=[{"role": "user", "content": "x"}],
+            response="y", outcome=outcome, cfg={"temperature": 0.0, "model": "m"},
+        )
+        rec.flush_unit(unit, outcome=outcome, reason=reason)
+
+    def test_index_lists_all_units_in_stage_order(self, tmp_path):
+        self._write_unit(tmp_path, "director", "vid_b", OK)
+        self._write_unit(tmp_path, "text_filter", "summary_llm", OK)
+        self._write_unit(tmp_path, "guided_edit", "vid_a", DROPPED_ITEMS, "1 op unapplied")
+
+        rebuild_index(tmp_path)
+        index = (tmp_path / "index.md").read_text(encoding="utf-8")
+
+        # text_filter row appears before director row (STAGE_ORDER)
+        assert index.index("text_filter") < index.index("director")
+        assert "summary_llm" in index
+        assert "1 op unapplied" in index
+        # detail links are relative
+        assert "director/vid_b.md" in index
+        assert "guided_edit/vid_a.md" in index
+
+    def test_index_is_regenerated_not_appended(self, tmp_path):
+        self._write_unit(tmp_path, "director", "vid_a", OK)
+        rebuild_index(tmp_path)
+        # re-run director with a different outcome (refresh own section)
+        Recorder("director", tmp_path, enabled=True).clear()
+        self._write_unit(tmp_path, "director", "vid_a", VERIFY_FAIL)
+        rebuild_index(tmp_path)
+
+        index = (tmp_path / "index.md").read_text(encoding="utf-8")
+        assert index.count("director/vid_a.md") == 1
+        assert VERIFY_FAIL in index
