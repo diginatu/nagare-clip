@@ -3,6 +3,13 @@
 # All values shown are the defaults; remove or comment out
 # any you don't want to change.
 
+# LLM provider selection (applies to every LLM stage below):
+#   Set `provider` to one of: ollama_chat (default, local), openai, gemini, anthropic.
+#   `model` is the provider's model name; LiteLLM receives "<provider>/<model>".
+#   For cloud providers, set `api_key` (or the provider's standard env var, e.g.
+#   OPENAI_API_KEY / GEMINI_API_KEY / ANTHROPIC_API_KEY) and leave `api_base` empty.
+#   Each stage can use a different provider.
+
 general:
   log_level: INFO   # DEBUG | INFO | WARNING | ERROR | CRITICAL
   log_file: ""      # Path to log file; empty = console only (run_pipeline.sh sets this automatically)
@@ -27,9 +34,10 @@ audio_silence:
 # Pipeline Stage 3: text editing checkpoint.
 text_filter:
   use_llm: false               # Enable LLM text filter for the text-editing checkpoint
-  api_base: "http://localhost:11434/v1"  # OpenAI-compatible API base URL (Ollama default)
-  model: "qwen3.5:4b"          # Model name for chat completions
-  api_key: ""                  # API key (empty = no auth, for local Ollama)
+  provider: "ollama_chat"      # LiteLLM provider prefix: ollama_chat | openai | gemini | anthropic
+  api_base: ""                 # Base URL; empty -> Ollama localhost default; leave empty for cloud providers
+  model: "qwen3.5:4b"          # Model name (passed to LiteLLM as "<provider>/<model>")
+  api_key: ""                  # API key for the provider (or set the provider's env var, e.g. OPENAI_API_KEY)
   batch_size: 10               # Number of transcript segments per LLM call
   timeout: 60                  # API request timeout in seconds
   retry_on_invalid: true       # On lines the LLM mangled (changed text outside {{old->new}} markers, fabricated old, or omitted the line), retry just those lines with a halved batch size
@@ -40,9 +48,10 @@ text_filter:
   summary_llm:                   # Summary LLM: generates context (summary + keywords) for the filter LLM
     enabled: false               # Enable summary generation before filtering
     # keywords: []               # Constant keywords always injected into the filter LLM prompt (e.g. domain-specific terms, proper nouns)
-    api_base: "http://localhost:11434"  # API base URL (can differ from filter LLM)
-    model: "qwen3.5:4b"         # Model for summarization (can use a larger model)
-    api_key: ""                  # API key (empty = no auth)
+    provider: "ollama_chat"      # LiteLLM provider prefix: ollama_chat | openai | gemini | anthropic
+    api_base: ""                 # Base URL; empty -> Ollama localhost default; leave empty for cloud providers
+    model: "qwen3.5:4b"         # Model name (passed to LiteLLM as "<provider>/<model>"; can differ from filter LLM)
+    api_key: ""                  # API key for the provider (or set the provider's env var, e.g. OPENAI_API_KEY)
     temperature: 0.3             # Higher temperature for summarization
     thinking: false              # Thinking mode for summary LLM
     timeout: 120                 # Longer timeout since full transcript is sent
@@ -55,9 +64,10 @@ text_filter:
 # default (writes an empty summary = no-op).
 summary:
   enabled: false               # Enable the summary LLM
-  api_base: "http://localhost:11434"
-  model: "gpt-oss:120b"        # A larger model for editorial judgement
-  api_key: ""
+  provider: "ollama_chat"      # LiteLLM provider prefix: ollama_chat | openai | gemini | anthropic
+  api_base: ""                 # Base URL; empty -> Ollama localhost default; leave empty for cloud providers
+  model: "gpt-oss:120b"        # A larger model (passed to LiteLLM as "<provider>/<model>")
+  api_key: ""                  # API key for the provider (or set the provider's env var, e.g. OPENAI_API_KEY)
   temperature: 0.3
   thinking: false
   timeout: 300
@@ -75,9 +85,10 @@ summary:
 # Disabled by default (writes an empty plan = no-op).
 plan:
   enabled: false               # Enable the plan LLM
-  api_base: "http://localhost:11434"
-  model: "gpt-oss:120b"        # A larger model for editorial judgement
-  api_key: ""
+  provider: "ollama_chat"      # LiteLLM provider prefix: ollama_chat | openai | gemini | anthropic
+  api_base: ""                 # Base URL; empty -> Ollama localhost default; leave empty for cloud providers
+  model: "gpt-oss:120b"        # A larger model (passed to LiteLLM as "<provider>/<model>")
+  api_key: ""                  # API key for the provider (or set the provider's env var, e.g. OPENAI_API_KEY)
   temperature: 0.3
   thinking: false
   timeout: 300
@@ -95,9 +106,10 @@ plan:
 # empty op list = no-op).
 director:
   enabled: false               # Enable the director LLM
-  api_base: "http://localhost:11434"
-  model: "gpt-oss:120b"        # A larger model for editorial judgement
-  api_key: ""
+  provider: "ollama_chat"      # LiteLLM provider prefix: ollama_chat | openai | gemini | anthropic
+  api_base: ""                 # Base URL; empty -> Ollama localhost default; leave empty for cloud providers
+  model: "gpt-oss:120b"        # A larger model (passed to LiteLLM as "<provider>/<model>")
+  api_key: ""                  # API key for the provider (or set the provider's env var, e.g. OPENAI_API_KEY)
   temperature: 0.2
   thinking: false
   timeout: 300
@@ -114,9 +126,10 @@ director:
 # for any that could not be applied. Disabled by default (copies edits through).
 guided_edit:
   enabled: false               # Enable applying director ops
-  api_base: "http://localhost:11434"
-  model: "qwen3.5:4b"          # The same small model as text_filter is fine
-  api_key: ""
+  provider: "ollama_chat"      # LiteLLM provider prefix: ollama_chat | openai | gemini | anthropic
+  api_base: ""                 # Base URL; empty -> Ollama localhost default; leave empty for cloud providers
+  model: "qwen3.5:4b"          # The same small model as text_filter is fine (passed to LiteLLM as "<provider>/<model>")
+  api_key: ""                  # API key for the provider (or set the provider's env var, e.g. OPENAI_API_KEY)
   temperature: 0.1
   thinking: false
   timeout: 60

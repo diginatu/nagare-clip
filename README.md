@@ -161,6 +161,19 @@ Parameters resolve in this priority order (highest wins):
 
 The config file covers all sections (`general`, `stage1`, `audio_silence`, `stage2`, `stage3`, `stage4`, `pipeline`). The config section names are functional labels, not pipeline-stage numbers: `audio_silence` drives pipeline Stage 2, `stage2.*` drives the Stage 3 text-editing checkpoint, and `stage3.*` drives the Stage 4 interval merge. See `config.example.yml` for the full list of keys and their defaults.
 
+### Choosing an LLM provider
+
+Every LLM stage (`text_filter` and its `summary_llm`, `summary`, `plan`, `director`, `guided_edit`) routes through a unified transport backed by the [LiteLLM](https://github.com/BerriAI/litellm) library, so you can point any stage at a local or cloud provider. On a stage's config block, set `provider:` to one of `ollama_chat` (default, local Ollama), `openai`, `gemini`, or `anthropic`, and set `model:` to that provider's model name — LiteLLM receives the combined `"<provider>/<model>"`. Supply credentials with `api_key:` (or the provider's standard environment variable, e.g. `OPENAI_API_KEY`, `GEMINI_API_KEY`, `ANTHROPIC_API_KEY`). Leave `api_base:` empty for cloud providers; for `ollama_chat` an empty `api_base` falls back to local Ollama (`http://localhost:11434`). Each stage chooses its provider independently, so you can mix (e.g. a cloud model for `director` and local Ollama for `guided_edit`).
+
+```yaml
+director:
+  enabled: true
+  provider: "openai"
+  model: "gpt-4o"
+  api_key: ""        # or set OPENAI_API_KEY in the environment
+  api_base: ""       # leave empty for cloud providers
+```
+
 ### Stage 2: Audio-Silence Detection
 
 Pipeline Stage 2 runs ffmpeg `silencedetect` (inside the whisperx Docker image) on the waveform and writes an editable `{stem}_cuts.txt` cut list. Each non-comment line is a `START - END` silent span (seconds) that will be cut from the video; delete a line to keep that span, or adjust the times. Stage 4 unions these reviewed ranges into its keep-interval excludes. This is acoustic silence — distinct from `stage3.silence_threshold`, which is a WhisperX word-gap heuristic.
@@ -179,7 +192,8 @@ The text-editing checkpoint always produces `{stem}_edits.txt`. When `stage2.use
 ```yaml
 stage2:
   use_llm: true
-  api_base: "http://localhost:11434/v1"
+  provider: "ollama_chat"   # see "Choosing an LLM provider" above
+  api_base: ""              # empty -> local Ollama; leave empty for cloud providers
   model: "qwen3.5:4b"
   thinking: "low"   # thinking mode: true/false, or "low"/"medium"/"high" for supported models
 ```
@@ -190,7 +204,7 @@ Human editors can also wrap a span in `<keep>...</keep>` to force-preserve the a
 
 `<speed factor="N.N">...</speed>` is a companion marker with identical force-keep behavior **plus** a playback-speed annotation. Stage 4 records each marked span as an entry in a top-level `speed_ranges` array (`{start, end, factor}`) in `_intervals.json`, independent of `keep_intervals`. Stage 5 splits keep intervals at those boundaries, so a `<speed>` span may cover an arbitrary sub-range of a keep interval (or span several), and adds a Blender VSE Speed Control effect strip over each sped-up sub-range so it plays at the requested speed in the final `.blend`.
 
-`thinking` sends `"think"` in the Ollama API request, enabling chain-of-thought reasoning for supported models (e.g. qwen3, deepseek-r1). Set `true`/`false`, or a string level like `"low"`, `"medium"`, `"high"` for models that support granular control (e.g. Qwen 3.5). Ollama returns the reasoning trace in a separate field; the pipeline uses only the final answer.
+`thinking` enables chain-of-thought reasoning for supported models (e.g. qwen3, deepseek-r1); it maps to LiteLLM's `reasoning_effort` (best-effort per provider). Set `true`/`false`, or a string level like `"low"`, `"medium"`, `"high"` for models that support granular control (e.g. Qwen 3.5). The pipeline uses only the final answer, not the reasoning trace.
 
 #### Summary LLM (optional)
 
