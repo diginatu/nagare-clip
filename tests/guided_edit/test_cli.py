@@ -57,7 +57,7 @@ def test_enabled_applies_ops(monkeypatch, tmp_path):
         return "1: あ<cut>いう</cut>"
 
     monkeypatch.setattr(
-        ge_cli, "apply_ops", lambda lines, ops, c: apply_ops(lines, ops, c, call_llm=fake_llm)
+        ge_cli, "apply_ops", lambda lines, ops, c, **kwargs: apply_ops(lines, ops, c, call_llm=fake_llm)
     )
     monkeypatch.setattr(sys, "argv", _argv(edits, director, out, cfg))
     ge_cli.main()

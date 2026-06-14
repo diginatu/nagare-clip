@@ -14,6 +14,14 @@ from typing import Any, Callable, Dict, List, Tuple
 
 from nagare_clip.director.director_llm import DirectorOp
 from nagare_clip.guided_edit.reconcile import verify_op
+from nagare_clip.llm_report import (
+    DROPPED_ITEMS,
+    LLM_ERROR,
+    NULL_RECORDER,
+    OK,
+    VERIFY_FAIL,
+    Recorder,
+)
 from nagare_clip.llm_retry import cfg_for_attempt, retry_attempts
 from nagare_clip.stage2.llm_filter import _call_llm
 
@@ -76,21 +84,29 @@ def _parse_returned_lines(response: str, allowed: set[int]) -> Dict[int, str]:
     return out
 
 
-def _apply_one_op(
-    lines: List[str], op: DirectorOp, cfg: Dict[str, Any], call_llm: CallLLM
-) -> List[str]:
-    a, b = op.lines
-    allowed = {a} if a == b else {a, b}
-    messages = [
+def _build_messages(op: DirectorOp, lines: List[str], cfg: Dict[str, Any]) -> List[Dict[str, str]]:
+    return [
         {"role": "system", "content": cfg.get("prompt", "")},
         {"role": "user", "content": build_user_prompt(op, lines)},
     ]
+
+
+def _apply_one_op(
+    lines: List[str],
+    op: DirectorOp,
+    cfg: Dict[str, Any],
+    call_llm: CallLLM,
+    messages: List[Dict[str, str]],
+) -> Tuple[List[str], str]:
+    """Returns (new_lines, raw_response)."""
+    a, b = op.lines
+    allowed = {a} if a == b else {a, b}
     response = call_llm(messages, cfg)
     returned = _parse_returned_lines(response, allowed)
     new_lines = list(lines)
     for n, text in returned.items():
         new_lines[n - 1] = text
-    return new_lines
+    return new_lines, response
 
 
 def apply_ops(
@@ -99,6 +115,8 @@ def apply_ops(
     cfg: Dict[str, Any],
     *,
     call_llm: CallLLM = _call_llm,
+    recorder: Recorder = NULL_RECORDER,
+    unit: str = "guided_edit",
 ) -> Tuple[List[str], List[Unapplied]]:
     """Apply ops sequentially; return (new_lines, unapplied).
 
@@ -110,39 +128,57 @@ def apply_ops(
     lines = list(edit_lines)
     unapplied: List[Unapplied] = []
     attempts = retry_attempts(cfg)
-    for op in ops:
+    for i, op in enumerate(ops):
+        section = f"op {i}: {op.type} [{op.lines[0]}-{op.lines[1]}]"
         last_reason = f"{op.type} op not applied"
         applied = False
         for attempt in range(attempts):
+            attempt_cfg = cfg_for_attempt(cfg, attempt)
+            messages = _build_messages(op, lines, attempt_cfg)
             try:
-                candidate = _apply_one_op(
-                    lines, op, cfg_for_attempt(cfg, attempt), call_llm
+                candidate, response = _apply_one_op(
+                    lines, op, attempt_cfg, call_llm, messages
                 )
             except Exception as e:  # noqa: BLE001 - LLM/parse failures are recoverable
                 last_reason = f"LLM/apply error: {e}"
                 logger.warning(
                     "guided_edit: op %s attempt %d/%d failed: %s",
-                    op.type,
-                    attempt + 1,
-                    attempts,
-                    e,
+                    op.type, attempt + 1, attempts, e,
+                )
+                recorder.attempt(
+                    unit=unit, attempt=attempt, total=attempts, messages=messages,
+                    error=str(e), outcome=LLM_ERROR, reason=last_reason,
+                    cfg=attempt_cfg, section=section,
                 )
                 continue
             reason = verify_op(lines, candidate, op)
             if reason is None:
+                recorder.attempt(
+                    unit=unit, attempt=attempt, total=attempts, messages=messages,
+                    response=response, outcome=OK, cfg=attempt_cfg, section=section,
+                )
                 lines = candidate
                 applied = True
                 break
             last_reason = reason
+            recorder.attempt(
+                unit=unit, attempt=attempt, total=attempts, messages=messages,
+                response=response, outcome=VERIFY_FAIL, reason=reason,
+                cfg=attempt_cfg, section=section,
+            )
             logger.warning(
                 "guided_edit: op %s attempt %d/%d reverted: %s",
-                op.type,
-                attempt + 1,
-                attempts,
-                reason,
+                op.type, attempt + 1, attempts, reason,
             )
         if not applied:
             unapplied.append((op, last_reason))
+    if unapplied:
+        outcome = DROPPED_ITEMS
+        reason = f"{len(unapplied)}/{len(ops)} op(s) unapplied"
+    else:
+        outcome = OK
+        reason = f"{len(ops)} op(s) applied"
+    recorder.flush_unit(unit, outcome=outcome, reason=reason)
     return lines, unapplied
 
 

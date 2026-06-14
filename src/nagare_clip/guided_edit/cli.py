@@ -20,6 +20,7 @@ from pathlib import Path
 from nagare_clip.config import get_effective_config
 from nagare_clip.director.director_llm import ops_from_dict
 from nagare_clip.guided_edit.apply import apply_ops, format_unapplied
+from nagare_clip.llm_report import recorder_from_config
 from nagare_clip.logging_setup import setup_logging
 from nagare_clip.stage3.check_edits import check_edits
 
@@ -44,6 +45,12 @@ def parse_args() -> argparse.Namespace:
         help="WhisperX JSON for a final check_edits pass (optional)",
     )
     parser.add_argument("--config", dest="config_path", default=None)
+    parser.add_argument(
+        "--llm-report-dir",
+        dest="llm_report_dir",
+        default=None,
+        help="Override directory for LLM report output",
+    )
     parser.add_argument(
         "--log-level",
         default=None,
@@ -70,11 +77,15 @@ def main() -> None:
     ge_cfg = cfg["guided_edit"]
     edit_lines = Path(args.edits_txt).read_text(encoding="utf-8").splitlines()
     output = Path(args.output)
+    stem = output.stem.replace("_edits", "")
     unapplied_path = (
         Path(args.unapplied)
         if args.unapplied
-        else output.with_name(output.stem.replace("_edits", "") + "_unapplied.txt")
+        else output.with_name(stem + "_unapplied.txt")
     )
+
+    recorder = recorder_from_config("guided_edit", cfg, override_dir=args.llm_report_dir)
+    recorder.clear()
 
     if not ge_cfg.get("enabled", False):
         logging.info("guided_edit: disabled, copying edits through")
@@ -86,7 +97,9 @@ def main() -> None:
         )
         ops = ops_from_dict(director_data, num_lines=len(edit_lines))
         logging.info("guided_edit: applying %d director op(s)", len(ops))
-        result_lines, unapplied = apply_ops(edit_lines, ops, ge_cfg)
+        result_lines, unapplied = apply_ops(
+            edit_lines, ops, ge_cfg, recorder=recorder, unit=stem
+        )
         logging.info(
             "guided_edit: %d applied, %d unapplied",
             len(ops) - len(unapplied),
@@ -109,6 +122,8 @@ def main() -> None:
             logging.warning(
                 "guided_edit: %d check_edits problem(s) in output", len(problems)
             )
+
+    recorder.rebuild_index()
 
 
 if __name__ == "__main__":

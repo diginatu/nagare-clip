@@ -164,3 +164,49 @@ class TestRetry:
             pytest.approx(0.3),
             pytest.approx(0.5),
         ]
+
+
+# add to tests/guided_edit/test_apply.py
+import yaml as _yaml
+
+from nagare_clip.llm_report import Recorder
+
+
+def _fm(tmp_path, unit):
+    text = (tmp_path / "guided_edit" / f"{unit}.md").read_text(encoding="utf-8")
+    _, fm, _ = text.split("---", 2)
+    return _yaml.safe_load(fm)
+
+
+class TestGuidedEditRecorder:
+    def test_records_unapplied_op_as_dropped_items(self, tmp_path):
+        rec = Recorder("guided_edit", tmp_path, enabled=True)
+        op = DirectorOp(type="keep", lines=(1, 1), note="")
+        # call_llm returns the line unchanged -> op never reflected -> verify fails ->
+        # all retries exhausted -> op unapplied.
+
+        def fake(_messages, _cfg):
+            return "1: hello world"
+
+        lines = ["hello world"]
+        new_lines, unapplied = apply_ops(
+            lines, [op], {"max_retries": 1}, call_llm=fake, recorder=rec, unit="vid",
+        )
+        assert len(unapplied) == 1
+        fm = _fm(tmp_path, "vid")
+        assert fm["outcome"] == "dropped-items"
+        body = (tmp_path / "guided_edit" / "vid.md").read_text(encoding="utf-8")
+        assert "op 0: keep" in body  # section header rendered
+
+    def test_records_applied_op_as_ok(self, tmp_path):
+        rec = Recorder("guided_edit", tmp_path, enabled=True)
+        op = DirectorOp(type="keep", lines=(1, 1), note="")
+
+        def fake(_messages, _cfg):
+            return "1: <keep>hello world</keep>"
+
+        new_lines, unapplied = apply_ops(
+            ["hello world"], [op], {"max_retries": 0}, call_llm=fake, recorder=rec, unit="vid",
+        )
+        assert unapplied == []
+        assert _fm(tmp_path, "vid")["outcome"] == "ok"
