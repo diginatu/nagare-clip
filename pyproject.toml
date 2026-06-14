@@ -10,6 +10,7 @@ dependencies = [
     "PyYAML",
     "ginza",
     "ja_ginza",
+    "litellm>=1.89.0",
 ]
 
 [project.optional-dependencies]
