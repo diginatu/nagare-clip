@@ -113,7 +113,7 @@ director:
   temperature: 0.2
   thinking: false
   timeout: 300
-  response_format: "json"      # Ollama JSON mode for reliable parsing
+  response_format: "json"      # JSON mode for reliable parsing
   max_retries: 2               # Extra attempts on LLM error / unparseable JSON (0 = single attempt)
   retry_temp_step: 0.2         # Temperature increment added on each retry
   retry_temp_cap: 0.8          # Maximum temperature any retry uses
