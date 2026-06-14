@@ -144,6 +144,7 @@ config.example.yml            # Documented YAML config template with all default
 src/nagare_clip/          # Main Python package (src layout)
   config.py                   # Centralised config loading/merging (DEFAULTS dict)
   llm_retry.py                # Shared bounded-retry helpers (director/guided_edit): retry_attempts(), cfg_for_attempt()
+  llm_report.py               # Structured per-call LLM report: Recorder + rebuild_index (index.md + per-call <stage>/<unit>.md)
   cli.py                      # Pipeline Stage 4 CLI entry point (patch + intervals; --cuts-txt)
   __main__.py                 # python -m nagare_clip support
   audio_silence/              # Pipeline Stage 2 (audio-silence detection)
@@ -250,6 +251,17 @@ All tunable parameters are centralised in `src/nagare_clip/config.py`:
 - `run_pipeline.sh` accepts `--from-stage S` where `S` is a stage **name** (`transcription`, `audio_silence`, `text_filter`, `summary`, `plan`, `director`, `guided_edit`, `intervals`, `blender`) to skip expensive earlier stages and reuse their outputs; legacy numbers 1-5 still map to transcription/audio_silence/text_filter/intervals/blender. Stage execution order is the `STAGE_ORDER` array; each stage runs when `FROM_ORDER <= its order`. Also configurable via `pipeline.from_stage` in YAML config. When skipping stages, the script validates that required intermediate outputs exist. Output dirs: legacy `output/stage1`..`output/stage5` for transcription/audio_silence/text_filter/intervals/blender, plus name-only `output/summary/`, `output/plan/`, `output/director/` and `output/guided_edit/`. The intervals stage reads the **guided_edit** `_edits.txt` (which is the text_filter edits passed through when guided_edit is disabled).
 - `summary`, `plan`, `director` and `guided_edit` **always run** in a full pipeline (they are cheap no-ops when disabled: summary writes `{summary:"",parts:[]}`, plan writes `{directions:[]}`, director writes an empty op list, guided_edit copies the edits through), so `output/guided_edit/{stem}_edits.txt` always exists for the intervals stage to consume. `summary`/`plan` run **once project-wide** (single invocation over all videos); the other two loop per source.
 - Stage 1 (WhisperX) runs in a **single container** for all source files, passing all relative paths as positional arguments. This avoids model reload overhead between videos. Stages 2/3/4 still loop per-source after the single Stage 1 completes.
+- All LLM stages (`text_filter` incl. its summary-LLM and batch-halving retries,
+  `summary`, `plan`, `director`, `guided_edit`) record every attempt's prompt,
+  raw response, retry count and outcome via `nagare_clip.llm_report.Recorder`
+  into `output/llm_report/` (config `general.llm_report` default true,
+  `general.llm_report_dir` default `output/llm_report`). Each stage CLI builds a
+  recorder, `clear()`s its own `<stage>/` subdir at start, passes it into the
+  stage functions (default `NULL_RECORDER` = no-op, keeps functions testable),
+  and `rebuild_index()`s `index.md` from every detail file's YAML front-matter.
+  Outcomes: ok / ok-empty / llm-error / unparseable / verify-fail / dropped-items;
+  the parse helpers take a `drops` accumulator so the previously silent per-item
+  drop warnings surface as `dropped-items` with counts.
 
 ## Python Execution
 

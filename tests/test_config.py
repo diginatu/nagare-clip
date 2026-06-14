@@ -227,3 +227,11 @@ def test_director_override_keeps_other_defaults(tmp_path):
     assert cfg["director"]["enabled"] is True
     assert cfg["director"]["model"] == "gpt-oss:120b"
     assert cfg["director"]["temperature"] == 0.2
+
+
+def test_llm_report_defaults():
+    from nagare_clip.config import get_effective_config
+
+    cfg = get_effective_config(None, {})
+    assert cfg["general"]["llm_report"] is True
+    assert cfg["general"]["llm_report_dir"] == "output/llm_report"

@@ -48,7 +48,7 @@ def test_enabled_writes_directions(monkeypatch, tmp_path):
         "all", [PartSummary("a", (1, 2), "x"), PartSummary("b", (1, 1), "y")]
     )
 
-    def fake_generate(project_summary, cfg):
+    def fake_generate(project_summary, cfg, **kwargs):
         # confirms the loaded summary round-tripped into the stage
         assert [p.stem for p in project_summary.parts] == ["a", "b"]
         return [PartDirection("a", (1, 2), "keep"), PartDirection("b", (1, 1), "remove")]

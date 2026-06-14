@@ -134,6 +134,25 @@ class TestBuildEnhancedPrompt:
         assert result == base
 
 
+import yaml as _yaml
+
+from nagare_clip.llm_report import Recorder
+
+
+class TestSummaryLLMRecorder:
+    def test_records_summary_call(self, tmp_path):
+        rec = Recorder("text_filter", tmp_path, enabled=True)
+
+        def fake(_messages, _cfg):
+            return '{"summary":"s","keywords":["k"]}'
+
+        out = generate_summary("some text", {"model": "m"}, call_llm=fake, recorder=rec)
+        assert out is not None
+        text = (tmp_path / "text_filter" / "summary_llm.md").read_text(encoding="utf-8")
+        _, fm, _ = text.split("---", 2)
+        assert _yaml.safe_load(fm)["outcome"] == "ok"
+
+
 class TestGenerateSummary:
     @patch("nagare_clip.stage2.summary_llm._call_llm")
     def test_successful_summary(self, mock_llm):

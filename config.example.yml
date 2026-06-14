@@ -6,6 +6,8 @@
 general:
   log_level: INFO   # DEBUG | INFO | WARNING | ERROR | CRITICAL
   log_file: ""      # Path to log file; empty = console only (run_pipeline.sh sets this automatically)
+  llm_report: true            # write a per-call LLM report under output/llm_report/
+  llm_report_dir: "output/llm_report"
 
 transcription:
   compute_type: float16

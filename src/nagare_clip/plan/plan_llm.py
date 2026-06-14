@@ -17,6 +17,15 @@ from dataclasses import dataclass
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from nagare_clip.director.director_llm import _FENCE_RE
+from nagare_clip.llm_report import (
+    DROPPED_ITEMS,
+    LLM_ERROR,
+    NULL_RECORDER,
+    OK,
+    OK_EMPTY,
+    UNPARSEABLE,
+    Recorder,
+)
 from nagare_clip.llm_retry import cfg_for_attempt, retry_attempts
 from nagare_clip.stage2.llm_filter import _call_llm
 from nagare_clip.summary.summarize import ProjectSummary
@@ -44,7 +53,7 @@ def _format_parts_for_plan(project_summary: ProjectSummary) -> str:
 
 
 def try_parse_plan_response(
-    response: str, num_parts: int
+    response: str, num_parts: int, drops: Optional[List[str]] = None
 ) -> Optional[Dict[int, str]]:
     """Parse ``{"directions": [{"index": N, "direction": "…"}]}``.
 
@@ -52,6 +61,11 @@ def try_parse_plan_response(
     array) so the caller can retry; otherwise a (possibly empty) ``{index:
     direction}`` map with malformed/out-of-range entries dropped (logged).
     """
+    def _drop(msg: str) -> None:
+        logger.warning("plan: %s", msg)
+        if drops is not None:
+            drops.append(msg)
+
     text = response.strip()
     fence = _FENCE_RE.match(text)
     if fence:
@@ -71,14 +85,14 @@ def try_parse_plan_response(
             continue
         idx = raw.get("index")
         if isinstance(idx, bool) or not isinstance(idx, int):
-            logger.warning("plan: direction dropped, bad index %r", idx)
+            _drop(f"direction dropped, bad index {idx!r}")
             continue
         if not (1 <= idx <= num_parts):
-            logger.warning("plan: direction dropped, index %r out of range", idx)
+            _drop(f"direction dropped, index {idx!r} out of range")
             continue
         direction = raw.get("direction")
         if not isinstance(direction, str) or direction == "":
-            logger.warning("plan: direction dropped, empty/missing text")
+            _drop("direction dropped, empty/missing text")
             continue
         out[idx] = direction
     return out
@@ -89,6 +103,8 @@ def generate_plan(
     cfg: Dict[str, Any],
     *,
     call_llm: CallLLM = _call_llm,
+    recorder: Recorder = NULL_RECORDER,
+    unit: str = "plan",
 ) -> List[PartDirection]:
     """Run the plan LLM and return one rough direction per part (where given)."""
     parts = project_summary.parts
@@ -100,26 +116,49 @@ def generate_plan(
     ]
     attempts = retry_attempts(cfg)
     for attempt in range(attempts):
+        attempt_cfg = cfg_for_attempt(cfg, attempt)
         try:
-            response = call_llm(messages, cfg_for_attempt(cfg, attempt))
-        except Exception:
+            response = call_llm(messages, attempt_cfg)
+        except Exception as e:  # noqa: BLE001 - recoverable
             logger.warning(
-                "plan: LLM call failed (attempt %d/%d)",
-                attempt + 1,
-                attempts,
+                "plan: LLM call failed (attempt %d/%d)", attempt + 1, attempts,
                 exc_info=True,
             )
+            recorder.attempt(
+                unit=unit, attempt=attempt, total=attempts, messages=messages,
+                error=str(e), outcome=LLM_ERROR, reason="LLM call failed",
+                cfg=attempt_cfg,
+            )
             continue
-        mapping = try_parse_plan_response(response, num_parts=len(parts))
-        if mapping is not None:
-            return [
-                PartDirection(stem=p.stem, lines=p.lines, direction=mapping[i + 1])
-                for i, p in enumerate(parts)
-                if (i + 1) in mapping
-            ]
-        logger.warning(
-            "plan: response unparseable (attempt %d/%d)", attempt + 1, attempts
+        drops: List[str] = []
+        mapping = try_parse_plan_response(response, num_parts=len(parts), drops=drops)
+        if mapping is None:
+            recorder.attempt(
+                unit=unit, attempt=attempt, total=attempts, messages=messages,
+                response=response, outcome=UNPARSEABLE,
+                reason="invalid JSON / no 'directions' array", cfg=attempt_cfg,
+            )
+            logger.warning(
+                "plan: response unparseable (attempt %d/%d)", attempt + 1, attempts
+            )
+            continue
+        if drops:
+            outcome, reason = DROPPED_ITEMS, f"{len(drops)} dropped: " + "; ".join(drops)
+        elif not mapping:
+            outcome, reason = OK_EMPTY, ""
+        else:
+            outcome, reason = OK, ""
+        recorder.attempt(
+            unit=unit, attempt=attempt, total=attempts, messages=messages,
+            response=response, outcome=outcome, reason=reason, cfg=attempt_cfg,
         )
+        recorder.flush_unit(unit, outcome=outcome, reason=reason)
+        return [
+            PartDirection(stem=p.stem, lines=p.lines, direction=mapping[i + 1])
+            for i, p in enumerate(parts)
+            if (i + 1) in mapping
+        ]
+    recorder.flush_unit(unit, outcome=LLM_ERROR, reason=f"all {attempts} attempt(s) failed")
     logger.warning("plan: all %d attempt(s) failed; no directions", attempts)
     return []
 

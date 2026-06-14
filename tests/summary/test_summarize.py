@@ -150,6 +150,52 @@ class TestBuildSummary:
         ]
 
 
+import yaml as _yaml
+
+from nagare_clip.llm_report import Recorder
+
+
+def _outcome(tmp_path, unit):
+    text = (tmp_path / "summary" / f"{unit}.md").read_text(encoding="utf-8")
+    _, fm, _ = text.split("---", 2)
+    return _yaml.safe_load(fm)["outcome"]
+
+
+class TestSummaryRecorder:
+    def test_segment_records_ok(self, tmp_path):
+        rec = Recorder("summary", tmp_path, enabled=True)
+        resp = '{"parts":[{"lines":[1,2],"summary":"s"}]}'
+
+        def fake(_m, _c):
+            return resp
+
+        parts = segment_video("vid", ["a", "b"], {"max_retries": 0}, call_llm=fake, recorder=rec)
+        assert len(parts) == 1
+        assert _outcome(tmp_path, "vid") == "ok"
+
+    def test_segment_records_dropped_items(self, tmp_path):
+        rec = Recorder("summary", tmp_path, enabled=True)
+        resp = '{"parts":[{"lines":[1,2],"summary":"s"},{"lines":[9,9],"summary":"x"}]}'
+
+        def fake(_m, _c):
+            return resp
+
+        parts = segment_video("vid", ["a", "b"], {"max_retries": 0}, call_llm=fake, recorder=rec)
+        assert len(parts) == 1
+        assert _outcome(tmp_path, "vid") == "dropped-items"
+
+    def test_overall_records_ok(self, tmp_path):
+        rec = Recorder("summary", tmp_path, enabled=True)
+
+        def fake(_m, _c):
+            return '{"summary":"all"}'
+
+        parts = [PartSummary(stem="v", lines=(1, 2), summary="p")]
+        out = generate_project_summary(parts, {"max_retries": 0}, call_llm=fake, recorder=rec)
+        assert out == "all"
+        assert _outcome(tmp_path, "overall") == "ok"
+
+
 class TestRoundTrip:
     def test_to_from_dict(self):
         ps = ProjectSummary(

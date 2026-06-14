@@ -50,7 +50,7 @@ def _run(tmp_path, s2_config, summary_result=None, lines=None):
 
     captured: dict = {}
 
-    def mock_filter(lines, cfg):
+    def mock_filter(lines, cfg, **kwargs):
         captured.update(cfg)
         return lines
 

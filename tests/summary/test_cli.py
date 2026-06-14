@@ -37,7 +37,7 @@ def test_disabled_writes_empty(monkeypatch, tmp_path):
 def test_enabled_writes_summary_with_stems_from_basename(monkeypatch, tmp_path):
     captured = {}
 
-    def fake_build(parts_input, cfg):
+    def fake_build(parts_input, cfg, **kwargs):
         captured["stems"] = [stem for stem, _ in parts_input]
         return ProjectSummary(
             summary="all",

@@ -232,3 +232,40 @@ class TestRetry:
             pytest.approx(0.6),
             pytest.approx(0.8),
         ]
+
+
+import yaml as _yaml
+
+from nagare_clip.llm_report import Recorder
+
+
+def _outcome(tmp_path, stage, unit):
+    text = (tmp_path / stage / f"{unit}.md").read_text(encoding="utf-8")
+    _, fm, _ = text.split("---", 2)
+    return _yaml.safe_load(fm)["outcome"]
+
+
+class TestDirectorRecorder:
+    def test_records_unparseable_then_ok(self, tmp_path):
+        rec = Recorder("director", tmp_path, enabled=True)
+        fake = _seq_llm(["nonsense", '{"ops": []}'])
+        ops = generate_director_ops(
+            ["a", "b"], {"max_retries": 2}, call_llm=fake,
+            recorder=rec, unit="vid",
+        )
+        assert ops == []
+        assert _outcome(tmp_path, "director", "vid") == "ok-empty"
+        body = (tmp_path / "director" / "vid.md").read_text(encoding="utf-8")
+        assert "nonsense" in body  # failed attempt's response preserved
+
+    def test_records_dropped_items(self, tmp_path):
+        rec = Recorder("director", tmp_path, enabled=True)
+        # one valid op, one with out-of-range lines (dropped)
+        resp = '{"ops": [{"type":"cut","lines":[1,1]},{"type":"cut","lines":[9,9]}]}'
+        fake = _seq_llm([resp])
+        ops = generate_director_ops(
+            ["a", "b"], {"max_retries": 0}, call_llm=fake,
+            recorder=rec, unit="vid",
+        )
+        assert len(ops) == 1
+        assert _outcome(tmp_path, "director", "vid") == "dropped-items"

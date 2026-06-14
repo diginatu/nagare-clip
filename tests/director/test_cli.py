@@ -46,7 +46,7 @@ def test_enabled_writes_parsed_ops(monkeypatch, tmp_path):
     monkeypatch.setattr(
         director_cli,
         "generate_director_ops",
-        lambda lines, c, overview_context="": generate_director_ops(
+        lambda lines, c, overview_context="", **kw: generate_director_ops(
             lines, c, call_llm=fake_llm, overview_context=overview_context
         ),
     )
@@ -55,6 +55,53 @@ def test_enabled_writes_parsed_ops(monkeypatch, tmp_path):
         monkeypatch, tmp_path, {"director": {"enabled": True}}, "あい\nうえ\n"
     )
     assert data["ops"] == [{"type": "cut", "lines": [1, 2], "note": "boring"}]
+
+
+def test_llm_report_no_clear_preserves_existing_report(monkeypatch, tmp_path):
+    """--llm-report-no-clear keeps a pre-existing report file; without it, clear wipes it."""
+    report_dir = tmp_path / "llm_report"
+    director_report_dir = report_dir / "director"
+    director_report_dir.mkdir(parents=True)
+    old_md = director_report_dir / "old.md"
+    old_md.write_text("pre-existing report", encoding="utf-8")
+
+    cfg = tmp_path / "config.yml"
+    cfg.write_text(yaml.safe_dump({"director": {"enabled": False}}), encoding="utf-8")
+    edits = tmp_path / "clip_edits.txt"
+    edits.write_text("あ\nい\n", encoding="utf-8")
+    out = tmp_path / "clip_director.json"
+
+    # With --llm-report-no-clear: old.md should survive
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "director",
+            "--edits-txt", str(edits),
+            "--output", str(out),
+            "--config", str(cfg),
+            "--llm-report-dir", str(report_dir),
+            "--llm-report-no-clear",
+        ],
+    )
+    director_cli.main()
+    assert old_md.exists(), "old.md should survive when --llm-report-no-clear is passed"
+
+    # Without --llm-report-no-clear: old.md should be wiped
+    old_md.write_text("pre-existing report", encoding="utf-8")
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "director",
+            "--edits-txt", str(edits),
+            "--output", str(out),
+            "--config", str(cfg),
+            "--llm-report-dir", str(report_dir),
+        ],
+    )
+    director_cli.main()
+    assert not old_md.exists(), "old.md should be wiped when --llm-report-no-clear is not passed"
 
 
 def test_overview_context_injected_for_stem(monkeypatch, tmp_path):
@@ -85,7 +132,7 @@ def test_overview_context_injected_for_stem(monkeypatch, tmp_path):
 
     captured = {}
 
-    def fake(lines, c, overview_context=""):
+    def fake(lines, c, overview_context="", **kw):
         captured["ctx"] = overview_context
         return []
 

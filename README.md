@@ -49,6 +49,17 @@ The `<overlay text="...">wrapped transcript words</overlay>` tag places an on-sc
 
 The `<cut>...</cut>` tag deletes the wrapped text. It is a shorthand for `{{wrapped->}}` deletion patches (and can span multiple lines — open on the first, close on the last), so use it to drop whole sentences or sections. There is no separate "cut this time range" mechanism: removing the words opens a gap between the surviving neighbours that the word-gap silence detection cuts from the timeline, so `<cut>` is meant for **larger** deletions (a span shorter than the silence threshold may not actually be cut). Because the text is deleted, no caption is shown for it. Do not overlap `<cut>` with `<keep>`/`<speed>`/`<overlay>` on the same span.
 
+### LLM report (`output/llm_report/`)
+
+Every LLM stage (`text_filter`, `summary`, `plan`, `director`, `guided_edit`)
+writes a per-call record under `output/llm_report/`: an `index.md` table
+(stage, unit, attempts, outcome, reason) linking to per-call detail files under
+`<stage>/<unit>.md` that hold the full prompt and raw response for every attempt,
+including retries. Outcomes: `ok`, `ok-empty`, `llm-error`, `unparseable`,
+`verify-fail`, `dropped-items` (a call that parsed but discarded some items).
+Re-running a stage refreshes only that stage's section. Toggle with
+`general.llm_report` (default `true`) and relocate with `general.llm_report_dir`.
+
 ## Requirements
 
 - Linux

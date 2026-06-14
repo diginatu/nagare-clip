@@ -13,6 +13,8 @@ DEFAULTS: Dict[str, Any] = {
     "general": {
         "log_level": "INFO",
         "log_file": "",
+        "llm_report": True,
+        "llm_report_dir": "output/llm_report",
     },
     "transcription": {
         "compute_type": "float16",

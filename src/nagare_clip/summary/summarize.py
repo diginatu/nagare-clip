@@ -22,6 +22,15 @@ from nagare_clip.director.director_llm import (
     _coerce_lines,
     format_numbered_transcript,
 )
+from nagare_clip.llm_report import (
+    DROPPED_ITEMS,
+    LLM_ERROR,
+    NULL_RECORDER,
+    OK,
+    OK_EMPTY,
+    UNPARSEABLE,
+    Recorder,
+)
 from nagare_clip.llm_retry import cfg_for_attempt, retry_attempts
 from nagare_clip.stage2.llm_filter import _call_llm
 
@@ -50,7 +59,7 @@ def _strip_fence(response: str) -> str:
 
 
 def _parse_parts_response(
-    response: str, stem: str, num_lines: int
+    response: str, stem: str, num_lines: int, drops: Optional[List[str]] = None
 ) -> Optional[List[PartSummary]]:
     """Parse a ``{"parts": [{"lines": [a,b], "summary": "…"}]}`` response.
 
@@ -58,6 +67,11 @@ def _parse_parts_response(
     so the caller can retry; otherwise the (possibly empty) validated list, with
     malformed/out-of-range entries dropped (logged).
     """
+    def _drop(msg: str) -> None:
+        logger.warning("summary: %s", msg)
+        if drops is not None:
+            drops.append(msg)
+
     try:
         data = json.loads(_strip_fence(response))
     except (ValueError, TypeError):
@@ -73,11 +87,11 @@ def _parse_parts_response(
             continue
         lines = _coerce_lines(raw.get("lines"), num_lines)
         if lines is None:
-            logger.warning("summary: part dropped, bad lines %r", raw.get("lines"))
+            _drop(f"part dropped, bad lines {raw.get('lines')!r}")
             continue
         summary = raw.get("summary")
         if not isinstance(summary, str) or summary == "":
-            logger.warning("summary: part dropped, empty/missing summary")
+            _drop("part dropped, empty/missing summary")
             continue
         parts.append(PartSummary(stem=stem, lines=lines, summary=summary))
     return parts
@@ -89,6 +103,7 @@ def segment_video(
     cfg: Dict[str, Any],
     *,
     call_llm: CallLLM = _call_llm,
+    recorder: Recorder = NULL_RECORDER,
 ) -> List[PartSummary]:
     """Segment one video's transcript into summarised parts (line ranges)."""
     messages = [
@@ -97,26 +112,48 @@ def segment_video(
     ]
     attempts = retry_attempts(cfg)
     for attempt in range(attempts):
+        attempt_cfg = cfg_for_attempt(cfg, attempt)
         try:
-            response = call_llm(messages, cfg_for_attempt(cfg, attempt))
-        except Exception:
+            response = call_llm(messages, attempt_cfg)
+        except Exception as e:  # noqa: BLE001 - recoverable
             logger.warning(
                 "summary: segment LLM call failed (attempt %d/%d) for %s",
-                attempt + 1,
-                attempts,
-                stem,
-                exc_info=True,
+                attempt + 1, attempts, stem, exc_info=True,
+            )
+            recorder.attempt(
+                unit=stem, attempt=attempt, total=attempts, messages=messages,
+                error=str(e), outcome=LLM_ERROR, reason="LLM call failed",
+                cfg=attempt_cfg,
             )
             continue
-        parts = _parse_parts_response(response, stem, num_lines=len(clean_lines))
-        if parts is not None:
-            return parts
-        logger.warning(
-            "summary: segment response unparseable (attempt %d/%d) for %s",
-            attempt + 1,
-            attempts,
-            stem,
+        drops: List[str] = []
+        parts = _parse_parts_response(
+            response, stem, num_lines=len(clean_lines), drops=drops
         )
+        if parts is None:
+            recorder.attempt(
+                unit=stem, attempt=attempt, total=attempts, messages=messages,
+                response=response, outcome=UNPARSEABLE,
+                reason="invalid JSON / no 'parts' array", cfg=attempt_cfg,
+            )
+            logger.warning(
+                "summary: segment response unparseable (attempt %d/%d) for %s",
+                attempt + 1, attempts, stem,
+            )
+            continue
+        if drops:
+            outcome, reason = DROPPED_ITEMS, f"{len(drops)} dropped: " + "; ".join(drops)
+        elif not parts:
+            outcome, reason = OK_EMPTY, ""
+        else:
+            outcome, reason = OK, ""
+        recorder.attempt(
+            unit=stem, attempt=attempt, total=attempts, messages=messages,
+            response=response, outcome=outcome, reason=reason, cfg=attempt_cfg,
+        )
+        recorder.flush_unit(stem, outcome=outcome, reason=reason)
+        return parts
+    recorder.flush_unit(stem, outcome=LLM_ERROR, reason=f"all {attempts} attempt(s) failed")
     logger.warning("summary: all %d attempt(s) failed for %s; no parts", attempts, stem)
     return []
 
@@ -144,6 +181,7 @@ def generate_project_summary(
     cfg: Dict[str, Any],
     *,
     call_llm: CallLLM = _call_llm,
+    recorder: Recorder = NULL_RECORDER,
 ) -> str:
     """Synthesise a single all-videos summary from the per-part summaries."""
     if not parts:
@@ -154,24 +192,43 @@ def generate_project_summary(
     ]
     attempts = retry_attempts(cfg)
     for attempt in range(attempts):
+        attempt_cfg = cfg_for_attempt(cfg, attempt)
         try:
-            response = call_llm(messages, cfg_for_attempt(cfg, attempt))
-        except Exception:
+            response = call_llm(messages, attempt_cfg)
+        except Exception as e:  # noqa: BLE001 - recoverable
             logger.warning(
                 "summary: overall LLM call failed (attempt %d/%d)",
                 attempt + 1,
                 attempts,
                 exc_info=True,
             )
+            recorder.attempt(
+                unit="overall", attempt=attempt, total=attempts, messages=messages,
+                error=str(e), outcome=LLM_ERROR, reason="LLM call failed",
+                cfg=attempt_cfg,
+            )
             continue
         summary = _parse_overall_response(response)
-        if summary is not None:
-            return summary
-        logger.warning(
-            "summary: overall response unparseable (attempt %d/%d)",
-            attempt + 1,
-            attempts,
+        if summary is None:
+            recorder.attempt(
+                unit="overall", attempt=attempt, total=attempts, messages=messages,
+                response=response, outcome=UNPARSEABLE, reason="no 'summary' string",
+                cfg=attempt_cfg,
+            )
+            logger.warning(
+                "summary: overall response unparseable (attempt %d/%d)",
+                attempt + 1,
+                attempts,
+            )
+            continue
+        outcome = OK_EMPTY if summary == "" else OK
+        recorder.attempt(
+            unit="overall", attempt=attempt, total=attempts, messages=messages,
+            response=response, outcome=outcome, cfg=attempt_cfg,
         )
+        recorder.flush_unit("overall", outcome=outcome)
+        return summary
+    recorder.flush_unit("overall", outcome=LLM_ERROR, reason=f"all {attempts} attempt(s) failed")
     logger.warning("summary: all %d overall attempt(s) failed; empty summary", attempts)
     return ""
 
@@ -181,12 +238,15 @@ def build_summary(
     cfg: Dict[str, Any],
     *,
     call_llm: CallLLM = _call_llm,
+    recorder: Recorder = NULL_RECORDER,
 ) -> ProjectSummary:
     """Map (``segment_video`` per video) then reduce (``generate_project_summary``)."""
     parts: List[PartSummary] = []
     for stem, clean_lines in parts_input:
-        parts.extend(segment_video(stem, clean_lines, cfg, call_llm=call_llm))
-    summary = generate_project_summary(parts, cfg, call_llm=call_llm)
+        parts.extend(
+            segment_video(stem, clean_lines, cfg, call_llm=call_llm, recorder=recorder)
+        )
+    summary = generate_project_summary(parts, cfg, call_llm=call_llm, recorder=recorder)
     return ProjectSummary(summary=summary, parts=parts)
 
 
