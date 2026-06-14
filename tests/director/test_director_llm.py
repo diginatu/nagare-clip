@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import pytest
-import yaml as _yaml
 
 from nagare_clip.director.director_llm import (
     DirectorOp,
@@ -14,13 +13,6 @@ from nagare_clip.director.director_llm import (
     parse_director_response,
     try_parse_director_response,
 )
-from nagare_clip.llm_report import Recorder
-
-
-def _outcome(tmp_path, stage, unit):
-    text = (tmp_path / stage / f"{unit}.md").read_text(encoding="utf-8")
-    _, fm, _ = text.split("---", 2)
-    return _yaml.safe_load(fm)["outcome"]
 
 
 def _seq_llm(items, temps=None):
@@ -220,6 +212,39 @@ class TestRetry:
         assert ops == []
         assert fake.calls["i"] == 1
 
+    def test_temperature_nudged_per_attempt(self):
+        temps: list = []
+        fake = _seq_llm([ConnectionError("x")] * 4, temps=temps)
+        generate_director_ops(
+            ["あ"],
+            {
+                "prompt": "P",
+                "temperature": 0.2,
+                "max_retries": 3,
+                "retry_temp_step": 0.2,
+                "retry_temp_cap": 0.8,
+            },
+            call_llm=fake,
+        )
+        assert temps == [
+            pytest.approx(0.2),
+            pytest.approx(0.4),
+            pytest.approx(0.6),
+            pytest.approx(0.8),
+        ]
+
+
+import yaml as _yaml
+
+from nagare_clip.llm_report import Recorder
+
+
+def _outcome(tmp_path, stage, unit):
+    text = (tmp_path / stage / f"{unit}.md").read_text(encoding="utf-8")
+    _, fm, _ = text.split("---", 2)
+    return _yaml.safe_load(fm)["outcome"]
+
+
 class TestDirectorRecorder:
     def test_records_unparseable_then_ok(self, tmp_path):
         rec = Recorder("director", tmp_path, enabled=True)
@@ -244,25 +269,3 @@ class TestDirectorRecorder:
         )
         assert len(ops) == 1
         assert _outcome(tmp_path, "director", "vid") == "dropped-items"
-
-
-    def test_temperature_nudged_per_attempt(self):
-        temps: list = []
-        fake = _seq_llm([ConnectionError("x")] * 4, temps=temps)
-        generate_director_ops(
-            ["あ"],
-            {
-                "prompt": "P",
-                "temperature": 0.2,
-                "max_retries": 3,
-                "retry_temp_step": 0.2,
-                "retry_temp_cap": 0.8,
-            },
-            call_llm=fake,
-        )
-        assert temps == [
-            pytest.approx(0.2),
-            pytest.approx(0.4),
-            pytest.approx(0.6),
-            pytest.approx(0.8),
-        ]
