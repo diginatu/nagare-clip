@@ -10,6 +10,7 @@ from typing import Any, Dict, List
 
 _FENCE_RE = re.compile(r"^\s*```(?:json)?\s*\n(.*?)\n```\s*$", re.DOTALL | re.IGNORECASE)
 
+from nagare_clip.llm_report import LLM_ERROR, NULL_RECORDER, OK, UNPARSEABLE, Recorder
 from nagare_clip.stage2.llm_filter import _call_llm
 
 logger = logging.getLogger(__name__)
@@ -65,9 +66,15 @@ def build_enhanced_prompt(base_prompt: str, summary: SummaryResult) -> str:
 
 
 def generate_summary(
-    full_text: str, cfg: Dict[str, Any]
+    full_text: str,
+    cfg: Dict[str, Any],
+    *,
+    call_llm=None,
+    recorder: Recorder = NULL_RECORDER,
 ) -> SummaryResult | None:
     """Call the summary LLM and return parsed result, or None on failure."""
+    if call_llm is None:
+        call_llm = _call_llm
     if not full_text.strip():
         return None
 
@@ -77,12 +84,28 @@ def generate_summary(
     ]
 
     try:
-        response = _call_llm(messages, cfg)
-    except Exception:
+        response = call_llm(messages, cfg)
+    except Exception as e:  # noqa: BLE001 - recoverable
         logger.warning("Summary LLM call failed, proceeding without summary", exc_info=True)
+        recorder.attempt(
+            unit="summary_llm", attempt=0, total=1, messages=messages, error=str(e),
+            outcome=LLM_ERROR, reason="LLM call failed", cfg=cfg,
+        )
+        recorder.flush_unit("summary_llm", outcome=LLM_ERROR, reason="LLM call failed")
         return None
 
     result = parse_summary_response(response)
     if result is None:
         logger.warning("Failed to parse summary LLM response: %s", response[:200])
+        recorder.attempt(
+            unit="summary_llm", attempt=0, total=1, messages=messages, response=response,
+            outcome=UNPARSEABLE, reason="unparseable summary JSON", cfg=cfg,
+        )
+        recorder.flush_unit("summary_llm", outcome=UNPARSEABLE, reason="unparseable summary JSON")
+        return result
+    recorder.attempt(
+        unit="summary_llm", attempt=0, total=1, messages=messages, response=response,
+        outcome=OK, cfg=cfg,
+    )
+    recorder.flush_unit("summary_llm", outcome=OK)
     return result

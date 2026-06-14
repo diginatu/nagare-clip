@@ -10,6 +10,8 @@ import urllib.request
 from collections import defaultdict
 from typing import Any, Dict, List, Optional, Tuple
 
+from nagare_clip.llm_report import DROPPED_ITEMS, LLM_ERROR, NULL_RECORDER, OK, Recorder
+
 logger = logging.getLogger(__name__)
 
 PATCH_RE = re.compile(r"\{\{([^}]*?)->(.*?)\}\}")
@@ -32,13 +34,21 @@ def apply_patches_to_lines(lines: List[str]) -> List[str]:
     return clean
 
 
-def filter_transcript(lines: List[str], cfg: Dict[str, Any]) -> List[str]:
+def filter_transcript(
+    lines: List[str],
+    cfg: Dict[str, Any],
+    *,
+    call_llm=None,
+    recorder: Recorder = NULL_RECORDER,
+) -> List[str]:
     """Send transcript lines to LLM in batches, return lines with {{old->new}} markers.
 
     The returned lines preserve the ``{{old->new}}`` patch syntax so that
     a human can review and further edit the markers before they are applied
     by Stage 3.  Falls back to original lines on any API or parse failure.
     """
+    if call_llm is None:
+        call_llm = _call_llm
     if not lines:
         return []
 
@@ -48,7 +58,7 @@ def filter_transcript(lines: List[str], cfg: Dict[str, Any]) -> List[str]:
 
     stats: Dict[int, Dict[str, int]] = defaultdict(lambda: {"total": 0, "succeeded": 0})
     for batch in batches:
-        _process_batch(batch, result, cfg, batch_size, stats)
+        _process_batch(batch, result, cfg, batch_size, stats, call_llm=call_llm, recorder=recorder)
 
     _log_stats(stats, batch_size)
     return result
@@ -60,19 +70,26 @@ def _process_batch(
     cfg: Dict[str, Any],
     current_size: int,
     stats: Optional[Dict[int, Dict[str, int]]] = None,
+    *,
+    call_llm=None,
+    recorder: Recorder = NULL_RECORDER,
 ) -> None:
     """Run one LLM call for ``batch``; on any line missing from the parse
     result, recursively retry the failed lines with a halved batch size
     (down to ``retry_min_batch_size``)."""
+    if call_llm is None:
+        call_llm = _call_llm
+    a = batch[0][0] + 1
+    b = batch[-1][0] + 1
+    unit = f"lines {a}-{b} (size {current_size})"
+    messages = [
+        {"role": "system", "content": cfg.get("prompt", "")},
+        {"role": "user", "content": _format_batch(batch)},
+    ]
     try:
-        prompt_text = _format_batch(batch)
-        messages = [
-            {"role": "system", "content": cfg.get("prompt", "")},
-            {"role": "user", "content": prompt_text},
-        ]
-        response = _call_llm(messages, cfg)
+        response = call_llm(messages, cfg)
         patches = _parse_response(response, batch)
-    except Exception:
+    except Exception as e:  # noqa: BLE001 - recoverable
         if stats is not None:
             stats[current_size]["total"] += len(batch)
         logger.warning(
@@ -80,6 +97,11 @@ def _process_batch(
             batch[0][0] + 1,
             exc_info=True,
         )
+        recorder.attempt(
+            unit=unit, attempt=0, total=1, messages=messages, error=str(e),
+            outcome=LLM_ERROR, reason="LLM call failed", cfg=cfg,
+        )
+        recorder.flush_unit(unit, outcome=LLM_ERROR, reason="LLM call failed")
         return
 
     if stats is not None:
@@ -88,6 +110,19 @@ def _process_batch(
 
     for idx, corrected in patches.items():
         result[idx] = corrected
+
+    missing = len(batch) - len(patches)
+    if missing:
+        outcome = DROPPED_ITEMS
+        reason = f"{missing}/{len(batch)} line(s) kept original"
+    else:
+        outcome = OK
+        reason = ""
+    recorder.attempt(
+        unit=unit, attempt=0, total=1, messages=messages, response=response,
+        outcome=outcome, reason=reason, cfg=cfg,
+    )
+    recorder.flush_unit(unit, outcome=outcome, reason=reason)
 
     if not cfg.get("retry_on_invalid", True):
         return
@@ -107,7 +142,10 @@ def _process_batch(
         current_size,
     )
     for i in range(0, len(failed), new_size):
-        _process_batch(failed[i : i + new_size], result, cfg, new_size, stats)
+        _process_batch(
+            failed[i : i + new_size], result, cfg, new_size, stats,
+            call_llm=call_llm, recorder=recorder,
+        )
 
 
 def _log_stats(stats: Dict[int, Dict[str, int]], initial_size: int) -> None:

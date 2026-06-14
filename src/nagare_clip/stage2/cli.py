@@ -12,6 +12,7 @@ import logging
 from pathlib import Path
 
 from nagare_clip.config import get_effective_config
+from nagare_clip.llm_report import recorder_from_config
 from nagare_clip.logging_setup import setup_logging
 from nagare_clip.stage2.llm_filter import filter_transcript
 from nagare_clip.stage2.rule_filter import remove_midstream_closing
@@ -47,6 +48,12 @@ def parse_args() -> argparse.Namespace:
         "--log-file",
         default=None,
         help="Path to log file; appends to existing file (default: console only)",
+    )
+    parser.add_argument(
+        "--llm-report-dir",
+        default=None,
+        dest="llm_report_dir",
+        help="Directory for LLM report output (overrides config)",
     )
     return parser.parse_args()
 
@@ -87,12 +94,15 @@ def main() -> None:
     else:
         logging.info("Stage 2: filtering %d lines with AI", len(lines))
 
+        recorder = recorder_from_config("text_filter", cfg, override_dir=args.llm_report_dir)
+        recorder.clear()
+
         # Summary LLM — generate context for the filter LLM
         filter_cfg = dict(s2)
         summary_cfg = s2.get("summary_llm", {})
         constant_keywords: list = summary_cfg.get("keywords", [])
         if summary_cfg.get("enabled", False):
-            summary_result = generate_summary("\n".join(lines), summary_cfg)
+            summary_result = generate_summary("\n".join(lines), summary_cfg, recorder=recorder)
             if summary_result is not None:
                 summary_result.keywords = constant_keywords + summary_result.keywords
                 filter_cfg["prompt"] = build_enhanced_prompt(
@@ -114,11 +124,13 @@ def main() -> None:
             )
 
         # AI filter — returns lines with {{old->new}} markers preserved
-        result_lines = filter_transcript(lines, filter_cfg)
+        result_lines = filter_transcript(lines, filter_cfg, recorder=recorder)
 
         # Count changes
         changes = sum(1 for o, c in zip(lines, result_lines) if o != c)
         logging.info("Stage 2: %d/%d lines modified by AI", changes, len(lines))
+
+        recorder.rebuild_index()
 
     # Write output
     output_txt.parent.mkdir(parents=True, exist_ok=True)

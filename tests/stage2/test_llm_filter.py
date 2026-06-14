@@ -448,6 +448,37 @@ class TestCallLlmThinking:
         assert body.get("think") == "low"
 
 
+import yaml as _yaml
+
+from nagare_clip.llm_report import Recorder
+from nagare_clip.stage2.llm_filter import filter_transcript as _filter_transcript_import
+
+
+def _units(tmp_path):
+    return sorted(p.name for p in (tmp_path / "text_filter").glob("*.md"))
+
+
+class TestFilterRecorder:
+    def test_records_each_batch(self, tmp_path):
+        rec = Recorder("text_filter", tmp_path, enabled=True)
+
+        def fake(_messages, _cfg):
+            # echo back the two lines unchanged with their numbers
+            return "1: alpha\n2: beta"
+
+        out = filter_transcript(
+            ["alpha", "beta"],
+            {"batch_size": 10, "retry_on_invalid": False, "model": "m"},
+            call_llm=fake, recorder=rec,
+        )
+        assert out == ["alpha", "beta"]
+        files = list((tmp_path / "text_filter").glob("*.md"))
+        assert len(files) == 1
+        text = files[0].read_text(encoding="utf-8")
+        _, fm, _ = text.split("---", 2)
+        assert _yaml.safe_load(fm)["outcome"] == "ok"
+
+
 class TestCallLlmResponseFormat:
     @patch("urllib.request.urlopen")
     def test_format_json_when_response_format_set(self, mock_urlopen):
