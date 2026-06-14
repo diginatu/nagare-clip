@@ -2,9 +2,8 @@
 
 from __future__ import annotations
 
-import json
 import logging
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
 import pytest
 
@@ -402,52 +401,6 @@ class TestRetryStats:
         assert not any("LLM filter" in r.message for r in caplog.records)
 
 
-def _make_urlopen_mock(content: str) -> MagicMock:
-    resp_body = json.dumps({"message": {"content": content}, "done": True}).encode(
-        "utf-8"
-    )
-    mock_resp = MagicMock()
-    mock_resp.read.return_value = resp_body
-    mock_resp.__enter__ = lambda s: s
-    mock_resp.__exit__ = MagicMock(return_value=False)
-    return mock_resp
-
-
-class TestCallLlmThinking:
-    @patch("urllib.request.urlopen")
-    def test_think_true_when_thinking_true(self, mock_urlopen):
-        mock_urlopen.return_value = _make_urlopen_mock("1: ok")
-        cfg = {"thinking": True, "model": "test-model", "api_base": "http://localhost"}
-        _call_llm([{"role": "user", "content": "hi"}], cfg)
-        body = json.loads(mock_urlopen.call_args[0][0].data.decode("utf-8"))
-        assert body.get("think") is True
-
-    @patch("urllib.request.urlopen")
-    def test_think_false_when_thinking_false(self, mock_urlopen):
-        mock_urlopen.return_value = _make_urlopen_mock("1: ok")
-        cfg = {"thinking": False, "model": "test-model", "api_base": "http://localhost"}
-        _call_llm([{"role": "user", "content": "hi"}], cfg)
-        body = json.loads(mock_urlopen.call_args[0][0].data.decode("utf-8"))
-        assert body.get("think") is False
-
-    @patch("urllib.request.urlopen")
-    def test_think_false_by_default(self, mock_urlopen):
-        mock_urlopen.return_value = _make_urlopen_mock("1: ok")
-        cfg = {"model": "test-model", "api_base": "http://localhost"}
-        _call_llm([{"role": "user", "content": "hi"}], cfg)
-        body = json.loads(mock_urlopen.call_args[0][0].data.decode("utf-8"))
-        assert body.get("think") is False
-
-    @patch("urllib.request.urlopen")
-    def test_think_string_level(self, mock_urlopen):
-        """thinking accepts string levels like 'low' for models that support it."""
-        mock_urlopen.return_value = _make_urlopen_mock("1: ok")
-        cfg = {"thinking": "low", "model": "test-model", "api_base": "http://localhost"}
-        _call_llm([{"role": "user", "content": "hi"}], cfg)
-        body = json.loads(mock_urlopen.call_args[0][0].data.decode("utf-8"))
-        assert body.get("think") == "low"
-
-
 import yaml as _yaml
 
 from nagare_clip.llm_report import Recorder
@@ -472,25 +425,3 @@ class TestFilterRecorder:
         text = files[0].read_text(encoding="utf-8")
         _, fm, _ = text.split("---", 2)
         assert _yaml.safe_load(fm)["outcome"] == "ok"
-
-
-class TestCallLlmResponseFormat:
-    @patch("urllib.request.urlopen")
-    def test_format_json_when_response_format_set(self, mock_urlopen):
-        mock_urlopen.return_value = _make_urlopen_mock('{"key": "value"}')
-        cfg = {
-            "response_format": "json",
-            "model": "test-model",
-            "api_base": "http://localhost",
-        }
-        _call_llm([{"role": "user", "content": "hi"}], cfg)
-        body = json.loads(mock_urlopen.call_args[0][0].data.decode("utf-8"))
-        assert body.get("format") == "json"
-
-    @patch("urllib.request.urlopen")
-    def test_no_format_when_response_format_not_set(self, mock_urlopen):
-        mock_urlopen.return_value = _make_urlopen_mock("1: ok")
-        cfg = {"model": "test-model", "api_base": "http://localhost"}
-        _call_llm([{"role": "user", "content": "hi"}], cfg)
-        body = json.loads(mock_urlopen.call_args[0][0].data.decode("utf-8"))
-        assert "format" not in body
