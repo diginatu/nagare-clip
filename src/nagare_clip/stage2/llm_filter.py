@@ -2,14 +2,12 @@
 
 from __future__ import annotations
 
-import json
 import logging
 import re
-import urllib.error
-import urllib.request
 from collections import defaultdict
 from typing import Any, Dict, List, Optional, Tuple
 
+from nagare_clip.llm_client import call_llm as _call_llm
 from nagare_clip.llm_report import DROPPED_ITEMS, LLM_ERROR, NULL_RECORDER, OK, Recorder
 
 logger = logging.getLogger(__name__)
@@ -179,47 +177,6 @@ def _batch_lines(
 def _format_batch(batch: List[Tuple[int, str]]) -> str:
     """Format batch as numbered lines (1-indexed for LLM readability)."""
     return "\n".join(f"{idx + 1}: {text}" for idx, text in batch)
-
-
-def _call_llm(messages: List[Dict[str, str]], cfg: Dict[str, Any]) -> str:
-    """Call Ollama native chat API via urllib."""
-    api_base = cfg.get("api_base", "http://localhost:11434").rstrip("/")
-    url = f"{api_base}/api/chat"
-
-    body: Dict[str, Any] = {
-        "model": cfg.get("model", "qwen3.5:4b"),
-        "messages": messages,
-        "stream": False,
-        "think": cfg.get("thinking", False),
-        "options": {
-            "temperature": cfg.get("temperature", 0.1),
-        },
-    }
-
-    response_format = cfg.get("response_format")
-    if response_format:
-        body["format"] = response_format
-
-    headers = {"Content-Type": "application/json"}
-    api_key = cfg.get("api_key", "")
-    if api_key:
-        headers["Authorization"] = f"Bearer {api_key}"
-
-    data = json.dumps(body).encode("utf-8")
-    req = urllib.request.Request(url, data=data, headers=headers, method="POST")
-
-    logger.debug("LLM request: %s", json.dumps(body, ensure_ascii=False))
-
-    timeout = cfg.get("timeout", 300)
-    try:
-        with urllib.request.urlopen(req, timeout=timeout) as resp:
-            result = json.loads(resp.read().decode("utf-8"))
-    except (urllib.error.URLError, urllib.error.HTTPError, TimeoutError) as e:
-        raise ConnectionError(f"LLM API request failed: {e}") from e
-
-    logger.debug("LLM response: %s", json.dumps(result, ensure_ascii=False))
-
-    return result["message"]["content"]
 
 
 def _parse_response(
