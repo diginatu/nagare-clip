@@ -136,7 +136,7 @@ AUDIO_SILENCE_MIN_SILENCE="${CFG_AUDIO_SILENCE_MIN_SILENCE:-0.8}"
 # Canonical stage execution order (names are the identifiers; numbers are
 # being phased out). New stages are inserted by name, so existing stages never
 # need renumbering.
-STAGE_ORDER=(transcription audio_silence text_filter director guided_edit intervals blender)
+STAGE_ORDER=(transcription audio_silence text_filter summary plan director guided_edit intervals blender)
 
 stage_index() {  # echo 1-based index of a stage name, or nothing
   local name="$1" i
@@ -162,6 +162,8 @@ fi
 ORD_TRANSCRIPTION="$(stage_index transcription)"
 ORD_AUDIO_SILENCE="$(stage_index audio_silence)"
 ORD_TEXT_FILTER="$(stage_index text_filter)"
+ORD_SUMMARY="$(stage_index summary)"
+ORD_PLAN="$(stage_index plan)"
 ORD_DIRECTOR="$(stage_index director)"
 ORD_GUIDED_EDIT="$(stage_index guided_edit)"
 ORD_INTERVALS="$(stage_index intervals)"
@@ -176,6 +178,8 @@ fi
 STAGE1_DIR="${OUTPUT_DIR}/stage1"          # WhisperX transcription
 STAGE2_DIR="${OUTPUT_DIR}/stage2"          # Audio-silence cut lists
 STAGE3_DIR="${OUTPUT_DIR}/stage3"          # Text editing checkpoint (_edits.txt)
+SUMMARY_DIR="${OUTPUT_DIR}/summary"        # Project-wide summaries (summary.json)
+PLAN_DIR="${OUTPUT_DIR}/plan"              # Cross-video rough directions (plan.json)
 DIRECTOR_DIR="${OUTPUT_DIR}/director"      # director ops (_director.json)
 GUIDED_DIR="${OUTPUT_DIR}/guided_edit"     # augmented _edits.txt + _unapplied.txt
 STAGE4_DIR="${OUTPUT_DIR}/stage4"          # Patch + keep-interval merge (_intervals.json)
@@ -183,7 +187,8 @@ STAGE5_DIR="${OUTPUT_DIR}/stage5"          # Blender VSE project (.blend)
 LOG_FILE="${OUTPUT_DIR}/pipeline.log"
 
 mkdir -p "$INPUT_VIDEOS_DIR" "$STAGE1_DIR" "$STAGE2_DIR" "$STAGE3_DIR" \
-  "$DIRECTOR_DIR" "$GUIDED_DIR" "$STAGE4_DIR" "$STAGE5_DIR" "$PROJECT_ROOT/cache"
+  "$SUMMARY_DIR" "$PLAN_DIR" "$DIRECTOR_DIR" "$GUIDED_DIR" "$STAGE4_DIR" \
+  "$STAGE5_DIR" "$PROJECT_ROOT/cache"
 
 ABS_INPUT_VIDEOS="$(realpath "$INPUT_VIDEOS_DIR")"
 ABS_OUTPUT_DIR="$(realpath "$OUTPUT_DIR")"
@@ -362,6 +367,44 @@ else
   done
 fi
 
+# --- summary: project-wide per-part + all-videos summaries (single run) ---
+# Always runs (a no-op when summary.enabled is false, writing an empty summary).
+if (( FROM_ORDER <= ORD_SUMMARY )); then
+  echo "[summary] Project-wide summaries"
+  EDITS_ARGS=()
+  for STEM in "${ALL_STEMS[@]}"; do
+    EDITS_ARGS+=(--edits-txt "${STAGE3_DIR}/${STEM}_edits.txt")
+  done
+  uv run --project "$PROJECT_ROOT" python -m nagare_clip.summary.cli \
+    "${EDITS_ARGS[@]}" \
+    --output "${SUMMARY_DIR}/summary.json" \
+    "${CONFIG_ARGS[@]}" \
+    --log-file "$LOG_FILE"
+else
+  echo "[summary] Skipped (--from-stage $FROM_STAGE)"
+  if [[ ! -f "${SUMMARY_DIR}/summary.json" ]]; then
+    echo "Missing summary output: ${SUMMARY_DIR}/summary.json (required when skipping summary)" >&2
+    exit 1
+  fi
+fi
+
+# --- plan: cross-video rough directions per part (single run) ---
+# Always runs (a no-op when plan.enabled is false, writing an empty plan).
+if (( FROM_ORDER <= ORD_PLAN )); then
+  echo "[plan] Cross-video rough directions"
+  uv run --project "$PROJECT_ROOT" python -m nagare_clip.plan.cli \
+    --summary "${SUMMARY_DIR}/summary.json" \
+    --output "${PLAN_DIR}/plan.json" \
+    "${CONFIG_ARGS[@]}" \
+    --log-file "$LOG_FILE"
+else
+  echo "[plan] Skipped (--from-stage $FROM_STAGE)"
+  if [[ ! -f "${PLAN_DIR}/plan.json" ]]; then
+    echo "Missing plan output: ${PLAN_DIR}/plan.json (required when skipping plan)" >&2
+    exit 1
+  fi
+fi
+
 # --- director: LLM high-level edit operations (per source) ---
 # Always runs (a no-op when director.enabled is false, writing an empty op list).
 if (( FROM_ORDER <= ORD_DIRECTOR )); then
@@ -370,6 +413,9 @@ if (( FROM_ORDER <= ORD_DIRECTOR )); then
     uv run --project "$PROJECT_ROOT" python -m nagare_clip.director.cli \
       --edits-txt "${STAGE3_DIR}/${STEM}_edits.txt" \
       --output "${DIRECTOR_DIR}/${STEM}_director.json" \
+      --summary "${SUMMARY_DIR}/summary.json" \
+      --plan "${PLAN_DIR}/plan.json" \
+      --stem "${STEM}" \
       "${CONFIG_ARGS[@]}" \
       --log-file "$LOG_FILE"
   done

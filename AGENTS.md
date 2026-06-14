@@ -9,20 +9,23 @@ Maintain and improve a multi-stage rough-cut pipeline:
 1. WhisperX transcription in Docker
 2. Audio-silence (jump-cut) detection — ffmpeg `silencedetect`, editable cut list
 3. Text editing checkpoint — copies `.txt` or runs LLM filter with `{{old->new}}` markers
-4. director — a larger LLM proposes high-level edits (cut/speed/overlay/keep/edit) as a reviewable JSON op list
-5. guided_edit — a small LLM applies the director's ops into `_edits.txt`, deterministically verified
-6. Patch application + keep-interval computation in Python (audio cuts unioned in)
-7. Blender VSE auto-layout in headless mode
+4. summary — a larger LLM segments every video into line-range parts + summaries and writes one all-videos summary (project-wide)
+5. plan — a larger LLM gives coarse, cross-video rough directions per part (project-wide)
+6. director — a larger LLM proposes high-level edits (cut/speed/overlay/keep/edit) as a reviewable JSON op list (fed the summary/plan overview context)
+7. guided_edit — a small LLM applies the director's ops into `_edits.txt`, deterministically verified
+8. Patch application + keep-interval computation in Python (audio cuts unioned in)
+9. Blender VSE auto-layout in headless mode
 
 Final deliverable is a `.blend` project for human editing.
 
 > **Naming convention:** Stages are identified by **functional name**, not
 > number (numbers are being phased out — new stages are inserted by name so
 > existing stages never need renumbering). Config-section names are the
-> identifiers: `transcription:`, `audio_silence:`, `text_filter:`,
-> `director:`, `guided_edit:`, `intervals:`, `blender:`. Some Python package
-> dirs (`stage2/`, `stage3/`, `stage4/`) keep their legacy numeric names to
-> avoid churn; `director/` and `guided_edit/` are name-only. `run_pipeline.sh`
+> identifiers: `transcription:`, `audio_silence:`, `text_filter:`, `summary:`,
+> `plan:`, `director:`, `guided_edit:`, `intervals:`, `blender:`. Some Python
+> package dirs (`stage2/`, `stage3/`, `stage4/`) keep their legacy numeric names
+> to avoid churn; `summary/`, `plan/`, `director/` and `guided_edit/` are
+> name-only. `run_pipeline.sh`
 > `--from-stage` accepts a stage name (legacy numbers 1-5 still map to
 > transcription/audio_silence/text_filter/intervals/blender).
 
@@ -78,11 +81,25 @@ on the same span.
 
 Humans can validate a hand-edited `_edits.txt` before resuming the intervals stage with the standalone checker `python -m nagare_clip.stage3.check_edits --edits-txt <file> --json <file>` (`src/nagare_clip/stage3/check_edits.py`). Unlike the interval stage's fail-fast `ValueError`, it collects and reports **every** problem at once (line-numbered, exit 1 if any): line-count vs. JSON segments, `{{old->new}}` patch syntax (empty `{{old->}}` deletions allowed; only `{{->}}` flagged), decomposition integrity (reuses `_diagnose_decomposition`, mirroring `sync_json._decompose_edit_line`), and `<keep>`/`<speed>`/`<overlay>`/`<cut>` tag balance / factor>0 / non-empty overlay text / malformed tags. Pure `check_edits(edit_lines, json_data) -> list[Problem]` never raises.
 
+### summary — Project-Wide Summaries
+
+A larger LLM (config `summary:`, disabled by default) runs **once over all videos** (project-wide, not per-source). For each video it segments the clean numbered transcript into contiguous **parts specified by line ranges** and writes a one-sentence summary per part (`summarize.segment_video()`, parsing `{"parts":[{"lines":[a,b],"summary":...}]}`); a reduce step then synthesises one all-videos summary from the per-part summaries (`generate_project_summary()`). `build_summary()` is the map-then-reduce entry point. Reuses `director_llm._coerce_lines`/`_FENCE_RE`/`format_numbered_transcript` and the `llm_retry` bounded-retry helpers; any LLM/parse failure degrades gracefully (empty parts / empty summary). The single `summary.json` (`{summary, parts:[{stem,lines,summary}]}`) is a human-reviewable intermediate consumed by `plan` and `director`. Disabled → writes `{"summary":"","parts":[]}` (no-op).
+
+- **Inputs:** every `{stem}_edits.txt` (from text_filter), via repeated `--edits-txt` (stem derived from basename)
+- **Outputs:** `output/summary/summary.json`
+
+### plan — Cross-Video Rough Directions
+
+A larger LLM (config `plan:`, disabled by default) runs **once project-wide** after `summary`. It reads the per-part summaries (with stems + line ranges) plus the overall summary and emits a coarse, **cross-video** editorial direction per part (`plan_llm.generate_plan()`, parsing `{"directions":[{"index":N,"direction":...}]}` and mapping each 1-based index back to its part). Cross-video awareness is the point: a part that repeats an earlier video can be marked "remove". Out-of-range/malformed entries dropped (logged); hard parse failure / LLM error retried via `llm_retry`, then graceful empty. The single `plan.json` (`{directions:[{stem,lines,direction}]}`, self-contained — repeats stem+lines) is human-reviewable and consumed by `director`. Disabled → writes `{"directions":[]}` (no-op).
+
+- **Inputs:** `output/summary/summary.json`
+- **Outputs:** `output/plan/plan.json`
+
 ### director — LLM High-Level Edit Operations (Pass A)
 
-A larger LLM (config `director:`, disabled by default) reads the whole numbered transcript and emits a JSON op list `{stem}_director.json` — `{"ops": [{type, lines:[a,b], factor?, text?, note}]}`, `type ∈ {cut, speed, overlay, keep, edit}`, lines 1-based. It **never re-outputs the transcript text**, which structurally avoids the "format breakage" and "original modification" failure modes of whole-file editing. `director_llm.parse_director_response()`/`ops_from_dict()` drop any malformed/out-of-range op (logged) so one bad op never derails the rest. The LLM call is retried (config `director.max_retries`, default 2) on a connection error or a **hard parse failure**; `director_llm.try_parse_director_response()` returns `None` only on hard failure (invalid JSON / no `ops` array), so a valid empty `{"ops": []}` is accepted without retry. Each retry nudges temperature up via `nagare_clip.llm_retry.cfg_for_attempt()` (`+retry_temp_step` per attempt, capped at `retry_temp_cap`). After all attempts fail → empty op list (no-op). `_director.json` is a human-reviewable/editable intermediate.
+A larger LLM (config `director:`, disabled by default) reads the whole numbered transcript and emits a JSON op list `{stem}_director.json` — `{"ops": [{type, lines:[a,b], factor?, text?, note}]}`, `type ∈ {cut, speed, overlay, keep, edit}`, lines 1-based. It **never re-outputs the transcript text**, which structurally avoids the "format breakage" and "original modification" failure modes of whole-file editing. `director_llm.parse_director_response()`/`ops_from_dict()` drop any malformed/out-of-range op (logged) so one bad op never derails the rest. The LLM call is retried (config `director.max_retries`, default 2) on a connection error or a **hard parse failure**; `director_llm.try_parse_director_response()` returns `None` only on hard failure (invalid JSON / no `ops` array), so a valid empty `{"ops": []}` is accepted without retry. Each retry nudges temperature up via `nagare_clip.llm_retry.cfg_for_attempt()` (`+retry_temp_step` per attempt, capped at `retry_temp_cap`). After all attempts fail → empty op list (no-op). `_director.json` is a human-reviewable/editable intermediate. When `summary`/`plan` are enabled, the director CLI loads `summary.json`/`plan.json` and (via `director.context.build_director_context(project_summary, directions, stem)`) appends a cross-video **overview context** — the global summary + this video's parts (line ranges + summaries + rough directions) + one-line sibling-video entries — to the director's system prompt (`generate_director_ops(..., overview_context=...)`). When both are disabled/empty the context is `""` and the prompt is byte-identical to before (regression-guarded). `build_director_context` lives in `director/context.py` (not `director_llm.py`) so `summary` can import `director_llm` without a cycle.
 
-- **Inputs:** `{stem}_edits.txt` (from text_filter)
+- **Inputs:** `{stem}_edits.txt` (from text_filter); optionally `output/summary/summary.json`, `output/plan/plan.json`, `--stem`
 - **Outputs:** `{stem}_director.json`
 
 ### guided_edit — Apply Director Ops (Pass B2)
@@ -137,9 +154,16 @@ src/nagare_clip/          # Main Python package (src layout)
     cli.py                    # text-editing checkpoint CLI entry point
     llm_filter.py             # LLM API calls, {{old->new}} patch parsing, apply_patches_to_lines()
     summary_llm.py            # Summary LLM: generates transcript summary + keywords for filter context
+  summary/                    # summary stage (project-wide): per-part + all-videos summaries
+    summarize.py              # PartSummary/ProjectSummary, segment_video(), build_summary()
+    cli.py                    # summary CLI (repeated --edits-txt -> summary.json)
+  plan/                       # plan stage (project-wide): cross-video rough directions
+    plan_llm.py               # PartDirection, generate_plan(), plan_to/from_dict()
+    cli.py                    # plan CLI (summary.json -> plan.json)
   director/                   # director stage (Pass A): high-level edit ops
     director_llm.py           # DirectorOp, parse/validate JSON ops, generate via LLM
-    cli.py                    # director CLI (writes _director.json)
+    context.py                # build_director_context(): summary+plan -> prompt overview block
+    cli.py                    # director CLI (writes _director.json; --summary/--plan/--stem)
   guided_edit/                # guided_edit stage (Pass B2): apply director ops
     apply.py                  # per-op LLM call + splice + revert-on-failure
     reconcile.py              # verify_op(): verbatim-safety + op-reflection checks
@@ -166,7 +190,9 @@ tests/
   test_cli_cut_marker.py      # <cut>...</cut> deletion → silence-gap cut (CLI integration)
   audio_silence/              # audio_silence (detect / cuts_file / cli) unit tests
   stage2/                     # text-editing checkpoint unit tests
-  director/                   # director op parsing/generation + CLI tests
+  summary/                    # summary segment/build + CLI tests
+  plan/                       # plan generate/parse + CLI tests
+  director/                   # director op parsing/generation + context + CLI tests
   guided_edit/                # guided_edit apply/reconcile + CLI tests
   stage3/                     # interval-stage unit tests (incl. <cut> desugar)
   stage4/                     # Blender-stage tests
@@ -221,8 +247,8 @@ All tunable parameters are centralised in `src/nagare_clip/config.py`:
 - Stage 5 fallback FPS (used when source metadata is unavailable) is controlled by `blender.default_fps`.
 - Stage 5 supports multiple source files: `blender_cli.py` accepts repeated `--source`/`--intervals` flags; `place_strips()` and `build_timeline_map()` accept `start_cursor` and `idx_offset` to concatenate sources on a single timeline.
 - `run_pipeline.sh` discovers all video files (`mp4`, `mkv`, `mov`, `avi`, `webm`) in `INPUT_VIDEOS_DIR` alphabetically when `--source` is not provided. Multiple `--source` flags are also accepted.
-- `run_pipeline.sh` accepts `--from-stage S` where `S` is a stage **name** (`transcription`, `audio_silence`, `text_filter`, `director`, `guided_edit`, `intervals`, `blender`) to skip expensive earlier stages and reuse their outputs; legacy numbers 1-5 still map to transcription/audio_silence/text_filter/intervals/blender. Stage execution order is the `STAGE_ORDER` array; each stage runs when `FROM_ORDER <= its order`. Also configurable via `pipeline.from_stage` in YAML config. When skipping stages, the script validates that required intermediate outputs exist. Output dirs: legacy `output/stage1`..`output/stage5` for transcription/audio_silence/text_filter/intervals/blender, plus name-only `output/director/` and `output/guided_edit/`. The intervals stage reads the **guided_edit** `_edits.txt` (which is the text_filter edits passed through when guided_edit is disabled).
-- `director` and `guided_edit` **always run** in a full pipeline (they are cheap no-ops when disabled: director writes an empty op list, guided_edit copies the edits through), so `output/guided_edit/{stem}_edits.txt` always exists for the intervals stage to consume.
+- `run_pipeline.sh` accepts `--from-stage S` where `S` is a stage **name** (`transcription`, `audio_silence`, `text_filter`, `summary`, `plan`, `director`, `guided_edit`, `intervals`, `blender`) to skip expensive earlier stages and reuse their outputs; legacy numbers 1-5 still map to transcription/audio_silence/text_filter/intervals/blender. Stage execution order is the `STAGE_ORDER` array; each stage runs when `FROM_ORDER <= its order`. Also configurable via `pipeline.from_stage` in YAML config. When skipping stages, the script validates that required intermediate outputs exist. Output dirs: legacy `output/stage1`..`output/stage5` for transcription/audio_silence/text_filter/intervals/blender, plus name-only `output/summary/`, `output/plan/`, `output/director/` and `output/guided_edit/`. The intervals stage reads the **guided_edit** `_edits.txt` (which is the text_filter edits passed through when guided_edit is disabled).
+- `summary`, `plan`, `director` and `guided_edit` **always run** in a full pipeline (they are cheap no-ops when disabled: summary writes `{summary:"",parts:[]}`, plan writes `{directions:[]}`, director writes an empty op list, guided_edit copies the edits through), so `output/guided_edit/{stem}_edits.txt` always exists for the intervals stage to consume. `summary`/`plan` run **once project-wide** (single invocation over all videos); the other two loop per source.
 - Stage 1 (WhisperX) runs in a **single container** for all source files, passing all relative paths as positional arguments. This avoids model reload overhead between videos. Stages 2/3/4 still loop per-source after the single Stage 1 completes.
 
 ## Python Execution
@@ -241,7 +267,7 @@ defined in `.opencode/plugin/validate.ts`. It triggers after every file
 write/edit and runs:
 
 - `docker compose config --services`
-- `python -m py_compile` on the Python modules (text_filter `stage2/`, `director/`, `guided_edit/`, intervals `stage3/`, blender `stage4/`)
+- `python -m py_compile` on the Python modules (text_filter `stage2/`, `summary/`, `plan/`, `director/`, `guided_edit/`, intervals `stage3/`, blender `stage4/`)
 - `bash -n scripts/run_pipeline.sh`
 
 If environment allows, also validate with a full run:

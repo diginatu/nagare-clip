@@ -46,10 +46,51 @@ text_filter:
     timeout: 120                 # Longer timeout since full transcript is sent
     # prompt: "..."              # System prompt for summary LLM (has sensible default)
 
+# summary stage: runs once project-wide (over all videos) before director. A
+# larger LLM segments each transcript into line-range parts and summarises each,
+# then a reduce step writes one all-videos summary. Output summary.json is a
+# reviewable intermediate consumed by the plan + director stages. Disabled by
+# default (writes an empty summary = no-op).
+summary:
+  enabled: false               # Enable the summary LLM
+  api_base: "http://localhost:11434"
+  model: "gpt-oss:120b"        # A larger model for editorial judgement
+  api_key: ""
+  temperature: 0.3
+  thinking: false
+  timeout: 300
+  response_format: "json"
+  max_retries: 2               # Extra attempts on LLM error / unparseable JSON (0 = single attempt)
+  retry_temp_step: 0.2
+  retry_temp_cap: 0.8
+  # prompt: "..."              # Per-video segment+summarise prompt (has a sensible default)
+  # overall_prompt: "..."      # All-videos reduce prompt (has a sensible default)
+
+# plan stage: runs once project-wide after summary, before director. A larger
+# LLM reads the per-part summaries (with line ranges) of all videos and gives a
+# coarse, cross-video editorial direction per part (remove / shorten / speed /
+# keep ...). Output plan.json is a reviewable intermediate consumed by director.
+# Disabled by default (writes an empty plan = no-op).
+plan:
+  enabled: false               # Enable the plan LLM
+  api_base: "http://localhost:11434"
+  model: "gpt-oss:120b"        # A larger model for editorial judgement
+  api_key: ""
+  temperature: 0.3
+  thinking: false
+  timeout: 300
+  response_format: "json"
+  max_retries: 2               # Extra attempts on LLM error / unparseable JSON (0 = single attempt)
+  retry_temp_step: 0.2
+  retry_temp_cap: 0.8
+  # prompt: "..."              # System prompt (has a sensible default)
+
 # director stage (Pass A): a larger LLM reads the whole numbered transcript and
 # emits high-level edit operations (cut / speed / overlay / keep / edit) as
 # {stem}_director.json — a human-reviewable intermediate. It never re-outputs
-# the transcript text. Disabled by default (writes an empty op list = no-op).
+# the transcript text. When summary/plan are enabled it also receives the
+# cross-video overview context for this video. Disabled by default (writes an
+# empty op list = no-op).
 director:
   enabled: false               # Enable the director LLM
   api_base: "http://localhost:11434"

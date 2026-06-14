@@ -201,6 +201,7 @@ def generate_director_ops(
     cfg: Dict[str, Any],
     *,
     call_llm: CallLLM = _call_llm,
+    overview_context: str = "",
 ) -> List[DirectorOp]:
     """Run the director LLM over the transcript and return validated ops.
 
@@ -208,10 +209,16 @@ def generate_director_ops(
     failure, nudging temperature up each attempt.  A valid empty op list is
     accepted without retry.  Returns ``[]`` after all attempts fail (graceful
     no-op), so the pipeline proceeds with the unedited transcript.
+
+    ``overview_context`` (from the summary/plan stages) is appended to the system
+    prompt when non-empty; an empty string leaves the prompt unchanged.
     """
     clean_lines = clean_for_display(edit_lines)
+    system_prompt = cfg.get("prompt", "")
+    if overview_context:
+        system_prompt = f"{system_prompt}\n\n{overview_context}"
     messages = [
-        {"role": "system", "content": cfg.get("prompt", "")},
+        {"role": "system", "content": system_prompt},
         {"role": "user", "content": format_numbered_transcript(clean_lines)},
     ]
     attempts = retry_attempts(cfg)

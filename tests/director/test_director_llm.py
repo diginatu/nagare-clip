@@ -129,6 +129,28 @@ class TestGenerate:
 
         assert generate_director_ops(["あ"], {"prompt": "P"}, call_llm=boom) == []
 
+    def test_empty_overview_context_leaves_system_prompt_unchanged(self):
+        captured = {}
+
+        def fake_llm(messages, cfg):
+            captured["system"] = messages[0]["content"]
+            return '{"ops": []}'
+
+        generate_director_ops(["あ"], {"prompt": "P"}, call_llm=fake_llm)
+        assert captured["system"] == "P"
+
+    def test_overview_context_appended_to_system_prompt(self):
+        captured = {}
+
+        def fake_llm(messages, cfg):
+            captured["system"] = messages[0]["content"]
+            return '{"ops": []}'
+
+        generate_director_ops(
+            ["あ"], {"prompt": "P"}, call_llm=fake_llm, overview_context="CTX"
+        )
+        assert captured["system"] == "P\n\nCTX"
+
 
 class TestTryParse:
     def test_hard_failure_returns_none(self):

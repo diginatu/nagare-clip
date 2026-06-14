@@ -17,8 +17,11 @@ import logging
 from pathlib import Path
 
 from nagare_clip.config import get_effective_config
+from nagare_clip.director.context import build_director_context
 from nagare_clip.director.director_llm import generate_director_ops, ops_to_dict
 from nagare_clip.logging_setup import setup_logging
+from nagare_clip.plan.plan_llm import plan_from_dict
+from nagare_clip.summary.summarize import ProjectSummary, summary_from_dict
 
 
 def parse_args() -> argparse.Namespace:
@@ -32,6 +35,24 @@ def parse_args() -> argparse.Namespace:
         "--output", required=True, dest="output", help="Output _director.json path"
     )
     parser.add_argument(
+        "--summary",
+        dest="summary",
+        default=None,
+        help="Optional summary.json (cross-video context)",
+    )
+    parser.add_argument(
+        "--plan",
+        dest="plan",
+        default=None,
+        help="Optional plan.json (cross-video rough directions)",
+    )
+    parser.add_argument(
+        "--stem",
+        dest="stem",
+        default=None,
+        help="This video's stem (to select its parts/directions from the overview)",
+    )
+    parser.add_argument(
         "--config", dest="config_path", default=None, help="Path to YAML config file"
     )
     parser.add_argument(
@@ -41,6 +62,24 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--log-file", default=None)
     return parser.parse_args()
+
+
+def _build_overview_context(args: argparse.Namespace) -> str:
+    """Load summary/plan artifacts (tolerating missing/empty) and render the
+    cross-video context for this video's stem.  Returns ``""`` if unavailable."""
+    if not args.stem:
+        return ""
+    project_summary = ProjectSummary(summary="", parts=[])
+    if args.summary and Path(args.summary).is_file():
+        project_summary = summary_from_dict(
+            json.loads(Path(args.summary).read_text(encoding="utf-8"))
+        )
+    directions = []
+    if args.plan and Path(args.plan).is_file():
+        directions = plan_from_dict(
+            json.loads(Path(args.plan).read_text(encoding="utf-8"))
+        )
+    return build_director_context(project_summary, directions, args.stem)
 
 
 def main() -> None:
@@ -65,8 +104,11 @@ def main() -> None:
         logging.info("director: disabled, writing empty op list")
         ops = []
     else:
+        overview_context = _build_overview_context(args)
         logging.info("director: analysing %d line(s) with LLM", len(edit_lines))
-        ops = generate_director_ops(edit_lines, director_cfg)
+        ops = generate_director_ops(
+            edit_lines, director_cfg, overview_context=overview_context
+        )
         logging.info("director: %d operation(s)", len(ops))
 
     output.parent.mkdir(parents=True, exist_ok=True)

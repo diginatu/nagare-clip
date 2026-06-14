@@ -73,6 +73,86 @@ DEFAULTS: Dict[str, Any] = {
             ),
         },
     },
+    # "summary" stage: runs once project-wide before "director".  A larger LLM
+    # segments each video's numbered transcript into line-range parts and writes
+    # a summary per part; a reduce step then synthesises one all-videos summary.
+    # Output is a reviewable summary.json consumed by "plan" and "director".
+    # Disabled by default (writes an empty summary = no-op).
+    "summary": {
+        "enabled": False,
+        "api_base": "http://localhost:11434",
+        "model": "gpt-oss:120b",
+        "api_key": "",
+        "temperature": 0.3,
+        "thinking": False,
+        "timeout": 300,
+        "response_format": "json",
+        "max_retries": 2,
+        "retry_temp_step": 0.2,
+        "retry_temp_cap": 0.8,
+        "prompt": (
+            "You are a video editor. You receive ONE Japanese transcript as "
+            "numbered lines (one line per subtitle segment). Split it into a few "
+            "contiguous PARTS by topic/section and summarise each part. Reference "
+            "lines by their 1-based numbers (inclusive). Output ONLY a JSON object.\n"
+            "\n"
+            "JSON shape:\n"
+            '{"parts": [\n'
+            '  {"lines": [1, 12], "summary": "what this part covers"},\n'
+            '  {"lines": [13, 40], "summary": "..."}\n'
+            "]}\n"
+            "\n"
+            "Rules:\n"
+            "- Parts must be contiguous and within the transcript range.\n"
+            "- Keep each summary to one short sentence.\n"
+            "- Output only the JSON object, no other text."
+        ),
+        "overall_prompt": (
+            "You are a video editor. You receive numbered per-part summaries "
+            "spanning several source videos of one project. Write ONE concise "
+            "overall summary of the whole project. Output ONLY a JSON object:\n"
+            '{"summary": "..."}\n'
+            "Output only the JSON object, no other text."
+        ),
+    },
+    # "plan" stage: runs once project-wide after "summary", before "director".
+    # A larger LLM reads the per-part summaries (with line ranges) of all videos
+    # and gives a coarse, cross-video editorial direction per part (e.g. remove /
+    # shorten / speed / keep).  Output is a reviewable plan.json consumed by
+    # "director".  Disabled by default (writes an empty plan = no-op).
+    "plan": {
+        "enabled": False,
+        "api_base": "http://localhost:11434",
+        "model": "gpt-oss:120b",
+        "api_key": "",
+        "temperature": 0.3,
+        "thinking": False,
+        "timeout": 300,
+        "response_format": "json",
+        "max_retries": 2,
+        "retry_temp_step": 0.2,
+        "retry_temp_cap": 0.8,
+        "prompt": (
+            "You are a video editor planning a rough cut across several source "
+            "videos. You receive numbered PARTS (each with a source video, a line "
+            "range, and a summary) plus an overall summary. For each part, give a "
+            "ROUGH editorial direction — what to do with it (e.g. remove, shorten, "
+            "speed up, keep, emphasise) and why, considering the whole project "
+            "(e.g. a part that repeats an earlier one can be removed). Reference "
+            "parts by their 1-based index. Output ONLY a JSON object.\n"
+            "\n"
+            "JSON shape:\n"
+            '{"directions": [\n'
+            '  {"index": 1, "direction": "keep — sets up the topic"},\n'
+            '  {"index": 2, "direction": "remove — repeats part 1"}\n'
+            "]}\n"
+            "\n"
+            "Rules:\n"
+            '- "index" must be one of the given part numbers.\n'
+            "- Keep each direction to one short, actionable phrase.\n"
+            "- Output only the JSON object, no other text."
+        ),
+    },
     # Pipeline "director" stage (Pass A): a larger LLM reads the whole
     # numbered transcript and emits a JSON list of high-level edit operations
     # (cut / speed / overlay / keep / edit) referenced by line number.  It

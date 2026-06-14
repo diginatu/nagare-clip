@@ -9,12 +9,14 @@ The pipeline creates a rough-cut Blender project for human review and fine-tunin
 1. transcription: WhisperX in Docker -> transcript outputs (`json`, `srt`, `vtt`, etc.)
 2. audio_silence: Audio-silence (jump-cut) detection -> `_cuts.txt` editable cut list
 3. text_filter: Text editing checkpoint -> `_edits.txt` (copy of `.txt`, or LLM-corrected with `{{old->new}}` markers)
-4. director (optional): a larger LLM proposes high-level edits -> reviewable `_director.json` op list
-5. guided_edit (optional): a small LLM applies the director's ops into `_edits.txt` (deterministically verified)
-6. intervals: Patch application + keep intervals -> `*_intervals.json` keep ranges (audio cuts unioned in)
-7. blender: Blender headless -> `.blend` with VSE strips arranged back-to-back
+4. summary (optional, project-wide): a larger LLM segments every video into line-range parts + summaries and writes one all-videos summary -> reviewable `output/summary/summary.json`
+5. plan (optional, project-wide): a larger LLM gives a coarse, cross-video rough direction per part -> reviewable `output/plan/plan.json`
+6. director (optional): a larger LLM proposes high-level edits -> reviewable `_director.json` op list (fed the summary/plan overview context)
+7. guided_edit (optional): a small LLM applies the director's ops into `_edits.txt` (deterministically verified)
+8. intervals: Patch application + keep intervals -> `*_intervals.json` keep ranges (audio cuts unioned in)
+9. blender: Blender headless -> `.blend` with VSE strips arranged back-to-back
 
-Stages are referenced by name (`--from-stage <name>`); the director/guided_edit stages are no-ops unless enabled in config.
+Stages are referenced by name (`--from-stage <name>`); the summary/plan/director/guided_edit stages are no-ops unless enabled in config.
 
 ## Human Editing Workflow
 
@@ -26,6 +28,8 @@ Stages are referenced by name (`--from-stage <name>`); the director/guided_edit 
 The `{{old->new}}` syntax replaces `old` with `new` in the transcript. Use `{{delete->}}` to remove text, `{{->insert}}` to insert text.
 
 The optional `director` + `guided_edit` stages automate steps like the above with LLMs: enable `director.enabled`/`guided_edit.enabled` in config, then a larger LLM proposes edits (cut/speed/overlay/keep/edit) into a reviewable `output/director/{stem}_director.json`, and a small LLM applies them — any op it cannot apply cleanly is listed in `output/guided_edit/{stem}_unapplied.txt`. Both stages retry a failed LLM call (the director on a connection error / unparseable JSON, guided_edit per op on an error / failed verification), nudging the temperature up each attempt; tune `max_retries`, `retry_temp_step`, and `retry_temp_cap` per stage (`max_retries: 0` disables retry).
+
+The optional `summary` + `plan` stages run **once over all source videos** (project-wide) before `director` and give it cross-video context. Enable `summary.enabled`/`plan.enabled` in config: `summary` segments each transcript into line-range parts with a summary each and writes one all-videos summary to `output/summary/summary.json`; `plan` reads those summaries and writes a coarse, cross-video rough direction per part (e.g. "remove — repeats an earlier part", "keep tight") to `output/plan/plan.json`. Both files are human-reviewable/editable. When enabled, the `director` for each video receives the overall summary plus that video's parts (line ranges, summaries, rough directions) and one-line context for the other videos, so its precise per-line ops follow the project-wide plan. They share the same `max_retries`/`retry_temp_step`/`retry_temp_cap` retry knobs.
 
 Before resuming, you can validate your edits in one pass (reports **every** problem at once, with line numbers, instead of failing on the first like Stage 4 does):
 
@@ -201,7 +205,7 @@ Options:
 - `--source FILE` — source video file (may be repeated for multiple sources); when omitted, all videos in `--input-videos-dir` are processed alphabetically.
 - `--config FILE` — path to a YAML config file; config values fill in between CLI overrides and built-in defaults.
 - `--language LANG` — ISO 639-1 language code passed to WhisperX (default: `ja`). Also settable via `stage1.language` in config.
-- `--from-stage S` — start from stage `S`, reusing earlier stage outputs. `S` is a stage **name**: `transcription`, `audio_silence`, `text_filter`, `director`, `guided_edit`, `intervals`, `blender` (legacy numbers 1-5 still work, mapping to transcription/audio_silence/text_filter/intervals/blender). Also settable via `pipeline.from_stage` in config.
+- `--from-stage S` — start from stage `S`, reusing earlier stage outputs. `S` is a stage **name**: `transcription`, `audio_silence`, `text_filter`, `summary`, `plan`, `director`, `guided_edit`, `intervals`, `blender` (legacy numbers 1-5 still work, mapping to transcription/audio_silence/text_filter/intervals/blender). Also settable via `pipeline.from_stage` in config.
 - Defaults: input videos under `src_video/`, outputs under `output/`.
 - If `--source` contains `/`, it is treated as the exact path; otherwise it is resolved inside `--input-videos-dir`.
 - `silence_threshold` and `min_keep` default to `1.5` and `1.0` (overridable via config).
