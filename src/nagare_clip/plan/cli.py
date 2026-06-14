@@ -16,6 +16,7 @@ import logging
 from pathlib import Path
 
 from nagare_clip.config import get_effective_config
+from nagare_clip.llm_report import recorder_from_config
 from nagare_clip.logging_setup import setup_logging
 from nagare_clip.plan.plan_llm import generate_plan, plan_to_dict
 from nagare_clip.summary.summarize import summary_from_dict
@@ -43,6 +44,7 @@ def parse_args() -> argparse.Namespace:
         choices=["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"],
     )
     parser.add_argument("--log-file", default=None)
+    parser.add_argument("--llm-report-dir", default=None, dest="llm_report_dir")
     return parser.parse_args()
 
 
@@ -60,6 +62,9 @@ def main() -> None:
         args.log_file or cfg["general"]["log_file"] or None,
     )
 
+    recorder = recorder_from_config("plan", cfg, override_dir=args.llm_report_dir)
+    recorder.clear()
+
     plan_cfg = cfg["plan"]
     output = Path(args.output)
 
@@ -72,7 +77,7 @@ def main() -> None:
             json.loads(summary_path.read_text(encoding="utf-8"))
         )
         logging.info("plan: directing %d part(s) with LLM", len(project_summary.parts))
-        directions = generate_plan(project_summary, plan_cfg)
+        directions = generate_plan(project_summary, plan_cfg, recorder=recorder)
         logging.info("plan: %d direction(s)", len(directions))
 
     output.parent.mkdir(parents=True, exist_ok=True)
@@ -81,6 +86,7 @@ def main() -> None:
         encoding="utf-8",
     )
     logging.info("plan: wrote %s", output)
+    recorder.rebuild_index()
 
 
 if __name__ == "__main__":

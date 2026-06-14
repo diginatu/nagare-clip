@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import yaml as _yaml
+
+from nagare_clip.llm_report import Recorder
 from nagare_clip.plan.plan_llm import (
     PartDirection,
     generate_plan,
@@ -125,3 +128,43 @@ class TestRoundTrip:
     def test_from_dict_tolerates_garbage(self):
         assert plan_from_dict("nope") == []
         assert plan_from_dict({}) == []
+
+
+def _ps():
+    return ProjectSummary(
+        summary="overall",
+        parts=[
+            PartSummary(stem="v", lines=(1, 2), summary="p1"),
+            PartSummary(stem="v", lines=(3, 4), summary="p2"),
+        ],
+    )
+
+
+def _outcome(tmp_path, unit):
+    text = (tmp_path / "plan" / f"{unit}.md").read_text(encoding="utf-8")
+    _, fm, _ = text.split("---", 2)
+    return _yaml.safe_load(fm)["outcome"]
+
+
+class TestPlanRecorder:
+    def test_records_ok(self, tmp_path):
+        rec = Recorder("plan", tmp_path, enabled=True)
+        resp = '{"directions":[{"index":1,"direction":"keep"},{"index":2,"direction":"cut"}]}'
+
+        def fake(_m, _c):
+            return resp
+
+        out = generate_plan(_ps(), {"max_retries": 0}, call_llm=fake, recorder=rec)
+        assert len(out) == 2
+        assert _outcome(tmp_path, "plan") == "ok"
+
+    def test_records_dropped_items(self, tmp_path):
+        rec = Recorder("plan", tmp_path, enabled=True)
+        resp = '{"directions":[{"index":1,"direction":"keep"},{"index":9,"direction":"x"}]}'
+
+        def fake(_m, _c):
+            return resp
+
+        out = generate_plan(_ps(), {"max_retries": 0}, call_llm=fake, recorder=rec)
+        assert len(out) == 1
+        assert _outcome(tmp_path, "plan") == "dropped-items"
