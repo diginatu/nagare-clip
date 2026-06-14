@@ -451,11 +451,6 @@ class TestCallLlmThinking:
 import yaml as _yaml
 
 from nagare_clip.llm_report import Recorder
-from nagare_clip.stage2.llm_filter import filter_transcript as _filter_transcript_import
-
-
-def _units(tmp_path):
-    return sorted(p.name for p in (tmp_path / "text_filter").glob("*.md"))
 
 
 class TestFilterRecorder:

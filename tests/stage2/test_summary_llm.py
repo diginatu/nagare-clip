@@ -137,7 +137,6 @@ class TestBuildEnhancedPrompt:
 import yaml as _yaml
 
 from nagare_clip.llm_report import Recorder
-from nagare_clip.stage2.summary_llm import generate_summary as _generate_summary_import
 
 
 class TestSummaryLLMRecorder:
