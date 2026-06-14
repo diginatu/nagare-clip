@@ -18,6 +18,7 @@ from pathlib import Path
 
 from nagare_clip.config import get_effective_config
 from nagare_clip.director.director_llm import clean_for_display
+from nagare_clip.llm_report import recorder_from_config
 from nagare_clip.logging_setup import setup_logging
 from nagare_clip.summary.summarize import (
     ProjectSummary,
@@ -55,6 +56,7 @@ def parse_args() -> argparse.Namespace:
         choices=["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"],
     )
     parser.add_argument("--log-file", default=None)
+    parser.add_argument("--llm-report-dir", default=None, dest="llm_report_dir")
     return parser.parse_args()
 
 
@@ -72,6 +74,9 @@ def main() -> None:
         args.log_file or cfg["general"]["log_file"] or None,
     )
 
+    recorder = recorder_from_config("summary", cfg, override_dir=args.llm_report_dir)
+    recorder.clear()
+
     summary_cfg = cfg["summary"]
     output = Path(args.output)
 
@@ -88,7 +93,7 @@ def main() -> None:
             )
             parts_input.append((stem, clean_lines))
         logging.info("summary: analysing %d video(s) with LLM", len(parts_input))
-        project = build_summary(parts_input, summary_cfg)
+        project = build_summary(parts_input, summary_cfg, recorder=recorder)
         logging.info(
             "summary: %d part(s) across %d video(s)",
             len(project.parts),
@@ -101,6 +106,7 @@ def main() -> None:
         encoding="utf-8",
     )
     logging.info("summary: wrote %s", output)
+    recorder.rebuild_index()
 
 
 if __name__ == "__main__":
