@@ -15,6 +15,15 @@ import re
 from dataclasses import dataclass, field
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
+from nagare_clip.llm_report import (
+    DROPPED_ITEMS,
+    LLM_ERROR,
+    NULL_RECORDER,
+    OK,
+    OK_EMPTY,
+    UNPARSEABLE,
+    Recorder,
+)
 from nagare_clip.llm_retry import cfg_for_attempt, retry_attempts
 from nagare_clip.stage2.llm_filter import _call_llm, apply_patches_to_lines
 from nagare_clip.stage3.sync_json import (
@@ -62,16 +71,23 @@ def _coerce_lines(value: Any, num_lines: int) -> Optional[Tuple[int, int]]:
     return (start, end)
 
 
-def _parse_op(raw: Any, num_lines: int) -> Optional[DirectorOp]:
+def _parse_op(
+    raw: Any, num_lines: int, drops: Optional[List[str]] = None
+) -> Optional[DirectorOp]:
+    def _drop(msg: str) -> None:
+        logger.warning("Director op dropped: %s", msg)
+        if drops is not None:
+            drops.append(msg)
+
     if not isinstance(raw, dict):
         return None
     op_type = raw.get("type")
     if op_type not in VALID_TYPES:
-        logger.warning("Director op dropped: unknown type %r", op_type)
+        _drop(f"unknown type {op_type!r}")
         return None
     lines = _coerce_lines(raw.get("lines"), num_lines)
     if lines is None:
-        logger.warning("Director op dropped: bad lines %r", raw.get("lines"))
+        _drop(f"bad lines {raw.get('lines')!r}")
         return None
 
     note = str(raw.get("note", "") or "")
@@ -80,18 +96,18 @@ def _parse_op(raw: Any, num_lines: int) -> Optional[DirectorOp]:
     if op_type == "speed":
         raw_factor = raw.get("factor")
         if not isinstance(raw_factor, (int, float)) or isinstance(raw_factor, bool):
-            logger.warning("Director speed op dropped: missing factor")
+            _drop("speed op missing factor")
             return None
         factor = float(raw_factor)
         if factor <= 0:
-            logger.warning("Director speed op dropped: factor %r <= 0", factor)
+            _drop(f"speed factor {factor!r} <= 0")
             return None
 
     text: Optional[str] = None
     if op_type == "overlay":
         raw_text = raw.get("text")
         if not isinstance(raw_text, str) or raw_text == "":
-            logger.warning("Director overlay op dropped: empty/missing text")
+            _drop("overlay op empty/missing text")
             return None
         text = raw_text
 
@@ -99,7 +115,7 @@ def _parse_op(raw: Any, num_lines: int) -> Optional[DirectorOp]:
 
 
 def try_parse_director_response(
-    response: str, num_lines: int
+    response: str, num_lines: int, drops: Optional[List[str]] = None
 ) -> Optional[List[DirectorOp]]:
     """Parse the director LLM response, distinguishing failure from empty.
 
@@ -124,7 +140,7 @@ def try_parse_director_response(
 
     ops: List[DirectorOp] = []
     for raw in data["ops"]:
-        op = _parse_op(raw, num_lines)
+        op = _parse_op(raw, num_lines, drops)
         if op is not None:
             ops.append(op)
     return ops
@@ -202,6 +218,8 @@ def generate_director_ops(
     *,
     call_llm: CallLLM = _call_llm,
     overview_context: str = "",
+    recorder: Recorder = NULL_RECORDER,
+    unit: str = "director",
 ) -> List[DirectorOp]:
     """Run the director LLM over the transcript and return validated ops.
 
@@ -223,21 +241,48 @@ def generate_director_ops(
     ]
     attempts = retry_attempts(cfg)
     for attempt in range(attempts):
+        attempt_cfg = cfg_for_attempt(cfg, attempt)
         try:
-            response = call_llm(messages, cfg_for_attempt(cfg, attempt))
-        except Exception:
+            response = call_llm(messages, attempt_cfg)
+        except Exception as e:  # noqa: BLE001 - recoverable
             logger.warning(
                 "Director LLM call failed (attempt %d/%d)",
                 attempt + 1,
                 attempts,
                 exc_info=True,
             )
+            recorder.attempt(
+                unit=unit, attempt=attempt, total=attempts, messages=messages,
+                error=str(e), outcome=LLM_ERROR, reason="LLM call failed",
+                cfg=attempt_cfg,
+            )
             continue
-        ops = try_parse_director_response(response, num_lines=len(clean_lines))
-        if ops is not None:
-            return ops
-        logger.warning(
-            "Director response unparseable (attempt %d/%d)", attempt + 1, attempts
+        drops: List[str] = []
+        ops = try_parse_director_response(
+            response, num_lines=len(clean_lines), drops=drops
         )
+        if ops is None:
+            recorder.attempt(
+                unit=unit, attempt=attempt, total=attempts, messages=messages,
+                response=response, outcome=UNPARSEABLE,
+                reason="invalid JSON / no 'ops' array", cfg=attempt_cfg,
+            )
+            logger.warning(
+                "Director response unparseable (attempt %d/%d)", attempt + 1, attempts
+            )
+            continue
+        if drops:
+            outcome, reason = DROPPED_ITEMS, f"{len(drops)} op(s) dropped: " + "; ".join(drops)
+        elif not ops:
+            outcome, reason = OK_EMPTY, ""
+        else:
+            outcome, reason = OK, ""
+        recorder.attempt(
+            unit=unit, attempt=attempt, total=attempts, messages=messages,
+            response=response, outcome=outcome, reason=reason, cfg=attempt_cfg,
+        )
+        recorder.flush_unit(unit, outcome=outcome, reason=reason)
+        return ops
+    recorder.flush_unit(unit, outcome=LLM_ERROR, reason=f"all {attempts} attempt(s) failed")
     logger.warning("Director: all %d attempt(s) failed; proceeding with no ops", attempts)
     return []

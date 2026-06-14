@@ -46,7 +46,7 @@ def test_enabled_writes_parsed_ops(monkeypatch, tmp_path):
     monkeypatch.setattr(
         director_cli,
         "generate_director_ops",
-        lambda lines, c, overview_context="": generate_director_ops(
+        lambda lines, c, overview_context="", **kw: generate_director_ops(
             lines, c, call_llm=fake_llm, overview_context=overview_context
         ),
     )
@@ -85,7 +85,7 @@ def test_overview_context_injected_for_stem(monkeypatch, tmp_path):
 
     captured = {}
 
-    def fake(lines, c, overview_context=""):
+    def fake(lines, c, overview_context="", **kw):
         captured["ctx"] = overview_context
         return []
 

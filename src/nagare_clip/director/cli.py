@@ -19,6 +19,7 @@ from pathlib import Path
 from nagare_clip.config import get_effective_config
 from nagare_clip.director.context import build_director_context
 from nagare_clip.director.director_llm import generate_director_ops, ops_to_dict
+from nagare_clip.llm_report import recorder_from_config
 from nagare_clip.logging_setup import setup_logging
 from nagare_clip.plan.plan_llm import plan_from_dict
 from nagare_clip.summary.summarize import ProjectSummary, summary_from_dict
@@ -61,6 +62,7 @@ def parse_args() -> argparse.Namespace:
         choices=["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"],
     )
     parser.add_argument("--log-file", default=None)
+    parser.add_argument("--llm-report-dir", default=None, dest="llm_report_dir")
     return parser.parse_args()
 
 
@@ -96,9 +98,13 @@ def main() -> None:
         args.log_file or cfg["general"]["log_file"] or None,
     )
 
+    recorder = recorder_from_config("director", cfg, override_dir=args.llm_report_dir)
+    recorder.clear()
+
     director_cfg = cfg["director"]
     edit_lines = Path(args.edits_txt).read_text(encoding="utf-8").splitlines()
     output = Path(args.output)
+    stem = args.stem or output.stem.replace("_director", "")
 
     if not director_cfg.get("enabled", False):
         logging.info("director: disabled, writing empty op list")
@@ -107,7 +113,8 @@ def main() -> None:
         overview_context = _build_overview_context(args)
         logging.info("director: analysing %d line(s) with LLM", len(edit_lines))
         ops = generate_director_ops(
-            edit_lines, director_cfg, overview_context=overview_context
+            edit_lines, director_cfg, overview_context=overview_context,
+            recorder=recorder, unit=stem,
         )
         logging.info("director: %d operation(s)", len(ops))
 
@@ -117,6 +124,7 @@ def main() -> None:
         encoding="utf-8",
     )
     logging.info("director: wrote %s", output)
+    recorder.rebuild_index()
 
 
 if __name__ == "__main__":
