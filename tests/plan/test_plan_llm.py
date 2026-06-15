@@ -7,6 +7,7 @@ import yaml as _yaml
 from nagare_clip.llm_report import Recorder
 from nagare_clip.plan.plan_llm import (
     PartDirection,
+    _format_parts_for_plan,
     generate_plan,
     plan_from_dict,
     plan_to_dict,
@@ -144,6 +145,34 @@ def _outcome(tmp_path, unit):
     text = (tmp_path / "plan" / f"{unit}.md").read_text(encoding="utf-8")
     _, fm, _ = text.split("---", 2)
     return _yaml.safe_load(fm)["outcome"]
+
+
+class TestFormatPartsTiming:
+    def test_same_stem_gap_and_last_part_no_gap(self):
+        ps = ProjectSummary(summary="", parts=[
+            PartSummary("v", (1, 2), "intro", start=0.0, end=10.0),
+            PartSummary("v", (3, 4), "demo", start=11.5, end=19.5),
+        ])
+        out = _format_parts_for_plan(ps)
+        assert "1: v [1-2] [10.0s, gap 1.5s] — intro" in out
+        assert "2: v [3-4] [8.0s] — demo" in out
+
+    def test_cross_video_boundary_has_no_gap(self):
+        ps = ProjectSummary(summary="", parts=[
+            PartSummary("a", (1, 2), "x", start=0.0, end=10.0),
+            PartSummary("b", (1, 2), "y", start=2.0, end=8.0),
+        ])
+        out = _format_parts_for_plan(ps)
+        # part 1 is last of stem "a" -> dur only, no gap into "b"
+        assert "1: a [1-2] [10.0s] — x" in out
+        assert "2: b [1-2] [6.0s] — y" in out
+
+    def test_missing_times_no_bracket(self):
+        ps = ProjectSummary(summary="", parts=[
+            PartSummary("v", (1, 2), "intro"),
+        ])
+        out = _format_parts_for_plan(ps)
+        assert out == "1: v [1-2] — intro"
 
 
 class TestPlanRecorder:
