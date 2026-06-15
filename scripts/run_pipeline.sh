@@ -381,6 +381,7 @@ if (( FROM_ORDER <= ORD_SUMMARY )); then
   EDITS_ARGS=()
   for STEM in "${ALL_STEMS[@]}"; do
     EDITS_ARGS+=(--edits-txt "${STAGE3_DIR}/${STEM}_edits.txt")
+    EDITS_ARGS+=(--json "${STAGE1_DIR}/${STEM}.json")
   done
   uv run --project "$PROJECT_ROOT" python -m nagare_clip.summary.cli \
     "${EDITS_ARGS[@]}" \
@@ -429,6 +430,7 @@ if (( FROM_ORDER <= ORD_DIRECTOR )); then
       --summary "${SUMMARY_DIR}/summary.json" \
       --plan "${PLAN_DIR}/plan.json" \
       --stem "${STEM}" \
+      --json "${STAGE1_DIR}/${STEM}.json" \
       "${CONFIG_ARGS[@]}" \
       --log-file "$LOG_FILE" \
       --llm-report-dir "$LLM_REPORT_DIR" \
