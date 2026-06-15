@@ -44,7 +44,7 @@ def call_llm(messages: List[Dict[str, str]], cfg: Dict[str, Any]) -> str:
     if temperature is not None:
         kwargs["temperature"] = temperature
 
-    api_base = cfg.get("api_base", "")
+    api_base = cfg.get("api_base", "").rstrip("/")
     if not api_base and provider.startswith("ollama"):
         api_base = DEFAULT_OLLAMA_API_BASE
     if api_base:

@@ -93,6 +93,12 @@ def test_api_key_forwarded_when_set():
     assert m.call_args.kwargs["api_key"] == "sk-123"
 
 
+def test_trailing_slash_stripped_from_explicit_api_base():
+    _, m = _call({"provider": "ollama_chat", "model": "x",
+                  "api_base": "http://localhost:11434/"})
+    assert m.call_args.kwargs["api_base"] == "http://localhost:11434"
+
+
 def test_litellm_error_wrapped_as_connection_error():
     with patch("nagare_clip.llm_client.litellm.completion", side_effect=ValueError("boom")):
         with pytest.raises(ConnectionError):
