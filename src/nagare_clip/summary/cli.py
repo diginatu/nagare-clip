@@ -25,6 +25,7 @@ from nagare_clip.summary.summarize import (
     build_summary,
     summary_to_dict,
 )
+from nagare_clip.timing import segment_times
 
 
 def _stem_from_edits(path: Path) -> str:
@@ -43,6 +44,13 @@ def parse_args() -> argparse.Namespace:
         action="append",
         dest="edits_txt",
         help="Input _edits.txt path (repeat once per source video)",
+    )
+    parser.add_argument(
+        "--json",
+        action="append",
+        default=None,
+        dest="json",
+        help="WhisperX {stem}.json for per-part timing (repeat, matched by stem)",
     )
     parser.add_argument(
         "--output", required=True, dest="output", help="Output summary.json path"
@@ -97,8 +105,21 @@ def main() -> None:
                 path.read_text(encoding="utf-8").splitlines()
             )
             parts_input.append((stem, clean_lines))
+        seg_times_by_stem = {}
+        for raw in args.json or []:
+            jpath = Path(raw)
+            if jpath.is_file():
+                try:
+                    seg_times_by_stem[jpath.stem] = segment_times(
+                        json.loads(jpath.read_text(encoding="utf-8"))
+                    )
+                except (ValueError, OSError):
+                    logging.warning("summary: could not read --json %s", jpath)
         logging.info("summary: analysing %d video(s) with LLM", len(parts_input))
-        project = build_summary(parts_input, summary_cfg, recorder=recorder)
+        project = build_summary(
+            parts_input, summary_cfg, recorder=recorder,
+            seg_times_by_stem=seg_times_by_stem or None,
+        )
         logging.info(
             "summary: %d part(s) across %d video(s)",
             len(project.parts),
