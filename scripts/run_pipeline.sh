@@ -22,6 +22,9 @@ usage() {
   echo "                            text_filter, director, guided_edit, intervals, blender."
   echo "                            Legacy numbers 1-5 are still accepted (1=transcription,"
   echo "                            2=audio_silence, 3=text_filter, 4=intervals, 5=blender)."
+  echo "  --to-stage          S     Stop after stage S (inclusive); later stages are skipped."
+  echo "                            Same NAME/legacy-number values as --from-stage."
+  echo "                            Must not precede --from-stage (default: blender)."
   echo "  --align-model       MODEL HuggingFace model ID for WhisperX alignment"
   echo "                            Japanese default: vumichien/wav2vec2-large-xlsr-japanese"
   echo "                            English default: (whisperx built-in)"
@@ -44,6 +47,7 @@ CLI_LANGUAGE=""
 CLI_SILENCE_THRESHOLD=""
 CLI_MIN_KEEP=""
 CLI_FROM_STAGE=""
+CLI_TO_STAGE=""
 CLI_SOURCES=()
 
 while [[ $# -gt 0 ]]; do
@@ -51,6 +55,7 @@ while [[ $# -gt 0 ]]; do
     --source) CLI_SOURCES+=("$2"); shift 2 ;;
     --config) CONFIG_FILE="$2"; shift 2 ;;
     --from-stage) CLI_FROM_STAGE="$2"; shift 2 ;;
+    --to-stage) CLI_TO_STAGE="$2"; shift 2 ;;
     --input-videos-dir) CLI_INPUT_VIDEOS_DIR="$2"; shift 2 ;;
     --output-dir) CLI_OUTPUT_DIR="$2"; shift 2 ;;
     --keep-pre-margin) CLI_KEEP_PRE_MARGIN="$2"; shift 2 ;;
@@ -74,6 +79,7 @@ CFG_LANGUAGE=""
 CFG_SILENCE_THRESHOLD=""
 CFG_MIN_KEEP=""
 CFG_FROM_STAGE=""
+CFG_TO_STAGE=""
 CFG_COMPUTE_TYPE=""
 CFG_BATCH_SIZE=""
 CFG_USE_LLM=""
@@ -114,6 +120,7 @@ out('CFG_AUDIO_SILENCE_MIN_SILENCE', asl.get('min_silence'))
 out('CFG_INPUT_VIDEOS_DIR', p.get('input_videos_dir'))
 out('CFG_OUTPUT_DIR', p.get('output_dir'))
 out('CFG_FROM_STAGE', p.get('from_stage'))
+out('CFG_TO_STAGE', p.get('to_stage'))
 " "$CONFIG_FILE")"
 fi
 
@@ -129,6 +136,7 @@ MIN_KEEP="${CLI_MIN_KEEP:-${CFG_MIN_KEEP:-1.0}}"
 COMPUTE_TYPE="${CFG_COMPUTE_TYPE:-float16}"
 BATCH_SIZE="${CFG_BATCH_SIZE:-16}"
 FROM_STAGE="${CLI_FROM_STAGE:-${CFG_FROM_STAGE:-1}}"
+TO_STAGE="${CLI_TO_STAGE:-${CFG_TO_STAGE:-blender}}"
 AUDIO_SILENCE_ENABLED="${CFG_AUDIO_SILENCE_ENABLED:-true}"
 AUDIO_SILENCE_NOISE="${CFG_AUDIO_SILENCE_NOISE:--30.0}"
 AUDIO_SILENCE_MIN_SILENCE="${CFG_AUDIO_SILENCE_MIN_SILENCE:-0.8}"
@@ -141,8 +149,12 @@ STAGE_ORDER=(transcription audio_silence text_filter summary plan director guide
 stage_index() {  # echo 1-based index of a stage name, or nothing
   local name="$1" i
   for i in "${!STAGE_ORDER[@]}"; do
-    [[ "${STAGE_ORDER[$i]}" == "$name" ]] && { echo $((i + 1)); return; }
+    [[ "${STAGE_ORDER[$i]}" == "$name" ]] && { echo $((i + 1)); return 0; }
   done
+  # Not found: echo nothing but still succeed, so callers using
+  # `VAR="$(stage_index x)"` under `set -e` reach their own -z validation
+  # instead of aborting silently on the command-substitution failure.
+  return 0
 }
 
 # Resolve --from-stage (a stage name, or a legacy 1-5 number) to an order index.
@@ -159,6 +171,32 @@ if [[ -z "$FROM_ORDER" ]]; then
   echo "Use a stage name (${STAGE_ORDER[*]}) or a legacy number 1-5." >&2
   exit 1
 fi
+
+# Resolve --to-stage (a stage name, or a legacy 1-5 number) to an order index.
+# Default is the last stage (blender), i.e. no upper bound.
+case "$TO_STAGE" in
+  1) TO_ORDER="$(stage_index transcription)" ;;
+  2) TO_ORDER="$(stage_index audio_silence)" ;;
+  3) TO_ORDER="$(stage_index text_filter)" ;;
+  4) TO_ORDER="$(stage_index intervals)" ;;
+  5) TO_ORDER="$(stage_index blender)" ;;
+  *) TO_ORDER="$(stage_index "$TO_STAGE")" ;;
+esac
+if [[ -z "$TO_ORDER" ]]; then
+  echo "Invalid --to-stage value: $TO_STAGE" >&2
+  echo "Use a stage name (${STAGE_ORDER[*]}) or a legacy number 1-5." >&2
+  exit 1
+fi
+if (( FROM_ORDER > TO_ORDER )); then
+  echo "Invalid stage range: --from-stage ($FROM_STAGE) is after --to-stage ($TO_STAGE)." >&2
+  exit 1
+fi
+
+# A stage runs only inside the [from, to] window; stages past the window are
+# skipped without reusing/validating outputs (they are intentionally not built).
+in_window() { (( FROM_ORDER <= $1 && $1 <= TO_ORDER )); }
+past_window() { (( $1 > TO_ORDER )); }
+
 ORD_TRANSCRIPTION="$(stage_index transcription)"
 ORD_AUDIO_SILENCE="$(stage_index audio_silence)"
 ORD_TEXT_FILTER="$(stage_index text_filter)"
@@ -167,6 +205,7 @@ ORD_PLAN="$(stage_index plan)"
 ORD_DIRECTOR="$(stage_index director)"
 ORD_GUIDED_EDIT="$(stage_index guided_edit)"
 ORD_INTERVALS="$(stage_index intervals)"
+ORD_BLENDER="$(stage_index blender)"
 
 # Set default alignment model per language if not specified
 if [[ -z "$ALIGN_MODEL" ]]; then
@@ -285,7 +324,7 @@ for SOURCE_PATH in "${SOURCE_PATHS[@]}"; do
 done
 
 # --- Stage 1: WhisperX transcription (single container run for all sources) ---
-if (( FROM_ORDER <= ORD_TRANSCRIPTION )); then
+if in_window "$ORD_TRANSCRIPTION"; then
   echo "[transcription] WhisperX: ${ALL_RELATIVES[*]}"
   INPUT_VIDEOS_DIR="$ABS_INPUT_VIDEOS" OUTPUT_DIR="$ABS_OUTPUT_DIR" \
   docker compose -f "$PROJECT_ROOT/docker-compose.yml" run --rm --user "0:0" whisperx \
@@ -297,6 +336,8 @@ if (( FROM_ORDER <= ORD_TRANSCRIPTION )); then
     --compute_type "$COMPUTE_TYPE" \
     --batch_size "$BATCH_SIZE" \
     "${ALIGN_MODEL_ARGS[@]}"
+elif past_window "$ORD_TRANSCRIPTION"; then
+  echo "[transcription] Skipped (--to-stage $TO_STAGE)"
 else
   echo "[transcription] Skipped (--from-stage $FROM_STAGE)"
   # Validate that transcription outputs exist for all sources
@@ -313,7 +354,7 @@ else
 fi
 
 # --- Stage 2: Audio-silence (jump-cut) detection checkpoint (per source) ---
-if (( FROM_ORDER <= ORD_AUDIO_SILENCE )); then
+if in_window "$ORD_AUDIO_SILENCE"; then
   for i in "${!ALL_STEMS[@]}"; do
     STEM="${ALL_STEMS[$i]}"
     CUTS_TXT="${STAGE2_DIR}/${STEM}_cuts.txt"
@@ -335,6 +376,8 @@ if (( FROM_ORDER <= ORD_AUDIO_SILENCE )); then
       "${CONFIG_ARGS[@]}" \
       --log-file "$LOG_FILE"
   done
+elif past_window "$ORD_AUDIO_SILENCE"; then
+  echo "[audio_silence] Skipped (--to-stage $TO_STAGE)"
 else
   echo "[audio_silence] Skipped (--from-stage $FROM_STAGE)"
   # Validate that audio_silence outputs exist
@@ -347,7 +390,7 @@ else
 fi
 
 # --- text_filter: Text editing checkpoint (mandatory, per source) ---
-if (( FROM_ORDER <= ORD_TEXT_FILTER )); then
+if in_window "$ORD_TEXT_FILTER"; then
   REPORT_CLEARED_TF=0
   for i in "${!ALL_STEMS[@]}"; do
     STEM="${ALL_STEMS[$i]}"
@@ -363,6 +406,8 @@ if (( FROM_ORDER <= ORD_TEXT_FILTER )); then
       --llm-report-dir "$LLM_REPORT_DIR" \
       "${REPORT_KEEP_TF[@]}"
   done
+elif past_window "$ORD_TEXT_FILTER"; then
+  echo "[text_filter] Skipped (--to-stage $TO_STAGE)"
 else
   echo "[text_filter] Skipped (--from-stage $FROM_STAGE)"
   # Validate that text_filter outputs exist
@@ -376,7 +421,7 @@ fi
 
 # --- summary: project-wide per-part + all-videos summaries (single run) ---
 # Always runs (a no-op when summary.enabled is false, writing an empty summary).
-if (( FROM_ORDER <= ORD_SUMMARY )); then
+if in_window "$ORD_SUMMARY"; then
   echo "[summary] Project-wide summaries"
   EDITS_ARGS=()
   for STEM in "${ALL_STEMS[@]}"; do
@@ -389,6 +434,8 @@ if (( FROM_ORDER <= ORD_SUMMARY )); then
     "${CONFIG_ARGS[@]}" \
     --log-file "$LOG_FILE" \
     --llm-report-dir "$LLM_REPORT_DIR"
+elif past_window "$ORD_SUMMARY"; then
+  echo "[summary] Skipped (--to-stage $TO_STAGE)"
 else
   echo "[summary] Skipped (--from-stage $FROM_STAGE)"
   if [[ ! -f "${SUMMARY_DIR}/summary.json" ]]; then
@@ -399,7 +446,7 @@ fi
 
 # --- plan: cross-video rough directions per part (single run) ---
 # Always runs (a no-op when plan.enabled is false, writing an empty plan).
-if (( FROM_ORDER <= ORD_PLAN )); then
+if in_window "$ORD_PLAN"; then
   echo "[plan] Cross-video rough directions"
   uv run --project "$PROJECT_ROOT" python -m nagare_clip.plan.cli \
     --summary "${SUMMARY_DIR}/summary.json" \
@@ -407,6 +454,8 @@ if (( FROM_ORDER <= ORD_PLAN )); then
     "${CONFIG_ARGS[@]}" \
     --log-file "$LOG_FILE" \
     --llm-report-dir "$LLM_REPORT_DIR"
+elif past_window "$ORD_PLAN"; then
+  echo "[plan] Skipped (--to-stage $TO_STAGE)"
 else
   echo "[plan] Skipped (--from-stage $FROM_STAGE)"
   if [[ ! -f "${PLAN_DIR}/plan.json" ]]; then
@@ -417,7 +466,7 @@ fi
 
 # --- director: LLM high-level edit operations (per source) ---
 # Always runs (a no-op when director.enabled is false, writing an empty op list).
-if (( FROM_ORDER <= ORD_DIRECTOR )); then
+if in_window "$ORD_DIRECTOR"; then
   REPORT_CLEARED_DIR=0
   for STEM in "${ALL_STEMS[@]}"; do
     REPORT_KEEP_DIR=()
@@ -436,6 +485,8 @@ if (( FROM_ORDER <= ORD_DIRECTOR )); then
       --llm-report-dir "$LLM_REPORT_DIR" \
       "${REPORT_KEEP_DIR[@]}"
   done
+elif past_window "$ORD_DIRECTOR"; then
+  echo "[director] Skipped (--to-stage $TO_STAGE)"
 else
   echo "[director] Skipped (--from-stage $FROM_STAGE)"
   for STEM in "${ALL_STEMS[@]}"; do
@@ -448,7 +499,7 @@ fi
 
 # --- guided_edit: apply director ops into _edits.txt (per source) ---
 # Always runs (a no-op when guided_edit.enabled is false, copying edits through).
-if (( FROM_ORDER <= ORD_GUIDED_EDIT )); then
+if in_window "$ORD_GUIDED_EDIT"; then
   REPORT_CLEARED_GE=0
   for STEM in "${ALL_STEMS[@]}"; do
     REPORT_KEEP_GE=()
@@ -466,6 +517,8 @@ if (( FROM_ORDER <= ORD_GUIDED_EDIT )); then
       --llm-report-dir "$LLM_REPORT_DIR" \
       "${REPORT_KEEP_GE[@]}"
   done
+elif past_window "$ORD_GUIDED_EDIT"; then
+  echo "[guided_edit] Skipped (--to-stage $TO_STAGE)"
 else
   echo "[guided_edit] Skipped (--from-stage $FROM_STAGE)"
   for STEM in "${ALL_STEMS[@]}"; do
@@ -479,7 +532,7 @@ fi
 # --- intervals: Patch application + keep interval computation (per source) ---
 # Reads the guided_edit output (which is the text_filter edits passed through
 # when guided_edit is disabled).
-if (( FROM_ORDER <= ORD_INTERVALS )); then
+if in_window "$ORD_INTERVALS"; then
   for i in "${!ALL_STEMS[@]}"; do
     STEM="${ALL_STEMS[$i]}"
     INTERVALS_JSON="${STAGE4_DIR}/${STEM}_intervals.json"
@@ -496,6 +549,8 @@ if (( FROM_ORDER <= ORD_INTERVALS )); then
 
     ALL_INTERVALS+=("$(realpath "$INTERVALS_JSON")")
   done
+elif past_window "$ORD_INTERVALS"; then
+  echo "[intervals] Skipped (--to-stage $TO_STAGE)"
 else
   echo "[intervals] Skipped (--from-stage $FROM_STAGE)"
   # Validate that intervals outputs exist and collect interval paths
@@ -522,17 +577,25 @@ for ivp in "${ALL_INTERVALS[@]}"; do
   STAGE4_INTERVALS_ARGS+=("--intervals" "$ivp")
 done
 
-echo "[blender] VSE project generation"
-blender --background --factory-startup --python-exit-code 1 --python "$PROJECT_ROOT/src/nagare_clip/stage4/blender_cli.py" -- \
-  "${STAGE4_SOURCE_ARGS[@]}" \
-  "${STAGE4_INTERVALS_ARGS[@]}" \
-  --output "$BLEND_OUTPUT" \
-  "${CONFIG_ARGS[@]}" \
-  --log-file "$LOG_FILE"
+if in_window "$ORD_BLENDER"; then
+  echo "[blender] VSE project generation"
+  blender --background --factory-startup --python-exit-code 1 --python "$PROJECT_ROOT/src/nagare_clip/stage4/blender_cli.py" -- \
+    "${STAGE4_SOURCE_ARGS[@]}" \
+    "${STAGE4_INTERVALS_ARGS[@]}" \
+    --output "$BLEND_OUTPUT" \
+    "${CONFIG_ARGS[@]}" \
+    --log-file "$LOG_FILE"
+else
+  echo "[blender] Skipped (--to-stage $TO_STAGE)"
+fi
 
 # Cleanup any copied source files
 for f in "${CLEANUP_COPIES[@]}"; do
   rm -f "$f"
 done
 
-echo "Done: $BLEND_OUTPUT"
+if in_window "$ORD_BLENDER"; then
+  echo "Done: $BLEND_OUTPUT"
+else
+  echo "Done (stopped at --to-stage $TO_STAGE)"
+fi

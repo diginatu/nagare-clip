@@ -201,4 +201,5 @@ blender:
 pipeline:
   input_videos_dir: src_video
   output_dir: output   # Root dir; stage outputs go to stage1/ .. stage5/ subdirs
-  from_stage: 1        # Start from this stage (1-5); reuses earlier stage outputs
+  from_stage: 1        # Start from this stage (name or legacy 1-5); reuses earlier stage outputs
+  to_stage: blender    # Stop after this stage (inclusive; name or legacy 1-5); later stages are skipped. Must not precede from_stage

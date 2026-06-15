@@ -233,6 +233,7 @@ Options:
 - `--config FILE` — path to a YAML config file; config values fill in between CLI overrides and built-in defaults.
 - `--language LANG` — ISO 639-1 language code passed to WhisperX (default: `ja`). Also settable via `stage1.language` in config.
 - `--from-stage S` — start from stage `S`, reusing earlier stage outputs. `S` is a stage **name**: `transcription`, `audio_silence`, `text_filter`, `summary`, `plan`, `director`, `guided_edit`, `intervals`, `blender` (legacy numbers 1-5 still work, mapping to transcription/audio_silence/text_filter/intervals/blender). Also settable via `pipeline.from_stage` in config.
+- `--to-stage S` — stop **after** stage `S` (inclusive); later stages are skipped. Same name/legacy-number values as `--from-stage`, and must not precede it. Defaults to `blender` (run to the end). Also settable via `pipeline.to_stage` in config. Combine with `--from-stage` to run a window of stages, e.g. `--from-stage summary --to-stage director`.
 - Defaults: input videos under `src_video/`, outputs under `output/`.
 - If `--source` contains `/`, it is treated as the exact path; otherwise it is resolved inside `--input-videos-dir`.
 - `silence_threshold` and `min_keep` default to `1.5` and `1.0` (overridable via config).
