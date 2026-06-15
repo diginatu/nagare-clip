@@ -44,6 +44,8 @@ class PartSummary:
     stem: str
     lines: Tuple[int, int]  # 1-based inclusive (start, end)
     summary: str
+    start: Optional[float] = None  # part start time (s), from WhisperX segments
+    end: Optional[float] = None    # part end time (s)
 
 
 @dataclass
@@ -233,12 +235,29 @@ def generate_project_summary(
     return ""
 
 
+def _attach_part_times(
+    part: PartSummary,
+    seg_times: Optional[List[Tuple[Optional[float], Optional[float]]]],
+) -> None:
+    """Set ``part.start``/``part.end`` from segment times for its line range."""
+    if not seg_times:
+        return
+    a, b = part.lines
+    if not (1 <= a <= b <= len(seg_times)):
+        return
+    part.start = seg_times[a - 1][0]
+    part.end = seg_times[b - 1][1]
+
+
 def build_summary(
     parts_input: List[Tuple[str, List[str]]],
     cfg: Dict[str, Any],
     *,
     call_llm: CallLLM = _call_llm,
     recorder: Recorder = NULL_RECORDER,
+    seg_times_by_stem: Optional[
+        Dict[str, List[Tuple[Optional[float], Optional[float]]]]
+    ] = None,
 ) -> ProjectSummary:
     """Map (``segment_video`` per video) then reduce (``generate_project_summary``)."""
     parts: List[PartSummary] = []
@@ -246,18 +265,27 @@ def build_summary(
         parts.extend(
             segment_video(stem, clean_lines, cfg, call_llm=call_llm, recorder=recorder)
         )
+    if seg_times_by_stem:
+        for p in parts:
+            _attach_part_times(p, seg_times_by_stem.get(p.stem))
     summary = generate_project_summary(parts, cfg, call_llm=call_llm, recorder=recorder)
     return ProjectSummary(summary=summary, parts=parts)
 
 
 def summary_to_dict(ps: ProjectSummary) -> Dict[str, Any]:
-    return {
-        "summary": ps.summary,
-        "parts": [
-            {"stem": p.stem, "lines": [p.lines[0], p.lines[1]], "summary": p.summary}
-            for p in ps.parts
-        ],
-    }
+    parts: List[Dict[str, Any]] = []
+    for p in ps.parts:
+        entry: Dict[str, Any] = {
+            "stem": p.stem,
+            "lines": [p.lines[0], p.lines[1]],
+            "summary": p.summary,
+        }
+        if p.start is not None:
+            entry["start"] = p.start
+        if p.end is not None:
+            entry["end"] = p.end
+        parts.append(entry)
+    return {"summary": ps.summary, "parts": parts}
 
 
 def _coerce_pair(value: Any) -> Optional[Tuple[int, int]]:
@@ -287,5 +315,11 @@ def summary_from_dict(data: Any) -> ProjectSummary:
             s = raw.get("summary")
             if not isinstance(stem, str) or lines is None or not isinstance(s, str):
                 continue
-            parts.append(PartSummary(stem=stem, lines=lines, summary=s))
+            start = raw.get("start")
+            end = raw.get("end")
+            start = float(start) if isinstance(start, (int, float)) else None
+            end = float(end) if isinstance(end, (int, float)) else None
+            parts.append(
+                PartSummary(stem=stem, lines=lines, summary=s, start=start, end=end)
+            )
     return ProjectSummary(summary=summary, parts=parts)

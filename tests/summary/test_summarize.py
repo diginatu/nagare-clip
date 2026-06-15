@@ -218,3 +218,61 @@ class TestRoundTrip:
     def test_from_dict_tolerates_garbage(self):
         assert summary_from_dict("nope") == ProjectSummary(summary="", parts=[])
         assert summary_from_dict({}) == ProjectSummary(summary="", parts=[])
+
+
+class TestPartTimes:
+    def test_build_summary_attaches_part_times(self):
+        resp = '{"parts": [{"lines": [1, 2], "summary": "intro"}]}'
+        overall = '{"summary": "S"}'
+        seg_times = {"v": [(1.0, 3.0), (4.0, 6.5)]}
+        project = build_summary(
+            [("v", ["あ", "い"])],
+            {"prompt": "p", "overall_prompt": "o"},
+            call_llm=_seq_llm([resp, overall]),
+            seg_times_by_stem=seg_times,
+        )
+        p = project.parts[0]
+        assert p.start == 1.0 and p.end == 6.5
+
+    def test_build_summary_without_seg_times_leaves_none(self):
+        resp = '{"parts": [{"lines": [1, 2], "summary": "intro"}]}'
+        overall = '{"summary": "S"}'
+        project = build_summary(
+            [("v", ["あ", "い"])],
+            {"prompt": "p", "overall_prompt": "o"},
+            call_llm=_seq_llm([resp, overall]),
+        )
+        assert project.parts[0].start is None
+        assert project.parts[0].end is None
+
+    def test_to_dict_omits_none_times(self):
+        ps = ProjectSummary(
+            summary="S",
+            parts=[PartSummary(stem="v", lines=(1, 2), summary="x")],
+        )
+        d = summary_to_dict(ps)
+        assert "start" not in d["parts"][0]
+        assert "end" not in d["parts"][0]
+
+    def test_to_dict_includes_times_when_set(self):
+        ps = ProjectSummary(
+            summary="S",
+            parts=[PartSummary(stem="v", lines=(1, 2), summary="x",
+                               start=1.0, end=6.5)],
+        )
+        d = summary_to_dict(ps)
+        assert d["parts"][0]["start"] == 1.0
+        assert d["parts"][0]["end"] == 6.5
+
+    def test_from_dict_round_trip_times(self):
+        data = {"summary": "S", "parts": [
+            {"stem": "v", "lines": [1, 2], "summary": "x",
+             "start": 1.0, "end": 6.5}]}
+        ps = summary_from_dict(data)
+        assert ps.parts[0].start == 1.0 and ps.parts[0].end == 6.5
+
+    def test_from_dict_missing_times_are_none(self):
+        data = {"summary": "S", "parts": [
+            {"stem": "v", "lines": [1, 2], "summary": "x"}]}
+        ps = summary_from_dict(data)
+        assert ps.parts[0].start is None and ps.parts[0].end is None

@@ -31,6 +31,8 @@ The optional `director` + `guided_edit` stages automate steps like the above wit
 
 The optional `summary` + `plan` stages run **once over all source videos** (project-wide) before `director` and give it cross-video context. Enable `summary.enabled`/`plan.enabled` in config: `summary` segments each transcript into line-range parts with a summary each and writes one all-videos summary to `output/summary/summary.json`; `plan` reads those summaries and writes a coarse, cross-video rough direction per part (e.g. "remove — repeats an earlier part", "keep tight") to `output/plan/plan.json`. Both files are human-reviewable/editable. When enabled, the `director` for each video receives the overall summary plus that video's parts (line ranges, summaries, rough directions) and one-line context for the other videos, so its precise per-line ops follow the project-wide plan. They share the same `max_retries`/`retry_temp_step`/`retry_temp_cap` retry knobs.
 
+To help the LLMs reason about pacing, the `plan` and `director` stages now also see **calculated durations and in-between gaps**: the `director`'s numbered transcript annotates each line with `[4.2s, gap 0.8s]` (per-sentence duration + gap to the next line) and the `plan`'s per-part context shows each part's duration and gap. These times come from the WhisperX `{stem}.json`, which the `summary` and `director` stages read via a `--json` flag — the pipeline wires this automatically, so you only need it when running a stage on its own.
+
 Before resuming, you can validate your edits in one pass (reports **every** problem at once, with line numbers, instead of failing on the first like Stage 4 does):
 
 ```bash

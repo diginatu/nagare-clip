@@ -8,6 +8,7 @@ from nagare_clip.director.director_llm import (
     DirectorOp,
     clean_for_display,
     format_numbered_transcript,
+    format_numbered_transcript_timed,
     generate_director_ops,
     ops_to_dict,
     parse_director_response,
@@ -269,3 +270,52 @@ class TestDirectorRecorder:
         )
         assert len(ops) == 1
         assert _outcome(tmp_path, "director", "vid") == "dropped-items"
+
+
+class TestTimedTranscript:
+    def test_annotates_dur_and_gap_last_line_no_gap(self):
+        seg = [(1.0, 3.0), (4.0, 6.5)]  # gap after line1 = 1.0s
+        out = format_numbered_transcript_timed(["あい", "うえ"], seg)
+        assert out == "1: あい  [2.0s, gap 1.0s]\n2: うえ  [2.5s]"
+
+    def test_missing_times_degrade_to_plain_line(self):
+        seg = [(None, None), (4.0, 6.0)]
+        out = format_numbered_transcript_timed(["あ", "い"], seg)
+        # line1 has no dur -> no bracket (trailing spaces stripped); line2 last -> dur only
+        assert out == "1: あ\n2: い  [2.0s]"
+
+    def test_generate_uses_timed_format_when_seg_times_given(self):
+        captured = {}
+
+        def fake_llm(messages, cfg):
+            captured["user"] = messages[1]["content"]
+            return '{"ops": []}'
+
+        generate_director_ops(
+            ["あ", "い"], {"prompt": "P"}, call_llm=fake_llm,
+            seg_times=[(1.0, 3.0), (4.0, 6.5)],
+        )
+        assert captured["user"] == "1: あ  [2.0s, gap 1.0s]\n2: い  [2.5s]"
+
+    def test_generate_falls_back_byte_identical_without_seg_times(self):
+        captured = {}
+
+        def fake_llm(messages, cfg):
+            captured["user"] = messages[1]["content"]
+            return '{"ops": []}'
+
+        generate_director_ops(["あ", "い"], {"prompt": "P"}, call_llm=fake_llm)
+        assert captured["user"] == "1: あ\n2: い"
+
+    def test_generate_falls_back_on_length_mismatch(self):
+        captured = {}
+
+        def fake_llm(messages, cfg):
+            captured["user"] = messages[1]["content"]
+            return '{"ops": []}'
+
+        generate_director_ops(
+            ["あ", "い"], {"prompt": "P"}, call_llm=fake_llm,
+            seg_times=[(1.0, 3.0)],  # only 1 entry for 2 lines
+        )
+        assert captured["user"] == "1: あ\n2: い"

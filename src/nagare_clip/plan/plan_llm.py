@@ -29,6 +29,7 @@ from nagare_clip.llm_report import (
 from nagare_clip.llm_retry import cfg_for_attempt, retry_attempts
 from nagare_clip.stage2.llm_filter import _call_llm
 from nagare_clip.summary.summarize import ProjectSummary
+from nagare_clip.timing import format_dur_gap
 
 logger = logging.getLogger(__name__)
 
@@ -47,8 +48,22 @@ def _format_parts_for_plan(project_summary: ProjectSummary) -> str:
     if project_summary.summary:
         lines.append(f"Overall: {project_summary.summary}")
         lines.append("")
-    for i, p in enumerate(project_summary.parts):
-        lines.append(f"{i + 1}: {p.stem} [{p.lines[0]}-{p.lines[1]}] — {p.summary}")
+    parts = project_summary.parts
+    for i, p in enumerate(parts):
+        dur = p.end - p.start if p.start is not None and p.end is not None else None
+        gap: Optional[float] = None
+        if i + 1 < len(parts):
+            nxt = parts[i + 1]
+            if (
+                nxt.stem == p.stem
+                and p.end is not None
+                and nxt.start is not None
+            ):
+                gap = nxt.start - p.end
+        bracket = format_dur_gap(dur, gap)
+        prefix = f"{i + 1}: {p.stem} [{p.lines[0]}-{p.lines[1]}]"
+        head = f"{prefix} {bracket}" if bracket else prefix
+        lines.append(f"{head} — {p.summary}")
     return "\n".join(lines)
 
 

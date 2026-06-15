@@ -32,6 +32,7 @@ from nagare_clip.stage3.sync_json import (
     OVERLAY_TAG_RE,
     SPEED_TAG_RE,
 )
+from nagare_clip.timing import format_dur_gap
 
 logger = logging.getLogger(__name__)
 
@@ -194,6 +195,30 @@ def format_numbered_transcript(clean_lines: List[str]) -> str:
     return "\n".join(f"{i + 1}: {text}" for i, text in enumerate(clean_lines))
 
 
+def format_numbered_transcript_timed(
+    clean_lines: List[str],
+    seg_times: List[Tuple[Optional[float], Optional[float]]],
+) -> str:
+    """``N: text  [dur, gap]`` (1-based), gap = time to the next line.
+
+    Per line: ``dur = end - start``; ``gap = next.start - this.end`` (the last
+    line has no gap).  A missing ``start``/``end`` degrades that line's bracket
+    via :func:`format_dur_gap` (possibly to no bracket at all).
+    """
+    out: List[str] = []
+    for i, text in enumerate(clean_lines):
+        start, end = seg_times[i]
+        dur = end - start if start is not None and end is not None else None
+        gap: Optional[float] = None
+        if i + 1 < len(clean_lines):
+            nxt_start = seg_times[i + 1][0]
+            if end is not None and nxt_start is not None:
+                gap = nxt_start - end
+        bracket = format_dur_gap(dur, gap)
+        out.append(f"{i + 1}: {text}  {bracket}".rstrip())
+    return "\n".join(out)
+
+
 def ops_to_dict(ops: List[DirectorOp]) -> Dict[str, Any]:
     """Serialise ops to the ``{stem}_director.json`` shape."""
     out: List[Dict[str, Any]] = []
@@ -220,6 +245,7 @@ def generate_director_ops(
     overview_context: str = "",
     recorder: Recorder = NULL_RECORDER,
     unit: str = "director",
+    seg_times: Optional[List[Tuple[Optional[float], Optional[float]]]] = None,
 ) -> List[DirectorOp]:
     """Run the director LLM over the transcript and return validated ops.
 
@@ -235,9 +261,13 @@ def generate_director_ops(
     system_prompt = cfg.get("prompt", "")
     if overview_context:
         system_prompt = f"{system_prompt}\n\n{overview_context}"
+    if seg_times is not None and len(seg_times) == len(clean_lines):
+        user_content = format_numbered_transcript_timed(clean_lines, seg_times)
+    else:
+        user_content = format_numbered_transcript(clean_lines)
     messages = [
         {"role": "system", "content": system_prompt},
-        {"role": "user", "content": format_numbered_transcript(clean_lines)},
+        {"role": "user", "content": user_content},
     ]
     attempts = retry_attempts(cfg)
     for attempt in range(attempts):

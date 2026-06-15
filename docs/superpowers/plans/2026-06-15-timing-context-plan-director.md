@@ -967,12 +967,12 @@ git commit -m "feat: pass --json to summary and director stages in pipeline"
 **Files:**
 - Modify: `README.md`, `plan.md`, `CLAUDE.md`
 
-- [ ] **Step 1: Run the whole test suite**
+- [x] **Step 1: Run the whole test suite**
 
 Run: `uv run pytest -q`
-Expected: all pass (no regressions).
+Expected: all pass (no regressions). **Done — 506 passed.**
 
-- [ ] **Step 2: Update `CLAUDE.md`**
+- [x] **Step 2: Update `CLAUDE.md`**
 
 In the `### plan — Cross-Video Rough Directions` section, add to the description
 that the plan input now includes calculated **per-part durations and in-between
@@ -984,16 +984,29 @@ the `### summary` section, note `summary.json` parts now carry optional
 `start`/`end` times. In the "Current Runtime Quirks" list, add one bullet
 summarizing the new `timing.py` helper and the `--json` flags on summary/director.
 
-- [ ] **Step 3: Update `README.md`**
+- [x] **Step 3: Update `README.md`**
 
 Add a short note (wherever the plan/director stages are described for users)
 that durations/gaps are now shown to those LLMs, and that the director/summary
-stages accept `--json` pointing at the WhisperX `{stem}.json`.
+stages accept `--json` pointing at the WhisperX `{stem}.json`. **Done — added a
+pacing/`--json` paragraph after the summary/plan stage description.**
 
-- [ ] **Step 4: Update `plan.md`**
+- [x] **Step 4: Update `plan.md`** — *N/A: `plan.md` was removed from the repo in
+commit 657102f ("Remove plan.md"); status is now tracked in these
+`docs/superpowers/plans/` files instead, so the entry is recorded here.*
 
-Add a status entry recording this feature: per-part timing in `summary.json`,
-plan/director duration context, new `timing.py` module.
+**Status (2026-06-15, feature COMPLETE):** Duration context for the plan &
+director stages shipped. New pure `src/nagare_clip/timing.py` module
+(`segment_times`, `format_dur_gap`). The summary stage computes per-part
+`start`/`end` from each video's WhisperX `{stem}.json` and stores them in
+`summary.json` (omitted when unavailable; backward compatible). The plan stage
+renders per-part duration + in-between gap from those stored times (gap only
+between consecutive parts of the same video; no JSON read). The director stage
+annotates each numbered-transcript line with an inline `[dur, gap]` bracket
+sourced from `{stem}.json`, with byte-identical fallback to the untimed
+transcript when JSON is absent/mismatched. New `--json` flags on the summary
+(repeatable) and director CLIs; `run_pipeline.sh` wires the stage1 JSON to both.
+All 506 tests pass.
 
 - [ ] **Step 5: Re-run the suite once more after doc edits (sanity)**
 

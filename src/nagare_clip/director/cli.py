@@ -23,6 +23,7 @@ from nagare_clip.llm_report import recorder_from_config
 from nagare_clip.logging_setup import setup_logging
 from nagare_clip.plan.plan_llm import plan_from_dict
 from nagare_clip.summary.summarize import ProjectSummary, summary_from_dict
+from nagare_clip.timing import segment_times
 
 
 def parse_args() -> argparse.Namespace:
@@ -52,6 +53,12 @@ def parse_args() -> argparse.Namespace:
         dest="stem",
         default=None,
         help="This video's stem (to select its parts/directions from the overview)",
+    )
+    parser.add_argument(
+        "--json",
+        dest="json",
+        default=None,
+        help="This video's WhisperX {stem}.json (per-sentence timing)",
     )
     parser.add_argument(
         "--config", dest="config_path", default=None, help="Path to YAML config file"
@@ -116,10 +123,18 @@ def main() -> None:
         ops = []
     else:
         overview_context = _build_overview_context(args)
+        seg_times = None
+        if args.json and Path(args.json).is_file():
+            try:
+                seg_times = segment_times(
+                    json.loads(Path(args.json).read_text(encoding="utf-8"))
+                )
+            except (ValueError, OSError):
+                logging.warning("director: could not read --json %s", args.json)
         logging.info("director: analysing %d line(s) with LLM", len(edit_lines))
         ops = generate_director_ops(
             edit_lines, director_cfg, overview_context=overview_context,
-            recorder=recorder, unit=stem,
+            recorder=recorder, unit=stem, seg_times=seg_times,
         )
         logging.info("director: %d operation(s)", len(ops))
 
