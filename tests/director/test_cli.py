@@ -160,3 +160,72 @@ def test_overview_context_injected_for_stem(monkeypatch, tmp_path):
     assert "Project overview text" in captured["ctx"]
     assert "the part" in captured["ctx"]
     assert "keep tight" in captured["ctx"]
+
+
+def test_json_passes_seg_times(monkeypatch, tmp_path):
+    import json as _json
+
+    js = tmp_path / "clip.json"
+    js.write_text(
+        _json.dumps({"segments": [
+            {"start": 1.0, "end": 3.0, "text": "あい"},
+            {"start": 4.0, "end": 6.5, "text": "うえ"},
+        ]}),
+        encoding="utf-8",
+    )
+
+    captured = {}
+
+    def fake(lines, c, overview_context="", seg_times=None, **kw):
+        captured["seg_times"] = seg_times
+        return []
+
+    monkeypatch.setattr(director_cli, "generate_director_ops", fake)
+
+    cfg = tmp_path / "config.yml"
+    cfg.write_text(yaml.safe_dump({"director": {"enabled": True}}), encoding="utf-8")
+    edits = tmp_path / "clip_edits.txt"
+    edits.write_text("あい\nうえ\n", encoding="utf-8")
+    out = tmp_path / "clip_director.json"
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "director",
+            "--edits-txt", str(edits),
+            "--output", str(out),
+            "--json", str(js),
+            "--stem", "clip",
+            "--config", str(cfg),
+        ],
+    )
+    director_cli.main()
+    assert captured["seg_times"] == [(1.0, 3.0), (4.0, 6.5)]
+
+
+def test_missing_json_passes_none_seg_times(monkeypatch, tmp_path):
+    captured = {}
+
+    def fake(lines, c, overview_context="", seg_times=None, **kw):
+        captured["seg_times"] = seg_times
+        return []
+
+    monkeypatch.setattr(director_cli, "generate_director_ops", fake)
+
+    cfg = tmp_path / "config.yml"
+    cfg.write_text(yaml.safe_dump({"director": {"enabled": True}}), encoding="utf-8")
+    edits = tmp_path / "clip_edits.txt"
+    edits.write_text("あい\nうえ\n", encoding="utf-8")
+    out = tmp_path / "clip_director.json"
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "director",
+            "--edits-txt", str(edits),
+            "--output", str(out),
+            "--config", str(cfg),
+        ],
+    )
+    director_cli.main()
+    assert captured["seg_times"] is None
