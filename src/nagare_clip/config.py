@@ -147,9 +147,14 @@ DEFAULTS: Dict[str, Any] = {
             "(e.g. a part that repeats an earlier one can be removed). Reference "
             "parts by their 1-based index. Output ONLY a JSON object.\n"
             "\n"
+            "By default, non-speech stretches are dropped. \"keep\" preserves ALL "
+            "content in the range (silences and non-speech gaps included) — use "
+            "it when those moments matter.\n"
+            "\n"
             "JSON shape:\n"
             '{"directions": [\n'
-            '  {"index": 1, "direction": "keep — sets up the topic"},\n'
+            '  {"index": 1, "direction": "keep — the product\'s operating noise '
+            'is the point"},\n'
             '  {"index": 2, "direction": "remove — repeats part 1"}\n'
             "]}\n"
             "\n"
@@ -186,7 +191,8 @@ DEFAULTS: Dict[str, Any] = {
             "- cut: remove a boring/redundant span entirely (deletes audio+video).\n"
             '- speed: play a span faster; give "factor" (e.g. 2.0).\n'
             '- overlay: show an on-screen caption over a span; give "text".\n'
-            "- keep: protect an important span from being cut.\n"
+            "- keep: protect a span from cutting, INCLUDING its silences/"
+            "non-speech gaps (which are dropped by default).\n"
             '- edit: request a fine within-line text deletion/fix; describe it in "note".\n'
             "\n"
             "JSON shape:\n"
