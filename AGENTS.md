@@ -265,6 +265,10 @@ All LLM stages (`text_filter` + its `summary_llm`, `summary`, `plan`, `director`
   recorder, `clear()`s its own `<stage>/` subdir at start, passes it into the
   stage functions (default `NULL_RECORDER` = no-op, keeps functions testable),
   and `rebuild_index()`s `index.md` from every detail file's YAML front-matter.
+  Each unit's front-matter also carries a `thinking` key (the last attempt's
+  `cfg.get("thinking", False)`, mirroring how `model` is captured; defaults to
+  `False` when omitted) — it does not vary per retry, so unlike `temperature`
+  it is not repeated in the per-attempt header text.
   Outcomes: ok / ok-empty / llm-error / unparseable / verify-fail / dropped-items;
   the parse helpers take a `drops` accumulator so the previously silent per-item
   drop warnings surface as `dropped-items` with counts.

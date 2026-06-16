@@ -34,12 +34,12 @@ class TestUnitFile:
         rec.attempt(
             unit="my_video", attempt=0, total=2, messages=msgs,
             response="bad json", outcome="unparseable", reason="no ops",
-            cfg={"temperature": 0.1, "model": "qwen3.5:30b"},
+            cfg={"temperature": 0.1, "model": "qwen3.5:30b", "thinking": "low"},
         )
         rec.attempt(
             unit="my_video", attempt=1, total=2, messages=msgs,
             response='{"ops": []}', outcome=OK_EMPTY,
-            cfg={"temperature": 0.3, "model": "qwen3.5:30b"},
+            cfg={"temperature": 0.3, "model": "qwen3.5:30b", "thinking": "low"},
         )
         rec.flush_unit("my_video", outcome=OK_EMPTY)
 
@@ -51,12 +51,24 @@ class TestUnitFile:
         assert fm["attempts"] == 2
         assert fm["outcome"] == OK_EMPTY
         assert fm["model"] == "qwen3.5:30b"
+        assert fm["thinking"] == "low"
 
         body = path.read_text(encoding="utf-8")
         assert "SYS" in body and "USER" in body
         assert "bad json" in body and '{"ops": []}' in body
         assert "temperature 0.1" in body and "temperature 0.3" in body
         assert "no ops" in body  # per-attempt reason rendered
+
+    def test_thinking_defaults_to_false_when_omitted(self, tmp_path):
+        rec = Recorder("director", tmp_path, enabled=True)
+        rec.attempt(
+            unit="my_video", attempt=0, total=1,
+            messages=[{"role": "user", "content": "x"}],
+            response="y", outcome=OK, cfg={"temperature": 0.0, "model": "m"},
+        )
+        rec.flush_unit("my_video", outcome=OK)
+        fm = _front_matter(tmp_path / "director" / "my_video.md")
+        assert fm["thinking"] is False
 
     def test_slug_handles_punctuation(self, tmp_path):
         rec = Recorder("text_filter", tmp_path, enabled=True)

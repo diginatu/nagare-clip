@@ -41,6 +41,7 @@ class _Attempt:
     total: int
     temperature: Optional[float]
     model: str
+    thinking: Any
     messages: List[Dict[str, str]]
     response: Optional[str]
     error: Optional[str]
@@ -100,6 +101,7 @@ class Recorder:
             return
         temperature = cfg.get("temperature") if cfg else None
         model = str(cfg.get("model", "")) if cfg else ""
+        thinking = cfg.get("thinking", False) if cfg else False
         self._started.setdefault(unit, datetime.now())
         self._buffers.setdefault(unit, []).append(
             _Attempt(
@@ -107,6 +109,7 @@ class Recorder:
                 total=total,
                 temperature=temperature,
                 model=model,
+                thinking=thinking,
                 messages=[dict(m) for m in messages],
                 response=response,
                 error=error,
@@ -124,11 +127,12 @@ class Recorder:
         started = self._started.pop(unit, datetime.now())
         duration_ms = int((datetime.now() - started).total_seconds() * 1000)
         model = attempts[-1].model if attempts else ""
+        thinking = attempts[-1].thinking if attempts else False
         try:
             self._stage_dir.mkdir(parents=True, exist_ok=True)
             (self._stage_dir / f"{_slug(unit)}.md").write_text(
                 _render_unit(
-                    self.stage, unit, attempts, outcome, reason, model,
+                    self.stage, unit, attempts, outcome, reason, model, thinking,
                     started.isoformat(timespec="seconds"), duration_ms,
                 ),
                 encoding="utf-8",
@@ -149,6 +153,7 @@ def _render_unit(
     outcome: str,
     reason: str,
     model: str,
+    thinking: Any,
     started_at: str,
     duration_ms: int,
 ) -> str:
@@ -156,6 +161,7 @@ def _render_unit(
         "stage": stage,
         "unit": unit,
         "model": model,
+        "thinking": thinking,
         "attempts": len(attempts),
         "outcome": outcome,
         "reason": reason,
