@@ -43,24 +43,43 @@ def clean_old(line: str) -> str:
     return PATCH_RE.sub(r"\1", no_tags)
 
 
-def _reflected(region_before: str, region_after: str, op: DirectorOp) -> bool:
-    if op.type == "cut":
-        return "<cut>" in region_after and "</cut>" in region_after
-    if op.type == "keep":
-        return "<keep>" in region_after and "</keep>" in region_after
-    if op.type == "speed":
-        return (
-            _SPEED_OPEN_RE.search(region_after) is not None
-            and "</speed>" in region_after
-        )
-    if op.type == "overlay":
-        return (
-            _OVERLAY_OPEN_RE.search(region_after) is not None
-            and "</overlay>" in region_after
-        )
+# Per span-op-type (open-tag predicate, close-tag predicate). For a multi-line
+# op the open tag must sit on the *first* boundary line and the close tag on the
+# *last* — checking mere presence anywhere in the region would let the small LLM
+# collapse both tags onto one boundary, silently leaving the rest of the span
+# uncut/unprotected.
+_SPAN_TAGS = {
+    "cut": (lambda s: "<cut>" in s, lambda s: "</cut>" in s),
+    "keep": (lambda s: "<keep>" in s, lambda s: "</keep>" in s),
+    "speed": (
+        lambda s: _SPEED_OPEN_RE.search(s) is not None,
+        lambda s: "</speed>" in s,
+    ),
+    "overlay": (
+        lambda s: _OVERLAY_OPEN_RE.search(s) is not None,
+        lambda s: "</overlay>" in s,
+    ),
+}
+
+
+def _reflection_failure(
+    before: List[str], after: List[str], lo: int, hi: int, op: DirectorOp
+) -> Optional[str]:
+    a, b = op.lines
     if op.type == "edit":
-        return region_after != region_before
-    return False
+        if "".join(after[lo:hi]) == "".join(before[lo:hi]):
+            return f"edit op not reflected on lines {a}-{b}"
+        return None
+    tags = _SPAN_TAGS.get(op.type)
+    if tags is None:
+        return f"{op.type} op not reflected on lines {a}-{b}"
+    is_open, is_close = tags
+    first, last = after[lo], after[hi - 1]
+    if not is_open(first):
+        return f"{op.type} op: opening tag missing on line {a}"
+    if not is_close(last):
+        return f"{op.type} op: closing tag missing on line {b}"
+    return None
 
 
 def verify_op(
@@ -80,8 +99,4 @@ def verify_op(
         if clean_old(after[idx]) != clean_old(before[idx]):
             return f"line {idx + 1}: underlying text was altered"
 
-    region_before = "".join(before[lo:hi])
-    region_after = "".join(after[lo:hi])
-    if not _reflected(region_before, region_after, op):
-        return f"{op.type} op not reflected on lines {a}-{b}"
-    return None
+    return _reflection_failure(before, after, lo, hi, op)

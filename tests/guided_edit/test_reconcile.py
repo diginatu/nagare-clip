@@ -66,3 +66,31 @@ class TestVerifyFails:
         before = ["あいう"]
         after = ["あいう"]
         assert verify_op(before, after, _op("edit", 1, 1)) is not None
+
+    def test_cut_opener_not_on_first_line_rejected(self):
+        # Both tags collapsed onto the last line; first boundary untouched, so
+        # only the last line is actually cut (the reported failure mode).
+        before = ["あい", "うえ", "おか"]
+        after = ["あい", "うえ", "<cut>おか</cut>"]
+        assert verify_op(before, after, _op("cut", 1, 3)) is not None
+
+    def test_cut_closer_not_on_last_line_rejected(self):
+        # Symmetric: both tags collapsed onto the first line.
+        before = ["あい", "うえ", "おか"]
+        after = ["<cut>あい</cut>", "うえ", "おか"]
+        assert verify_op(before, after, _op("cut", 1, 3)) is not None
+
+    def test_keep_opener_not_on_first_line_rejected(self):
+        before = ["あい", "うえ"]
+        after = ["あい", "<keep>うえ</keep>"]
+        assert verify_op(before, after, _op("keep", 1, 2)) is not None
+
+    def test_speed_opener_not_on_first_line_rejected(self):
+        before = ["あい", "うえ"]
+        after = ["あい", '<speed factor="2.0">うえ</speed>']
+        assert verify_op(before, after, _op("speed", 1, 2, factor=2.0)) is not None
+
+    def test_overlay_opener_not_on_first_line_rejected(self):
+        before = ["あい", "うえ"]
+        after = ["あい", '<overlay text="z">うえ</overlay>']
+        assert verify_op(before, after, _op("overlay", 1, 2, text="z")) is not None
