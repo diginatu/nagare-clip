@@ -21,16 +21,17 @@ _PATCH = "patch"
 KEEP_TAG_RE = re.compile(r"</?keep>")
 _KEEP_SPLIT_RE = re.compile(r"(<keep>|</keep>)")
 
-# <speed factor="N.N">...</speed> markers: like <keep> but additionally carry a
-# playback speed factor for Stage 5 (Blender VSE).
+# <speed factor="N.N">...</speed> markers: carry a playback speed factor for
+# Stage 5 (Blender VSE). Unlike <keep>, <speed> does NOT force-preserve audio —
+# its span is only emitted in speed_ranges; nest inside <keep> to also keep it.
 SPEED_TAG_RE = re.compile(r'<speed\s+factor="[0-9.]+">|</speed>')
 _SPEED_SPLIT_RE = re.compile(r'(<speed\s+factor="[0-9.]+">|</speed>)')
 _SPEED_OPEN_RE = re.compile(r'<speed\s+factor="([0-9.]+)">')
 
 # <overlay text="...">...</overlay> markers: place a Blender VSE TEXT strip
-# at the wrapped span's time range. Unlike <keep>/<speed>, overlay does NOT
-# affect audio retention; if the wrapped audio is cut, the overlay is skipped
-# in Stage 5.
+# at the wrapped span's time range. Like <speed> (and unlike <keep>), overlay
+# does NOT affect audio retention; if the wrapped audio is cut, the overlay is
+# skipped in Stage 5.
 OVERLAY_TAG_RE = re.compile(r'<overlay\s+text="[^"]*">|</overlay>')
 _OVERLAY_SPLIT_RE = re.compile(r'(<overlay\s+text="[^"]*">|</overlay>)')
 _OVERLAY_OPEN_RE = re.compile(r'<overlay\s+text="([^"]*)">')

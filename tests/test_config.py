@@ -212,6 +212,17 @@ def test_director_defaults_present():
     assert isinstance(d["prompt"], str) and d["prompt"]
 
 
+def test_director_prompt_documents_speed_does_not_keep_silence():
+    """The director prompt must tell the LLM that <speed> drops internal
+    silences and that a `keep` over the same span preserves them (so the
+    director can express keep+speed)."""
+    cfg = get_effective_config(None, {})
+    prompt = cfg["director"]["prompt"]
+    speed_line = next(ln for ln in prompt.splitlines() if ln.startswith("- speed:"))
+    assert "keep" in speed_line.lower()
+    assert "silence" in speed_line.lower() or "pause" in speed_line.lower()
+
+
 def test_guided_edit_defaults_present():
     cfg = get_effective_config(None, {})
     g = cfg["guided_edit"]

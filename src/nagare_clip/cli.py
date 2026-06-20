@@ -293,9 +293,11 @@ def main() -> None:
         for start, end in excludes
         if end > start
     ]
-    all_force_keep: List[Tuple[float, float]] = list(force_keep_ranges) + [
-        (s, e) for s, e, _ in speed_ranges
-    ]
+    # Only <keep> force-preserves audio. <speed> no longer carves silence out of
+    # the excludes — it is purely a playback-speed annotation (its span is still
+    # emitted verbatim in speed_ranges below). To keep AND speed a region, nest
+    # <speed> inside <keep>.
+    all_force_keep: List[Tuple[float, float]] = list(force_keep_ranges)
     if all_force_keep:
         bounded_excludes = subtract_intervals(bounded_excludes, all_force_keep)
     merged_excludes = merge_intervals(bounded_excludes)

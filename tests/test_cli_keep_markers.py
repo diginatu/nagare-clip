@@ -168,19 +168,22 @@ def _speed_at(speed_ranges, t):
     return None
 
 
-def test_speed_marker_carves_silence_and_emits_range(tmp_path, monkeypatch):
-    """`<speed factor="2.0">いう</speed>` wraps the silent gap, force-keeps it,
-    AND a top-level speed_ranges entry with factor=2.0 covers that time."""
+def test_speed_marker_does_not_carve_silence_but_emits_range(tmp_path, monkeypatch):
+    """`<speed factor="2.0">いう</speed>` does NOT force-keep: the silent gap it
+    spans is still cut by silence detection, yet a top-level speed_ranges entry
+    with factor=2.0 is still emitted verbatim over the wrapped time range."""
     json_path, edits, cfg = _setup(
         tmp_path, 'あ<speed factor="2.0">いう</speed>え\n'
     )
     out = tmp_path / "intervals.json"
     data = _run(monkeypatch, json_path, edits, cfg, out)
     keep = data["keep_intervals"]
-    # Force-keep survives silence
-    assert _covers(keep, 2.5)
-    # speed_ranges is a top-level array independent of keep_intervals
-    assert "speed_factor" not in keep[0]
+    # <speed> no longer force-keeps — mid-gap silence (2.5) is cut
+    assert not _covers(keep, 2.5)
+    # The wrapped spoken words themselves still survive as normal speech
+    assert _covers(keep, 1.0)
+    assert _covers(keep, 5.15)
+    # speed_ranges is still emitted as a top-level array over the wrapped span
     assert _speed_at(data["speed_ranges"], 2.5) == 2.0
 
 
@@ -195,8 +198,9 @@ def test_speed_marker_factor_below_one(tmp_path, monkeypatch):
 
 
 def test_keep_and_speed_coexist(tmp_path, monkeypatch):
-    """A `<keep>` block and a `<speed>` block in the same _edits.txt:
-    both regions force-kept; only the <speed> region appears in speed_ranges."""
+    """A `<keep>` block and a `<speed>` block in the same _edits.txt: the <keep>
+    region is force-kept, the <speed> region survives as ordinary speech (no
+    internal silence), and only the <speed> region appears in speed_ranges."""
     # Two-segment fixture: seg0 has 'あい' with silence gap before seg1.
     data_json = {
         "duration": 15.0,
@@ -239,6 +243,22 @@ def test_keep_and_speed_coexist(tmp_path, monkeypatch):
     # <speed> region preserved, factor=3.0 emitted
     assert _covers(keep, 5.5)
     assert _speed_at(data["speed_ranges"], 5.5) == 3.0
+
+
+def test_nested_keep_speed_preserves_silence_and_emits_range(tmp_path, monkeypatch):
+    """Nesting `<keep><speed>...</speed></keep>` restores the force-keep: the
+    `<keep>` preserves the internal silence while the `<speed>` still emits its
+    speed range. This is how a user keeps audio AND speeds it up post-change."""
+    json_path, edits, cfg = _setup(
+        tmp_path, 'あ<keep><speed factor="2.0">いう</speed></keep>え\n'
+    )
+    out = tmp_path / "intervals.json"
+    data = _run(monkeypatch, json_path, edits, cfg, out)
+    keep = data["keep_intervals"]
+    # <keep> force-preserves the silent gap the <speed> spans
+    assert _covers(keep, 2.5)
+    # <speed> range still emitted over the wrapped span
+    assert _speed_at(data["speed_ranges"], 2.5) == 2.0
 
 
 def test_no_speed_marker_no_speed_ranges_field(tmp_path, monkeypatch):

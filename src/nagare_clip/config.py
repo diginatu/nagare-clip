@@ -189,7 +189,7 @@ DEFAULTS: Dict[str, Any] = {
             "\n"
             "Operations (reference lines by their 1-based numbers, inclusive):\n"
             "- cut: remove a boring/redundant span entirely (deletes audio+video).\n"
-            '- speed: play a span faster; give "factor" (e.g. 2.0).\n'
+            '- speed: play a span faster; give "factor" (e.g. 2.0). Internal silences/pauses are still dropped — add a "keep" over the same lines to preserve them while sped up.\n'
             '- overlay: show an on-screen caption over a span; give "text".\n'
             "- keep: protect a span from cutting, INCLUDING its silences/"
             "non-speech gaps (which are dropped by default).\n"
