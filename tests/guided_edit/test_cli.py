@@ -8,7 +8,6 @@ import sys
 import yaml
 
 import nagare_clip.guided_edit.cli as ge_cli
-from nagare_clip.guided_edit.apply import apply_ops
 
 
 def _setup(tmp_path, cfg_dict, edits_text, director_ops):
@@ -53,15 +52,10 @@ def test_enabled_applies_ops(monkeypatch, tmp_path):
         [{"type": "cut", "lines": [1, 1]}],
     )
 
-    def fake_llm(_m, _c):
-        return "1: あ<cut>いう</cut>"
-
-    monkeypatch.setattr(
-        ge_cli, "apply_ops", lambda lines, ops, c, **kwargs: apply_ops(lines, ops, c, call_llm=fake_llm)
-    )
     monkeypatch.setattr(sys, "argv", _argv(edits, director, out, cfg))
     ge_cli.main()
-    assert out.read_text(encoding="utf-8").splitlines()[0] == "あ<cut>いう</cut>"
+    # cut is a span op -> applied deterministically (no LLM needed)
+    assert out.read_text(encoding="utf-8").splitlines()[0] == "<cut>あいう</cut>"
     # Unapplied report written next to output
     report = tmp_path / "out_unapplied.txt"
     assert report.exists()
