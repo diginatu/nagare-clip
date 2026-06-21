@@ -10,6 +10,7 @@ from typing import Any, Dict, List
 
 _FENCE_RE = re.compile(r"^\s*```(?:json)?\s*\n(.*?)\n```\s*$", re.DOTALL | re.IGNORECASE)
 
+from nagare_clip.llm_client import with_trace_meta
 from nagare_clip.llm_report import LLM_ERROR, NULL_RECORDER, OK, UNPARSEABLE, Recorder
 from nagare_clip.text_filter.llm_filter import _call_llm
 
@@ -77,7 +78,7 @@ def generate_summary(
         call_llm = _call_llm
     if not full_text.strip():
         return None
-
+    cfg = with_trace_meta(cfg, stage=recorder.stage, unit="summary_llm")
     messages = [
         {"role": "system", "content": cfg.get("prompt", "")},
         {"role": "user", "content": full_text},

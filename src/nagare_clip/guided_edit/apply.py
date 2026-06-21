@@ -19,6 +19,7 @@ from typing import Any, Callable, Dict, List, Optional, Set, Tuple
 
 from nagare_clip.director.director_llm import DirectorOp
 from nagare_clip.guided_edit.reconcile import verify_op
+from nagare_clip.llm_client import with_trace_meta
 from nagare_clip.llm_report import (
     DROPPED_ITEMS,
     LLM_ERROR,
@@ -223,6 +224,7 @@ def apply_ops(
     """
     lines = list(edit_lines)
     unapplied: List[Unapplied] = []
+    cfg = with_trace_meta(cfg, stage=recorder.stage, unit=unit)
     attempts = retry_attempts(cfg)
     for i, op in enumerate(ops):
         section = f"op {i}: {op.type} [{op.lines[0]}-{op.lines[1]}]"

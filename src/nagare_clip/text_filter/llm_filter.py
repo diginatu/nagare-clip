@@ -7,7 +7,7 @@ import re
 from collections import defaultdict
 from typing import Any, Dict, List, Optional, Tuple
 
-from nagare_clip.llm_client import call_llm as _call_llm
+from nagare_clip.llm_client import call_llm as _call_llm, with_trace_meta
 from nagare_clip.llm_report import DROPPED_ITEMS, LLM_ERROR, NULL_RECORDER, OK, Recorder
 
 logger = logging.getLogger(__name__)
@@ -80,6 +80,7 @@ def _process_batch(
     a = batch[0][0] + 1
     b = batch[-1][0] + 1
     unit = f"lines {a}-{b} (size {current_size})"
+    cfg = with_trace_meta(cfg, stage=recorder.stage, unit=unit)
     messages = [
         {"role": "system", "content": cfg.get("prompt", "")},
         {"role": "user", "content": _format_batch(batch)},
