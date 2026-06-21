@@ -62,6 +62,34 @@ including retries. Outcomes: `ok`, `ok-empty`, `llm-error`, `unparseable`,
 Re-running a stage refreshes only that stage's section. Toggle with
 `general.llm_report` (default `true`) and relocate with `general.llm_report_dir`.
 
+### Langfuse tracing (optional)
+
+Every LLM call can be traced to [Langfuse](https://langfuse.com) via LiteLLM's
+`langfuse_otel` OTEL callback. Tracing is **off by default** and activates only
+when both `LANGFUSE_PUBLIC_KEY` and `LANGFUSE_SECRET_KEY` are set in the
+environment.
+
+```bash
+export LANGFUSE_PUBLIC_KEY="pk-lf-..."
+export LANGFUSE_SECRET_KEY="sk-lf-..."
+./scripts/run_pipeline.sh
+```
+
+Set `LANGFUSE_OTEL_HOST` to select a region or self-hosted endpoint (default: US
+cloud; EU cloud: `https://cloud.langfuse.com`).
+
+To disable tracing even when keys are present, set `general.langfuse: false` in
+your config file, or export `NAGARE_LANGFUSE=0` before running the pipeline.
+`run_pipeline.sh` maps the config flag to `NAGARE_LANGFUSE` automatically.
+
+Traces are grouped by pipeline run (`session_id` = one timestamp per
+`run_pipeline.sh` invocation, exported as `NAGARE_RUN_ID`), by stage
+(`tags: ["stage:<name>"]`), and by source file (`tags: ["stem:<stem>"]`), so
+you can filter by any dimension in the Langfuse UI.
+
+The existing markdown LLM report (`output/llm_report/`) continues to run
+alongside Langfuse — the two are independent sinks.
+
 ## Requirements
 
 - Linux
