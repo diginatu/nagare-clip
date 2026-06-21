@@ -44,8 +44,17 @@ Env-gated, zero-config-by-default:
   is US cloud). Passed through purely via env — we do not hardcode a host.
 - A `general.langfuse` boolean in `config.py` `DEFAULTS` (default `true`) and
   documented in `config.example.yml` lets a project force-disable even when keys
-  are present. Disabled OR keys absent → **no callback registered, no `metadata`
-  added** → behavior byte-identical to today (regression-guarded).
+  are present.
+
+  Mechanism: `call_llm` only receives a per-stage `cfg` (not the `general`
+  section), so it cannot read `general.langfuse` directly. Instead the kill-switch
+  reaches `call_llm` via an env flag: tracing is enabled iff keys are present
+  **and** `os.environ.get("NAGARE_LANGFUSE", "1") != "0"`. `run_pipeline.sh`
+  reads `general.langfuse` (it already parses config via Python/yaml) and exports
+  `NAGARE_LANGFUSE=0` when false. Standalone CLI runs honor the same env flag
+  (set `NAGARE_LANGFUSE=0` or unset the keys to disable). Disabled OR keys absent
+  → **no callback registered, no `metadata` added** → behavior byte-identical to
+  today (regression-guarded).
 
 Because the callback is global LiteLLM state, registration is **idempotent** and
 **lazy**: performed once on the first `call_llm` invocation (guarded by a
