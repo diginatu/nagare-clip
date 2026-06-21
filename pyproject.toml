@@ -11,6 +11,9 @@ dependencies = [
     "ginza",
     "ja_ginza",
     "litellm>=1.89.0",
+    "opentelemetry-api",
+    "opentelemetry-sdk",
+    "opentelemetry-exporter-otlp",
 ]
 
 [project.optional-dependencies]
