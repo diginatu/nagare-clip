@@ -6,6 +6,10 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 
+# One session id per pipeline run, inherited by every stage subprocess so
+# Langfuse groups all of a run's LLM calls under one session.
+export NAGARE_RUN_ID="${NAGARE_RUN_ID:-$(date +%Y%m%d-%H%M%S)}"
+
 usage() {
   echo "Usage: ./scripts/run_pipeline.sh [OPTIONS]"
   echo ""
@@ -81,6 +85,7 @@ CFG_TO_STAGE=""
 CFG_COMPUTE_TYPE=""
 CFG_BATCH_SIZE=""
 CFG_USE_LLM=""
+CFG_LANGFUSE=""
 CFG_AUDIO_SILENCE_ENABLED=""
 CFG_AUDIO_SILENCE_NOISE=""
 CFG_AUDIO_SILENCE_MIN_SILENCE=""
@@ -99,6 +104,7 @@ s2 = c.get('text_filter', {})
 s3 = c.get('intervals', {})
 asl = c.get('audio_silence', {})
 p  = c.get('pipeline', {})
+g  = c.get('general', {})
 def out(name, val):
     if val is not None and val != '':
         print(f'{name}={shlex.quote(str(val))}')
@@ -111,6 +117,7 @@ out('CFG_MIN_KEEP', s3.get('min_keep'))
 out('CFG_KEEP_PRE_MARGIN', s3.get('keep_pre_margin'))
 out('CFG_KEEP_POST_MARGIN', s3.get('keep_post_margin'))
 out('CFG_USE_LLM', str(bool(s2.get('use_llm', False))).lower())
+out('CFG_LANGFUSE', str(bool(g.get('langfuse', True))).lower())
 if 'enabled' in asl:
     out('CFG_AUDIO_SILENCE_ENABLED', str(bool(asl.get('enabled'))).lower())
 out('CFG_AUDIO_SILENCE_NOISE', asl.get('noise'))
@@ -138,6 +145,10 @@ TO_STAGE="${CLI_TO_STAGE:-${CFG_TO_STAGE:-blender}}"
 AUDIO_SILENCE_ENABLED="${CFG_AUDIO_SILENCE_ENABLED:-true}"
 AUDIO_SILENCE_NOISE="${CFG_AUDIO_SILENCE_NOISE:--30.0}"
 AUDIO_SILENCE_MIN_SILENCE="${CFG_AUDIO_SILENCE_MIN_SILENCE:-0.8}"
+LANGFUSE_ENABLED="${CFG_LANGFUSE:-true}"
+if [[ "$LANGFUSE_ENABLED" == "false" ]]; then
+  export NAGARE_LANGFUSE=0
+fi
 
 # Canonical stage execution order. Stages are identified only by name, so a new
 # stage can be inserted anywhere without renumbering the others.
