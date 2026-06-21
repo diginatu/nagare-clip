@@ -203,7 +203,7 @@ TEXT_FILTER_DIR="${OUTPUT_DIR}/text_filter"      # Text editing checkpoint (_edi
 SUMMARY_DIR="${OUTPUT_DIR}/summary"              # Project-wide summaries (summary.json)
 PLAN_DIR="${OUTPUT_DIR}/plan"                    # Cross-video rough directions (plan.json)
 DIRECTOR_DIR="${OUTPUT_DIR}/director"            # director ops (_director.json)
-GUIDED_DIR="${OUTPUT_DIR}/guided_edit"           # augmented _edits.txt + _unapplied.txt
+GUIDED_DIR="${OUTPUT_DIR}/guided_edit"           # augmented _edits.txt
 INTERVALS_DIR="${OUTPUT_DIR}/intervals"          # Patch + keep-interval merge (_intervals.json)
 BLENDER_DIR="${OUTPUT_DIR}/blender"              # Blender VSE project (.blend)
 LLM_REPORT_DIR="${OUTPUT_DIR}/llm_report"  # Per-call LLM report (index.md + detail files)
@@ -493,7 +493,6 @@ if in_window "$ORD_GUIDED_EDIT"; then
       --edits-txt "${TEXT_FILTER_DIR}/${STEM}_edits.txt" \
       --director "${DIRECTOR_DIR}/${STEM}_director.json" \
       --output "${GUIDED_DIR}/${STEM}_edits.txt" \
-      --unapplied "${GUIDED_DIR}/${STEM}_unapplied.txt" \
       --json "${TRANSCRIPTION_DIR}/${STEM}.json" \
       "${CONFIG_ARGS[@]}" \
       --log-file "$LOG_FILE" \

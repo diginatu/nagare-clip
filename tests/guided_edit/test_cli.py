@@ -56,7 +56,5 @@ def test_enabled_applies_ops(monkeypatch, tmp_path):
     ge_cli.main()
     # cut is a span op -> applied deterministically (no LLM needed)
     assert out.read_text(encoding="utf-8").splitlines()[0] == "<cut>あいう</cut>"
-    # Unapplied report written next to output
-    report = tmp_path / "out_unapplied.txt"
-    assert report.exists()
-    assert "all director ops applied" in report.read_text(encoding="utf-8")
+    # The unapplied report file is no longer written.
+    assert not (tmp_path / "out_unapplied.txt").exists()

@@ -4,7 +4,7 @@ Reads the post-text_filter ``{stem}_edits.txt`` and the director's
 ``{stem}_director.json``, applies each operation with a small local LLM
 (inserting <cut>/<speed>/<overlay>/<keep> tags and {{old->new}} patches at the
 precise position), verifies every op deterministically, and writes the
-augmented ``{stem}_edits.txt`` plus a ``{stem}_unapplied.txt`` report.
+augmented ``{stem}_edits.txt``.
 
 When ``guided_edit.enabled`` is false (default) it copies the input edits
 through unchanged so the pipeline behaves exactly as before.
@@ -19,7 +19,7 @@ from pathlib import Path
 
 from nagare_clip.config import get_effective_config
 from nagare_clip.director.director_llm import ops_from_dict
-from nagare_clip.guided_edit.apply import apply_ops, format_unapplied
+from nagare_clip.guided_edit.apply import apply_ops
 from nagare_clip.llm_report import recorder_from_config
 from nagare_clip.logging_setup import setup_logging
 from nagare_clip.intervals.check_edits import check_edits
@@ -32,12 +32,6 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--edits-txt", required=True, dest="edits_txt")
     parser.add_argument("--director", required=True, dest="director_json")
     parser.add_argument("--output", required=True, dest="output")
-    parser.add_argument(
-        "--unapplied",
-        dest="unapplied",
-        default=None,
-        help="Unapplied-ops report path (default: <output dir>/<stem>_unapplied.txt)",
-    )
     parser.add_argument(
         "--json",
         dest="json_path",
@@ -82,11 +76,6 @@ def main() -> None:
     edit_lines = Path(args.edits_txt).read_text(encoding="utf-8").splitlines()
     output = Path(args.output)
     stem = output.stem.replace("_edits", "")
-    unapplied_path = (
-        Path(args.unapplied)
-        if args.unapplied
-        else output.with_name(stem + "_unapplied.txt")
-    )
 
     recorder = recorder_from_config("guided_edit", cfg, override_dir=args.llm_report_dir)
     if not args.llm_report_no_clear:
@@ -113,7 +102,6 @@ def main() -> None:
 
     output.parent.mkdir(parents=True, exist_ok=True)
     output.write_text("\n".join(result_lines) + "\n", encoding="utf-8")
-    unapplied_path.write_text(format_unapplied(unapplied), encoding="utf-8")
     logging.info("guided_edit: wrote %s", output)
 
     if args.json_path:

@@ -314,14 +314,3 @@ def apply_ops(
         reason = f"{len(ops)} op(s) applied"
     recorder.flush_unit(unit, outcome=outcome, reason=reason)
     return lines, unapplied
-
-
-def format_unapplied(unapplied: List[Unapplied]) -> str:
-    """Render the unapplied-ops report (one op per line)."""
-    if not unapplied:
-        return "# all director ops applied\n"
-    out = ["# director ops that could not be applied (op | lines | reason)"]
-    for op, reason in unapplied:
-        detail = op.note or op.text or (f"factor={op.factor}" if op.factor else "")
-        out.append(f"{op.type}\t{op.lines[0]}-{op.lines[1]}\t{reason}\t{detail}")
-    return "\n".join(out) + "\n"
