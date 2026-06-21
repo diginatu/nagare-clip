@@ -88,6 +88,8 @@ def call_llm(messages: List[Dict[str, str]], cfg: Dict[str, Any]) -> str:
     ``ConnectionError`` so the stages' existing broad-``Exception`` retry loops
     treat it like the old urllib transport did.
     """
+    cfg = dict(cfg)
+    trace = cfg.pop("_trace", None)
     provider = cfg.get("provider", "ollama_chat")
     model = cfg.get("model", "")
 
@@ -122,6 +124,14 @@ def call_llm(messages: List[Dict[str, str]], cfg: Dict[str, Any]) -> str:
     thinking = cfg.get("thinking", False)
     if thinking:
         kwargs["reasoning_effort"] = thinking if isinstance(thinking, str) else "low"
+
+    if _ensure_tracing():
+        metadata = dict(trace) if trace else {}
+        run_id = os.environ.get("NAGARE_RUN_ID")
+        if run_id:
+            metadata["session_id"] = run_id
+        if metadata:
+            kwargs["metadata"] = metadata
 
     logger.debug("LLM request model=%s", kwargs["model"])
     try:
