@@ -23,6 +23,34 @@ LANGFUSE_OTEL_CALLBACK = "langfuse_otel"
 _TRACING_INITIALIZED = False
 
 
+def flush_traces() -> None:
+    """Best-effort flush of pending OTEL spans (short-lived CLI processes)."""
+    try:
+        from opentelemetry import trace
+
+        provider = trace.get_tracer_provider()
+        force_flush = getattr(provider, "force_flush", None)
+        if callable(force_flush):
+            force_flush()
+    except Exception:  # noqa: BLE001 - flushing must never break the pipeline
+        logger.debug("flush_traces failed", exc_info=True)
+
+
+def _ensure_tracing() -> bool:
+    """Register the Langfuse OTEL callback once. Returns the enabled state."""
+    global _TRACING_INITIALIZED
+    if not _tracing_enabled():
+        return False
+    if not _TRACING_INITIALIZED:
+        callbacks = list(getattr(litellm, "callbacks", []) or [])
+        if LANGFUSE_OTEL_CALLBACK not in callbacks:
+            callbacks.append(LANGFUSE_OTEL_CALLBACK)
+            litellm.callbacks = callbacks
+        atexit.register(flush_traces)
+        _TRACING_INITIALIZED = True
+    return True
+
+
 def _tracing_enabled() -> bool:
     """Whether Langfuse tracing should be active for this process."""
     if os.environ.get("NAGARE_LANGFUSE", "1") == "0":
