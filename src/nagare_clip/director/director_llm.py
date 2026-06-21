@@ -24,6 +24,7 @@ from nagare_clip.llm_report import (
     UNPARSEABLE,
     Recorder,
 )
+from nagare_clip.llm_client import with_trace_meta
 from nagare_clip.llm_retry import cfg_for_attempt, retry_attempts
 from nagare_clip.text_filter.llm_filter import _call_llm, apply_patches_to_lines
 from nagare_clip.intervals.sync_json import (
@@ -269,6 +270,7 @@ def generate_director_ops(
         {"role": "system", "content": system_prompt},
         {"role": "user", "content": user_content},
     ]
+    cfg = with_trace_meta(cfg, stage=recorder.stage, unit=unit)
     attempts = retry_attempts(cfg)
     for attempt in range(attempts):
         attempt_cfg = cfg_for_attempt(cfg, attempt)

@@ -26,6 +26,7 @@ from nagare_clip.llm_report import (
     UNPARSEABLE,
     Recorder,
 )
+from nagare_clip.llm_client import with_trace_meta
 from nagare_clip.llm_retry import cfg_for_attempt, retry_attempts
 from nagare_clip.text_filter.llm_filter import _call_llm
 from nagare_clip.summary.summarize import ProjectSummary
@@ -129,6 +130,7 @@ def generate_plan(
         {"role": "system", "content": cfg.get("prompt", "")},
         {"role": "user", "content": _format_parts_for_plan(project_summary)},
     ]
+    cfg = with_trace_meta(cfg, stage=recorder.stage, unit=unit)
     attempts = retry_attempts(cfg)
     for attempt in range(attempts):
         attempt_cfg = cfg_for_attempt(cfg, attempt)
