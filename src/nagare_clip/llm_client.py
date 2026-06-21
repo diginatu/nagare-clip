@@ -8,14 +8,39 @@ provider is chosen by ``cfg['provider']`` (a LiteLLM prefix, default
 
 from __future__ import annotations
 
+import atexit
 import logging
-from typing import Any, Dict, List
+import os
+from typing import Any, Dict, Iterable, List
 
 import litellm
 
 logger = logging.getLogger(__name__)
 
 DEFAULT_OLLAMA_API_BASE = "http://localhost:11434"
+
+LANGFUSE_OTEL_CALLBACK = "langfuse_otel"
+_TRACING_INITIALIZED = False
+
+
+def with_trace_meta(
+    cfg: Dict[str, Any],
+    *,
+    stage: str,
+    unit: str,
+    extra_tags: Iterable[str] = (),
+) -> Dict[str, Any]:
+    """Return a copy of *cfg* carrying Langfuse grouping metadata under ``_trace``.
+
+    ``call_llm`` pops ``_trace`` and forwards it (plus the run session id) to
+    LiteLLM as ``metadata``.  Pure: *cfg* is never mutated.
+    """
+    out = dict(cfg)
+    out["_trace"] = {
+        "generation_name": f"{stage}/{unit}" if stage else str(unit),
+        "tags": [f"stage:{stage}", f"stem:{unit}", *extra_tags],
+    }
+    return out
 
 
 def call_llm(messages: List[Dict[str, str]], cfg: Dict[str, Any]) -> str:
