@@ -264,3 +264,8 @@ def test_llm_sections_default_provider_and_empty_api_base():
     for sec in sections:
         assert sec["provider"] == "ollama_chat"
         assert sec["api_base"] == ""
+
+
+def test_general_langfuse_defaults_true():
+    cfg = get_effective_config(None, {})
+    assert cfg["general"]["langfuse"] is True

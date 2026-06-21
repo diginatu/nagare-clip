@@ -10,11 +10,19 @@
 #   OPENAI_API_KEY / GEMINI_API_KEY / ANTHROPIC_API_KEY) and leave `api_base` empty.
 #   Each stage can use a different provider.
 
+# Langfuse tracing (optional, off unless keys are present):
+#   Export LANGFUSE_PUBLIC_KEY and LANGFUSE_SECRET_KEY to enable tracing of every
+#   LLM call. LANGFUSE_OTEL_HOST selects region / self-hosted endpoint
+#   (default US cloud; EU: https://cloud.langfuse.com). Disable via general.langfuse: false
+#   or NAGARE_LANGFUSE=0.
+
 general:
   log_level: INFO   # DEBUG | INFO | WARNING | ERROR | CRITICAL
   log_file: ""      # Path to log file; empty = console only (run_pipeline.sh sets this automatically)
   llm_report: true            # write a per-call LLM report under output/llm_report/
   llm_report_dir: "output/llm_report"
+  langfuse: true              # send LLM traces to Langfuse when LANGFUSE_PUBLIC_KEY/SECRET_KEY are set
+                              # (set to false to force-disable even when keys are present)
 
 transcription:
   compute_type: float16
