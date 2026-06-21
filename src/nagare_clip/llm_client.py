@@ -41,6 +41,9 @@ def _ensure_tracing() -> bool:
     global _TRACING_INITIALIZED
     if not _tracing_enabled():
         return False
+    # Process-global, not thread-safe: the pipeline runs each stage as its own
+    # process, so the check-then-set below never races. If a future stage calls
+    # call_llm concurrently from threads, guard this with a lock.
     if not _TRACING_INITIALIZED:
         callbacks = list(getattr(litellm, "callbacks", []) or [])
         if LANGFUSE_OTEL_CALLBACK not in callbacks:

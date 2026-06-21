@@ -80,7 +80,11 @@ cloud; EU cloud: `https://cloud.langfuse.com`).
 
 To disable tracing even when keys are present, set `general.langfuse: false` in
 your config file, or export `NAGARE_LANGFUSE=0` before running the pipeline.
-`run_pipeline.sh` maps the config flag to `NAGARE_LANGFUSE` automatically.
+`run_pipeline.sh` maps the config flag to `NAGARE_LANGFUSE` automatically. Note:
+`call_llm` reads only the env var, so `general.langfuse: false` takes effect
+**only through `run_pipeline.sh`** — if you invoke a stage CLI directly (e.g.
+`python -m nagare_clip.director.cli`) with the keys exported, set
+`NAGARE_LANGFUSE=0` yourself to disable.
 
 Traces are grouped by pipeline run (`session_id` = one timestamp per
 `run_pipeline.sh` invocation, exported as `NAGARE_RUN_ID`), by stage
