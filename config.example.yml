@@ -22,7 +22,7 @@ transcription:
   language: ja              # ISO 639-1 language code passed to WhisperX (e.g. ja, en)
   # align_model: vumichien/wav2vec2-large-xlsr-japanese
 
-# Pipeline Stage 2: audio-silence (jump-cut) detection.
+# audio_silence stage: audio-silence (jump-cut) detection.
 # Runs ffmpeg silencedetect on the waveform and writes an editable
 # {stem}_cuts.txt checkpoint. NOTE: this is acoustic silence, distinct
 # from intervals.silence_threshold (which is a WhisperX word-gap heuristic).
@@ -31,7 +31,7 @@ audio_silence:
   noise: -30.0        # ffmpeg silencedetect noise threshold, in dB
   min_silence: 0.8    # ffmpeg silencedetect minimum silence duration, seconds
 
-# Pipeline Stage 3: text editing checkpoint.
+# text_filter stage: text editing checkpoint.
 text_filter:
   use_llm: false               # Enable LLM text filter for the text-editing checkpoint
   provider: "ollama_chat"      # LiteLLM provider prefix: ollama_chat | openai | gemini | anthropic
@@ -159,7 +159,7 @@ intervals:
   #   char_eps: 0.02
   #   silence_max_word_span: 0.6
 
-# Pipeline Stage 5: Blender VSE layout.
+# blender stage: Blender VSE layout.
 blender:
   default_fps: 30.0           # Fallback FPS when source metadata unavailable
   use_proxy: true              # Enable proxy on movie strips for smooth VSE playback (bpy MovieStrip.use_proxy)
@@ -200,6 +200,6 @@ blender:
 
 pipeline:
   input_videos_dir: src_video
-  output_dir: output   # Root dir; stage outputs go to stage1/ .. stage5/ subdirs
-  from_stage: 1        # Start from this stage (name or legacy 1-5); reuses earlier stage outputs
-  to_stage: blender    # Stop after this stage (inclusive; name or legacy 1-5); later stages are skipped. Must not precede from_stage
+  output_dir: output   # Root dir; stage outputs go to per-stage named subdirs
+  from_stage: transcription  # Start from this stage; reuses earlier stage outputs
+  to_stage: blender    # Stop after this stage (inclusive); later stages are skipped. Must not precede from_stage

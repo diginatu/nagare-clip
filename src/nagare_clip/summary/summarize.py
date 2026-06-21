@@ -32,7 +32,7 @@ from nagare_clip.llm_report import (
     Recorder,
 )
 from nagare_clip.llm_retry import cfg_for_attempt, retry_attempts
-from nagare_clip.stage2.llm_filter import _call_llm
+from nagare_clip.text_filter.llm_filter import _call_llm
 
 logger = logging.getLogger(__name__)
 

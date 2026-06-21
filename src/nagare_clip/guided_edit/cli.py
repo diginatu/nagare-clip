@@ -22,7 +22,7 @@ from nagare_clip.director.director_llm import ops_from_dict
 from nagare_clip.guided_edit.apply import apply_ops, format_unapplied
 from nagare_clip.llm_report import recorder_from_config
 from nagare_clip.logging_setup import setup_logging
-from nagare_clip.stage3.check_edits import check_edits
+from nagare_clip.intervals.check_edits import check_edits
 
 
 def parse_args() -> argparse.Namespace:

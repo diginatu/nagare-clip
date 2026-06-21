@@ -19,7 +19,7 @@ dev = [
 ]
 
 [project.scripts]
-nagare-clip-stage2 = "nagare_clip.cli:main"
+nagare-clip-intervals = "nagare_clip.intervals.cli:main"
 
 [dependency-groups]
 dev = [

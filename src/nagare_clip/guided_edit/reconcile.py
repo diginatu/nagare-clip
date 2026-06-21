@@ -16,8 +16,8 @@ from __future__ import annotations
 from typing import List, Optional
 
 from nagare_clip.director.director_llm import DirectorOp
-from nagare_clip.stage2.llm_filter import PATCH_RE
-from nagare_clip.stage3.sync_json import (
+from nagare_clip.text_filter.llm_filter import PATCH_RE
+from nagare_clip.intervals.sync_json import (
     CUT_TAG_RE,
     KEEP_TAG_RE,
     OVERLAY_TAG_RE,

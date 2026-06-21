@@ -7,7 +7,7 @@ import sys
 
 import yaml
 
-import nagare_clip.cli as stage_cli
+import nagare_clip.intervals.cli as stage_cli
 
 
 def _whisperx_three_segments():
@@ -79,7 +79,7 @@ def _run(monkeypatch, tmp_path, edits_text):
         sys,
         "argv",
         [
-            "nagare_clip.cli",
+            "nagare_clip.intervals.cli",
             "--edits-txt",
             str(edits),
             "--json",

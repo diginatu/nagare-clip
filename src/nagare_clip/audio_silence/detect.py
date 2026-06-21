@@ -1,7 +1,7 @@
 """Parse ffmpeg ``silencedetect`` output into cut ranges.
 
 The ffmpeg invocation itself is driven by ``scripts/run_pipeline.sh`` inside
-the whisperx Docker image (mirroring Stage 1). This module only builds the
+the whisperx Docker image (mirroring transcription). This module only builds the
 ffmpeg argument list and parses the captured stderr, so it stays pure and
 needs no ffmpeg/Docker in the test path.
 """
@@ -62,7 +62,7 @@ def build_ffmpeg_args(
     """ffmpeg argument list run inside the whisperx container.
 
     ``rel_source`` is the path relative to the mounted input-videos dir
-    (container ``working_dir`` is ``/app``) — the same value Stage 1 passes.
+    (container ``working_dir`` is ``/app``) — the same value transcription passes.
     """
     return [
         "-hide_banner",

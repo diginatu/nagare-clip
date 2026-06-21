@@ -5,7 +5,7 @@ import sys
 
 import yaml
 
-import nagare_clip.cli as stage_cli
+import nagare_clip.intervals.cli as stage_cli
 
 
 def _whisperx():
@@ -52,7 +52,7 @@ def _run(monkeypatch, json_path, edits, cfg, out, cuts=None):
     # build_bunsetu_times never invokes nlp.
     monkeypatch.setattr(stage_cli.spacy, "load", lambda *a, **k: object())
     argv = [
-        "nagare_clip.cli",
+        "nagare_clip.intervals.cli",
         "--edits-txt",
         str(edits),
         "--json",

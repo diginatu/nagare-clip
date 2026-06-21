@@ -1,10 +1,10 @@
-"""Stage 2 CLI: audio-silence (jump-cut) detection checkpoint.
+"""audio_silence CLI: audio-silence (jump-cut) detection checkpoint.
 
 ffmpeg ``silencedetect`` is run inside the whisperx Docker image by
 ``scripts/run_pipeline.sh``; this CLI consumes the captured stderr (``--raw``)
 and writes a human-editable ``{stem}_cuts.txt``. Without ``--raw`` (or when
 ``audio_silence.enabled`` is false) it writes a header-only file so the
-downstream union in Stage 4 becomes a no-op.
+downstream union in the intervals stage becomes a no-op.
 """
 
 from __future__ import annotations
@@ -75,16 +75,16 @@ def main() -> None:
 
     if not a["enabled"] or args.raw_path is None:
         reason = "disabled" if not a["enabled"] else "no ffmpeg output provided"
-        logging.info("Stage 2: audio-silence %s, writing empty cut list", reason)
+        logging.info("audio_silence: audio-silence %s, writing empty cut list", reason)
         write_cuts(output_path, [])
-        logging.info("Stage 2: wrote %s", output_path)
+        logging.info("audio_silence: wrote %s", output_path)
         return
 
     stderr = Path(args.raw_path).read_text(encoding="utf-8")
     ranges = parse_silencedetect_output(stderr)
     write_cuts(output_path, ranges)
     logging.info(
-        "Stage 2: detected %d silence range(s), wrote %s",
+        "audio_silence: detected %d silence range(s), wrote %s",
         len(ranges),
         output_path,
     )

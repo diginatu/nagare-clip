@@ -18,50 +18,48 @@ Maintain and improve a multi-stage rough-cut pipeline:
 
 Final deliverable is a `.blend` project for human editing.
 
-> **Naming convention:** Stages are identified by **functional name**, not
-> number — numbers are being phased out so new stages can be inserted
-> without renumbering. Config sections are the canonical identifiers:
-> `transcription:`, `audio_silence:`, `text_filter:`, `summary:`, `plan:`,
-> `director:`, `guided_edit:`, `intervals:`, `blender:`. Some package dirs
-> (`stage2/`, `stage3/`, `stage4/`) keep legacy numeric names to avoid churn;
-> `summary/`, `plan/`, `director/`, `guided_edit/` are name-only.
-> `run_pipeline.sh --from-stage` accepts a name (legacy numbers 1-5 still map
-> to transcription/audio_silence/text_filter/intervals/blender).
+> **Naming convention:** Stages are identified only by their **functional /
+> config-section name** — there are no stage numbers anywhere. The canonical
+> identifiers are: `transcription:`, `audio_silence:`, `text_filter:`,
+> `summary:`, `plan:`, `director:`, `guided_edit:`, `intervals:`, `blender:`.
+> Package dirs (`src/nagare_clip/<name>/`), `output/<name>/` subdirs, and
+> `run_pipeline.sh --from-stage`/`--to-stage` all use these same names. A new
+> stage can be inserted anywhere without renumbering the others.
 
 ## Pipeline Overview
 
 `scripts/run_pipeline.sh` orchestrates all stages end-to-end. Use `--from-stage <name>` to skip earlier stages and reuse their outputs.
 
-### Stage 1 — WhisperX Transcription
+### transcription — WhisperX Transcription
 
 Speech-to-text with word-level alignment. Runs in a single Docker container for all source files to avoid model reload overhead.
 
 - **Inputs:** source video files (mp4/mkv/mov/avi/webm)
 - **Outputs:** `{stem}.json` (word timings), `{stem}.txt` (plain text)
 
-### Stage 2 — Audio-Silence (Jump-Cut) Detection
+### audio_silence — Audio-Silence (Jump-Cut) Detection
 
-Runs ffmpeg `silencedetect` on the waveform inside the whisperx Docker image (mirrors Stage 1 — no host/Python ffmpeg dependency). `run_pipeline.sh` captures stderr; `nagare_clip.audio_silence.cli --raw` parses it into an editable `{stem}_cuts.txt`. Disabled (or no `--raw`) → header-only file, so the downstream union is a no-op.
+Runs ffmpeg `silencedetect` on the waveform inside the whisperx Docker image (mirrors the transcription stage — no host/Python ffmpeg dependency). `run_pipeline.sh` captures stderr; `nagare_clip.audio_silence.cli --raw` parses it into an editable `{stem}_cuts.txt`. Disabled (or no `--raw`) → header-only file, so the downstream union is a no-op.
 
 - **Inputs:** source video file
 - **Outputs:** `{stem}_cuts.txt` (one `START - END` silent span per line; delete a line to keep that span)
 
-### Stage 3 — Text Editing Checkpoint (mandatory)
+### text_filter — Text Editing Checkpoint (mandatory)
 
-Produces `{stem}_edits.txt` for human review. When `text_filter.use_llm` is `false` (default), copies the Stage 1 `.txt` as-is. When enabled, runs LLM filter and writes output with `{{old->new}}` markers preserved.
+Produces `{stem}_edits.txt` for human review. When `text_filter.use_llm` is `false` (default), copies the transcription `.txt` as-is. When enabled, runs LLM filter and writes output with `{{old->new}}` markers preserved.
 
-Humans may wrap a span in `<keep>...</keep>` to force-preserve its audio in Stage 4. It may open on one line and close on a later one, spanning multiple WhisperX segments (and the silences between them). Added by the human *after* the LLM filter runs — the LLM never sees it.
+Humans may wrap a span in `<keep>...</keep>` to force-preserve its audio in the intervals stage. It may open on one line and close on a later one, spanning multiple WhisperX segments (and the silences between them). Added by the human *after* the LLM filter runs — the LLM never sees it.
 
-`<speed factor="N.N">...</speed>` plays the region at the given speed in Stage 5. Unlike `<keep>`, it does **not** force-preserve audio — silence inside a `<speed>` span is still cut by silence detection, and the speed applies only to the surviving spoken parts (its span is emitted verbatim in `speed_ranges` regardless, and any portion on cut content is ignored downstream). To keep the audio **and** speed it, nest the tags: `<keep><speed factor="N.N">…</speed></keep>` (the extractors parse each tag type independently and strip the other's tags when counting positions). Multi-line/nesting/authorship rules follow `<keep>`.
+`<speed factor="N.N">...</speed>` plays the region at the given speed in the blender stage. Unlike `<keep>`, it does **not** force-preserve audio — silence inside a `<speed>` span is still cut by silence detection, and the speed applies only to the surviving spoken parts (its span is emitted verbatim in `speed_ranges` regardless, and any portion on cut content is ignored downstream). To keep the audio **and** speed it, nest the tags: `<keep><speed factor="N.N">…</speed></keep>` (the extractors parse each tag type independently and strip the other's tags when counting positions). Multi-line/nesting/authorship rules follow `<keep>`.
 
-`<overlay text="...">...</overlay>` places an on-screen TEXT strip in Stage 5 over the wrapped span's time range. Like `<speed>` (and unlike `<keep>`) it does **not** force-preserve audio — if the span is cut by silence detection, the overlay is silently skipped. Multi-line/nesting/authorship rules follow `<keep>`. Quotes inside `text="..."` are unsupported (regex uses `[^"]*`).
+`<overlay text="...">...</overlay>` places an on-screen TEXT strip in the blender stage over the wrapped span's time range. Like `<speed>` (and unlike `<keep>`) it does **not** force-preserve audio — if the span is cut by silence detection, the overlay is silently skipped. Multi-line/nesting/authorship rules follow `<keep>`. Quotes inside `text="..."` are unsupported (regex uses `[^"]*`).
 
 `<cut>...</cut>` is a deletion shorthand: it desugars to `{{wrapped->}}` deletion patches (`sync_json._expand_cut_tags`), so the words vanish from the JSON and the resulting gap is cut by the interval stage's word-gap silence detection — meant for deletions longer than `intervals.silence_threshold`, and immune to caption re-expansion since deleted text has no caption. Balance/nesting rules follow `<keep>`; don't overlap it with `<keep>/<speed>/<overlay>` on the same span.
 
 - **Inputs:** `{stem}.txt`
 - **Outputs:** `{stem}_edits.txt`
 
-Validate a hand-edited `_edits.txt` before resuming with `python -m nagare_clip.stage3.check_edits --edits-txt <file> --json <file>` (`src/nagare_clip/stage3/check_edits.py`). Unlike the interval stage's fail-fast `ValueError`, it collects **every** problem at once (line-numbered, exit 1 if any): line count vs. JSON segments, `{{old->new}}` syntax, decomposition integrity, and tag balance/validity for all four markers. Pure `check_edits(edit_lines, json_data) -> list[Problem]`, never raises.
+Validate a hand-edited `_edits.txt` before resuming with `python -m nagare_clip.intervals.check_edits --edits-txt <file> --json <file>` (`src/nagare_clip/intervals/check_edits.py`). Unlike the interval stage's fail-fast `ValueError`, it collects **every** problem at once (line-numbered, exit 1 if any): line count vs. JSON segments, `{{old->new}}` syntax, decomposition integrity, and tag balance/validity for all four markers. Pure `check_edits(edit_lines, json_data) -> list[Problem]`, never raises.
 
 ### summary — Project-Wide Summaries
 
@@ -91,14 +89,14 @@ Applies each director op into `_edits.txt`. **Span ops** (`cut`/`speed`/`overlay
 - **Inputs:** `{stem}_edits.txt` (text_filter), `{stem}_director.json`, `{stem}.json`
 - **Outputs:** augmented `{stem}_edits.txt`, `{stem}_unapplied.txt`
 
-### Stage 4 — Patch Application + Keep-Interval Computation
+### intervals — Patch Application + Keep-Interval Computation
 
-Applies `{{old->new}}` patches from `_edits.txt`, syncs corrected text back into WhisperX JSON timing data, then runs NLP analysis (GiNZA/spaCy bunsetsu segmentation) to compute keep intervals. The Stage 2 `_cuts.txt` ranges are unioned into the exclude set (via `--cuts-txt`) before inversion. Any `<keep>...</keep>` ranges from `_edits.txt` are then subtracted from the unioned excludes so the wrapped audio survives both silence sources. `<speed factor="...">...</speed>` spans do **not** force-keep audio — they are written verbatim to a top-level `speed_ranges` array in the output JSON (independent of `keep_intervals`) but are not subtracted from the excludes, so silence inside a bare `<speed>` span is still cut; Stage 5 splits keep intervals at those boundaries. All existing caption/min_keep/margin safeguards still apply. Runs per source via `uv run`.
+Applies `{{old->new}}` patches from `_edits.txt`, syncs corrected text back into WhisperX JSON timing data, then runs NLP analysis (GiNZA/spaCy bunsetsu segmentation) to compute keep intervals. The audio_silence `_cuts.txt` ranges are unioned into the exclude set (via `--cuts-txt`) before inversion. Any `<keep>...</keep>` ranges from `_edits.txt` are then subtracted from the unioned excludes so the wrapped audio survives both silence sources. `<speed factor="...">...</speed>` spans do **not** force-keep audio — they are written verbatim to a top-level `speed_ranges` array in the output JSON (independent of `keep_intervals`) but are not subtracted from the excludes, so silence inside a bare `<speed>` span is still cut; the blender stage splits keep intervals at those boundaries. All existing caption/min_keep/margin safeguards still apply. Runs per source via `uv run`.
 
-- **Inputs:** `{stem}_edits.txt`, `{stem}.json` (Stage 1 original), `{stem}_cuts.txt` (Stage 2)
+- **Inputs:** `{stem}_edits.txt`, `{stem}.json` (transcription original), `{stem}_cuts.txt` (audio_silence)
 - **Outputs:** `{stem}_intervals.json` (keep intervals + captions)
 
-### Stage 5 — Blender VSE Layout
+### blender — Blender VSE Layout
 
 Auto-assembles the rough cut in headless Blender. References original media in-place (no re-encoding). Concatenates all sources onto a single timeline.
 
@@ -107,9 +105,9 @@ Auto-assembles the rough cut in headless Blender. References original media in-p
 
 ### Human Editing Workflow
 
-1. Run stages 1–3 → Stage 2 produces `{stem}_cuts.txt`, Stage 3 produces `{stem}_edits.txt`
+1. Run transcription–text_filter → audio_silence produces `{stem}_cuts.txt`, text_filter produces `{stem}_edits.txt`
 2. Human edits `_cuts.txt` (delete/adjust silent spans) and `_edits.txt` (`{{old->new}}` patches; optional `<keep>`, `<speed factor="N.N">`, `<overlay text="...">`)
-3. Resume with `--from-stage 4` → unions cuts, applies patches, syncs JSON, carves out `<keep>` ranges (not `<speed>`, which only annotates playback speed), computes intervals, runs Blender (with Speed Control effects for `<speed>` regions)
+3. Resume with `--from-stage intervals` → unions cuts, applies patches, syncs JSON, carves out `<keep>` ranges (not `<speed>`, which only annotates playback speed), computes intervals, runs Blender (with Speed Control effects for `<speed>` regions)
 
 ## Hard Constraints
 
@@ -117,7 +115,7 @@ Auto-assembles the rough cut in headless Blender. References original media in-p
 - LiteLLM is the LLM transport dependency: all provider access (OpenAI/Gemini/Anthropic/Ollama) goes through `nagare_clip.llm_client.call_llm` — do not add provider-specific HTTP clients.
 - Runtime NLP dependency is `ginza` + `ja_ginza` (spaCy-based).
 - Route media tooling (ffmpeg) through the existing whisperx Docker image; do not add host binaries or new Python audio deps.
-- Preserve the interval JSON (`stage3/` package) as the human-editable contract for the Blender stage.
+- Preserve the interval JSON (`intervals/` package) as the human-editable contract for the Blender stage.
 - The Blender stage must reference original media; do not re-encode/copy source media.
 
 ## Project Structure
@@ -130,13 +128,12 @@ src/nagare_clip/          # Main Python package (src layout)
   llm_report.py               # Structured per-call LLM report: Recorder + rebuild_index (index.md + per-call <stage>/<unit>.md)
   llm_client.py               # Unified LiteLLM transport: call_llm(messages, cfg) -> str (OpenAI/Gemini/Anthropic/Ollama)
   timing.py                   # Pure timing helpers: segment_times(), format_dur_gap() (plan/director duration context)
-  cli.py                      # Pipeline Stage 4 CLI entry point (patch + intervals; --cuts-txt)
-  __main__.py                 # python -m nagare_clip support
-  audio_silence/              # Pipeline Stage 2 (audio-silence detection)
+  __main__.py                 # python -m nagare_clip support (runs the intervals stage)
+  audio_silence/              # audio_silence stage (audio-silence detection)
     detect.py                 # parse_silencedetect_output(), build_ffmpeg_args() (pure)
     cuts_file.py              # write_cuts() / read_cuts() — editable cut-list format
-    cli.py                    # Pipeline Stage 2 CLI (consumes --raw ffmpeg stderr)
-  stage2/                     # text_filter stage modules (text editing checkpoint)
+    cli.py                    # audio_silence stage CLI (consumes --raw ffmpeg stderr)
+  text_filter/                # text_filter stage modules (text editing checkpoint)
     cli.py                    # text-editing checkpoint CLI entry point
     llm_filter.py             # LLM API calls, {{old->new}} patch parsing, apply_patches_to_lines()
     summary_llm.py            # Summary LLM: generates transcript summary + keywords for filter context
@@ -154,7 +151,8 @@ src/nagare_clip/          # Main Python package (src layout)
     apply.py                  # per-op LLM call + splice + revert-on-failure
     reconcile.py              # verify_op(): verbatim-safety + op-reflection checks
     cli.py                    # guided_edit CLI (writes augmented _edits.txt + _unapplied.txt)
-  stage3/                     # intervals stage modules (patch application + intervals)
+  intervals/                  # intervals stage modules (patch application + intervals)
+    cli.py                    # intervals stage CLI entry point (patch + intervals; --cuts-txt)
     check_edits.py            # Standalone _edits.txt integrity checker (reports ALL problems at once)
     sync_json.py              # Sync corrected text back into WhisperX JSON
     bunsetu.py                # Bunsetsu-level timing (GiNZA)
@@ -163,7 +161,7 @@ src/nagare_clip/          # Main Python package (src layout)
     captions.py                # Caption chunking
     filler.py                 # Filler word config (unused at runtime)
     io.py                     # Source file inference
-  stage4/                     # blender stage modules (Blender VSE)
+  blender/                    # blender stage modules (Blender VSE)
     blender_cli.py            # Blender-stage CLI (runs inside Blender)
     scene.py                  # Blender scene setup
     timeline.py               # Strip and caption placement
@@ -175,13 +173,13 @@ tests/
   test_cli_keep_markers.py    # <keep>...</keep> force-keep markers (CLI integration)
   test_cli_cut_marker.py      # <cut>...</cut> deletion → silence-gap cut (CLI integration)
   audio_silence/              # audio_silence (detect / cuts_file / cli) unit tests
-  stage2/                     # text-editing checkpoint unit tests
+  text_filter/                # text-editing checkpoint unit tests
   summary/                    # summary segment/build + CLI tests
   plan/                       # plan generate/parse + CLI tests
   director/                   # director op parsing/generation + context + CLI tests
   guided_edit/                # guided_edit apply/reconcile + CLI tests
-  stage3/                     # interval-stage unit tests (incl. <cut> desugar)
-  stage4/                     # Blender-stage tests
+  intervals/                  # interval-stage unit tests (incl. <cut> desugar)
+  blender/                    # Blender-stage tests
 ```
 
 ## Configuration System
@@ -196,31 +194,31 @@ All tunable parameters are centralised in `src/nagare_clip/config.py`:
 
 All LLM stages (`text_filter` + its `summary_llm`, `summary`, `plan`, `director`, `guided_edit`) route through `nagare_clip.llm_client.call_llm` (LiteLLM). Each block selects its backend with a `provider` key (default `ollama_chat`); the model id sent to LiteLLM is `"<provider>/<model>"`. An empty `api_base` falls back to `http://localhost:11434` for an ollama provider, or is omitted for a cloud provider. `api_key` is forwarded when set (or use the provider's env var). `response_format: "json"` maps to a JSON-object request; `thinking` maps to LiteLLM `reasoning_effort` (best-effort per provider).
 
-`cli.py` (interval stage), `audio_silence/cli.py` (Stage 2), and `blender_cli.py` (Blender stage) all accept a `--config <path>` flag, passed through by `scripts/run_pipeline.sh` when `--config` is provided.
+`intervals/cli.py`, `audio_silence/cli.py`, and `blender/blender_cli.py` all accept a `--config <path>` flag, passed through by `scripts/run_pipeline.sh` when `--config` is provided.
 
 `scripts/run_pipeline.sh` also reads `pipeline.*`, `transcription.*`, and `audio_silence.*` config keys directly via Python/yaml for arguments not forwarded to a Python CLI: `transcription.language` (default `ja`), and `audio_silence.enabled/noise/min_silence` (deciding whether/how to run the docker ffmpeg call).
 
 ## Current Runtime Quirks
 
-### Stage 2 / Stage 3 (audio-silence, text_filter)
+### audio_silence / text_filter
 
 - Audio-silence detection runs ffmpeg `silencedetect` in the whisperx container; `run_pipeline.sh` redirects stderr to `{stem}_silencedetect.log`, `detect.py` parses it (duration from ffmpeg's own `Duration:` line, no ffprobe), `cuts_file.py` writes `{stem}_cuts.txt`. Config: `audio_silence.enabled` (default `true`), `.noise` (dB, default `-30.0`), `.min_silence` (s, default `0.8`) — distinct from `intervals.silence_threshold` (a WhisperX word-gap heuristic in the interval stage). `_cuts.txt` is human-editable; blank/`#`/malformed/`start>=end` lines are skipped with a warning by `read_cuts()`. The interval stage's optional `--cuts-txt` unions these ranges into the word-timing excludes before invert; omitting it reproduces the prior behaviour exactly (regression-guarded by `tests/test_cli_cuts_merge.py`).
 - `text_filter.provider` (default `ollama_chat`) selects the LiteLLM backend; an empty `api_base` falls back to Ollama localhost or is omitted for cloud providers. `text_filter.thinking` (default `false`) accepts `true`/`false` or a level string (`"low"/"medium"/"high"`), mapped to LiteLLM `reasoning_effort`. The optional **summary LLM** (`text_filter.summary_llm.enabled`) runs first, sending the full transcript to a (possibly different) LLM that returns `{summary, keywords}`; these are appended to the filter LLM's system prompt to help correct mis-dictated rare words, and fall back gracefully on failure.
 
-### Stage 4 (intervals) — `<keep>`/`<speed>`/`<overlay>`/`<cut>` markers
+### intervals — `<keep>`/`<speed>`/`<overlay>`/`<cut>` markers
 
-- `extract_keep_ranges()` (`stage3/sync_json.py`) resolves `<keep>` to `(first wrapped word.start, last wrapped word.end)` post-patch, tracking open/close across edit lines so one block can span multiple segments (and the silences between them); out-of-segment anchors resolve via `_first_word_at_or_after`/`_last_word_before`. Resolved ranges are subtracted from the unioned excludes via `subtract_intervals()` — `keep_pre_margin`/`keep_post_margin` do **not** extend `<keep>` ranges. Empty/unclosed/unmatched/nested/invalid tags are skipped with a warning.
-- `extract_speed_ranges()` (same file) returns `(start, end, factor)` and is written verbatim to a top-level `speed_ranges` array (independent of `keep_intervals`). It is **not** subtracted from the excludes — only `<keep>` ranges are (`cli.py` builds `all_force_keep` from `force_keep_ranges` alone), so silence inside a bare `<speed>` span is still cut. Stage 5's `split_intervals_by_speed()` (`stage4/timeline.py`) cuts each surviving keep interval at speed-range boundaries and annotates sub-intervals with `speed_factor` (omitted at 1.0/uncovered), so a `<speed>` span can cover part of an interval or several; a speed range (or the part of one) on cut content matches no interval and is ignored, and `place_speed_marks()` skips a badge whose whole span is cut. Nest `<speed>` inside `<keep>` to preserve the audio too. `place_strips()` applies Blender 5.1 retiming (`retiming_segment_speed_set`) directly to video+audio strips. **`strip.retiming_keys` is a shared C pointer across all strips — never read/write it via Python; always use sequencer operators.** A related Blender bug corrupts placed strips' `content_start` once a scene holds several retimed strips at large offsets (surfaces only at scale, e.g. 6 sources / ~88 strips / 4 speed spans) — `place_strips()` records each strip's intended start and a final **Phase D** pass re-pins `content_start` after every operator has run. **This is a Blender-bug workaround: remove it together with its regression test (`tests/stage4/test_retiming_positions.py`) once a Blender release places retimed strips correctly.**
-- `extract_overlay_ranges()` returns `(start, end, text)`; overlays skip `subtract_intervals()`/speed annotation entirely and are written verbatim to a top-level `overlays` array. Stage 5's `place_overlays()` renders one contiguous TEXT strip per overlay (even across multiple keep intervals, via min/max `tl_map` bounds) on `OVERLAY_CHANNEL = 5` (topmost text channel); an overlay entirely on cut content is silently skipped. Quotes inside `text="..."` are unsupported.
-- `<cut>` is handled entirely in `sync_json._expand_cut_tags()` (runs before the keep/speed/overlay tag-strip): it desugars to `{{wrapped->}}` deletion patches, so there's no `extract_cut_ranges()` or intervals-stage logic — the resulting gap is cut by word-gap silence detection (`cli.py:250-258`), threshold-dependent (deleted text has no caption, so caption re-expansion can't restore it). `_patched_visible_length()` strips `<cut>...</cut>` so it doesn't shift neighbouring tag positions; don't overlap it with other tags on the same span. Guarded by `tests/stage3/test_cut_tag.py` and `tests/test_cli_cut_marker.py`.
+- `extract_keep_ranges()` (`intervals/sync_json.py`) resolves `<keep>` to `(first wrapped word.start, last wrapped word.end)` post-patch, tracking open/close across edit lines so one block can span multiple segments (and the silences between them); out-of-segment anchors resolve via `_first_word_at_or_after`/`_last_word_before`. Resolved ranges are subtracted from the unioned excludes via `subtract_intervals()` — `keep_pre_margin`/`keep_post_margin` do **not** extend `<keep>` ranges. Empty/unclosed/unmatched/nested/invalid tags are skipped with a warning.
+- `extract_speed_ranges()` (same file) returns `(start, end, factor)` and is written verbatim to a top-level `speed_ranges` array (independent of `keep_intervals`). It is **not** subtracted from the excludes — only `<keep>` ranges are (`cli.py` builds `all_force_keep` from `force_keep_ranges` alone), so silence inside a bare `<speed>` span is still cut. The blender stage's `split_intervals_by_speed()` (`blender/timeline.py`) cuts each surviving keep interval at speed-range boundaries and annotates sub-intervals with `speed_factor` (omitted at 1.0/uncovered), so a `<speed>` span can cover part of an interval or several; a speed range (or the part of one) on cut content matches no interval and is ignored, and `place_speed_marks()` skips a badge whose whole span is cut. Nest `<speed>` inside `<keep>` to preserve the audio too. `place_strips()` applies Blender 5.1 retiming (`retiming_segment_speed_set`) directly to video+audio strips. **`strip.retiming_keys` is a shared C pointer across all strips — never read/write it via Python; always use sequencer operators.** A related Blender bug corrupts placed strips' `content_start` once a scene holds several retimed strips at large offsets (surfaces only at scale, e.g. 6 sources / ~88 strips / 4 speed spans) — `place_strips()` records each strip's intended start and a final **Phase D** pass re-pins `content_start` after every operator has run. **This is a Blender-bug workaround: remove it together with its regression test (`tests/blender/test_retiming_positions.py`) once a Blender release places retimed strips correctly.**
+- `extract_overlay_ranges()` returns `(start, end, text)`; overlays skip `subtract_intervals()`/speed annotation entirely and are written verbatim to a top-level `overlays` array. The blender stage's `place_overlays()` renders one contiguous TEXT strip per overlay (even across multiple keep intervals, via min/max `tl_map` bounds) on `OVERLAY_CHANNEL = 5` (topmost text channel); an overlay entirely on cut content is silently skipped. Quotes inside `text="..."` are unsupported.
+- `<cut>` is handled entirely in `sync_json._expand_cut_tags()` (runs before the keep/speed/overlay tag-strip): it desugars to `{{wrapped->}}` deletion patches, so there's no `extract_cut_ranges()` or intervals-stage logic — the resulting gap is cut by word-gap silence detection (`cli.py:250-258`), threshold-dependent (deleted text has no caption, so caption re-expansion can't restore it). `_patched_visible_length()` strips `<cut>...</cut>` so it doesn't shift neighbouring tag positions; don't overlap it with other tags on the same span. Guarded by `tests/intervals/test_cut_tag.py` and `tests/test_cli_cut_marker.py`.
 
-### Stage 4 (intervals) — margins & captions
+### intervals — margins & captions
 
 - `keep_pre_margin`/`keep_post_margin` (default 1.0s) expand keep intervals before merge; `caption.pre_margin`/`caption.post_margin` (default 0.0s) independently extend caption display time, clamped against neighbouring captions.
-- Silence detection caps WhisperX word spans at `intervals.bunsetu.silence_max_word_span` (0.6s) so inflated token ends don't hide pauses. `build_bunsetu_times` (`stage3/bunsetu.py`) uses `ginza.bunsetu_spans()` for natural subtitle break units, snapping a bunsetsu's start forward when an intra-bunsetsu character gap exceeds that threshold (WhisperX misalignment); the end-offset epsilon is `intervals.bunsetu.char_eps`.
+- Silence detection caps WhisperX word spans at `intervals.bunsetu.silence_max_word_span` (0.6s) so inflated token ends don't hide pauses. `build_bunsetu_times` (`intervals/bunsetu.py`) uses `ginza.bunsetu_spans()` for natural subtitle break units, snapping a bunsetsu's start forward when an intra-bunsetsu character gap exceeds that threshold (WhisperX misalignment); the end-offset epsilon is `intervals.bunsetu.char_eps`.
 - Captions chunk on bunsetsu units (defaults: 12 bunsetsu, 4.0s max, 3 bunsetsu min, 1.5s min duration, 1.5s silence flush; joined by `caption.bunsetu_separator`, default `' '`, enabling Blender TEXT-strip word-wrap), are preserved as full transcript chunks (not pre-filtered by keep intervals) with keep intervals expanded to include them, then `intervals.min_keep` is re-applied so tiny keep strips merge/expand.
 
-### Stage 5 (Blender)
+### blender
 
 - `place_speed_marks()` (when `blender.speed_mark.enabled`, default true) badges each speed range with `template.format(factor=...)` (default `"x{factor}"`) on `SPEED_MARK_CHANNEL = 3` — the lowest of the three text channels (`3` < `CAPTION_CHANNEL=4` < `OVERLAY_CHANNEL=5`), so a badge yields to overlapping captions/overlays.
 - Caption/overlay/speed-mark style is `blender.caption_style.*` (font size, alignment, position, color, shadow, wrap width, outline, box — each applied only when explicitly set) overlaid with per-feature `overlay_style`/`speed_mark` overrides; `resolve_speed_mark_style()` in `blender_cli.py` merges the style and strips non-style keys.
@@ -228,8 +226,8 @@ All LLM stages (`text_filter` + its `summary_llm`, `summary`, `plan`, `director`
 
 ### Pipeline orchestration
 
-- `run_pipeline.sh` discovers videos (`mp4/mkv/mov/avi/webm`) alphabetically in `INPUT_VIDEOS_DIR` when `--source` is omitted (repeatable). `--from-stage`/`--to-stage` take a stage name (legacy numbers 1-5 map as in the Naming Convention note); the window is enforced by `STAGE_ORDER`/`in_window`/`past_window`, skipping earlier stages validates required outputs exist, and `--from-stage` after `--to-stage` errors. (`stage_index` deliberately returns success even for an unknown name, so under `set -e` an invalid stage reaches its own friendly error message instead of aborting silently.) Also configurable via `pipeline.from_stage`/`to_stage`. Output dirs: legacy `output/stage1..5`, plus name-only `output/summary|plan|director|guided_edit/`.
-- `summary`/`plan`/`director`/`guided_edit` **always run** (cheap no-ops when disabled), so `output/guided_edit/{stem}_edits.txt` always exists for the intervals stage; `summary`/`plan` run once project-wide, the other two loop per source. WhisperX (Stage 1) also runs in a single container for all sources to avoid model-reload overhead; Stages 2-4 still loop per-source after.
+- `run_pipeline.sh` discovers videos (`mp4/mkv/mov/avi/webm`) alphabetically in `INPUT_VIDEOS_DIR` when `--source` is omitted (repeatable). `--from-stage`/`--to-stage` take a stage name; the window is enforced by `STAGE_ORDER`/`in_window`/`past_window`, skipping earlier stages validates required outputs exist, and `--from-stage` after `--to-stage` errors. (`stage_index` deliberately returns success even for an unknown name, so under `set -e` an invalid stage reaches its own friendly error message instead of aborting silently.) Also configurable via `pipeline.from_stage`/`to_stage`. Output dirs are one per stage by name: `output/transcription|audio_silence|text_filter|summary|plan|director|guided_edit|intervals|blender/`.
+- `summary`/`plan`/`director`/`guided_edit` **always run** (cheap no-ops when disabled), so `output/guided_edit/{stem}_edits.txt` always exists for the intervals stage; `summary`/`plan` run once project-wide, the other two loop per source. WhisperX (transcription) also runs in a single container for all sources to avoid model-reload overhead; the remaining per-source stages still loop afterwards.
 - `timing.py` is a pure helper (`segment_times()`, `format_dur_gap()`) used by `summary` (per-part `start`/`end`) and `director` (per-line `[dur, gap]` annotations); `plan` reads the precomputed times from `summary.json` rather than touching JSON itself. `run_pipeline.sh` passes `--json` to both the summary and director stages.
 - All LLM stages record every attempt (prompt, raw response, retries, outcome, plus call config like `model`/`thinking`) via `llm_report.Recorder` into `output/llm_report/` (config `general.llm_report`/`llm_report_dir`); each stage CLI clears its own subdir, passes the recorder through (default `NULL_RECORDER` keeps functions testable), and rebuilds `index.md` from front-matter. Outcomes: ok / ok-empty / llm-error / unparseable / verify-fail / dropped-items (the last surfaces previously-silent per-item drop warnings with counts).
 
@@ -239,7 +237,7 @@ Always use `uv run` to invoke Python tools in this repo. Examples:
 
 ```bash
 uv run pytest
-uv run python -m nagare_clip.cli
+uv run python -m nagare_clip.intervals.cli
 ```
 
 ## Preferred Validation
@@ -249,7 +247,7 @@ defined in `.opencode/plugin/validate.ts`. It triggers after every file
 write/edit and runs:
 
 - `docker compose config --services`
-- `python -m py_compile` on the Python modules (text_filter `stage2/`, `summary/`, `plan/`, `director/`, `guided_edit/`, intervals `stage3/`, blender `stage4/`)
+- `python -m py_compile` on the Python modules (every file under `src/nagare_clip/`)
 - `bash -n scripts/run_pipeline.sh`
 
 If environment allows, also validate with a full run:

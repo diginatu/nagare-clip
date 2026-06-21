@@ -6,7 +6,7 @@ import sys
 
 import yaml
 
-import nagare_clip.cli as stage_cli
+import nagare_clip.intervals.cli as stage_cli
 
 
 def _whisperx_with_silence():

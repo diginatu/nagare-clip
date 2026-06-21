@@ -20,9 +20,9 @@ Stages are referenced by name (`--from-stage <name>`); the summary/plan/director
 
 ## Human Editing Workflow
 
-1. Run stages 1–3: `./scripts/run_pipeline.sh`
-2. Edit `output/stage2/{stem}_cuts.txt` — delete a line to keep that span, or adjust the `START - END` times
-3. Edit `output/stage3/{stem}_edits.txt` — add/modify `{{old->new}}` patch markers, wrap text in `<keep>...</keep>` to force-keep its audio, wrap text in `<speed factor="N.N">...</speed>` to play that region at the given speed in Blender (does not force-keep audio — nest inside `<keep>` to also keep it), wrap text in `<overlay text="...">...</overlay>` to display an on-screen TEXT strip (does not affect audio), or wrap text in `<cut>...</cut>` to delete it (larger deletions drop out of the timeline via silence detection)
+1. Run the transcription, audio_silence and text_filter stages: `./scripts/run_pipeline.sh`
+2. Edit `output/audio_silence/{stem}_cuts.txt` — delete a line to keep that span, or adjust the `START - END` times
+3. Edit `output/text_filter/{stem}_edits.txt` — add/modify `{{old->new}}` patch markers, wrap text in `<keep>...</keep>` to force-keep its audio, wrap text in `<speed factor="N.N">...</speed>` to play that region at the given speed in Blender (does not force-keep audio — nest inside `<keep>` to also keep it), wrap text in `<overlay text="...">...</overlay>` to display an on-screen TEXT strip (does not affect audio), or wrap text in `<cut>...</cut>` to delete it (larger deletions drop out of the timeline via silence detection)
 4. Resume: `./scripts/run_pipeline.sh --from-stage intervals --source myvideo.mp4`
 
 The `{{old->new}}` syntax replaces `old` with `new` in the transcript. Use `{{delete->}}` to remove text, `{{->insert}}` to insert text.
@@ -33,19 +33,19 @@ The optional `summary` + `plan` stages run **once over all source videos** (proj
 
 To help the LLMs reason about pacing, the `plan` and `director` stages now also see **calculated durations and in-between gaps**: the `director`'s numbered transcript annotates each line with `[4.2s, gap 0.8s]` (per-sentence duration + gap to the next line) and the `plan`'s per-part context shows each part's duration and gap. These times come from the WhisperX `{stem}.json`, which the `summary` and `director` stages read via a `--json` flag — the pipeline wires this automatically, so you only need it when running a stage on its own.
 
-Before resuming, you can validate your edits in one pass (reports **every** problem at once, with line numbers, instead of failing on the first like Stage 4 does):
+Before resuming, you can validate your edits in one pass (reports **every** problem at once, with line numbers, instead of failing on the first like the intervals stage does):
 
 ```bash
-uv run python -m nagare_clip.stage3.check_edits \
-  --edits-txt output/stage3/myvideo_edits.txt \
-  --json output/stage1/myvideo.json
+uv run python -m nagare_clip.intervals.check_edits \
+  --edits-txt output/text_filter/myvideo_edits.txt \
+  --json output/transcription/myvideo.json
 ```
 
 It checks line-count vs. JSON segments, `{{old->new}}` patch syntax (empty `{{old->}}` deletions are allowed), decomposition integrity against the original transcript, and `<keep>`/`<speed>`/`<overlay>`/`<cut>` tag balance and well-formedness. Exit code is non-zero when any problem is found.
 
-The `<keep>...</keep>` tag preserves the audio under the wrapped text — Stage 4 carves that time range out of both the word-gap silence detection and any overlapping `_cuts.txt` ranges, so dramatic pauses and intentional silences survive. The tag may be opened on one line and closed on a later one, so a single `<keep>` block can span multiple lines and preserve the silences between them. The tag is added by the human (not the LLM) after `_edits.txt` is produced.
+The `<keep>...</keep>` tag preserves the audio under the wrapped text — the intervals stage carves that time range out of both the word-gap silence detection and any overlapping `_cuts.txt` ranges, so dramatic pauses and intentional silences survive. The tag may be opened on one line and closed on a later one, so a single `<keep>` block can span multiple lines and preserve the silences between them. The tag is added by the human (not the LLM) after `_edits.txt` is produced.
 
-The `<speed factor="N.N">...</speed>` tag instructs Stage 5 to play the wrapped region at the given playback speed (e.g., `factor="2.0"` for 2× fast-forward, `factor="0.5"` for slow-motion) via a Blender VSE Speed Control effect strip. Unlike `<keep>`, **it does not force-keep audio** — silence inside a `<speed>` span is still cut by silence detection, and the speed only applies to the surviving spoken parts. To preserve the audio **and** speed it up, nest the tags: `<keep><speed factor="2.0">…</speed></keep>`. Captions inside the region are timed against the sped-up timeline so they stay in sync. Stage 5 also automatically renders a small top-right badge (e.g. `x2.0`) on-screen over every `<speed>` region — disable via `blender.speed_mark.enabled: false`, restyle via `blender.speed_mark.*`, or change the wording via `blender.speed_mark.template` (the `{factor}` placeholder is rendered to one decimal place).
+The `<speed factor="N.N">...</speed>` tag instructs the blender stage to play the wrapped region at the given playback speed (e.g., `factor="2.0"` for 2× fast-forward, `factor="0.5"` for slow-motion) via a Blender VSE Speed Control effect strip. Unlike `<keep>`, **it does not force-keep audio** — silence inside a `<speed>` span is still cut by silence detection, and the speed only applies to the surviving spoken parts. To preserve the audio **and** speed it up, nest the tags: `<keep><speed factor="2.0">…</speed></keep>`. Captions inside the region are timed against the sped-up timeline so they stay in sync. The blender stage also automatically renders a small top-right badge (e.g. `x2.0`) on-screen over every `<speed>` region — disable via `blender.speed_mark.enabled: false`, restyle via `blender.speed_mark.*`, or change the wording via `blender.speed_mark.template` (the `{factor}` placeholder is rendered to one decimal place).
 
 The `<overlay text="...">wrapped transcript words</overlay>` tag places an on-screen TEXT strip in Blender at the wrapped span's time range, with the `text="..."` attribute supplying the on-screen string. Like `<speed>` (and unlike `<keep>`), **it does not force-keep audio** — if the wrapped audio is cut by silence detection, the overlay is silently skipped (there is no timeline content to display it over). The tag may be opened on one line and closed on a later line, so a single overlay can span multiple WhisperX segments; an overlay covering several kept segments (with cut silence between them) displays as one continuous strip across them. Quotes inside the `text="..."` attribute value are not supported. Resume with `./scripts/run_pipeline.sh --from-stage intervals` to apply.
 
@@ -121,14 +121,14 @@ Override the language (default is `ja`):
 Re-run from a specific stage (skip expensive earlier stages when iterating on config):
 
 ```bash
-# Skip Stage 1, reuse WhisperX output, re-run silence detection + edits + intervals + Blender
-./scripts/run_pipeline.sh --from-stage 2 --source myvideo.mp4
+# Skip transcription, reuse WhisperX output, re-run silence detection + edits + intervals + Blender
+./scripts/run_pipeline.sh --from-stage audio_silence --source myvideo.mp4
 
-# Skip Stage 1–3, apply silence cuts + text edits and regenerate intervals + Blender project
-./scripts/run_pipeline.sh --from-stage 4 --source myvideo.mp4
+# Skip through text_filter, apply silence cuts + text edits and regenerate intervals + Blender project
+./scripts/run_pipeline.sh --from-stage intervals --source myvideo.mp4
 
-# Skip Stage 1–4, only regenerate the Blender project
-./scripts/run_pipeline.sh --from-stage 5 --source myvideo.mp4
+# Skip through intervals, only regenerate the Blender project
+./scripts/run_pipeline.sh --from-stage blender --source myvideo.mp4
 ```
 
 Override the alignment model (e.g. to revert to the WhisperX built-in default for Japanese):
@@ -139,11 +139,11 @@ Override the alignment model (e.g. to revert to the WhisperX built-in default fo
 
 This produces outputs under `output/` (or your `--output-dir`), including:
 
-- `stage1/myvideo.json`, `stage1/myvideo.txt`
-- `stage2/myvideo_cuts.txt`
-- `stage3/myvideo_edits.txt`
-- `stage4/myvideo_intervals.json`
-- `stage5/myvideo_edited.blend` (named after the first source file)
+- `transcription/myvideo.json`, `transcription/myvideo.txt`
+- `audio_silence/myvideo_cuts.txt`
+- `text_filter/myvideo_edits.txt`
+- `intervals/myvideo_intervals.json`
+- `blender/myvideo_edited.blend` (named after the first source file)
 
 ## Configuration
 
@@ -161,7 +161,7 @@ Parameters resolve in this priority order (highest wins):
 2. Config file values
 3. Built-in defaults
 
-The config file covers all sections (`general`, `stage1`, `audio_silence`, `stage2`, `stage3`, `stage4`, `pipeline`). The config section names are functional labels, not pipeline-stage numbers: `audio_silence` drives pipeline Stage 2, `stage2.*` drives the Stage 3 text-editing checkpoint, and `stage3.*` drives the Stage 4 interval merge. See `config.example.yml` for the full list of keys and their defaults.
+The config file covers all sections, each named after its stage: `general`, `transcription`, `audio_silence`, `text_filter`, `summary`, `plan`, `director`, `guided_edit`, `intervals`, `blender`, `pipeline`. See `config.example.yml` for the full list of keys and their defaults.
 
 ### Choosing an LLM provider
 
@@ -176,9 +176,9 @@ director:
   api_base: ""       # leave empty for cloud providers
 ```
 
-### Stage 2: Audio-Silence Detection
+### audio_silence: Audio-Silence Detection
 
-Pipeline Stage 2 runs ffmpeg `silencedetect` (inside the whisperx Docker image) on the waveform and writes an editable `{stem}_cuts.txt` cut list. Each non-comment line is a `START - END` silent span (seconds) that will be cut from the video; delete a line to keep that span, or adjust the times. Stage 4 unions these reviewed ranges into its keep-interval excludes. This is acoustic silence — distinct from `stage3.silence_threshold`, which is a WhisperX word-gap heuristic.
+The audio_silence stage runs ffmpeg `silencedetect` (inside the whisperx Docker image) on the waveform and writes an editable `{stem}_cuts.txt` cut list. Each non-comment line is a `START - END` silent span (seconds) that will be cut from the video; delete a line to keep that span, or adjust the times. The intervals stage unions these reviewed ranges into its keep-interval excludes. This is acoustic silence — distinct from `intervals.silence_threshold`, which is a WhisperX word-gap heuristic.
 
 ```yaml
 audio_silence:
@@ -187,12 +187,12 @@ audio_silence:
   min_silence: 0.8    # minimum silence duration to report, seconds
 ```
 
-### Stage 3: Text Editing (LLM optional)
+### text_filter: Text Editing (LLM optional)
 
-The text-editing checkpoint always produces `{stem}_edits.txt`. When `stage2.use_llm` is `false` (default), it copies the Stage 1 `.txt` as-is. When enabled, it runs LLM-based transcription correction and writes output with `{{old->new}}` markers preserved for human review.
+The text-editing checkpoint always produces `{stem}_edits.txt`. When `text_filter.use_llm` is `false` (default), it copies the transcription `.txt` as-is. When enabled, it runs LLM-based transcription correction and writes output with `{{old->new}}` markers preserved for human review.
 
 ```yaml
-stage2:
+text_filter:
   use_llm: true
   provider: "ollama_chat"   # see "Choosing an LLM provider" above
   api_base: ""              # empty -> local Ollama; leave empty for cloud providers
@@ -200,20 +200,20 @@ stage2:
   thinking: "low"   # thinking mode: true/false, or "low"/"medium"/"high" for supported models
 ```
 
-The LLM uses `{{old->new}}` inline patch syntax to mark corrections. Human editors can then review and modify the markers in `_edits.txt` before Stage 4 applies them.
+The LLM uses `{{old->new}}` inline patch syntax to mark corrections. Human editors can then review and modify the markers in `_edits.txt` before the intervals stage applies them.
 
-Human editors can also wrap a span in `<keep>...</keep>` to force-preserve the audio under that text. Stage 4 derives the time range from the first wrapped word's start to the last wrapped word's end and carves it out of both the word-gap silence and any overlapping `_cuts.txt` ranges. The marker may be opened on one line and closed on a later line, so a single `<keep>` block can span multiple WhisperX segments and preserve the silences between them. The marker is added after the LLM filter has produced `_edits.txt`, so the LLM never sees it.
+Human editors can also wrap a span in `<keep>...</keep>` to force-preserve the audio under that text. The intervals stage derives the time range from the first wrapped word's start to the last wrapped word's end and carves it out of both the word-gap silence and any overlapping `_cuts.txt` ranges. The marker may be opened on one line and closed on a later line, so a single `<keep>` block can span multiple WhisperX segments and preserve the silences between them. The marker is added after the LLM filter has produced `_edits.txt`, so the LLM never sees it.
 
-`<speed factor="N.N">...</speed>` is a companion marker carrying a playback-speed annotation. Unlike `<keep>`, it does **not** force-keep audio — its span does not carve silence out of the excludes, so silence inside it is still cut and the speed applies only to the surviving spoken parts (nest inside `<keep>` to preserve the audio too). Stage 4 records each marked span as an entry in a top-level `speed_ranges` array (`{start, end, factor}`) in `_intervals.json`, independent of `keep_intervals`. Stage 5 splits keep intervals at those boundaries, so a `<speed>` span may cover an arbitrary sub-range of a keep interval (or span several), and adds a Blender VSE Speed Control effect strip over each sped-up sub-range so it plays at the requested speed in the final `.blend`. A `speed_ranges` entry that falls entirely on cut content simply matches no surviving interval and is ignored.
+`<speed factor="N.N">...</speed>` is a companion marker carrying a playback-speed annotation. Unlike `<keep>`, it does **not** force-keep audio — its span does not carve silence out of the excludes, so silence inside it is still cut and the speed applies only to the surviving spoken parts (nest inside `<keep>` to preserve the audio too). The intervals stage records each marked span as an entry in a top-level `speed_ranges` array (`{start, end, factor}`) in `_intervals.json`, independent of `keep_intervals`. The blender stage splits keep intervals at those boundaries, so a `<speed>` span may cover an arbitrary sub-range of a keep interval (or span several), and adds a Blender VSE Speed Control effect strip over each sped-up sub-range so it plays at the requested speed in the final `.blend`. A `speed_ranges` entry that falls entirely on cut content simply matches no surviving interval and is ignored.
 
 `thinking` enables chain-of-thought reasoning for supported models (e.g. qwen3, deepseek-r1); it maps to LiteLLM's `reasoning_effort` (best-effort per provider). Set `true`/`false`, or a string level like `"low"`, `"medium"`, `"high"` for models that support granular control (e.g. Qwen 3.5). The pipeline uses only the final answer, not the reasoning trace.
 
 #### Summary LLM (optional)
 
-When `stage2.summary_llm.enabled` is `true`, a separate LLM analyzes the full transcript before filtering to generate a short summary and a list of rare/domain-specific keywords. These are appended to the filter LLM's system prompt so it can better correct mis-dictated words. The summary LLM has its own independent config (model, api_base, temperature, etc.), so you can use a larger model for summarization and a smaller one for filtering.
+When `text_filter.summary_llm.enabled` is `true`, a separate LLM analyzes the full transcript before filtering to generate a short summary and a list of rare/domain-specific keywords. These are appended to the filter LLM's system prompt so it can better correct mis-dictated words. The summary LLM has its own independent config (model, api_base, temperature, etc.), so you can use a larger model for summarization and a smaller one for filtering.
 
 ```yaml
-stage2:
+text_filter:
   use_llm: true
   summary_llm:
     enabled: true
@@ -231,9 +231,9 @@ Falls back gracefully if the summary LLM call fails — filtering proceeds witho
 Options:
 - `--source FILE` — source video file (may be repeated for multiple sources); when omitted, all videos in `--input-videos-dir` are processed alphabetically.
 - `--config FILE` — path to a YAML config file; config values fill in between CLI overrides and built-in defaults.
-- `--language LANG` — ISO 639-1 language code passed to WhisperX (default: `ja`). Also settable via `stage1.language` in config.
-- `--from-stage S` — start from stage `S`, reusing earlier stage outputs. `S` is a stage **name**: `transcription`, `audio_silence`, `text_filter`, `summary`, `plan`, `director`, `guided_edit`, `intervals`, `blender` (legacy numbers 1-5 still work, mapping to transcription/audio_silence/text_filter/intervals/blender). Also settable via `pipeline.from_stage` in config.
-- `--to-stage S` — stop **after** stage `S` (inclusive); later stages are skipped. Same name/legacy-number values as `--from-stage`, and must not precede it. Defaults to `blender` (run to the end). Also settable via `pipeline.to_stage` in config. Combine with `--from-stage` to run a window of stages, e.g. `--from-stage summary --to-stage director`.
+- `--language LANG` — ISO 639-1 language code passed to WhisperX (default: `ja`). Also settable via `transcription.language` in config.
+- `--from-stage NAME` — start from stage `NAME`, reusing earlier stage outputs. `NAME` is a stage name: `transcription`, `audio_silence`, `text_filter`, `summary`, `plan`, `director`, `guided_edit`, `intervals`, `blender`. Also settable via `pipeline.from_stage` in config.
+- `--to-stage NAME` — stop **after** stage `NAME` (inclusive); later stages are skipped. Same stage names as `--from-stage`, and must not precede it. Defaults to `blender` (run to the end). Also settable via `pipeline.to_stage` in config. Combine with `--from-stage` to run a window of stages, e.g. `--from-stage summary --to-stage director`.
 - Defaults: input videos under `src_video/`, outputs under `output/`.
 - If `--source` contains `/`, it is treated as the exact path; otherwise it is resolved inside `--input-videos-dir`.
 - `silence_threshold` and `min_keep` default to `1.5` and `1.0` (overridable via config).
@@ -242,7 +242,7 @@ Options:
 
 ## Stage Commands
 
-### Stage 1 only (WhisperX)
+### transcription only (WhisperX)
 
 ```bash
 docker compose run --rm --user "0:0" whisperx \
@@ -262,7 +262,7 @@ Notes:
 - This image tag does not accept `--word_timestamps`.
 - No diarization flags are used.
 
-### Stage 2 only (audio-silence detection)
+### audio_silence only (audio-silence detection)
 
 ffmpeg runs inside the whisperx image; capture its stderr, then parse it:
 
@@ -271,34 +271,34 @@ INPUT_VIDEOS_DIR=src_video OUTPUT_DIR=output \
 docker compose run --rm --user "0:0" --entrypoint ffmpeg whisperx \
   -hide_banner -nostats -i "myvideo.mp4" \
   -af "silencedetect=noise=-30.0dB:d=0.8" -f null - \
-  >/dev/null 2> output/stage2/myvideo_silencedetect.log
+  >/dev/null 2> output/audio_silence/myvideo_silencedetect.log
 
 uv run python -m nagare_clip.audio_silence.cli \
-  --raw output/stage2/myvideo_silencedetect.log \
-  --output output/stage2/myvideo_cuts.txt \
+  --raw output/audio_silence/myvideo_silencedetect.log \
+  --output output/audio_silence/myvideo_cuts.txt \
   --config my_project.yml
 ```
 
 Omit `--raw` (or set `audio_silence.enabled: false`) to write an empty cut list.
 
-### Stage 4 only (patch application + interval generation)
+### intervals only (patch application + interval generation)
 
 ```bash
-uv run python -m nagare_clip.cli \
-  --edits-txt output/stage3/myvideo_edits.txt \
-  --json output/stage1/myvideo.json \
-  --cuts-txt output/stage2/myvideo_cuts.txt \
+uv run python -m nagare_clip.intervals.cli \
+  --edits-txt output/text_filter/myvideo_edits.txt \
+  --json output/transcription/myvideo.json \
+  --cuts-txt output/audio_silence/myvideo_cuts.txt \
   --config my_project.yml \
-  --output output/stage4/myvideo_intervals.json
+  --output output/intervals/myvideo_intervals.json
 ```
 
 CLI flags override config file values:
 
 ```bash
-uv run python -m nagare_clip.cli \
-  --edits-txt output/stage3/myvideo_edits.txt \
-  --json output/stage1/myvideo.json \
-  --cuts-txt output/stage2/myvideo_cuts.txt \
+uv run python -m nagare_clip.intervals.cli \
+  --edits-txt output/text_filter/myvideo_edits.txt \
+  --json output/transcription/myvideo.json \
+  --cuts-txt output/audio_silence/myvideo_cuts.txt \
   --silence_threshold 1.5 \
   --min_keep 1.0 \
   --keep_pre_margin 1.0 \
@@ -308,25 +308,25 @@ uv run python -m nagare_clip.cli \
   --caption_max_duration 4.0 \
   --caption_min_duration 1.5 \
   --caption_silence_flush 1.5 \
-  --output output/stage4/myvideo_intervals.json
+  --output output/intervals/myvideo_intervals.json
 
 Keep-interval silence detection uses WhisperX word timings (`word.start`/`word.end`) with a per-word max-span cap (0.6s) so inflated token ends do not mask real pauses. Bunsetsu timing uses `ginza.bunsetu_spans(doc)` (GiNZA/spaCy) so particles and auxiliaries are attached to the preceding content word, producing natural subtitle line-break units. It detects large intra-bunsetsu character gaps (> 0.6s) caused by WhisperX misalignment and snaps the bunsetsu start forward to the later character cluster so silence is not hidden inside a single bunsetsu. Caption chunks use bunsetsu-level timing (`end = min(start+0.02s, next_bunsetu_start)`) and are split on detected silence gaps and keep-boundary crossings. Captions are preserved as transcript chunks and the interval stage expands keep intervals to include caption spans so subtitle text is not dropped at the Blender stage, then re-applies minimum keep duration (`--min_keep`) to avoid tiny strips. Tune chunking with `--caption_max_bunsetu`, `--caption_min_bunsetu`, `--caption_max_duration`, `--caption_min_duration`, and `--caption_silence_flush`.
 ```
 
-### Stage 5 only (Blender VSE project)
+### blender only (Blender VSE project)
 
 ```bash
-blender --background --factory-startup --python-exit-code 1 --python src/nagare_clip/stage4/blender_cli.py -- \
+blender --background --factory-startup --python-exit-code 1 --python src/nagare_clip/blender/blender_cli.py -- \
   --source src_video/myvideo.mp4 \
-  --intervals output/stage4/myvideo_intervals.json \
-  --output output/stage5/myvideo_edited.blend \
+  --intervals output/intervals/myvideo_intervals.json \
+  --output output/blender/myvideo_edited.blend \
   --config my_project.yml
 ```
 
 ## Operational Notes
 
 - `scripts/run_pipeline.sh` currently runs WhisperX as root (`--user "0:0"`) for compatibility with this image/runtime.
-- As a result, Stage 1 output files can be root-owned on host.
+- As a result, transcription output files can be root-owned on host.
 - If needed, fix ownership after run:
 
 ```bash

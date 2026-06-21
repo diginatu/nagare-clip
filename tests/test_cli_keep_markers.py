@@ -6,7 +6,7 @@ import sys
 
 import yaml
 
-import nagare_clip.cli as stage_cli
+import nagare_clip.intervals.cli as stage_cli
 
 
 def _whisperx_with_silence():
@@ -33,7 +33,7 @@ def _whisperx_with_silence():
 
 
 def _config(tmp_path):
-    """Stage 4 config with aggressive silence detection and zero margins so
+    """intervals config with aggressive silence detection and zero margins so
     behavior is easy to assert."""
     cfg = tmp_path / "config.yml"
     cfg.write_text(
@@ -65,7 +65,7 @@ def _run(monkeypatch, json_path, edits, cfg, out, cuts=None):
     # Bypass GiNZA bunsetsu parsing — captions aren't asserted in these tests.
     monkeypatch.setattr(stage_cli, "build_bunsetu_times", lambda *a, **k: [])
     argv = [
-        "nagare_clip.cli",
+        "nagare_clip.intervals.cli",
         "--edits-txt",
         str(edits),
         "--json",

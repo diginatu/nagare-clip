@@ -25,8 +25,8 @@ from nagare_clip.llm_report import (
     Recorder,
 )
 from nagare_clip.llm_retry import cfg_for_attempt, retry_attempts
-from nagare_clip.stage2.llm_filter import _call_llm, apply_patches_to_lines
-from nagare_clip.stage3.sync_json import (
+from nagare_clip.text_filter.llm_filter import _call_llm, apply_patches_to_lines
+from nagare_clip.intervals.sync_json import (
     CUT_TAG_RE,
     KEEP_TAG_RE,
     OVERLAY_TAG_RE,

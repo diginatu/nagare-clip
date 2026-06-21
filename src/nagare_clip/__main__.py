@@ -1,6 +1,6 @@
-"""Allow running Stage 3 via ``python -m nagare_clip``."""
+"""Allow running the intervals stage via ``python -m nagare_clip``."""
 
-from nagare_clip.cli import main
+from nagare_clip.intervals.cli import main
 
 if __name__ == "__main__":
     main()

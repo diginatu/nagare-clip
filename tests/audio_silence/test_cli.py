@@ -1,4 +1,4 @@
-"""Tests for the audio_silence Stage 2 CLI."""
+"""Tests for the audio_silence CLI."""
 
 import sys
 
