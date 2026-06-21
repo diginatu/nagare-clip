@@ -23,6 +23,15 @@ LANGFUSE_OTEL_CALLBACK = "langfuse_otel"
 _TRACING_INITIALIZED = False
 
 
+def _tracing_enabled() -> bool:
+    """Whether Langfuse tracing should be active for this process."""
+    if os.environ.get("NAGARE_LANGFUSE", "1") == "0":
+        return False
+    return bool(os.environ.get("LANGFUSE_PUBLIC_KEY")) and bool(
+        os.environ.get("LANGFUSE_SECRET_KEY")
+    )
+
+
 def with_trace_meta(
     cfg: Dict[str, Any],
     *,
