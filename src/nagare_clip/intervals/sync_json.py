@@ -299,7 +299,9 @@ def sync_text_to_json(
         if regions is None:
             raise ValueError(
                 f"Segment {i}: text changed without {{{{old->new}}}} markers; "
-                f"use patch syntax in _edits.txt to indicate changes"
+                f"use patch syntax in _edits.txt to indicate changes\n"
+                f"  original:  {original_text!r}\n"
+                f"  corrected: {corrected!r}"
             )
         if original_words:
             segment["words"] = _sync_segment_with_regions(original_words, regions)

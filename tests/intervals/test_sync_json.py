@@ -81,6 +81,19 @@ class TestSyncTextToJson:
         with pytest.raises(ValueError, match="without.*markers"):
             sync_text_to_json(json_data, ["い"])
 
+    def test_change_without_markers_reports_actual_text(self):
+        """Error includes the original and corrected text values."""
+        words = [_make_word("あ", 0.0, 0.5)]
+        json_data = {
+            "segments": [_make_segment("あ", words)],
+            "word_segments": words,
+        }
+        with pytest.raises(ValueError) as exc_info:
+            sync_text_to_json(json_data, ["い"])
+        message = str(exc_info.value)
+        assert "あ" in message
+        assert "い" in message
+
 
 class TestFineGrainedSync:
     """Tests for fine-grained sync using {{old->new}} edit_lines."""
