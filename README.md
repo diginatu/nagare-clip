@@ -8,13 +8,14 @@ The pipeline creates a rough-cut Blender project for human review and fine-tunin
 
 1. transcription: WhisperX in Docker -> transcript outputs (`json`, `srt`, `vtt`, etc.)
 2. audio_silence: Audio-silence (jump-cut) detection -> `_cuts.txt` editable cut list
-3. text_filter: Text editing checkpoint -> `_edits.txt` (copy of `.txt`, or LLM-corrected with `{{old->new}}` markers)
-4. summary (optional, project-wide): a larger LLM segments every video into line-range parts + summaries and writes one all-videos summary -> reviewable `output/summary/summary.json`
-5. plan (optional, project-wide): a larger LLM gives a coarse, cross-video rough direction per part -> reviewable `output/plan/plan.json`
-6. director (optional): a larger LLM proposes high-level edits -> reviewable `_director.json` op list (fed the summary/plan overview context)
-7. guided_edit (optional): a small LLM applies the director's ops into `_edits.txt` (deterministically verified)
-8. intervals: Patch application + keep intervals -> `*_intervals.json` keep ranges (audio cuts unioned in)
-9. blender: Blender headless -> `.blend` with VSE strips arranged back-to-back
+3. sentence_split (optional): LLM re-segments the transcript into one-sentence-per-line units -> `output/sentence_split/{stem}.json` + `{stem}.txt`; disabled by default (byte-identical copy-through)
+4. text_filter: Text editing checkpoint -> `_edits.txt` (copy of `.txt`, or LLM-corrected with `{{old->new}}` markers)
+5. summary (optional, project-wide): a larger LLM segments every video into line-range parts + summaries and writes one all-videos summary -> reviewable `output/summary/summary.json`
+6. plan (optional, project-wide): a larger LLM gives a coarse, cross-video rough direction per part -> reviewable `output/plan/plan.json`
+7. director (optional): a larger LLM proposes high-level edits -> reviewable `_director.json` op list (fed the summary/plan overview context)
+8. guided_edit (optional): a small LLM applies the director's ops into `_edits.txt` (deterministically verified)
+9. intervals: Patch application + keep intervals -> `*_intervals.json` keep ranges (audio cuts unioned in)
+10. blender: Blender headless -> `.blend` with VSE strips arranged back-to-back
 
 Stages are referenced by name (`--from-stage <name>`); the summary/plan/director/guided_edit stages are no-ops unless enabled in config.
 
@@ -53,7 +54,7 @@ The `<cut>...</cut>` tag deletes the wrapped text. It is a shorthand for `{{wrap
 
 ### LLM report (`output/llm_report/`)
 
-Every LLM stage (`text_filter`, `summary`, `plan`, `director`, `guided_edit`)
+Every LLM stage (`sentence_split`, `text_filter`, `summary`, `plan`, `director`, `guided_edit`)
 writes a per-call record under `output/llm_report/`: an `index.md` table
 (stage, unit, attempts, outcome, reason) linking to per-call detail files under
 `<stage>/<unit>.md` that hold the full prompt and raw response for every attempt,
@@ -193,7 +194,7 @@ Parameters resolve in this priority order (highest wins):
 2. Config file values
 3. Built-in defaults
 
-The config file covers all sections, each named after its stage: `general`, `transcription`, `audio_silence`, `text_filter`, `summary`, `plan`, `director`, `guided_edit`, `intervals`, `blender`, `pipeline`. See `config.example.yml` for the full list of keys and their defaults.
+The config file covers all sections, each named after its stage: `general`, `transcription`, `audio_silence`, `sentence_split`, `text_filter`, `summary`, `plan`, `director`, `guided_edit`, `intervals`, `blender`, `pipeline`. See `config.example.yml` for the full list of keys and their defaults.
 
 ### Choosing an LLM provider
 
@@ -218,6 +219,22 @@ audio_silence:
   noise: -30.0        # ffmpeg silencedetect noise threshold, in dB
   min_silence: 0.8    # minimum silence duration to report, seconds
 ```
+
+### sentence_split: LLM Sentence Re-Segmentation (optional)
+
+The `sentence_split` stage rewrites the WhisperX transcript into one-sentence-per-line units before the text-editing checkpoint. It improves caption readability (each line maps to a complete sentence) and gives downstream LLM stages (director, guided_edit) cleaner line boundaries to reason about. Disabled by default — when `sentence_split.enabled` is `false`, the stage copies `output/transcription/{stem}.{json,txt}` byte-identically into `output/sentence_split/`, so all downstream behaviour is unchanged.
+
+When enabled, the LLM receives a numbered list of GiNZA bunsetsu units (Japanese morpho-syntactic chunks) and returns contiguous bunsetsu-index ranges (`{"sentences":[[0,3],[4,7],…]}`) that map to one sentence each. The stage reconstructs new segments by slicing the original word list at those boundaries — words are only reassigned, never edited, so word timings are preserved and output text is verbatim. Processing is windowed (`sentence_split.window_segments`, default 20 segments per call); each window falls back to the original segmentation independently on LLM failure.
+
+```yaml
+sentence_split:
+  enabled: true
+  provider: "ollama_chat"   # see "Choosing an LLM provider" above
+  model: "gpt-oss:120b"
+  window_segments: 20       # segments per LLM window
+```
+
+Outputs land in `output/sentence_split/{stem}.json` and `output/sentence_split/{stem}.txt`; all downstream stages (text_filter, summary, director, etc.) read from there.
 
 ### text_filter: Text Editing (LLM optional)
 
@@ -264,7 +281,7 @@ Options:
 - `--source FILE` — source video file (may be repeated for multiple sources); when omitted, all videos in `--input-videos-dir` are processed alphabetically.
 - `--config FILE` — path to a YAML config file; config values fill in between CLI overrides and built-in defaults.
 - `--language LANG` — ISO 639-1 language code passed to WhisperX (default: `ja`). Also settable via `transcription.language` in config.
-- `--from-stage NAME` — start from stage `NAME`, reusing earlier stage outputs. `NAME` is a stage name: `transcription`, `audio_silence`, `text_filter`, `summary`, `plan`, `director`, `guided_edit`, `intervals`, `blender`. Also settable via `pipeline.from_stage` in config.
+- `--from-stage NAME` — start from stage `NAME`, reusing earlier stage outputs. `NAME` is a stage name: `transcription`, `audio_silence`, `sentence_split`, `text_filter`, `summary`, `plan`, `director`, `guided_edit`, `intervals`, `blender`. Also settable via `pipeline.from_stage` in config.
 - `--to-stage NAME` — stop **after** stage `NAME` (inclusive); later stages are skipped. Same stage names as `--from-stage`, and must not precede it. Defaults to `blender` (run to the end). Also settable via `pipeline.to_stage` in config. Combine with `--from-stage` to run a window of stages, e.g. `--from-stage summary --to-stage director`.
 - Defaults: input videos under `src_video/`, outputs under `output/`.
 - If `--source` contains `/`, it is treated as the exact path; otherwise it is resolved inside `--input-videos-dir`.
