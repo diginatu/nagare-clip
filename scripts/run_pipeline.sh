@@ -152,7 +152,7 @@ fi
 
 # Canonical stage execution order. Stages are identified only by name, so a new
 # stage can be inserted anywhere without renumbering the others.
-STAGE_ORDER=(transcription audio_silence text_filter summary plan director guided_edit intervals blender)
+STAGE_ORDER=(transcription audio_silence sentence_split text_filter summary plan director guided_edit intervals blender)
 
 stage_index() {  # echo 1-based index of a stage name, or nothing
   local name="$1" i
@@ -193,6 +193,7 @@ past_window() { (( $1 > TO_ORDER )); }
 
 ORD_TRANSCRIPTION="$(stage_index transcription)"
 ORD_AUDIO_SILENCE="$(stage_index audio_silence)"
+ORD_SENTENCE_SPLIT="$(stage_index sentence_split)"
 ORD_TEXT_FILTER="$(stage_index text_filter)"
 ORD_SUMMARY="$(stage_index summary)"
 ORD_PLAN="$(stage_index plan)"
@@ -210,6 +211,7 @@ fi
 
 TRANSCRIPTION_DIR="${OUTPUT_DIR}/transcription"  # WhisperX transcription
 AUDIO_SILENCE_DIR="${OUTPUT_DIR}/audio_silence"  # Audio-silence cut lists
+SENTENCE_SPLIT_DIR="${OUTPUT_DIR}/sentence_split"  # LLM sentence re-segmentation (.json + .txt)
 TEXT_FILTER_DIR="${OUTPUT_DIR}/text_filter"      # Text editing checkpoint (_edits.txt)
 SUMMARY_DIR="${OUTPUT_DIR}/summary"              # Project-wide summaries (summary.json)
 PLAN_DIR="${OUTPUT_DIR}/plan"                    # Cross-video rough directions (plan.json)
@@ -220,7 +222,7 @@ BLENDER_DIR="${OUTPUT_DIR}/blender"              # Blender VSE project (.blend)
 LLM_REPORT_DIR="${OUTPUT_DIR}/llm_report"  # Per-call LLM report (index.md + detail files)
 LOG_FILE="${OUTPUT_DIR}/pipeline.log"
 
-mkdir -p "$INPUT_VIDEOS_DIR" "$TRANSCRIPTION_DIR" "$AUDIO_SILENCE_DIR" "$TEXT_FILTER_DIR" \
+mkdir -p "$INPUT_VIDEOS_DIR" "$TRANSCRIPTION_DIR" "$AUDIO_SILENCE_DIR" "$SENTENCE_SPLIT_DIR" "$TEXT_FILTER_DIR" \
   "$SUMMARY_DIR" "$PLAN_DIR" "$DIRECTOR_DIR" "$GUIDED_DIR" "$INTERVALS_DIR" \
   "$BLENDER_DIR" "$PROJECT_ROOT/cache"
 
@@ -383,6 +385,38 @@ else
   done
 fi
 
+# --- sentence_split: LLM sentence re-segmentation (per source) ---
+# Always runs (copy-through no-op when sentence_split.enabled is false).
+if in_window "$ORD_SENTENCE_SPLIT"; then
+  REPORT_CLEARED_SS=0
+  for STEM in "${ALL_STEMS[@]}"; do
+    REPORT_KEEP_SS=()
+    if (( REPORT_CLEARED_SS )); then REPORT_KEEP_SS+=(--llm-report-no-clear); fi
+    REPORT_CLEARED_SS=1
+    echo "[sentence_split] Sentence re-segmentation: ${STEM}"
+    uv run --project "$PROJECT_ROOT" python -m nagare_clip.sentence_split.cli \
+      --json "${TRANSCRIPTION_DIR}/${STEM}.json" \
+      --txt "${TRANSCRIPTION_DIR}/${STEM}.txt" \
+      --output-json "${SENTENCE_SPLIT_DIR}/${STEM}.json" \
+      --output-txt "${SENTENCE_SPLIT_DIR}/${STEM}.txt" \
+      --stem "${STEM}" \
+      "${CONFIG_ARGS[@]}" \
+      --log-file "$LOG_FILE" \
+      --llm-report-dir "$LLM_REPORT_DIR" \
+      "${REPORT_KEEP_SS[@]}"
+  done
+elif past_window "$ORD_SENTENCE_SPLIT"; then
+  echo "[sentence_split] Skipped (--to-stage $TO_STAGE)"
+else
+  echo "[sentence_split] Skipped (--from-stage $FROM_STAGE)"
+  for STEM in "${ALL_STEMS[@]}"; do
+    if [[ ! -f "${SENTENCE_SPLIT_DIR}/${STEM}.json" || ! -f "${SENTENCE_SPLIT_DIR}/${STEM}.txt" ]]; then
+      echo "Missing sentence_split output: ${SENTENCE_SPLIT_DIR}/${STEM}.{json,txt} (required when skipping sentence_split)" >&2
+      exit 1
+    fi
+  done
+fi
+
 # --- text_filter: Text editing checkpoint (mandatory, per source) ---
 if in_window "$ORD_TEXT_FILTER"; then
   REPORT_CLEARED_TF=0
@@ -393,7 +427,7 @@ if in_window "$ORD_TEXT_FILTER"; then
     REPORT_CLEARED_TF=1
     echo "[text_filter] Text editing checkpoint: ${STEM}"
     uv run --project "$PROJECT_ROOT" python -m nagare_clip.text_filter.cli \
-      --txt "${TRANSCRIPTION_DIR}/${STEM}.txt" \
+      --txt "${SENTENCE_SPLIT_DIR}/${STEM}.txt" \
       --output-txt "${TEXT_FILTER_DIR}/${STEM}_edits.txt" \
       "${CONFIG_ARGS[@]}" \
       --log-file "$LOG_FILE" \
@@ -420,7 +454,7 @@ if in_window "$ORD_SUMMARY"; then
   EDITS_ARGS=()
   for STEM in "${ALL_STEMS[@]}"; do
     EDITS_ARGS+=(--edits-txt "${TEXT_FILTER_DIR}/${STEM}_edits.txt")
-    EDITS_ARGS+=(--json "${TRANSCRIPTION_DIR}/${STEM}.json")
+    EDITS_ARGS+=(--json "${SENTENCE_SPLIT_DIR}/${STEM}.json")
   done
   uv run --project "$PROJECT_ROOT" python -m nagare_clip.summary.cli \
     "${EDITS_ARGS[@]}" \
@@ -473,7 +507,7 @@ if in_window "$ORD_DIRECTOR"; then
       --summary "${SUMMARY_DIR}/summary.json" \
       --plan "${PLAN_DIR}/plan.json" \
       --stem "${STEM}" \
-      --json "${TRANSCRIPTION_DIR}/${STEM}.json" \
+      --json "${SENTENCE_SPLIT_DIR}/${STEM}.json" \
       "${CONFIG_ARGS[@]}" \
       --log-file "$LOG_FILE" \
       --llm-report-dir "$LLM_REPORT_DIR" \
@@ -504,7 +538,7 @@ if in_window "$ORD_GUIDED_EDIT"; then
       --edits-txt "${TEXT_FILTER_DIR}/${STEM}_edits.txt" \
       --director "${DIRECTOR_DIR}/${STEM}_director.json" \
       --output "${GUIDED_DIR}/${STEM}_edits.txt" \
-      --json "${TRANSCRIPTION_DIR}/${STEM}.json" \
+      --json "${SENTENCE_SPLIT_DIR}/${STEM}.json" \
       "${CONFIG_ARGS[@]}" \
       --log-file "$LOG_FILE" \
       --llm-report-dir "$LLM_REPORT_DIR" \
@@ -533,7 +567,7 @@ if in_window "$ORD_INTERVALS"; then
     echo "[intervals] Patch application + keep intervals: ${STEM}"
     uv run --project "$PROJECT_ROOT" python -m nagare_clip.intervals.cli \
       --edits-txt "${GUIDED_DIR}/${STEM}_edits.txt" \
-      --json "${TRANSCRIPTION_DIR}/${STEM}.json" \
+      --json "${SENTENCE_SPLIT_DIR}/${STEM}.json" \
       --cuts-txt "${AUDIO_SILENCE_DIR}/${STEM}_cuts.txt" \
       "${CONFIG_ARGS[@]}" \
       "${INTERVALS_OVERRIDE_ARGS[@]}" \
