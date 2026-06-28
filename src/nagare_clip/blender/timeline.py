@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import os
 
 import bpy
 
@@ -17,6 +18,58 @@ OVERLAY_CHANNEL = 5
 
 def sec_to_frames(seconds: float, fps: float) -> int:
     return int(round(seconds * fps))
+
+
+# caption_style keys that need name mapping or per-call defaults; each placement
+# function applies these explicitly (their defaults differ per feature), so the
+# generic passthrough below skips them.
+_MAPPED_STYLE_KEYS = frozenset(
+    {"font_size", "alignment_x", "anchor_y", "location_x", "location_y"}
+)
+
+
+def _load_font(path: object) -> object:
+    """Load a VectorFont datablock from an absolute filepath (hard error).
+
+    The Blender TextStrip ``font`` attribute is a ``VectorFont`` datablock, not
+    a path string, so a configured ``font`` must be loaded first. The path must
+    be absolute and exist; anything else raises (the blender stage fails loudly
+    rather than silently rendering the default font). ``check_existing=True``
+    dedupes the datablock when several strips/sources share the same font.
+    """
+    if not isinstance(path, str) or not os.path.isabs(path):
+        raise ValueError(
+            f"caption_style 'font' must be an absolute filepath, got: {path!r}"
+        )
+    if not os.path.isfile(path):
+        raise FileNotFoundError(f"caption_style 'font' not found: {path!r}")
+    return bpy.data.fonts.load(path, check_existing=True)
+
+
+def apply_text_style(text_strip: object, style: dict) -> None:
+    """Forward arbitrary caption_style keys to matching TextStrip attributes.
+
+    Every key not in ``_MAPPED_STYLE_KEYS`` (those are handled by the caller with
+    per-feature defaults) is set 1:1 on the strip, so any Blender TextStrip
+    attribute (``shadow_color``, ``shadow_offset``, ``shadow_blur``,
+    ``box_margin``, ...) can be styled from config with no code change. A key
+    that is not a valid strip attribute raises ``AttributeError`` (Blender RNA
+    rejects unknown properties on assignment); it is logged and skipped.
+
+    ``font`` is special-cased: its value is an absolute filepath loaded into a
+    ``VectorFont`` datablock (a bare ``setattr`` would reject the string); see
+    ``_load_font`` — an invalid/missing path raises (hard error).
+    """
+    for key, value in style.items():
+        if key in _MAPPED_STYLE_KEYS:
+            continue
+        if key == "font":
+            text_strip.font = _load_font(value)
+            continue
+        try:
+            setattr(text_strip, key, value)
+        except AttributeError:
+            logging.warning("Unknown caption_style key ignored: %s", key)
 
 
 def split_intervals_by_speed(keep_intervals: list, speed_ranges: list) -> list:
@@ -427,22 +480,7 @@ def place_captions(
         text_strip.anchor_y = style.get("anchor_y", "BOTTOM")
         text_strip.location[0] = style.get("location_x", 0.5)
         text_strip.location[1] = style.get("location_y", 0.05)
-        if "color" in style:
-            text_strip.color = style["color"]
-        if "use_shadow" in style:
-            text_strip.use_shadow = style["use_shadow"]
-        if "wrap_width" in style:
-            text_strip.wrap_width = style["wrap_width"]
-        if "use_outline" in style:
-            text_strip.use_outline = style["use_outline"]
-        if "outline_color" in style:
-            text_strip.outline_color = style["outline_color"]
-        if "outline_width" in style:
-            text_strip.outline_width = style["outline_width"]
-        if "use_box" in style:
-            text_strip.use_box = style["use_box"]
-        if "box_color" in style:
-            text_strip.box_color = style["box_color"]
+        apply_text_style(text_strip, style)
         logging.debug(
             "Caption '%s': timeline frames %d-%d",
             text[:40],
@@ -519,22 +557,7 @@ def place_overlays(
         text_strip.anchor_y = style.get("anchor_y", "TOP")
         text_strip.location[0] = style.get("location_x", 0.5)
         text_strip.location[1] = style.get("location_y", 0.95)
-        if "color" in style:
-            text_strip.color = style["color"]
-        if "use_shadow" in style:
-            text_strip.use_shadow = style["use_shadow"]
-        if "wrap_width" in style:
-            text_strip.wrap_width = style["wrap_width"]
-        if "use_outline" in style:
-            text_strip.use_outline = style["use_outline"]
-        if "outline_color" in style:
-            text_strip.outline_color = style["outline_color"]
-        if "outline_width" in style:
-            text_strip.outline_width = style["outline_width"]
-        if "use_box" in style:
-            text_strip.use_box = style["use_box"]
-        if "box_color" in style:
-            text_strip.box_color = style["box_color"]
+        apply_text_style(text_strip, style)
         logging.debug(
             "Overlay '%s': timeline frames %d-%d", text[:40], tl_start, tl_end
         )
@@ -608,22 +631,7 @@ def place_speed_marks(
         text_strip.anchor_y = style.get("anchor_y", "TOP")
         text_strip.location[0] = style.get("location_x", 0.95)
         text_strip.location[1] = style.get("location_y", 0.95)
-        if "color" in style:
-            text_strip.color = style["color"]
-        if "use_shadow" in style:
-            text_strip.use_shadow = style["use_shadow"]
-        if "wrap_width" in style:
-            text_strip.wrap_width = style["wrap_width"]
-        if "use_outline" in style:
-            text_strip.use_outline = style["use_outline"]
-        if "outline_color" in style:
-            text_strip.outline_color = style["outline_color"]
-        if "outline_width" in style:
-            text_strip.outline_width = style["outline_width"]
-        if "use_box" in style:
-            text_strip.use_box = style["use_box"]
-        if "box_color" in style:
-            text_strip.box_color = style["box_color"]
+        apply_text_style(text_strip, style)
         logging.debug(
             "Speed mark '%s': timeline frames %d-%d", text, tl_start, tl_start + length
         )

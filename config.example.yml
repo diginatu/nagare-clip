@@ -173,6 +173,9 @@ blender:
   use_proxy: true              # Enable proxy on movie strips for smooth VSE playback (bpy MovieStrip.use_proxy)
   proxy_size: 100              # Proxy render size percentage: 25 | 50 | 75 | 100
   caption_style:
+    # font: /abs/path/to/MyFont.ttf  # Absolute path to a font file; loaded as a
+    #                                # Blender VectorFont. Must be absolute and
+    #                                # exist or the blender stage errors out.
     font_size: 50
     alignment_x: CENTER        # LEFT | CENTER | RIGHT
     anchor_y: BOTTOM           # TOP | CENTER | BOTTOM
@@ -186,6 +189,12 @@ blender:
     # outline_width: 1.0          # Outline width
     # use_box: false              # Enable background box behind text
     # box_color: [0, 0, 0, 0.5]  # Box color (RGBA, 0.0 - 1.0)
+    # Any other key here is forwarded verbatim to the Blender TextStrip
+    # attribute of the same name (see bpy.types.TextStrip), so you can set
+    # arbitrary font settings without code changes, e.g.:
+    # shadow_color: [0, 0, 0, 1]  # shadow_offset / shadow_blur / shadow_angle
+    # box_margin: 0.05            # box_roundness, ...
+    # An unknown key (not a real TextStrip attribute) is logged and skipped.
   # Overlay TEXT strip style for <overlay text="..."> markers in _edits.txt.
   # Any field not set here is inherited from caption_style.
   overlay_style:
