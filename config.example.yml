@@ -86,6 +86,26 @@ summary:
   # prompt: "..."              # Per-video segment+summarise prompt (has a sensible default)
   # overall_prompt: "..."      # All-videos reduce prompt (has a sensible default)
 
+# sentence_split stage: runs per source between audio_silence and text_filter.
+# An LLM re-segments the WhisperX transcript into one-sentence-per-line units
+# (rewriting {stem}.json and {stem}.txt). Disabled by default = byte-identical
+# copy-through (no behaviour change).
+sentence_split:
+  enabled: false               # Enable LLM sentence re-segmentation
+  provider: "ollama_chat"      # LiteLLM provider prefix: ollama_chat | openai | gemini | anthropic
+  api_base: ""                 # Base URL; empty -> Ollama localhost default; leave empty for cloud providers
+  model: "gpt-oss:120b"        # Model (passed to LiteLLM as "<provider>/<model>")
+  api_key: ""                  # API key for the provider (or set the provider's env var)
+  temperature: 0.2
+  thinking: false
+  timeout: 300
+  response_format: "json"
+  max_retries: 2               # Extra attempts on LLM error / invalid ranges (0 = single attempt)
+  retry_temp_step: 0.2
+  retry_temp_cap: 0.8
+  window_segments: 20          # Segments per LLM window
+  # prompt: "..."              # Bunsetsu-grouping prompt (has a sensible default)
+
 # plan stage: runs once project-wide after summary, before director. A larger
 # LLM reads the per-part summaries (with line ranges) of all videos and gives a
 # coarse, cross-video editorial direction per part (remove / shorten / speed /

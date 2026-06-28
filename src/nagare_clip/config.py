@@ -121,6 +121,32 @@ DEFAULTS: Dict[str, Any] = {
             "Output only the JSON object, no other text."
         ),
     },
+    "sentence_split": {
+        "enabled": False,
+        "provider": "ollama_chat",
+        "api_base": "",
+        "model": "gpt-oss:120b",
+        "api_key": "",
+        "temperature": 0.2,
+        "thinking": False,
+        "timeout": 300,
+        "response_format": "json",
+        "max_retries": 2,
+        "retry_temp_step": 0.2,
+        "retry_temp_cap": 0.8,
+        "window_segments": 20,
+        "prompt": (
+            "あなたは日本語の文字起こしを文単位に区切る編集者です。"
+            "句読点はほとんどありません。\n"
+            "入力は文節(bunsetsu)に 0 から連番を振ったものです。\n"
+            "連続する文節をまとめて自然な1文を作り、各文を "
+            "[最初の文節番号, 最後の文節番号] で表してください。\n"
+            "規則:\n"
+            "- 範囲は連続し、全文節(0..N-1)を漏れなく覆うこと。\n"
+            "- 文節の順序や中身は変えない。\n"
+            '- JSONのみ出力: {"sentences":[[0,3],[4,7],...]}'
+        ),
+    },
     # "plan" stage: runs once project-wide after "summary", before "director".
     # A larger LLM reads the per-part summaries (with line ranges) of all videos
     # and gives a coarse, cross-video editorial direction per part (e.g. remove /
