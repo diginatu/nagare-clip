@@ -23,6 +23,39 @@ DEFAULTS: Dict[str, Any] = {
         "align_model": "",
         "language": "ja",
     },
+    "audio_silence": {
+        "enabled": True,
+        "noise": -30.0,
+        "min_silence": 0.8,
+    },
+    "sentence_split": {
+        "enabled": False,
+        "provider": "ollama_chat",
+        "api_base": "",
+        "model": "gpt-oss:120b",
+        "api_key": "",
+        "temperature": 0.2,
+        "thinking": False,
+        "timeout": 300,
+        "response_format": "json",
+        "max_retries": 2,
+        "retry_temp_step": 0.2,
+        "retry_temp_cap": 0.8,
+        "window_segments": 20,
+        "prompt": (
+            "You split a Japanese transcript into sentence units. The transcript "
+            "has little or no punctuation.\n"
+            "The input is a sequence of bunsetsu (Japanese phrase units) numbered "
+            "from 0, given as `index:surface` tokens.\n"
+            "Group consecutive bunsetsu into natural sentences, and represent each "
+            "sentence as [first bunsetsu index, last bunsetsu index].\n"
+            "Rules:\n"
+            "- Ranges must be contiguous and cover every bunsetsu (0..N-1) with no "
+            "gaps or overlaps.\n"
+            "- Do not change the order or content of the bunsetsu.\n"
+            '- Output ONLY JSON: {"sentences":[[0,3],[4,7],...]}'
+        ),
+    },
     "text_filter": {
         "use_llm": False,
         "provider": "ollama_chat",
@@ -251,11 +284,6 @@ DEFAULTS: Dict[str, Any] = {
             "and close it on the last line.\n"
             "- Output the same numbered lines, nothing else."
         ),
-    },
-    "audio_silence": {
-        "enabled": True,
-        "noise": -30.0,
-        "min_silence": 0.8,
     },
     "intervals": {
         "silence_threshold": 1.5,

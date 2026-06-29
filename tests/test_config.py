@@ -269,3 +269,14 @@ def test_llm_sections_default_provider_and_empty_api_base():
 def test_general_langfuse_defaults_true():
     cfg = get_effective_config(None, {})
     assert cfg["general"]["langfuse"] is True
+
+
+def test_sentence_split_defaults_present():
+    from nagare_clip.config import get_effective_config
+    cfg = get_effective_config(None, {})
+    sp = cfg["sentence_split"]
+    assert sp["enabled"] is False
+    assert sp["window_segments"] == 20
+    assert sp["max_retries"] == 2
+    assert sp["response_format"] == "json"
+    assert isinstance(sp["prompt"], str) and sp["prompt"]

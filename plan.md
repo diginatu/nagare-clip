@@ -1,5 +1,11 @@
 # nagare-clip — Implementation Status
 
+## sentence_split Stage
+
+**Status: complete** (branch `sentence-split-stage`, Tasks 1–7; design in `docs/superpowers/specs/2026-06-29-sentence-split-stage-design.md`).
+
+The `sentence_split` stage sits between `audio_silence` and `text_filter` and is disabled by default (byte-identical copy-through when `sentence_split.enabled: false`). When enabled, it rewrites the WhisperX `{stem}.json` + `{stem}.txt` into one-sentence-per-line units using a **bunsetsu-index-range approach**: the LLM receives a numbered list of GiNZA bunsetsu units and returns contiguous index ranges (`{"sentences":[[a,b],…]}`), which the stage maps back to whole-word boundaries via `char2word` and uses to reassemble segments from the original word list. Words are only reassigned, never edited, so word timings are verbatim by construction. A final `concat_word_text` check guards the verbatim invariant. Processing is windowed (`window_segments`, default 20) for long transcripts; each window degrades independently on LLM failure. All downstream stages read from `output/sentence_split/`.
+
 ## Langfuse LLM Tracing
 
 **Status: complete** (branch `feat/langfuse-tracing`, Tasks 1–9 committed; Task 10 docs).

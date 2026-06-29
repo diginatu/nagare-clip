@@ -8,20 +8,22 @@ Maintain and improve a multi-stage rough-cut pipeline:
 
 1. WhisperX transcription in Docker
 2. Audio-silence (jump-cut) detection — ffmpeg `silencedetect`, editable cut list
-3. Text editing checkpoint — copies `.txt` or runs LLM filter with `{{old->new}}` markers
-4. summary — a larger LLM segments every video into line-range parts + summaries and writes one all-videos summary (project-wide)
-5. plan — a larger LLM gives coarse, cross-video rough directions per part (project-wide)
-6. director — a larger LLM proposes high-level edits (cut/speed/overlay/keep/edit) as a reviewable JSON op list (fed the summary/plan overview context)
-7. guided_edit — a small LLM applies the director's ops into `_edits.txt`, deterministically verified
-8. Patch application + keep-interval computation in Python (audio cuts unioned in)
-9. Blender VSE auto-layout in headless mode
+3. LLM sentence re-segmentation — rewrites `{stem}.json`/`{stem}.txt` into one-sentence-per-line units (disabled by default)
+4. Text editing checkpoint — copies `.txt` or runs LLM filter with `{{old->new}}` markers
+5. summary — a larger LLM segments every video into line-range parts + summaries and writes one all-videos summary (project-wide)
+6. plan — a larger LLM gives coarse, cross-video rough directions per part (project-wide)
+7. director — a larger LLM proposes high-level edits (cut/speed/overlay/keep/edit) as a reviewable JSON op list (fed the summary/plan overview context)
+8. guided_edit — a small LLM applies the director's ops into `_edits.txt`, deterministically verified
+9. Patch application + keep-interval computation in Python (audio cuts unioned in)
+10. Blender VSE auto-layout in headless mode
 
 Final deliverable is a `.blend` project for human editing.
 
 > **Naming convention:** Stages are identified only by their **functional /
 > config-section name** — there are no stage numbers anywhere. The canonical
-> identifiers are: `transcription:`, `audio_silence:`, `text_filter:`,
-> `summary:`, `plan:`, `director:`, `guided_edit:`, `intervals:`, `blender:`.
+> identifiers are: `transcription:`, `audio_silence:`, `sentence_split:`,
+> `text_filter:`, `summary:`, `plan:`, `director:`, `guided_edit:`,
+> `intervals:`, `blender:`.
 > Package dirs (`src/nagare_clip/<name>/`), `output/<name>/` subdirs, and
 > `run_pipeline.sh --from-stage`/`--to-stage` all use these same names. A new
 > stage can be inserted anywhere without renumbering the others.
@@ -43,6 +45,13 @@ Runs ffmpeg `silencedetect` on the waveform inside the whisperx Docker image (mi
 
 - **Inputs:** source video file
 - **Outputs:** `{stem}_cuts.txt` (one `START - END` silent span per line; delete a line to keep that span)
+
+### sentence_split — LLM Sentence Re-Segmentation
+
+An LLM (config `sentence_split:`, disabled by default) rewrites a WhisperX transcript into one-sentence-per-line units per source. Rather than emitting text, the LLM returns **bunsetsu-index ranges** (`{"sentences":[[a,b],…]}`): each range identifies a contiguous span of GiNZA bunsetsu units that form one sentence. `segment.rebuild_window_segments()` slices the original word list at bunsetsu char boundaries (snapped to whole-word boundaries via `char2word`), assembling new segments from the existing words — so word timings are preserved and output text is verbatim by construction. A final concat check (`concat_word_text` before/after) guards against any boundary-rounding discrepancy; if it fails the original segmentation is kept for that window. Processing is windowed (`sentence_split.window_segments`, default 20 segments per LLM call) so long transcripts fit in context; each window degrades independently on LLM failure (returning the original window segments unchanged). Disabled → byte-identical copy-through of `output/transcription/{stem}.{json,txt}`.
+
+- **Inputs:** `{stem}.json` (word timings), `{stem}.txt` (plain text) from transcription
+- **Outputs:** re-segmented `{stem}.json` + `{stem}.txt` in `output/sentence_split/`
 
 ### text_filter — Text Editing Checkpoint (mandatory)
 
@@ -133,6 +142,11 @@ src/nagare_clip/          # Main Python package (src layout)
     detect.py                 # parse_silencedetect_output(), build_ffmpeg_args() (pure)
     cuts_file.py              # write_cuts() / read_cuts() — editable cut-list format
     cli.py                    # audio_silence stage CLI (consumes --raw ffmpeg stderr)
+  sentence_split/             # sentence_split stage (LLM re-segmentation)
+    segment.py                # pure: windowing, char/word map, rebuild_window_segments, verbatim check
+    nlp.py                    # GiNZA bunsetsu extraction (lazy import)
+    llm.py                    # prompt + bunsetsu-range parse/validate + retry/degrade
+    cli.py                    # stage CLI (copy-through when disabled)
   text_filter/                # text_filter stage modules (text editing checkpoint)
     cli.py                    # text-editing checkpoint CLI entry point
     llm_filter.py             # LLM API calls, {{old->new}} patch parsing, apply_patches_to_lines()
@@ -173,6 +187,7 @@ tests/
   test_cli_keep_markers.py    # <keep>...</keep> force-keep markers (CLI integration)
   test_cli_cut_marker.py      # <cut>...</cut> deletion → silence-gap cut (CLI integration)
   audio_silence/              # audio_silence (detect / cuts_file / cli) unit tests
+  sentence_split/             # sentence_split unit + CLI tests
   text_filter/                # text-editing checkpoint unit tests
   summary/                    # summary segment/build + CLI tests
   plan/                       # plan generate/parse + CLI tests
@@ -192,7 +207,7 @@ All tunable parameters are centralised in `src/nagare_clip/config.py`:
 
 **Priority order (highest first):** CLI flags > YAML config file > built-in defaults.
 
-All LLM stages (`text_filter` + its `summary_llm`, `summary`, `plan`, `director`, `guided_edit`) route through `nagare_clip.llm_client.call_llm` (LiteLLM). Each block selects its backend with a `provider` key (default `ollama_chat`); the model id sent to LiteLLM is `"<provider>/<model>"`. An empty `api_base` falls back to `http://localhost:11434` for an ollama provider, or is omitted for a cloud provider. `api_key` is forwarded when set (or use the provider's env var). `response_format: "json"` maps to a JSON-object request; `thinking` maps to LiteLLM `reasoning_effort` (best-effort per provider).
+All LLM stages (`sentence_split`, `text_filter` + its `summary_llm`, `summary`, `plan`, `director`, `guided_edit`) route through `nagare_clip.llm_client.call_llm` (LiteLLM). Each block selects its backend with a `provider` key (default `ollama_chat`); the model id sent to LiteLLM is `"<provider>/<model>"`. An empty `api_base` falls back to `http://localhost:11434` for an ollama provider, or is omitted for a cloud provider. `api_key` is forwarded when set (or use the provider's env var). `response_format: "json"` maps to a JSON-object request; `thinking` maps to LiteLLM `reasoning_effort` (best-effort per provider).
 
 `intervals/cli.py`, `audio_silence/cli.py`, and `blender/blender_cli.py` all accept a `--config <path>` flag, passed through by `scripts/run_pipeline.sh` when `--config` is provided.
 
@@ -226,7 +241,8 @@ All LLM stages (`text_filter` + its `summary_llm`, `summary`, `plan`, `director`
 
 ### Pipeline orchestration
 
-- `run_pipeline.sh` discovers videos (`mp4/mkv/mov/avi/webm`) alphabetically in `INPUT_VIDEOS_DIR` when `--source` is omitted (repeatable). `--from-stage`/`--to-stage` take a stage name; the window is enforced by `STAGE_ORDER`/`in_window`/`past_window`, skipping earlier stages validates required outputs exist, and `--from-stage` after `--to-stage` errors. (`stage_index` deliberately returns success even for an unknown name, so under `set -e` an invalid stage reaches its own friendly error message instead of aborting silently.) Also configurable via `pipeline.from_stage`/`to_stage`. Output dirs are one per stage by name: `output/transcription|audio_silence|text_filter|summary|plan|director|guided_edit|intervals|blender/`.
+- `run_pipeline.sh` discovers videos (`mp4/mkv/mov/avi/webm`) alphabetically in `INPUT_VIDEOS_DIR` when `--source` is omitted (repeatable). `--from-stage`/`--to-stage` take a stage name; the window is enforced by `STAGE_ORDER`/`in_window`/`past_window`, skipping earlier stages validates required outputs exist, and `--from-stage` after `--to-stage` errors. (`stage_index` deliberately returns success even for an unknown name, so under `set -e` an invalid stage reaches its own friendly error message instead of aborting silently.) Also configurable via `pipeline.from_stage`/`to_stage`. Output dirs are one per stage by name: `output/transcription|audio_silence|sentence_split|text_filter|summary|plan|director|guided_edit|intervals|blender/`.
+- `sentence_split` **always runs** per source (copy-through when disabled), so `output/sentence_split/{stem}.json` and `output/sentence_split/{stem}.txt` always exist. All downstream `.json`/`.txt` consumers (`text_filter`, `summary`, `director`, `guided_edit`, `intervals`) read from `output/sentence_split/` rather than `output/transcription/`.
 - `summary`/`plan`/`director`/`guided_edit` **always run** (cheap no-ops when disabled), so `output/guided_edit/{stem}_edits.txt` always exists for the intervals stage; `summary`/`plan` run once project-wide, the other two loop per source. WhisperX (transcription) also runs in a single container for all sources to avoid model-reload overhead; the remaining per-source stages still loop afterwards.
 - `timing.py` is a pure helper (`segment_times()`, `format_dur_gap()`) used by `summary` (per-part `start`/`end`) and `director` (per-line `[dur, gap]` annotations); `plan` reads the precomputed times from `summary.json` rather than touching JSON itself. `run_pipeline.sh` passes `--json` to both the summary and director stages.
 - All LLM stages record every attempt (prompt, raw response, retries, outcome, plus call config like `model`/`thinking`) via `llm_report.Recorder` into `output/llm_report/` (config `general.llm_report`/`llm_report_dir`); each stage CLI clears its own subdir, passes the recorder through (default `NULL_RECORDER` keeps functions testable), and rebuilds `index.md` from front-matter. Outcomes: ok / ok-empty / llm-error / unparseable / verify-fail / dropped-items (the last surfaces previously-silent per-item drop warnings with counts).
