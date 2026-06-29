@@ -79,6 +79,12 @@ def resegment_json(
     return out
 
 
+def _copy_through(src_json: str, src_txt: str, out_json: Path, out_txt: Path) -> None:
+    """Copy the transcription ``.json``/``.txt`` through byte-identically."""
+    shutil.copyfile(src_json, out_json)
+    shutil.copyfile(src_txt, out_txt)
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description="sentence_split stage: LLM re-segmentation of a WhisperX transcript."
@@ -124,38 +130,36 @@ def main() -> None:
     out_json.parent.mkdir(parents=True, exist_ok=True)
     out_txt.parent.mkdir(parents=True, exist_ok=True)
 
-    if not sp_cfg.get("enabled", False):
-        logging.info("sentence_split: disabled, copying %s through", args.stem)
-        shutil.copyfile(args.json, out_json)
-        shutil.copyfile(args.txt, out_txt)
+    try:
+        if not sp_cfg.get("enabled", False):
+            logging.info("sentence_split: disabled, copying %s through", args.stem)
+            _copy_through(args.json, args.txt, out_json, out_txt)
+            return
+
+        json_data = json.loads(Path(args.json).read_text(encoding="utf-8"))
+        nlp = load_nlp()
+        new_data = resegment_json(
+            json_data, sp_cfg, nlp, recorder=recorder, stem=args.stem
+        )
+
+        if new_data is json_data:
+            # verbatim violation already logged; copy through for safety
+            _copy_through(args.json, args.txt, out_json, out_txt)
+            return
+
+        out_json.write_text(
+            json.dumps(new_data, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
+        )
+        out_txt.write_text(
+            "\n".join(seg.get("text", "") for seg in new_data["segments"]) + "\n",
+            encoding="utf-8",
+        )
+        logging.info(
+            "sentence_split: %s %d -> %d segments",
+            args.stem, len(json_data.get("segments", [])), len(new_data["segments"]),
+        )
+    finally:
         recorder.rebuild_index()
-        return
-
-    json_data = json.loads(Path(args.json).read_text(encoding="utf-8"))
-    nlp = load_nlp()
-    new_data = resegment_json(
-        json_data, sp_cfg, nlp, recorder=recorder, stem=args.stem
-    )
-
-    if new_data is json_data:
-        # verbatim violation already logged; copy through for safety
-        shutil.copyfile(args.json, out_json)
-        shutil.copyfile(args.txt, out_txt)
-        recorder.rebuild_index()
-        return
-
-    out_json.write_text(
-        json.dumps(new_data, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
-    )
-    out_txt.write_text(
-        "\n".join(seg.get("text", "") for seg in new_data["segments"]) + "\n",
-        encoding="utf-8",
-    )
-    logging.info(
-        "sentence_split: %s %d -> %d segments",
-        args.stem, len(json_data.get("segments", [])), len(new_data["segments"]),
-    )
-    recorder.rebuild_index()
 
 
 if __name__ == "__main__":
