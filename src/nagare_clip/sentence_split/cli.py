@@ -27,6 +27,7 @@ from nagare_clip.sentence_split.segment import (
     concat_word_text,
     iter_windows,
     rebuild_window_segments,
+    segment_from_words,
     window_text_and_words,
 )
 
@@ -46,25 +47,45 @@ def resegment_json(
     segments = json_data.get("segments", [])
     window = int(sp_cfg.get("window_segments", 20))
     new_segments = []
-    for base, win in iter_windows(segments, window):
-        text, words = window_text_and_words(win)
+    # The trailing (possibly incomplete) sentence of each window is carried into
+    # the next window so a sentence straddling a window boundary is re-grouped
+    # with its continuation rather than forced to split at the seam.
+    carry_words: list = []
+    windows = list(iter_windows(segments, window))
+    for idx, (base, win) in enumerate(windows):
+        is_last = idx == len(windows) - 1
+        _, win_words = window_text_and_words(win)
+        carried_in = carry_words
+        words = carried_in + win_words
+        text = "".join(str(w.get("word", "")) for w in words)
+        carry_words = []
         if not text:
             new_segments.extend(win)
             continue
         bunsetsu = bunsetsu_units(text, nlp)
-        if not bunsetsu:
-            new_segments.extend(win)
-            continue
-        ranges = split_window(
-            bunsetsu, sp_cfg, recorder=recorder, unit=f"{stem}.w{base + 1}"
+        ranges = (
+            split_window(
+                bunsetsu, sp_cfg, recorder=recorder, unit=f"{stem}.w{base + 1}"
+            )
+            if bunsetsu
+            else None
         )
         if ranges is None:
+            # Degrade: finalize anything carried in, then keep the window's
+            # original segments so the fallback stays local and lossless.
+            if carried_in:
+                new_segments.append(segment_from_words(carried_in))
             new_segments.extend(win)
             continue
         char2word = char_to_word_index(words)
-        new_segments.extend(
-            rebuild_window_segments(words, bunsetsu, ranges, char2word)
-        )
+        rebuilt = rebuild_window_segments(words, bunsetsu, ranges, char2word)
+        if not is_last and len(rebuilt) > 1:
+            # Hold back the trailing sentence for the next window; emit the rest.
+            carry_words = rebuilt[-1].get("words", [])
+            new_segments.extend(rebuilt[:-1])
+        else:
+            # Single-sentence window (or the last window): accept as-is.
+            new_segments.extend(rebuilt)
 
     if concat_word_text(new_segments) != concat_word_text(segments):
         logging.error(

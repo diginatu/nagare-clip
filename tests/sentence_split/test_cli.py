@@ -45,6 +45,75 @@ def test_resegment_degraded_window_keeps_original(monkeypatch):
     assert [s["text"] for s in out["segments"]] == ["あいうえお", "かきくけこ"]
 
 
+def _stub_bunsetsu(monkeypatch):
+    monkeypatch.setattr(ss_cli, "bunsetsu_units",
+                        lambda text, nlp: [(i, i + 1, ch) for i, ch in enumerate(text)])
+
+
+def _surface(bunsetsu):
+    return "".join(s for _, _, s in bunsetsu)
+
+
+def test_carry_over_merges_sentence_across_window_boundary(monkeypatch):
+    # window_segments=2 -> win1=[あい, うえ], win2=[お].  The sentence うえお
+    # straddles the seam; carry-over must rejoin it.
+    data = {"language": "ja", "segments": [_seg("あい", 0), _seg("うえ", 2), _seg("お", 4)]}
+    _stub_bunsetsu(monkeypatch)
+
+    def split(bunsetsu, cfg, **kw):
+        s = _surface(bunsetsu)
+        if s == "あいうえ":
+            return [(0, 1), (2, 3)]  # あい | うえ  -> carry うえ
+        if s == "うえお":
+            return [(0, 2)]          # うえお as one sentence
+        raise AssertionError(f"unexpected surface {s!r}")
+
+    monkeypatch.setattr(ss_cli, "split_window", split)
+    out = ss_cli.resegment_json(data, {"enabled": True, "window_segments": 2},
+                                nlp=None, recorder=ss_cli.NULL_RECORDER, stem="x")
+    assert [s["text"] for s in out["segments"]] == ["あい", "うえお"]
+    assert concat_word_text(out["segments"]) == "あいうえお"
+
+
+def test_single_sentence_window_is_not_carried(monkeypatch):
+    # window_segments=1; each window comes back as one sentence -> no carry,
+    # the boundary is accepted as a real break (run-on guard).
+    data = {"language": "ja", "segments": [_seg("あい", 0), _seg("うえ", 2)]}
+    _stub_bunsetsu(monkeypatch)
+
+    def split(bunsetsu, cfg, **kw):
+        s = _surface(bunsetsu)
+        if s in ("あい", "うえ"):
+            return [(0, 1)]
+        if s == "あいうえ":  # only reached if the guard is wrongly removed
+            return [(0, 3)]
+        raise AssertionError(f"unexpected surface {s!r}")
+
+    monkeypatch.setattr(ss_cli, "split_window", split)
+    out = ss_cli.resegment_json(data, {"enabled": True, "window_segments": 1},
+                                nlp=None, recorder=ss_cli.NULL_RECORDER, stem="x")
+    assert [s["text"] for s in out["segments"]] == ["あい", "うえ"]
+    assert concat_word_text(out["segments"]) == "あいうえ"
+
+
+def test_degraded_window_flushes_carried_sentence(monkeypatch):
+    # win1 re-splits across the seg boundary (あ | いうえ) and carries いうえ;
+    # win2 degrades (None) and must flush the carried sentence, not drop it.
+    data = {"language": "ja", "segments": [_seg("あい", 0), _seg("うえ", 2), _seg("お", 4)]}
+    _stub_bunsetsu(monkeypatch)
+
+    def split(bunsetsu, cfg, **kw):
+        if _surface(bunsetsu) == "あいうえ":
+            return [(0, 0), (1, 3)]  # あ | いうえ -> carry いうえ
+        return None                  # win2 degrades
+
+    monkeypatch.setattr(ss_cli, "split_window", split)
+    out = ss_cli.resegment_json(data, {"enabled": True, "window_segments": 2},
+                                nlp=None, recorder=ss_cli.NULL_RECORDER, stem="x")
+    assert [s["text"] for s in out["segments"]] == ["あ", "いうえ", "お"]
+    assert concat_word_text(out["segments"]) == "あいうえお"
+
+
 def test_disabled_copy_through_byte_identical(tmp_path, monkeypatch):
     in_json = tmp_path / "in.json"
     in_txt = tmp_path / "in.txt"
