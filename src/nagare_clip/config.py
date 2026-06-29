@@ -43,15 +43,17 @@ DEFAULTS: Dict[str, Any] = {
         "retry_temp_cap": 0.8,
         "window_segments": 20,
         "prompt": (
-            "あなたは日本語の文字起こしを文単位に区切る編集者です。"
-            "句読点はほとんどありません。\n"
-            "入力は文節(bunsetsu)に 0 から連番を振ったものです。\n"
-            "連続する文節をまとめて自然な1文を作り、各文を "
-            "[最初の文節番号, 最後の文節番号] で表してください。\n"
-            "規則:\n"
-            "- 範囲は連続し、全文節(0..N-1)を漏れなく覆うこと。\n"
-            "- 文節の順序や中身は変えない。\n"
-            '- JSONのみ出力: {"sentences":[[0,3],[4,7],...]}'
+            "You split a Japanese transcript into sentence units. The transcript "
+            "has little or no punctuation.\n"
+            "The input is a sequence of bunsetsu (Japanese phrase units) numbered "
+            "from 0, given as `index:surface` tokens.\n"
+            "Group consecutive bunsetsu into natural sentences, and represent each "
+            "sentence as [first bunsetsu index, last bunsetsu index].\n"
+            "Rules:\n"
+            "- Ranges must be contiguous and cover every bunsetsu (0..N-1) with no "
+            "gaps or overlaps.\n"
+            "- Do not change the order or content of the bunsetsu.\n"
+            '- Output ONLY JSON: {"sentences":[[0,3],[4,7],...]}'
         ),
     },
     "text_filter": {
