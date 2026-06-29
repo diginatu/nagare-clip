@@ -336,17 +336,22 @@ elif past_window "$ORD_TRANSCRIPTION"; then
   echo "[transcription] Skipped (--to-stage $TO_STAGE)"
 else
   echo "[transcription] Skipped (--from-stage $FROM_STAGE)"
-  # Validate that transcription outputs exist for all sources
-  for STEM in "${ALL_STEMS[@]}"; do
-    if [[ ! -f "${TRANSCRIPTION_DIR}/${STEM}.json" ]]; then
-      echo "Missing transcription output: ${TRANSCRIPTION_DIR}/${STEM}.json (required when skipping transcription)" >&2
-      exit 1
-    fi
-    if (( FROM_ORDER <= ORD_TEXT_FILTER )) && [[ ! -f "${TRANSCRIPTION_DIR}/${STEM}.txt" ]]; then
-      echo "Missing transcription output: ${TRANSCRIPTION_DIR}/${STEM}.txt (required for the text editing checkpoint)" >&2
-      exit 1
-    fi
-  done
+  # Validate that transcription outputs exist for all sources.
+  # transcription's {stem}.json/.txt are consumed only by sentence_split, so
+  # only require them when sentence_split will actually run; later start points
+  # read SENTENCE_SPLIT_DIR instead (validated in the sentence_split skip block).
+  if (( FROM_ORDER <= ORD_SENTENCE_SPLIT )); then
+    for STEM in "${ALL_STEMS[@]}"; do
+      if [[ ! -f "${TRANSCRIPTION_DIR}/${STEM}.json" ]]; then
+        echo "Missing transcription output: ${TRANSCRIPTION_DIR}/${STEM}.json (required for sentence_split)" >&2
+        exit 1
+      fi
+      if [[ ! -f "${TRANSCRIPTION_DIR}/${STEM}.txt" ]]; then
+        echo "Missing transcription output: ${TRANSCRIPTION_DIR}/${STEM}.txt (required for sentence_split)" >&2
+        exit 1
+      fi
+    done
+  fi
 fi
 
 # --- audio_silence: Audio-silence (jump-cut) detection checkpoint (per source) ---
