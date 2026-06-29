@@ -56,7 +56,7 @@ sentence_split:
   max_retries: 2               # Extra attempts on LLM error / invalid ranges (0 = single attempt)
   retry_temp_step: 0.2
   retry_temp_cap: 0.8
-  window_segments: 20          # Segments per LLM window
+  window_segments: 20          # Segments per LLM window (the batch size); a window carries its trailing sentence to the next so cross-seam sentences aren't split
   # prompt: "..."              # Bunsetsu-grouping prompt (has a sensible default)
 
 # text_filter stage: text editing checkpoint.
@@ -83,6 +83,7 @@ text_filter:
     temperature: 0.3             # Higher temperature for summarization
     thinking: false              # Thinking mode for summary LLM
     timeout: 120                 # Longer timeout since full transcript is sent
+    response_format: "json"      # Request a JSON object from the summary LLM
     # prompt: "..."              # System prompt for summary LLM (has sensible default)
 
 # summary stage: runs once project-wide (over all videos) before director. A
@@ -161,6 +162,7 @@ guided_edit:
   temperature: 0.1
   thinking: false
   timeout: 60
+  context_lines: 1             # Lines of context shown to the LLM around an "edit" op's boundary line(s)
   max_retries: 2               # Extra attempts on LLM error / failed verification (0 = single attempt)
   retry_temp_step: 0.2         # Temperature increment added on each retry
   retry_temp_cap: 0.8          # Maximum temperature any retry uses
