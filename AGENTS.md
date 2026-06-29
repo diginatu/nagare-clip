@@ -182,7 +182,7 @@ src/nagare_clip/          # Main Python package (src layout)
 scripts/
   run_pipeline.sh             # Main orchestrator (name-based stages; --from-stage by name)
 tests/
-  test_config.py              # Config module unit tests
+  test_config.py              # Config module unit tests + example-config sync lint
   test_cli_cuts_merge.py      # --cuts-txt union into interval excludes
   test_cli_keep_markers.py    # <keep>...</keep> force-keep markers (CLI integration)
   test_cli_cut_marker.py      # <cut>...</cut> deletion → silence-gap cut (CLI integration)
@@ -203,7 +203,7 @@ All tunable parameters are centralised in `src/nagare_clip/config.py`:
 
 - `DEFAULTS` dict holds the canonical defaults for all sections.
 - `get_effective_config(config_path, cli_overrides)` merges DEFAULTS ← config file ← CLI overrides (highest priority wins).
-- `config.example.yml` documents every key with its default value; copy it to start a project config.
+- `config.example.yml` documents every key with its default value; copy it to start a project config. **A lint test (`tests/test_config.py::TestExampleConfigInSync`) fails if any `DEFAULTS` leaf is absent from `config.example.yml`** — every new default must be added to the example (as a real key, or as a documented `# key:` comment in the same top-level section for things like prompts / advanced blocks). Extra example keys are ignored by design.
 
 **Priority order (highest first):** CLI flags > YAML config file > built-in defaults.
 
