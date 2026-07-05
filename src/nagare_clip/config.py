@@ -11,6 +11,7 @@ boundary").  ``config.example.yml`` is generated from these models
 from __future__ import annotations
 
 import copy
+import logging
 from pathlib import Path
 from typing import Any, ClassVar
 
@@ -690,4 +691,6 @@ def get_effective_config(
     the open-ended Blender style blocks, which accept arbitrary extra keys).
     """
     merged = deep_merge(load_config(config_path), cli_overrides or {})
+    if config_path is not None:
+        logging.info("Config loaded from %s", config_path)
     return NagareClipConfig.model_validate(merged).model_dump()
