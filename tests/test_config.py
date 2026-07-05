@@ -11,7 +11,13 @@ import pytest
 import yaml
 from pydantic import ValidationError
 
-from nagare_clip.config import DEFAULTS, deep_merge, get_effective_config, load_config
+from nagare_clip.config import (
+    DEFAULTS,
+    deep_merge,
+    generate_example_yaml,
+    get_effective_config,
+    load_config,
+)
 
 
 def _leaf_paths(d: dict[str, Any], prefix: str = "") -> Iterator[str]:
@@ -24,53 +30,35 @@ def _leaf_paths(d: dict[str, Any], prefix: str = "") -> Iterator[str]:
             yield path
 
 
-def _has_real_path(data: Any, path: str) -> bool:
-    """True if *path* resolves to a key in the parsed YAML *data*."""
-    cur = data
-    for part in path.split("."):
-        if not isinstance(cur, dict) or part not in cur:
-            return False
-        cur = cur[part]
-    return True
+def test_example_file_matches_generator():
+    """config.example.yml must be exactly what the generator emits (regenerate
+    with `make config-example` to fix drift)."""
+    on_disk = Path("config.example.yml").read_text(encoding="utf-8")
+    assert generate_example_yaml() == on_disk
 
 
-def _section_block(text: str, top: str) -> str:
-    """Return the raw lines of the top-level ``top:`` section (until the next
-    column-0 key, or EOF)."""
+def test_generated_example_is_valid_yaml_covering_all_defaults():
+    """Every DEFAULTS leaf appears in the generated example as a real key or a
+    commented `# leaf:` line in its own top-level section."""
+    text = generate_example_yaml()
+    data = yaml.safe_load(text) or {}
+
+    def has_real(path: str) -> bool:
+        cur: Any = data
+        for part in path.split("."):
+            if not isinstance(cur, dict) or part not in cur:
+                return False
+            cur = cur[part]
+        return True
+
     lines = text.splitlines()
-    start = next(
-        (i for i, ln in enumerate(lines) if re.match(rf"^{re.escape(top)}\s*:", ln)),
-        None,
-    )
-    if start is None:
-        return ""
-    end = next(
-        (j for j in range(start + 1, len(lines)) if re.match(r"^\w+\s*:", lines[j])),
-        len(lines),
-    )
-    return "\n".join(lines[start:end])
-
-
-def _missing_example_paths(defaults: dict[str, Any], example_text: str) -> list[str]:
-    """Return DEFAULTS leaf paths absent from *example_text*.
-
-    A path counts as present when it resolves to a real parsed key, or when its
-    leaf name appears as a commented-out line (``# leaf:``, any indentation)
-    within its own top-level section.  Requiring the ``#`` prefix for the
-    comment fallback keeps a real key in a sibling subsection from falsely
-    satisfying a missing one.
-    """
-    data = yaml.safe_load(example_text) or {}
-    missing: list[str] = []
-    for path in _leaf_paths(defaults):
-        if _has_real_path(data, path):
+    for path in _leaf_paths(DEFAULTS):
+        if has_real(path):
             continue
-        top, leaf = path.split(".")[0], path.split(".")[-1]
-        block = _section_block(example_text, top)
-        if re.search(rf"^\s*#\s*{re.escape(leaf)}\s*:", block, re.M):
-            continue
-        missing.append(path)
-    return sorted(missing)
+        leaf = path.split(".")[-1]
+        assert any(re.match(rf"^\s*#\s*{re.escape(leaf)}\s*:", ln) for ln in lines), (
+            f"DEFAULTS leaf {path!r} missing from generated example"
+        )
 
 
 class TestLoadConfig:
@@ -396,37 +384,3 @@ def test_sentence_split_defaults_present():
     assert sp["max_retries"] == 2
     assert sp["response_format"] == "json"
     assert isinstance(sp["prompt"], str) and sp["prompt"]
-
-
-class TestExampleConfigInSync:
-    """Lint: every config.py DEFAULTS leaf must appear in config.example.yml.
-
-    "Appear" = present as a real key OR documented as a commented-out line in
-    the same top-level section (so intentionally-commented defaults like prompts
-    and the advanced bunsetu block count as present).  Extra example keys are
-    ignored by design.
-    """
-
-    def test_reports_absent_key(self):
-        defaults = {"sec": {"a": 1, "b": 2}}
-        text = "sec:\n  a: 1\n"
-        assert _missing_example_paths(defaults, text) == ["sec.b"]
-
-    def test_accepts_real_key_with_different_value(self):
-        defaults = {"sec": {"a": 1}}
-        text = "sec:\n  a: 5\n"
-        assert _missing_example_paths(defaults, text) == []
-
-    def test_accepts_commented_key_with_indentation(self):
-        defaults = {"sec": {"deep": {"x": 1}}}
-        text = "sec:\n  # deep:\n  #   x: 0.02\n"
-        assert _missing_example_paths(defaults, text) == []
-
-    def test_sibling_real_key_does_not_satisfy_missing_subsection(self):
-        defaults = {"top": {"subA": {"k": 1}, "subB": {"k": 2}}}
-        text = "top:\n  subA:\n    k: 1\n"
-        assert _missing_example_paths(defaults, text) == ["top.subB.k"]
-
-    def test_real_example_file_covers_all_defaults(self):
-        text = Path("config.example.yml").read_text(encoding="utf-8")
-        assert _missing_example_paths(DEFAULTS, text) == []

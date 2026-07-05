@@ -2,7 +2,7 @@
 # All Python tooling goes through `uv run` per the project convention.
 
 .DEFAULT_GOAL := help
-.PHONY: help install test lint format format-check validate check
+.PHONY: help install test lint format format-check validate check config-example
 
 help: ## Show this help
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) \
@@ -29,3 +29,6 @@ validate: ## Fast structural checks (docker compose, py_compile, shell syntax)
 	bash -n scripts/run_pipeline.sh
 
 check: lint format-check validate test ## Everything CI runs
+
+config-example: ## Regenerate config.example.yml from the config models
+	uv run python -m nagare_clip.config --write-example

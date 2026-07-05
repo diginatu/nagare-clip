@@ -12,6 +12,8 @@ from __future__ import annotations
 
 import copy
 import logging
+import re
+import sys
 from pathlib import Path
 from typing import Any, ClassVar
 
@@ -694,3 +696,95 @@ def get_effective_config(
     if config_path is not None:
         logging.info("Config loaded from %s", config_path)
     return NagareClipConfig.model_validate(merged).model_dump()
+
+
+# ---------------------------------------------------------------------------
+# config.example.yml generation
+# ---------------------------------------------------------------------------
+
+PREAMBLE = """\
+# Example configuration for nagare-clip pipeline.
+# Copy to your project and pass via --config flag.
+# All values shown are the defaults; remove or comment out any you don't want.
+#
+# LLM provider selection (applies to every LLM stage below):
+#   Set `provider` to one of: ollama_chat (default, local), openai, gemini, anthropic.
+#   `model` is the provider's model name; LiteLLM receives "<provider>/<model>".
+#   For cloud providers set `api_key` (or the provider's env var, e.g.
+#   OPENAI_API_KEY / GEMINI_API_KEY / ANTHROPIC_API_KEY) and leave `api_base` empty.
+#
+# Langfuse tracing (optional, off unless keys are present):
+#   Export LANGFUSE_PUBLIC_KEY and LANGFUSE_SECRET_KEY to enable tracing. Disable
+#   via general.langfuse: false or NAGARE_LANGFUSE=0.
+"""
+
+
+def _fmt_scalar(value: object) -> str:
+    """Render a scalar/list default as inline YAML (deterministic)."""
+    if isinstance(value, bool):
+        return "true" if value else "false"
+    if isinstance(value, (int, float)):
+        return repr(value)
+    if isinstance(value, list):
+        return "[" + ", ".join(_fmt_scalar(v) for v in value) + "]"
+    if value is None:
+        return "null"
+    s = str(value)
+    if s == "":
+        return '""'
+    if re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", s):
+        return s
+    return '"' + s.replace('"', '\\"') + '"'
+
+
+def _render_model(model_cls: type[BaseModel], indent: int) -> list[str]:
+    """Render a model's fields (and nested models) as indented YAML lines."""
+    pad = " " * indent
+    lines: list[str] = []
+    for name, field in model_cls.model_fields.items():
+        ann = field.annotation
+        if isinstance(ann, type) and issubclass(ann, BaseModel):
+            sub_comment = getattr(ann, "section_comment", "")
+            if sub_comment:
+                lines += [f"{pad}# {c}" for c in sub_comment.split("\n")]
+            lines.append(f"{pad}{name}:")
+            lines += _render_model(ann, indent + 2)
+            continue
+        extra = field.json_schema_extra or {}
+        desc = field.description or ""
+        desc_suffix = f"   # {desc}" if desc else ""
+        if extra.get("emit") == "commented":
+            lines.append(f"{pad}# {name}: {extra['sample']}{desc_suffix}")
+        else:
+            lines.append(f"{pad}{name}: {_fmt_scalar(field.default)}{desc_suffix}")
+    example_extra = getattr(model_cls, "example_extra", "")
+    if example_extra:
+        lines += [f"{pad}{c}" for c in example_extra.split("\n")]
+    return lines
+
+
+def generate_example_yaml() -> str:
+    """Generate config.example.yml text from the models (single source of truth)."""
+    out: list[str] = [PREAMBLE.rstrip("\n"), ""]
+    for name, field in NagareClipConfig.model_fields.items():
+        model_cls = field.annotation
+        section_comment = getattr(model_cls, "section_comment", "")
+        if section_comment:
+            out += [f"# {c}" for c in section_comment.split("\n")]
+        out.append(f"{name}:")
+        out += _render_model(model_cls, 2)
+        out.append("")
+    return "\n".join(out).rstrip("\n") + "\n"
+
+
+def _main(argv: list[str]) -> int:
+    if argv and argv[0] == "--write-example":
+        Path("config.example.yml").write_text(generate_example_yaml(), encoding="utf-8")
+        print("Wrote config.example.yml")
+        return 0
+    print("usage: python -m nagare_clip.config --write-example", file=sys.stderr)
+    return 2
+
+
+if __name__ == "__main__":
+    raise SystemExit(_main(sys.argv[1:]))

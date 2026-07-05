@@ -1,33 +1,28 @@
 # Example configuration for nagare-clip pipeline.
 # Copy to your project and pass via --config flag.
-# All values shown are the defaults; remove or comment out
-# any you don't want to change.
-
+# All values shown are the defaults; remove or comment out any you don't want.
+#
 # LLM provider selection (applies to every LLM stage below):
 #   Set `provider` to one of: ollama_chat (default, local), openai, gemini, anthropic.
 #   `model` is the provider's model name; LiteLLM receives "<provider>/<model>".
-#   For cloud providers, set `api_key` (or the provider's standard env var, e.g.
+#   For cloud providers set `api_key` (or the provider's env var, e.g.
 #   OPENAI_API_KEY / GEMINI_API_KEY / ANTHROPIC_API_KEY) and leave `api_base` empty.
-#   Each stage can use a different provider.
-
+#
 # Langfuse tracing (optional, off unless keys are present):
-#   Export LANGFUSE_PUBLIC_KEY and LANGFUSE_SECRET_KEY to enable tracing of every
-#   LLM call. LANGFUSE_OTEL_HOST selects region / self-hosted endpoint
-#   (default US cloud; EU: https://cloud.langfuse.com). Disable via general.langfuse: false
-#   or NAGARE_LANGFUSE=0.
+#   Export LANGFUSE_PUBLIC_KEY and LANGFUSE_SECRET_KEY to enable tracing. Disable
+#   via general.langfuse: false or NAGARE_LANGFUSE=0.
 
 general:
   log_level: INFO   # DEBUG | INFO | WARNING | ERROR | CRITICAL
-  log_file: ""      # Path to log file; empty = console only (run_pipeline.sh sets this automatically)
-  llm_report: true            # write a per-call LLM report under output/llm_report/
+  log_file: ""   # Path to log file; empty = console only (run_pipeline.sh sets this automatically)
+  llm_report: true   # write a per-call LLM report under output/llm_report/
   llm_report_dir: "output/llm_report"
-  langfuse: true              # send LLM traces to Langfuse when LANGFUSE_PUBLIC_KEY/SECRET_KEY are set
-                              # (set to false to force-disable even when keys are present)
+  langfuse: true   # send LLM traces to Langfuse when LANGFUSE_PUBLIC_KEY/SECRET_KEY are set (false to force-disable)
 
 transcription:
   compute_type: float16
   batch_size: 16
-  language: ja              # ISO 639-1 language code passed to WhisperX (e.g. ja, en)
+  language: ja   # ISO 639-1 language code passed to WhisperX (e.g. ja, en)
   # align_model: vumichien/wav2vec2-large-xlsr-japanese
 
 # audio_silence stage: audio-silence (jump-cut) detection.
@@ -35,56 +30,57 @@ transcription:
 # {stem}_cuts.txt checkpoint. NOTE: this is acoustic silence, distinct
 # from intervals.silence_threshold (which is a WhisperX word-gap heuristic).
 audio_silence:
-  enabled: true       # false = write an empty cut list (no audio cuts applied)
-  noise: -30.0        # ffmpeg silencedetect noise threshold, in dB
-  min_silence: 0.8    # ffmpeg silencedetect minimum silence duration, seconds
+  enabled: true   # false = write an empty cut list (no audio cuts applied)
+  noise: -30.0   # ffmpeg silencedetect noise threshold, in dB
+  min_silence: 0.8   # ffmpeg silencedetect minimum silence duration, seconds
 
 # sentence_split stage: runs per source between audio_silence and text_filter.
 # An LLM re-segments the WhisperX transcript into one-sentence-per-line units
 # (rewriting {stem}.json and {stem}.txt). Disabled by default = byte-identical
 # copy-through (no behaviour change).
 sentence_split:
-  enabled: false               # Enable LLM sentence re-segmentation
-  provider: "ollama_chat"      # LiteLLM provider prefix: ollama_chat | openai | gemini | anthropic
-  api_base: ""                 # Base URL; empty -> Ollama localhost default; leave empty for cloud providers
-  model: "gpt-oss:120b"        # Model (passed to LiteLLM as "<provider>/<model>")
-  api_key: ""                  # API key for the provider (or set the provider's env var)
+  enabled: false   # Enable LLM sentence re-segmentation
+  provider: ollama_chat   # LiteLLM provider prefix: ollama_chat | openai | gemini | anthropic
+  api_base: ""   # Base URL; empty -> Ollama localhost default; leave empty for cloud providers
+  model: "gpt-oss:120b"   # Model (passed to LiteLLM as "<provider>/<model>")
+  api_key: ""   # API key for the provider (or set the provider's env var)
   temperature: 0.2
   thinking: false
   timeout: 300
-  response_format: "json"
-  max_retries: 2               # Extra attempts on LLM error / invalid ranges (0 = single attempt)
+  response_format: json
+  max_retries: 2   # Extra attempts on LLM error / invalid ranges (0 = single attempt)
   retry_temp_step: 0.2
   retry_temp_cap: 0.8
-  window_segments: 20          # Segments per LLM window (the batch size); a window carries its trailing sentence to the next so cross-seam sentences aren't split
-  # prompt: "..."              # Bunsetsu-grouping prompt (has a sensible default)
+  window_segments: 20   # Segments per LLM window (the batch size); a window carries its trailing sentence to the next
+  # prompt: "..."   # Bunsetsu-grouping prompt (has a sensible default)
 
 # text_filter stage: text editing checkpoint.
 text_filter:
-  use_llm: false               # Enable LLM text filter for the text-editing checkpoint
-  provider: "ollama_chat"      # LiteLLM provider prefix: ollama_chat | openai | gemini | anthropic
-  api_base: ""                 # Base URL; empty -> Ollama localhost default; leave empty for cloud providers
-  model: "qwen3.5:4b"          # Model name (passed to LiteLLM as "<provider>/<model>")
-  api_key: ""                  # API key for the provider (or set the provider's env var, e.g. OPENAI_API_KEY)
-  batch_size: 10               # Number of transcript segments per LLM call
-  timeout: 60                  # API request timeout in seconds
-  retry_on_invalid: true       # On lines the LLM mangled (changed text outside {{old->new}} markers, fabricated old, or omitted the line), retry just those lines with a halved batch size
-  retry_min_batch_size: 1      # Floor for the halving retry; set equal to batch_size to disable
-  # prompt: "..."              # System prompt for LLM (has sensible default for Japanese)
-  temperature: 0.1             # LLM sampling temperature
-  thinking: false              # Thinking mode: true/false, or string level ("low", "medium", "high") for models that support it
-  summary_llm:                   # Summary LLM: generates context (summary + keywords) for the filter LLM
-    enabled: false               # Enable summary generation before filtering
-    # keywords: []               # Constant keywords always injected into the filter LLM prompt (e.g. domain-specific terms, proper nouns)
-    provider: "ollama_chat"      # LiteLLM provider prefix: ollama_chat | openai | gemini | anthropic
-    api_base: ""                 # Base URL; empty -> Ollama localhost default; leave empty for cloud providers
-    model: "qwen3.5:4b"         # Model name (passed to LiteLLM as "<provider>/<model>"; can differ from filter LLM)
-    api_key: ""                  # API key for the provider (or set the provider's env var, e.g. OPENAI_API_KEY)
-    temperature: 0.3             # Higher temperature for summarization
-    thinking: false              # Thinking mode for summary LLM
-    timeout: 120                 # Longer timeout since full transcript is sent
-    response_format: "json"      # Request a JSON object from the summary LLM
-    # prompt: "..."              # System prompt for summary LLM (has sensible default)
+  use_llm: false   # Enable LLM text filter for the text-editing checkpoint
+  provider: ollama_chat   # LiteLLM provider prefix: ollama_chat | openai | gemini | anthropic
+  api_base: ""   # Base URL; empty -> Ollama localhost default; leave empty for cloud providers
+  model: "qwen3.5:4b"   # Model name (passed to LiteLLM as "<provider>/<model>")
+  api_key: ""   # API key for the provider (or set the provider's env var)
+  batch_size: 10   # Number of transcript segments per LLM call
+  timeout: 60   # API request timeout in seconds
+  retry_on_invalid: true   # On mangled lines, retry just those with a halved batch size
+  retry_min_batch_size: 1   # Floor for the halving retry; set equal to batch_size to disable
+  # prompt: "..."   # System prompt for LLM (has sensible default for Japanese)
+  temperature: 0.1   # LLM sampling temperature
+  thinking: false   # Thinking mode: true/false, or "low"/"medium"/"high"
+  # Summary LLM: generates context (summary + keywords) for the filter LLM
+  summary_llm:
+    enabled: false   # Enable summary generation before filtering
+    # keywords: []   # Constant keywords always injected into the filter LLM prompt
+    provider: ollama_chat   # LiteLLM provider prefix: ollama_chat | openai | gemini | anthropic
+    api_base: ""   # Base URL; empty -> Ollama localhost default; leave empty for cloud providers
+    model: "qwen3.5:4b"   # Model name (passed to LiteLLM as "<provider>/<model>"; can differ from filter LLM)
+    api_key: ""   # API key for the provider (or set the provider's env var)
+    temperature: 0.3   # Higher temperature for summarization
+    thinking: false   # Thinking mode for summary LLM
+    timeout: 120   # Longer timeout since full transcript is sent
+    response_format: json   # Request a JSON object from the summary LLM
+    # prompt: "..."   # System prompt for summary LLM (has a sensible default)
 
 # summary stage: runs once project-wide (over all videos) before director. A
 # larger LLM segments each transcript into line-range parts and summarises each,
@@ -92,153 +88,140 @@ text_filter:
 # reviewable intermediate consumed by the plan + director stages. Disabled by
 # default (writes an empty summary = no-op).
 summary:
-  enabled: false               # Enable the summary LLM
-  provider: "ollama_chat"      # LiteLLM provider prefix: ollama_chat | openai | gemini | anthropic
-  api_base: ""                 # Base URL; empty -> Ollama localhost default; leave empty for cloud providers
-  model: "gpt-oss:120b"        # A larger model (passed to LiteLLM as "<provider>/<model>")
-  api_key: ""                  # API key for the provider (or set the provider's env var, e.g. OPENAI_API_KEY)
+  enabled: false   # Enable the summary LLM
+  provider: ollama_chat   # LiteLLM provider prefix: ollama_chat | openai | gemini | anthropic
+  api_base: ""   # Base URL; empty -> Ollama localhost default; leave empty for cloud providers
+  model: "gpt-oss:120b"   # A larger model (passed to LiteLLM as "<provider>/<model>")
+  api_key: ""   # API key for the provider (or set the provider's env var)
   temperature: 0.3
   thinking: false
   timeout: 300
-  response_format: "json"
-  max_retries: 2               # Extra attempts on LLM error / unparseable JSON (0 = single attempt)
+  response_format: json
+  max_retries: 2   # Extra attempts on LLM error / unparseable JSON (0 = single attempt)
   retry_temp_step: 0.2
   retry_temp_cap: 0.8
-  # prompt: "..."              # Per-video segment+summarise prompt (has a sensible default)
-  # overall_prompt: "..."      # All-videos reduce prompt (has a sensible default)
+  # prompt: "..."   # Per-video segment+summarise prompt (has a sensible default)
+  # overall_prompt: "..."   # All-videos reduce prompt (has a sensible default)
 
 # plan stage: runs once project-wide after summary, before director. A larger
 # LLM reads the per-part summaries (with line ranges) of all videos and gives a
-# coarse, cross-video editorial direction per part (remove / shorten / speed /
-# keep ...). Output plan.json is a reviewable intermediate consumed by director.
-# Disabled by default (writes an empty plan = no-op).
+# coarse, cross-video editorial direction per part. Output plan.json is a
+# reviewable intermediate consumed by director. Disabled by default (no-op).
 plan:
-  enabled: false               # Enable the plan LLM
-  provider: "ollama_chat"      # LiteLLM provider prefix: ollama_chat | openai | gemini | anthropic
-  api_base: ""                 # Base URL; empty -> Ollama localhost default; leave empty for cloud providers
-  model: "gpt-oss:120b"        # A larger model (passed to LiteLLM as "<provider>/<model>")
-  api_key: ""                  # API key for the provider (or set the provider's env var, e.g. OPENAI_API_KEY)
+  enabled: false   # Enable the plan LLM
+  provider: ollama_chat   # LiteLLM provider prefix: ollama_chat | openai | gemini | anthropic
+  api_base: ""   # Base URL; empty -> Ollama localhost default; leave empty for cloud providers
+  model: "gpt-oss:120b"   # A larger model (passed to LiteLLM as "<provider>/<model>")
+  api_key: ""   # API key for the provider (or set the provider's env var)
   temperature: 0.3
   thinking: false
   timeout: 300
-  response_format: "json"
-  max_retries: 2               # Extra attempts on LLM error / unparseable JSON (0 = single attempt)
+  response_format: json
+  max_retries: 2   # Extra attempts on LLM error / unparseable JSON (0 = single attempt)
   retry_temp_step: 0.2
   retry_temp_cap: 0.8
-  # prompt: "..."              # System prompt (has a sensible default)
+  # prompt: "..."   # System prompt (has a sensible default)
 
 # director stage (Pass A): a larger LLM reads the whole numbered transcript and
-# emits high-level edit operations (cut / speed / overlay / keep / edit) as
-# {stem}_director.json — a human-reviewable intermediate. It never re-outputs
-# the transcript text. When summary/plan are enabled it also receives the
-# cross-video overview context for this video. Disabled by default (writes an
-# empty op list = no-op).
+# emits high-level edit operations as {stem}_director.json. It never re-outputs
+# the transcript text. Disabled by default (writes an empty op list = no-op).
 director:
-  enabled: false               # Enable the director LLM
-  provider: "ollama_chat"      # LiteLLM provider prefix: ollama_chat | openai | gemini | anthropic
-  api_base: ""                 # Base URL; empty -> Ollama localhost default; leave empty for cloud providers
-  model: "gpt-oss:120b"        # A larger model (passed to LiteLLM as "<provider>/<model>")
-  api_key: ""                  # API key for the provider (or set the provider's env var, e.g. OPENAI_API_KEY)
+  enabled: false   # Enable the director LLM
+  provider: ollama_chat   # LiteLLM provider prefix: ollama_chat | openai | gemini | anthropic
+  api_base: ""   # Base URL; empty -> Ollama localhost default; leave empty for cloud providers
+  model: "gpt-oss:120b"   # A larger model (passed to LiteLLM as "<provider>/<model>")
+  api_key: ""   # API key for the provider (or set the provider's env var)
   temperature: 0.2
   thinking: false
   timeout: 300
-  response_format: "json"      # JSON mode for reliable parsing
-  max_retries: 2               # Extra attempts on LLM error / unparseable JSON (0 = single attempt)
-  retry_temp_step: 0.2         # Temperature increment added on each retry
-  retry_temp_cap: 0.8          # Maximum temperature any retry uses
-  # prompt: "..."              # System prompt (has a sensible default)
+  response_format: json   # JSON mode for reliable parsing
+  max_retries: 2   # Extra attempts on LLM error / unparseable JSON (0 = single attempt)
+  retry_temp_step: 0.2   # Temperature increment added on each retry
+  retry_temp_cap: 0.8   # Maximum temperature any retry uses
+  # prompt: "..."   # System prompt (has a sensible default)
 
 # guided_edit stage (Pass B2): a small local LLM applies each director op,
-# inserting <cut>/<speed>/<overlay>/<keep> tags (and {{old->new}} patches for
-# "edit" ops) into the verbatim _edits.txt at the precise position. A
-# deterministic reconciler verifies every op; any that could not be applied are
-# logged (and recorded in the LLM report). Disabled by default (copies edits through).
+# inserting <cut>/<speed>/<overlay>/<keep> tags (and {{old->new}} patches) into
+# the verbatim _edits.txt. Disabled by default (copies edits through).
 guided_edit:
-  enabled: false               # Enable applying director ops
-  provider: "ollama_chat"      # LiteLLM provider prefix: ollama_chat | openai | gemini | anthropic
-  api_base: ""                 # Base URL; empty -> Ollama localhost default; leave empty for cloud providers
-  model: "qwen3.5:4b"          # The same small model as text_filter is fine (passed to LiteLLM as "<provider>/<model>")
-  api_key: ""                  # API key for the provider (or set the provider's env var, e.g. OPENAI_API_KEY)
+  enabled: false   # Enable applying director ops
+  provider: ollama_chat   # LiteLLM provider prefix: ollama_chat | openai | gemini | anthropic
+  api_base: ""   # Base URL; empty -> Ollama localhost default; leave empty for cloud providers
+  model: "qwen3.5:4b"   # The same small model as text_filter is fine (passed to LiteLLM as "<provider>/<model>")
+  api_key: ""   # API key for the provider (or set the provider's env var)
   temperature: 0.1
   thinking: false
   timeout: 60
-  context_lines: 1             # Lines of context shown to the LLM around an "edit" op's boundary line(s)
-  max_retries: 2               # Extra attempts on LLM error / failed verification (0 = single attempt)
-  retry_temp_step: 0.2         # Temperature increment added on each retry
-  retry_temp_cap: 0.8          # Maximum temperature any retry uses
-  # prompt: "..."              # System prompt (has a sensible default)
+  context_lines: 1   # Lines of context shown to the LLM around an "edit" op boundary
+  max_retries: 2   # Extra attempts on LLM error / failed verification (0 = single attempt)
+  retry_temp_step: 0.2   # Temperature increment added on each retry
+  retry_temp_cap: 0.8   # Maximum temperature any retry uses
+  # prompt: "..."   # System prompt (has a sensible default)
 
 # intervals stage: patch application + keep-interval merge.
 # Audio cuts from audio_silence are unioned here.
 intervals:
-  silence_threshold: 1.5     # WhisperX word-gap silence threshold, seconds (NOT the audio_silence detector)
-  min_keep: 1.0              # Minimum keep interval length in seconds
-  keep_pre_margin: 1.0       # Seconds to extend keep intervals before start
-  keep_post_margin: 1.0      # Seconds to extend keep intervals after end
+  silence_threshold: 1.5   # WhisperX word-gap silence threshold, seconds (NOT the audio_silence detector)
+  min_keep: 1.0   # Minimum keep interval length in seconds
+  keep_pre_margin: 1.0   # Seconds to extend keep intervals before start
+  keep_post_margin: 1.0   # Seconds to extend keep intervals after end
   caption:
-    max_bunsetu: 12           # Maximum bunsetsu units per caption chunk
-    max_duration: 4.0         # Maximum seconds per caption chunk
-    min_bunsetu: 3            # Minimum bunsetsu before flushing chunk
-    min_duration: 1.5         # Minimum seconds before flushing chunk
-    silence_flush: 1.5        # Silence duration that forces chunk flush
-    bunsetu_separator: " "    # Separator between bunsetsu units
-    pre_margin: 0.0           # Seconds to extend each caption before its start (clamped to previous caption's end)
-    post_margin: 0.0          # Seconds to extend each caption after its end (clamped to next caption's start)
-  # Advanced: bunsetsu timing parameters (rarely need changing)
-  # bunsetu:
-  #   char_eps: 0.02
-  #   silence_max_word_span: 0.6
+    max_bunsetu: 12   # Maximum bunsetsu units per caption chunk
+    max_duration: 4.0   # Maximum seconds per caption chunk
+    min_bunsetu: 3   # Minimum bunsetsu before flushing chunk
+    min_duration: 1.5   # Minimum seconds before flushing chunk
+    silence_flush: 1.5   # Silence duration that forces chunk flush
+    bunsetu_separator: " "   # Separator between bunsetsu units
+    pre_margin: 0.0   # Seconds to extend each caption before its start (clamped to previous caption end)
+    post_margin: 0.0   # Seconds to extend each caption after its end (clamped to next caption start)
+  bunsetu:
+    char_eps: 0.02
+    silence_max_word_span: 0.6
 
 # blender stage: Blender VSE layout.
 blender:
-  default_fps: 30.0           # Fallback FPS when source metadata unavailable
-  use_proxy: true              # Enable proxy on movie strips for smooth VSE playback (bpy MovieStrip.use_proxy)
-  proxy_size: 100              # Proxy render size percentage: 25 | 50 | 75 | 100
+  default_fps: 30.0   # Fallback FPS when source metadata unavailable
+  use_proxy: true   # Enable proxy on movie strips for smooth VSE playback
+  proxy_size: 100   # Proxy render size percentage: 25 | 50 | 75 | 100
   caption_style:
-    # font: /abs/path/to/MyFont.ttf  # Absolute path to a font file; loaded as a
-    #                                # Blender VectorFont. Must be absolute and
-    #                                # exist or the blender stage errors out.
     font_size: 50
-    alignment_x: CENTER        # LEFT | CENTER | RIGHT
-    anchor_y: BOTTOM           # TOP | CENTER | BOTTOM
-    location_x: 0.5           # Horizontal position (0.0 - 1.0)
-    location_y: 0.05          # Vertical position (0.0 - 1.0)
-    # color: [1, 1, 1, 1]       # Font fill color (RGBA, 0.0 - 1.0); default white
-    use_shadow: true            # Enable text shadow
-    wrap_width: 0.90            # Text wrap width (0.0 = no wrap, 0.0 - 1.0)
-    # use_outline: false          # Enable text outline
-    # outline_color: [0, 0, 0, 1] # Outline color (RGBA, 0.0 - 1.0)
-    # outline_width: 1.0          # Outline width
-    # use_box: false              # Enable background box behind text
-    # box_color: [0, 0, 0, 0.5]  # Box color (RGBA, 0.0 - 1.0)
-    # Any other key here is forwarded verbatim to the Blender TextStrip
-    # attribute of the same name (see bpy.types.TextStrip), so you can set
-    # arbitrary font settings without code changes, e.g.:
-    # shadow_color: [0, 0, 0, 1]  # shadow_offset / shadow_blur / shadow_angle
-    # box_margin: 0.05            # box_roundness, ...
-    # An unknown key (not a real TextStrip attribute) is logged and skipped.
+    alignment_x: CENTER   # LEFT | CENTER | RIGHT
+    anchor_y: BOTTOM   # TOP | CENTER | BOTTOM
+    location_x: 0.5   # Horizontal position (0.0 - 1.0)
+    location_y: 0.05   # Vertical position (0.0 - 1.0)
+    use_shadow: true   # Enable text shadow
+    wrap_width: 0.9   # Text wrap width (0.0 = no wrap, 0.0 - 1.0)
+    # font: /abs/path/to/MyFont.ttf   # Absolute path to a font file; loaded as a Blender VectorFont.
+    # color: [1, 1, 1, 1]             # Font fill color (RGBA, 0.0 - 1.0); default white
+    # use_outline: false              # Enable text outline
+    # outline_color: [0, 0, 0, 1]     # Outline color (RGBA)
+    # use_box: false                  # Enable background box behind text
+    # box_color: [0, 0, 0, 0.5]       # Box color (RGBA)
+    # Any other key is forwarded verbatim to the Blender TextStrip attribute of the
+    # same name (see bpy.types.TextStrip), e.g. shadow_color / shadow_offset /
+    # shadow_blur / box_margin. An unknown key is logged and skipped.
   # Overlay TEXT strip style for <overlay text="..."> markers in _edits.txt.
   # Any field not set here is inherited from caption_style.
   overlay_style:
-    anchor_y: TOP              # default: TOP (overlays sit at top of frame)
-    location_y: 0.95           # default: 0.95
-    # font_size: 50            # inherits from caption_style if omitted
+    anchor_y: TOP   # default: TOP (overlays sit at top of frame)
+    location_y: 0.95   # default: 0.95
+    # font_size: 50       # inherits from caption_style if omitted
     # alignment_x: CENTER
     # location_x: 0.5
-    # color: [1, 1, 1, 1]      # Font fill color (RGBA); overrides caption_style
+    # color: [1, 1, 1, 1]  # overrides caption_style
   # Speed-up mark: auto on-screen badge over every <speed> region.
   speed_mark:
-    enabled: true            # set false to disable all speed badges
+    enabled: true   # set false to disable all speed badges
     template: "x{factor}"   # {factor} is the speed factor (one decimal, e.g. 2.0)
     font_size: 35
     alignment_x: RIGHT
     anchor_y: TOP
     location_x: 0.95
     location_y: 0.95
-    # color: [1, 1, 1, 1]     # Font fill color (RGBA); overrides caption_style
+    # color: [1, 1, 1, 1]   # Font fill color (RGBA); overrides caption_style
 
 pipeline:
   input_videos_dir: src_video
   output_dir: output   # Root dir; stage outputs go to per-stage named subdirs
-  from_stage: transcription  # Start from this stage; reuses earlier stage outputs
-  to_stage: blender    # Stop after this stage (inclusive); later stages are skipped. Must not precede from_stage
+  from_stage: transcription   # Start from this stage; reuses earlier stage outputs
+  to_stage: blender   # Stop after this stage (inclusive). Must not precede from_stage
