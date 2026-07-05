@@ -9,6 +9,7 @@ from typing import Any
 
 import pytest
 import yaml
+from pydantic import ValidationError
 
 from nagare_clip.config import DEFAULTS, deep_merge, get_effective_config, load_config
 
@@ -199,13 +200,35 @@ class TestGetEffectiveConfig:
         assert cfg["blender"]["caption_style"]["font_size"] == 72
         assert cfg["blender"]["caption_style"]["alignment_x"] == "CENTER"
 
-    def test_unknown_keys_preserved(self, tmp_path: Path):
+    def test_unknown_top_level_section_rejected(self, tmp_path: Path):
         cfg_file = tmp_path / "cfg.yml"
         cfg_file.write_text(yaml.dump({"custom_section": {"key": "value"}}))
+        with pytest.raises(ValidationError):
+            get_effective_config(cfg_file)
+
+    def test_typo_leaf_key_rejected(self, tmp_path: Path):
+        cfg_file = tmp_path / "cfg.yml"
+        # 'silence_threshld' is a typo of silence_threshold
+        cfg_file.write_text(yaml.dump({"intervals": {"silence_threshld": 2.0}}))
+        with pytest.raises(ValidationError):
+            get_effective_config(cfg_file)
+
+    def test_wrong_type_rejected(self, tmp_path: Path):
+        cfg_file = tmp_path / "cfg.yml"
+        cfg_file.write_text(yaml.dump({"intervals": {"silence_threshold": "not-a-number"}}))
+        with pytest.raises(ValidationError):
+            get_effective_config(cfg_file)
+
+    def test_pipeline_to_stage_valid(self, tmp_path: Path):
+        cfg_file = tmp_path / "cfg.yml"
+        cfg_file.write_text(yaml.dump({"pipeline": {"to_stage": "intervals"}}))
         cfg = get_effective_config(cfg_file)
-        assert cfg["custom_section"]["key"] == "value"
-        # Defaults still present
-        assert "intervals" in cfg
+        assert cfg["pipeline"]["to_stage"] == "intervals"
+
+    def test_pipeline_stage_defaults_are_names(self):
+        cfg = get_effective_config(None)
+        assert cfg["pipeline"]["from_stage"] == "transcription"
+        assert cfg["pipeline"]["to_stage"] == "blender"
 
     def test_transcription_language_default(self):
         cfg = get_effective_config(None)
@@ -243,6 +266,42 @@ class TestGetEffectiveConfig:
         assert cfg["text_filter"]["summary_llm"]["enabled"] is False
         # Other text_filter defaults intact
         assert cfg["text_filter"]["batch_size"] == 10
+
+
+def test_blender_style_allows_extra_keys(tmp_path):
+    """caption_style / speed_mark are open-ended Blender TextStrip pass-throughs:
+    a `font` path and an arbitrary RNA attr must survive validation."""
+    cfg_file = tmp_path / "cfg.yml"
+    cfg_file.write_text(
+        yaml.dump(
+            {
+                "blender": {
+                    "caption_style": {"font": "/abs/font.ttf", "shadow_blur": 0.5},
+                    "speed_mark": {"box_margin": 0.05},
+                }
+            }
+        )
+    )
+    cfg = get_effective_config(cfg_file)
+    assert cfg["blender"]["caption_style"]["font"] == "/abs/font.ttf"
+    assert cfg["blender"]["caption_style"]["shadow_blur"] == 0.5
+    assert cfg["blender"]["speed_mark"]["box_margin"] == 0.05
+
+
+def test_caption_style_new_defaults_present():
+    cfg = get_effective_config(None)
+    cs = cfg["blender"]["caption_style"]
+    assert cs["use_shadow"] is True
+    assert cs["wrap_width"] == 0.90
+
+
+def test_intervals_unknown_key_rejected(tmp_path):
+    """A non-open-ended section still rejects unknown keys."""
+    cfg_file = tmp_path / "cfg.yml"
+    cfg_file.write_text(yaml.dump({"blender": {"caption": {"bogus": 1}}}))
+    # blender has no 'caption' key at all -> rejected
+    with pytest.raises(ValidationError):
+        get_effective_config(cfg_file)
 
 
 def test_speed_mark_defaults_present():
