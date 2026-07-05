@@ -105,11 +105,27 @@ NagareClipConfig(BaseSettings)          # extra="forbid"
   `log_level: str = Field("INFO", description="DEBUG | INFO | WARNING | ERROR | CRITICAL")`).
   Field types come from the current default values (`float`, `int`, `bool`,
   `str`, `list[str]`).
-- **`pipeline.to_stage`** is added (e.g. `to_stage: str | None = None`) to close
-  the existing `DEFAULTS` gap and avoid `extra="forbid"` rejecting a valid,
-  currently-used YAML key. `from_stage` keeps its present default to preserve
-  `run_pipeline.sh` behavior (its staleness vs. the name-based-stage convention
-  is noted but not changed here).
+- **`pipeline` stage keys are reconciled to strings.** `run_pipeline.sh` treats
+  `from_stage`/`to_stage` as **stage-name strings** (`stage_index` maps a name to
+  its order; an int would be rejected). Today's `DEFAULTS` has a stale
+  `from_stage: 1` (int) and no `to_stage`, while `config.example.yml` correctly
+  shows `from_stage: transcription` / `to_stage: blender`. The model fixes this:
+  `from_stage: str = "transcription"`, `to_stage: str = "blender"`. This closes
+  the `extra="forbid"` hazard (a valid `to_stage` key would otherwise be rejected)
+  and corrects the stale int. No consumer reads `pipeline.*` through
+  `get_effective_config` (only `run_pipeline.sh` does, from raw YAML), so changing
+  the default is safe.
+
+- **Two `blender.caption_style` keys are promoted to real fields.**
+  `config.example.yml` ships `use_shadow: true` and `wrap_width: 0.90` as
+  *uncommented* keys under the header "all values shown are the defaults", but
+  neither is in `DEFAULTS` — so example-copiers get them and pure-built-in-default
+  users do not. The model reconciles this by declaring them as real fields with
+  those values (`use_shadow: bool = True`, `wrap_width: float = 0.90`). *This is a
+  minor visible behavior change* for users on pure built-in defaults (captions
+  gain a shadow + 0.9 wrap), matching the example's stated intent. All other
+  illustrative caption_style keys (`font`, `color`, outline/box/shadow examples)
+  stay documentation-only, carried by the generator's illustrative block (below).
 - **Multiline prompt strings** (`sentence_split.prompt`, `text_filter.prompt`,
   `summary.prompt`/`overall_prompt`, `plan.prompt`, `director.prompt`,
   `guided_edit.prompt`, `text_filter.summary_llm.prompt`) are field defaults,
@@ -150,6 +166,22 @@ a typo names the offending key).
 - **Curated prose** that isn't field-specific (the top-of-file provider block and
   Langfuse block, per-section header paragraphs) is preserved as: a module-level
   `PREAMBLE` constant + a per-section-model `section_comment` class attribute.
+- **Per-section illustrative block.** Several sections carry hand-curated
+  *documentation-only* lines the typed fields can't express — the `caption_style`
+  passthrough examples (`font`, `color`, outline/box/shadow, "any other key is
+  forwarded" prose), the commented `intervals.bunsetu` advanced block, and the
+  `overlay_style`/`speed_mark` inherited-key hints. Each section model may carry a
+  raw `example_extra: str` (verbatim comment lines) that the generator appends
+  after that section's typed fields. This keeps the generated example as useful as
+  the hand-written one while remaining single-source (the text lives in the model
+  module).
+- **Adopt generator output as the committed file (black-check model).** Rather
+  than byte-matching today's hand-formatted file, we run the generator once, commit
+  whatever it produces as the new `config.example.yml`, and the sync test asserts
+  `generate_example_yaml() == config.example.yml`. The regenerated file is *content*-
+  equivalent to today's (same keys, defaults, and illustrative docs) but its
+  incidental formatting/comment placement is whatever the generator emits — an
+  accepted, one-time reformat.
 - **CLI / make target:** `python -m nagare_clip.config --write-example` writes
   `config.example.yml`; a `make config-example` target wraps it.
 
