@@ -1,0 +1,987 @@
+# pydantic-settings Config Migration Implementation Plan
+
+> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+
+**Goal:** Replace the hand-maintained `DEFAULTS` dict + heuristic drift test with typed pydantic-settings models as the single source of truth, adding load-time validation and generating `config.example.yml` from the models.
+
+**Architecture:** One `BaseModel` per config section, nested to mirror today's config shape, composed by a root `NagareClipConfig(BaseSettings)`. `get_effective_config(config_path, cli_overrides)` keeps its signature and still returns a plain `dict` (`model_validate(merged).model_dump()`) — the **dict boundary** — so all 10 stage CLIs, `blender_cli.py`, `call_llm`, and `llm_retry` are untouched. `config.example.yml` is generated from the models (black-check model: regenerate, commit, test asserts equality).
+
+**Tech Stack:** Python 3.11, pydantic 2.x + pydantic-settings 2.x (already declared deps), PyYAML, pytest, uv, ruff.
+
+## Global Constraints
+
+- Dependency management: uv + `pyproject.toml`. No new deps (pydantic-settings already declared).
+- Always invoke Python via `uv run` (e.g. `uv run pytest`, `uv run python -m ...`).
+- `get_effective_config(config_path: Path | None, cli_overrides: dict | None = None) -> dict` MUST keep this exact signature and MUST return a plain `dict`. No stage consumer may change.
+- `extra` policy is **per-model**: `extra="forbid"` on every model EXCEPT `CaptionStyleConfig`, `OverlayStyleConfig`, `SpeedMarkConfig`, which use `extra="allow"` (open-ended Blender TextStrip pass-through, incl. `font`).
+- `pipeline.from_stage` / `to_stage` are **stage-name strings** (`run_pipeline.sh` maps names → order); defaults `"transcription"` / `"blender"`.
+- Preserve `load_config`, `deep_merge`, and a `DEFAULTS` dict (now DERIVED from the model) as public module attributes — tests and readers import them.
+- `\rm` instead of `rm` if any file removal is needed (never needed here).
+- Run `make check` (lint + format-check + validate + test) before the final commit of each task.
+
+---
+
+## File Structure
+
+- **Rewrite** `src/nagare_clip/config.py` — typed models, `load_config`, `deep_merge`, `DEFAULTS` (derived), `get_effective_config` (validates), `generate_example_yaml`, and a `python -m nagare_clip.config --write-example` entry point.
+- **Regenerate** `config.example.yml` — from the models (Task 2).
+- **Rewrite** `tests/test_config.py` — keep behavior tests, flip `test_unknown_keys_preserved` → rejected, add validation tests, replace the heuristic sync test with an exact-equality + completeness pair.
+- **Modify** `AGENTS.md` — Configuration System section (DEFAULTS derived; validation rejects unknown keys; example generated).
+- **Modify** `Makefile` — add `config-example` target.
+- **Check** `README.md` — update if it documents config editing (grep in Task 3).
+
+No stage CLI, `llm_client.py`, `llm_retry.py`, or `scripts/run_pipeline.sh` is modified (dict boundary; run_pipeline stays on raw-YAML reading — documented residual).
+
+---
+
+## Task 1: Typed config models + validating `get_effective_config`
+
+Replace the `DEFAULTS` dict with pydantic models; make `get_effective_config` validate. Keep `config.example.yml` and the *old* sync test untouched for now (Task 2 replaces them) — the old heuristic still passes because every new `DEFAULTS` leaf (`pipeline.to_stage`, `caption_style.use_shadow`, `caption_style.wrap_width`) already appears in the current example.
+
+**Files:**
+- Rewrite: `src/nagare_clip/config.py`
+- Modify: `tests/test_config.py` (flip one test, add validation tests)
+
+**Interfaces:**
+- Consumes: nothing new.
+- Produces:
+  - `DEFAULTS: dict` — `= NagareClipConfig.model_validate({}).model_dump()`
+  - `load_config(path: Path | None) -> dict` — unchanged behavior
+  - `deep_merge(base: dict, override: dict) -> dict` — unchanged behavior
+  - `get_effective_config(config_path: Path | None, cli_overrides: dict | None = None) -> dict` — now validates; raises `pydantic.ValidationError` on unknown/typo'd/badly-typed keys
+  - `NagareClipConfig` (root `BaseSettings`) and all section model classes
+
+- [ ] **Step 1: Write the failing tests**
+
+Add these to `tests/test_config.py`. Replace the existing `test_unknown_keys_preserved` method body with the new rejecting version; add the rest.
+
+```python
+# at top, alongside existing imports:
+from pydantic import ValidationError
+
+# --- inside class TestGetEffectiveConfig, REPLACE test_unknown_keys_preserved with: ---
+    def test_unknown_top_level_section_rejected(self, tmp_path: Path):
+        cfg_file = tmp_path / "cfg.yml"
+        cfg_file.write_text(yaml.dump({"custom_section": {"key": "value"}}))
+        with pytest.raises(ValidationError):
+            get_effective_config(cfg_file)
+
+    def test_typo_leaf_key_rejected(self, tmp_path: Path):
+        cfg_file = tmp_path / "cfg.yml"
+        # 'silence_threshld' is a typo of silence_threshold
+        cfg_file.write_text(yaml.dump({"intervals": {"silence_threshld": 2.0}}))
+        with pytest.raises(ValidationError):
+            get_effective_config(cfg_file)
+
+    def test_wrong_type_rejected(self, tmp_path: Path):
+        cfg_file = tmp_path / "cfg.yml"
+        cfg_file.write_text(yaml.dump({"intervals": {"silence_threshold": "not-a-number"}}))
+        with pytest.raises(ValidationError):
+            get_effective_config(cfg_file)
+
+    def test_pipeline_to_stage_valid(self, tmp_path: Path):
+        cfg_file = tmp_path / "cfg.yml"
+        cfg_file.write_text(yaml.dump({"pipeline": {"to_stage": "intervals"}}))
+        cfg = get_effective_config(cfg_file)
+        assert cfg["pipeline"]["to_stage"] == "intervals"
+
+    def test_pipeline_stage_defaults_are_names(self):
+        cfg = get_effective_config(None)
+        assert cfg["pipeline"]["from_stage"] == "transcription"
+        assert cfg["pipeline"]["to_stage"] == "blender"
+
+
+def test_blender_style_allows_extra_keys(tmp_path):
+    """caption_style / speed_mark are open-ended Blender TextStrip pass-throughs:
+    a `font` path and an arbitrary RNA attr must survive validation."""
+    cfg_file = tmp_path / "cfg.yml"
+    cfg_file.write_text(
+        yaml.dump(
+            {
+                "blender": {
+                    "caption_style": {"font": "/abs/font.ttf", "shadow_blur": 0.5},
+                    "speed_mark": {"box_margin": 0.05},
+                }
+            }
+        )
+    )
+    cfg = get_effective_config(cfg_file)
+    assert cfg["blender"]["caption_style"]["font"] == "/abs/font.ttf"
+    assert cfg["blender"]["caption_style"]["shadow_blur"] == 0.5
+    assert cfg["blender"]["speed_mark"]["box_margin"] == 0.05
+
+
+def test_caption_style_new_defaults_present():
+    cfg = get_effective_config(None)
+    cs = cfg["blender"]["caption_style"]
+    assert cs["use_shadow"] is True
+    assert cs["wrap_width"] == 0.90
+
+
+def test_intervals_unknown_key_rejected(tmp_path):
+    """A non-open-ended section still rejects unknown keys."""
+    cfg_file = tmp_path / "cfg.yml"
+    cfg_file.write_text(yaml.dump({"blender": {"caption": {"bogus": 1}}}))
+    # blender has no 'caption' key at all -> rejected
+    with pytest.raises(ValidationError):
+        get_effective_config(cfg_file)
+```
+
+Also DELETE the now-obsolete `test_unknown_keys_preserved` name if any leftover, and leave `TestExampleConfigInSync` and its helper tests untouched for Task 1 (they still pass).
+
+- [ ] **Step 2: Run the new tests — verify they FAIL**
+
+Run: `uv run pytest tests/test_config.py -k "rejected or to_stage or blender_style or caption_style_new or stage_defaults" -v`
+Expected: FAIL — `get_effective_config` currently returns permissively (no `ValidationError`), and `use_shadow`/`to_stage`/string stage defaults don't exist yet.
+
+- [ ] **Step 3: Rewrite `src/nagare_clip/config.py`**
+
+Replace the ENTIRE file with the following. Prompt-string defaults are copied verbatim from the current file — keep them exactly.
+
+```python
+"""Typed configuration models, loading, and merging (pydantic-settings).
+
+The pydantic models below are the single source of truth for every config
+default, its type, and its documentation.  ``get_effective_config`` validates a
+merged (defaults <- file <- CLI) config and returns a plain ``dict`` so existing
+stage code keeps reading ``cfg["section"]["key"]`` unchanged (the "dict
+boundary").  ``config.example.yml`` is generated from these models
+(``generate_example_yaml`` / ``--write-example``).
+"""
+
+from __future__ import annotations
+
+import copy
+import sys
+from pathlib import Path
+from typing import Any, ClassVar
+
+import yaml
+from pydantic import BaseModel, ConfigDict, Field
+from pydantic_settings import BaseSettings, SettingsConfigDict
+
+# ---------------------------------------------------------------------------
+# Long prompt defaults (verbatim; kept out of the class bodies for readability)
+# ---------------------------------------------------------------------------
+
+SENTENCE_SPLIT_PROMPT = (
+    "You split a Japanese transcript into sentence units. The transcript "
+    "has little or no punctuation.\n"
+    "The input is a sequence of bunsetsu (Japanese phrase units) numbered "
+    "from 0, given as `index:surface` tokens.\n"
+    "Group consecutive bunsetsu into natural sentences, and represent each "
+    "sentence as [first bunsetsu index, last bunsetsu index].\n"
+    "Rules:\n"
+    "- Ranges must be contiguous and cover every bunsetsu (0..N-1) with no "
+    "gaps or overlaps.\n"
+    "- Do not change the order or content of the bunsetsu.\n"
+    '- Output ONLY JSON: {"sentences":[[0,3],[4,7],...]}'
+)
+
+TEXT_FILTER_PROMPT = (
+    "Fix speech recognition errors in Japanese text.\n"
+    "Remove filler words (あのー, えーと) and noise like (雑音).\n"
+    "Only fix clear mistakes. Do NOT rephrase correct text.\n"
+    "\n"
+    "Rules:\n"
+    "- Copy each line fully with its number.\n"
+    "- Wrap ONLY the erroneous part: {{error->fix}} or {{delete->}}.\n"
+    "- Keep all surrounding text unchanged.\n"
+    "\n"
+    "Example:\n"
+    "Input:\n"
+    "1: えーとそれは急はいい天気ですね\n"
+    "2: 正しい文です\n"
+    "3: (雑音)\n"
+    "\n"
+    "Output:\n"
+    "1: {{えーと->}}それは{{急は->今日は}}いい天気ですね\n"
+    "2: 正しい文です\n"
+    "3: {{(雑音)->}}"
+)
+
+SUMMARY_LLM_PROMPT = (
+    "Analyze the following Japanese transcript from a video.\n"
+    "Provide a JSON object with:\n"
+    '- "summary": A very short summary (1-2 sentences) of the content.\n'
+    '- "keywords": A list of rare or domain-specific words that speech '
+    "recognition might misspell.\n"
+    "\n"
+    "Output only the JSON object, no other text."
+)
+
+SUMMARY_PROMPT = (
+    "You are a video editor. You receive ONE Japanese transcript as "
+    "numbered lines (one line per subtitle segment). Split it into a few "
+    "contiguous PARTS by topic/section and summarise each part. Reference "
+    "lines by their 1-based numbers (inclusive). Output ONLY a JSON object.\n"
+    "\n"
+    "JSON shape:\n"
+    '{"parts": [\n'
+    '  {"lines": [1, 12], "summary": "what this part covers"},\n'
+    '  {"lines": [13, 40], "summary": "..."}\n'
+    "]}\n"
+    "\n"
+    "Rules:\n"
+    "- Parts must be contiguous and within the transcript range.\n"
+    "- Keep each summary to one short sentence.\n"
+    "- Output only the JSON object, no other text."
+)
+
+SUMMARY_OVERALL_PROMPT = (
+    "You are a video editor. You receive numbered per-part summaries "
+    "spanning several source videos of one project. Write ONE concise "
+    "overall summary of the whole project. Output ONLY a JSON object:\n"
+    '{"summary": "..."}\n'
+    "Output only the JSON object, no other text."
+)
+
+PLAN_PROMPT = (
+    "You are a video editor planning a rough cut across several source "
+    "videos. You receive numbered PARTS (each with a source video, a line "
+    "range, and a summary) plus an overall summary. For each part, give a "
+    "ROUGH editorial direction — what to do with it (e.g. remove, shorten, "
+    "speed up, keep, emphasise) and why, considering the whole project "
+    "(e.g. a part that repeats an earlier one can be removed). Reference "
+    "parts by their 1-based index. Output ONLY a JSON object.\n"
+    "\n"
+    'By default, non-speech stretches are dropped. "keep" preserves ALL '
+    "content in the range (silences and non-speech gaps included) — use "
+    "it when those moments matter.\n"
+    "\n"
+    "JSON shape:\n"
+    '{"directions": [\n'
+    '  {"index": 1, "direction": "keep — the product\'s operating noise '
+    'is the point"},\n'
+    '  {"index": 2, "direction": "remove — repeats part 1"}\n'
+    "]}\n"
+    "\n"
+    "Rules:\n"
+    '- "index" must be one of the given part numbers.\n'
+    "- Keep each direction to one short, actionable phrase.\n"
+    "- Output only the JSON object, no other text."
+)
+
+DIRECTOR_PROMPT = (
+    "You are a video editor. You receive a Japanese transcript as "
+    "numbered lines (one line per subtitle segment). Decide high-level "
+    "edits to tighten the video. Do NOT rewrite or output the "
+    "transcript text. Output ONLY a JSON object.\n"
+    "\n"
+    "Operations (reference lines by their 1-based numbers, inclusive):\n"
+    "- cut: remove a boring/redundant span entirely (deletes audio+video).\n"
+    '- speed: play a span faster; give "factor" (e.g. 2.0). Internal silences/pauses are still dropped — add a "keep" over the same lines to preserve them while sped up.\n'
+    '- overlay: show an on-screen caption over a span; give "text".\n'
+    "- keep: protect a span from cutting, INCLUDING its silences/"
+    "non-speech gaps (which are dropped by default).\n"
+    '- edit: request a fine within-line text deletion/fix; describe it in "note".\n'
+    "\n"
+    "JSON shape:\n"
+    '{"ops": [\n'
+    '  {"type": "cut", "lines": [12, 18], "note": "why / where precisely"},\n'
+    '  {"type": "speed", "lines": [30, 34], "factor": 2.0, "note": "..."},\n'
+    '  {"type": "overlay", "lines": [5, 5], "text": "ポイント", "note": ""},\n'
+    '  {"type": "keep", "lines": [40, 42], "note": "..."},\n'
+    '  {"type": "edit", "lines": [7, 7], "note": "delete the redundant restatement"}\n'
+    "]}\n"
+    "\n"
+    "Rules:\n"
+    '- "lines" must be within the transcript range.\n'
+    '- Use "note" to describe in natural language precisely WHERE in the '
+    "line(s) the edit starts and ends, so a downstream editor can place "
+    "it exactly.\n"
+    "- Output only the JSON object, no other text."
+)
+
+GUIDED_EDIT_PROMPT = (
+    "You apply ONE editing instruction to Japanese subtitle lines.\n"
+    "You are given numbered lines and an instruction. Insert the "
+    "requested marker into the line text at the precise position "
+    "described, and return the lines unchanged otherwise.\n"
+    "\n"
+    "Markers:\n"
+    "- Cut a span:    wrap it in <cut>...</cut>\n"
+    '- Speed up:      wrap it in <speed factor="N.N">...</speed>\n'
+    '- Overlay text:  wrap it in <overlay text="...">...</overlay>\n'
+    "- Keep/protect:  wrap it in <keep>...</keep>\n"
+    "- Delete words within a line: {{old->}} (old copied verbatim)\n"
+    "- Fix words within a line:    {{old->new}}\n"
+    "\n"
+    "Rules:\n"
+    "- Copy each line fully with its number. Change ONLY by inserting "
+    "markers or {{old->new}}; never rephrase or reorder the original text.\n"
+    "- For a span across multiple lines, open the tag on the first line "
+    "and close it on the last line.\n"
+    "- Output the same numbered lines, nothing else."
+)
+
+
+# ---------------------------------------------------------------------------
+# Field helper: mark a field to be emitted commented-out in the example file
+# ---------------------------------------------------------------------------
+
+def _commented(default: Any, *, sample: str, description: str = ""):
+    """A real config field that the example generator emits as ``# key: sample``.
+
+    ``sample`` is the text shown after ``# key:`` (an illustrative value or
+    ``"..."`` placeholder); it is documentation only — the actual default is
+    ``default``.
+    """
+    return Field(
+        default,
+        description=description,
+        json_schema_extra={"emit": "commented", "sample": sample},
+    )
+
+
+# ---------------------------------------------------------------------------
+# Section models
+# ---------------------------------------------------------------------------
+
+class GeneralConfig(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    log_level: str = Field("INFO", description="DEBUG | INFO | WARNING | ERROR | CRITICAL")
+    log_file: str = Field("", description="Path to log file; empty = console only (run_pipeline.sh sets this automatically)")
+    llm_report: bool = Field(True, description="write a per-call LLM report under output/llm_report/")
+    llm_report_dir: str = Field("output/llm_report")
+    langfuse: bool = Field(True, description="send LLM traces to Langfuse when LANGFUSE_PUBLIC_KEY/SECRET_KEY are set (false to force-disable)")
+
+
+class TranscriptionConfig(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    compute_type: str = Field("float16")
+    batch_size: int = Field(16)
+    language: str = Field("ja", description="ISO 639-1 language code passed to WhisperX (e.g. ja, en)")
+    align_model: str = _commented("", sample="vumichien/wav2vec2-large-xlsr-japanese")
+
+
+class AudioSilenceConfig(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    section_comment: ClassVar[str] = (
+        "audio_silence stage: audio-silence (jump-cut) detection.\n"
+        "Runs ffmpeg silencedetect on the waveform and writes an editable\n"
+        "{stem}_cuts.txt checkpoint. NOTE: this is acoustic silence, distinct\n"
+        "from intervals.silence_threshold (which is a WhisperX word-gap heuristic)."
+    )
+    enabled: bool = Field(True, description="false = write an empty cut list (no audio cuts applied)")
+    noise: float = Field(-30.0, description="ffmpeg silencedetect noise threshold, in dB")
+    min_silence: float = Field(0.8, description="ffmpeg silencedetect minimum silence duration, seconds")
+
+
+class SentenceSplitConfig(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    section_comment: ClassVar[str] = (
+        "sentence_split stage: runs per source between audio_silence and text_filter.\n"
+        "An LLM re-segments the WhisperX transcript into one-sentence-per-line units\n"
+        "(rewriting {stem}.json and {stem}.txt). Disabled by default = byte-identical\n"
+        "copy-through (no behaviour change)."
+    )
+    enabled: bool = Field(False, description="Enable LLM sentence re-segmentation")
+    provider: str = Field("ollama_chat", description="LiteLLM provider prefix: ollama_chat | openai | gemini | anthropic")
+    api_base: str = Field("", description="Base URL; empty -> Ollama localhost default; leave empty for cloud providers")
+    model: str = Field("gpt-oss:120b", description='Model (passed to LiteLLM as "<provider>/<model>")')
+    api_key: str = Field("", description="API key for the provider (or set the provider's env var)")
+    temperature: float = Field(0.2)
+    thinking: bool | str = Field(False)
+    timeout: int = Field(300)
+    response_format: str = Field("json")
+    max_retries: int = Field(2, description="Extra attempts on LLM error / invalid ranges (0 = single attempt)")
+    retry_temp_step: float = Field(0.2)
+    retry_temp_cap: float = Field(0.8)
+    window_segments: int = Field(20, description="Segments per LLM window (the batch size); a window carries its trailing sentence to the next")
+    prompt: str = _commented(SENTENCE_SPLIT_PROMPT, sample='"..."', description="Bunsetsu-grouping prompt (has a sensible default)")
+
+
+class SummaryLLMConfig(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    section_comment: ClassVar[str] = "Summary LLM: generates context (summary + keywords) for the filter LLM"
+    enabled: bool = Field(False, description="Enable summary generation before filtering")
+    keywords: list[str] = _commented([], sample="[]", description="Constant keywords always injected into the filter LLM prompt")
+    provider: str = Field("ollama_chat", description="LiteLLM provider prefix: ollama_chat | openai | gemini | anthropic")
+    api_base: str = Field("", description="Base URL; empty -> Ollama localhost default; leave empty for cloud providers")
+    model: str = Field("qwen3.5:4b", description='Model name (passed to LiteLLM as "<provider>/<model>"; can differ from filter LLM)')
+    api_key: str = Field("", description="API key for the provider (or set the provider's env var)")
+    temperature: float = Field(0.3, description="Higher temperature for summarization")
+    thinking: bool | str = Field(False, description="Thinking mode for summary LLM")
+    timeout: int = Field(120, description="Longer timeout since full transcript is sent")
+    response_format: str = Field("json", description="Request a JSON object from the summary LLM")
+    prompt: str = _commented(SUMMARY_LLM_PROMPT, sample='"..."', description="System prompt for summary LLM (has a sensible default)")
+
+
+class TextFilterConfig(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    section_comment: ClassVar[str] = "text_filter stage: text editing checkpoint."
+    use_llm: bool = Field(False, description="Enable LLM text filter for the text-editing checkpoint")
+    provider: str = Field("ollama_chat", description="LiteLLM provider prefix: ollama_chat | openai | gemini | anthropic")
+    api_base: str = Field("", description="Base URL; empty -> Ollama localhost default; leave empty for cloud providers")
+    model: str = Field("qwen3.5:4b", description='Model name (passed to LiteLLM as "<provider>/<model>")')
+    api_key: str = Field("", description="API key for the provider (or set the provider's env var)")
+    batch_size: int = Field(10, description="Number of transcript segments per LLM call")
+    timeout: int = Field(60, description="API request timeout in seconds")
+    retry_on_invalid: bool = Field(True, description="On mangled lines, retry just those with a halved batch size")
+    retry_min_batch_size: int = Field(1, description="Floor for the halving retry; set equal to batch_size to disable")
+    prompt: str = _commented(TEXT_FILTER_PROMPT, sample='"..."', description="System prompt for LLM (has sensible default for Japanese)")
+    temperature: float = Field(0.1, description="LLM sampling temperature")
+    thinking: bool | str = Field(False, description='Thinking mode: true/false, or "low"/"medium"/"high"')
+    summary_llm: SummaryLLMConfig = Field(default_factory=SummaryLLMConfig)
+
+
+class SummaryConfig(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    section_comment: ClassVar[str] = (
+        "summary stage: runs once project-wide (over all videos) before director. A\n"
+        "larger LLM segments each transcript into line-range parts and summarises each,\n"
+        "then a reduce step writes one all-videos summary. Output summary.json is a\n"
+        "reviewable intermediate consumed by the plan + director stages. Disabled by\n"
+        "default (writes an empty summary = no-op)."
+    )
+    enabled: bool = Field(False, description="Enable the summary LLM")
+    provider: str = Field("ollama_chat", description="LiteLLM provider prefix: ollama_chat | openai | gemini | anthropic")
+    api_base: str = Field("", description="Base URL; empty -> Ollama localhost default; leave empty for cloud providers")
+    model: str = Field("gpt-oss:120b", description='A larger model (passed to LiteLLM as "<provider>/<model>")')
+    api_key: str = Field("", description="API key for the provider (or set the provider's env var)")
+    temperature: float = Field(0.3)
+    thinking: bool | str = Field(False)
+    timeout: int = Field(300)
+    response_format: str = Field("json")
+    max_retries: int = Field(2, description="Extra attempts on LLM error / unparseable JSON (0 = single attempt)")
+    retry_temp_step: float = Field(0.2)
+    retry_temp_cap: float = Field(0.8)
+    prompt: str = _commented(SUMMARY_PROMPT, sample='"..."', description="Per-video segment+summarise prompt (has a sensible default)")
+    overall_prompt: str = _commented(SUMMARY_OVERALL_PROMPT, sample='"..."', description="All-videos reduce prompt (has a sensible default)")
+
+
+class PlanConfig(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    section_comment: ClassVar[str] = (
+        "plan stage: runs once project-wide after summary, before director. A larger\n"
+        "LLM reads the per-part summaries (with line ranges) of all videos and gives a\n"
+        "coarse, cross-video editorial direction per part. Output plan.json is a\n"
+        "reviewable intermediate consumed by director. Disabled by default (no-op)."
+    )
+    enabled: bool = Field(False, description="Enable the plan LLM")
+    provider: str = Field("ollama_chat", description="LiteLLM provider prefix: ollama_chat | openai | gemini | anthropic")
+    api_base: str = Field("", description="Base URL; empty -> Ollama localhost default; leave empty for cloud providers")
+    model: str = Field("gpt-oss:120b", description='A larger model (passed to LiteLLM as "<provider>/<model>")')
+    api_key: str = Field("", description="API key for the provider (or set the provider's env var)")
+    temperature: float = Field(0.3)
+    thinking: bool | str = Field(False)
+    timeout: int = Field(300)
+    response_format: str = Field("json")
+    max_retries: int = Field(2, description="Extra attempts on LLM error / unparseable JSON (0 = single attempt)")
+    retry_temp_step: float = Field(0.2)
+    retry_temp_cap: float = Field(0.8)
+    prompt: str = _commented(PLAN_PROMPT, sample='"..."', description="System prompt (has a sensible default)")
+
+
+class DirectorConfig(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    section_comment: ClassVar[str] = (
+        "director stage (Pass A): a larger LLM reads the whole numbered transcript and\n"
+        "emits high-level edit operations as {stem}_director.json. It never re-outputs\n"
+        "the transcript text. Disabled by default (writes an empty op list = no-op)."
+    )
+    enabled: bool = Field(False, description="Enable the director LLM")
+    provider: str = Field("ollama_chat", description="LiteLLM provider prefix: ollama_chat | openai | gemini | anthropic")
+    api_base: str = Field("", description="Base URL; empty -> Ollama localhost default; leave empty for cloud providers")
+    model: str = Field("gpt-oss:120b", description='A larger model (passed to LiteLLM as "<provider>/<model>")')
+    api_key: str = Field("", description="API key for the provider (or set the provider's env var)")
+    temperature: float = Field(0.2)
+    thinking: bool | str = Field(False)
+    timeout: int = Field(300)
+    response_format: str = Field("json", description="JSON mode for reliable parsing")
+    max_retries: int = Field(2, description="Extra attempts on LLM error / unparseable JSON (0 = single attempt)")
+    retry_temp_step: float = Field(0.2, description="Temperature increment added on each retry")
+    retry_temp_cap: float = Field(0.8, description="Maximum temperature any retry uses")
+    prompt: str = _commented(DIRECTOR_PROMPT, sample='"..."', description="System prompt (has a sensible default)")
+
+
+class GuidedEditConfig(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    section_comment: ClassVar[str] = (
+        "guided_edit stage (Pass B2): a small local LLM applies each director op,\n"
+        "inserting <cut>/<speed>/<overlay>/<keep> tags (and {{old->new}} patches) into\n"
+        "the verbatim _edits.txt. Disabled by default (copies edits through)."
+    )
+    enabled: bool = Field(False, description="Enable applying director ops")
+    provider: str = Field("ollama_chat", description="LiteLLM provider prefix: ollama_chat | openai | gemini | anthropic")
+    api_base: str = Field("", description="Base URL; empty -> Ollama localhost default; leave empty for cloud providers")
+    model: str = Field("qwen3.5:4b", description='The same small model as text_filter is fine (passed to LiteLLM as "<provider>/<model>")')
+    api_key: str = Field("", description="API key for the provider (or set the provider's env var)")
+    temperature: float = Field(0.1)
+    thinking: bool | str = Field(False)
+    timeout: int = Field(60)
+    context_lines: int = Field(1, description='Lines of context shown to the LLM around an "edit" op boundary')
+    max_retries: int = Field(2, description="Extra attempts on LLM error / failed verification (0 = single attempt)")
+    retry_temp_step: float = Field(0.2, description="Temperature increment added on each retry")
+    retry_temp_cap: float = Field(0.8, description="Maximum temperature any retry uses")
+    prompt: str = _commented(GUIDED_EDIT_PROMPT, sample='"..."', description="System prompt (has a sensible default)")
+
+
+class CaptionConfig(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    max_bunsetu: int = Field(12, description="Maximum bunsetsu units per caption chunk")
+    max_duration: float = Field(4.0, description="Maximum seconds per caption chunk")
+    min_bunsetu: int = Field(3, description="Minimum bunsetsu before flushing chunk")
+    min_duration: float = Field(1.5, description="Minimum seconds before flushing chunk")
+    silence_flush: float = Field(1.5, description="Silence duration that forces chunk flush")
+    bunsetu_separator: str = Field(" ", description="Separator between bunsetsu units")
+    pre_margin: float = Field(0.0, description="Seconds to extend each caption before its start (clamped to previous caption end)")
+    post_margin: float = Field(0.0, description="Seconds to extend each caption after its end (clamped to next caption start)")
+
+
+class BunsetuConfig(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    char_eps: float = Field(0.02)
+    silence_max_word_span: float = Field(0.6)
+
+
+class IntervalsConfig(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    section_comment: ClassVar[str] = (
+        "intervals stage: patch application + keep-interval merge.\n"
+        "Audio cuts from audio_silence are unioned here."
+    )
+    silence_threshold: float = Field(1.5, description="WhisperX word-gap silence threshold, seconds (NOT the audio_silence detector)")
+    min_keep: float = Field(1.0, description="Minimum keep interval length in seconds")
+    keep_pre_margin: float = Field(1.0, description="Seconds to extend keep intervals before start")
+    keep_post_margin: float = Field(1.0, description="Seconds to extend keep intervals after end")
+    caption: CaptionConfig = Field(default_factory=CaptionConfig)
+    bunsetu: BunsetuConfig = Field(default_factory=BunsetuConfig)
+
+
+class CaptionStyleConfig(BaseModel):
+    # Open-ended: any extra key is forwarded 1:1 to the Blender TextStrip RNA
+    # attribute of the same name (incl. `font`), so extras must be allowed.
+    model_config = ConfigDict(extra="allow")
+    example_extra: ClassVar[str] = (
+        "# font: /abs/path/to/MyFont.ttf   # Absolute path to a font file; loaded as a Blender VectorFont.\n"
+        "# color: [1, 1, 1, 1]             # Font fill color (RGBA, 0.0 - 1.0); default white\n"
+        "# use_outline: false              # Enable text outline\n"
+        "# outline_color: [0, 0, 0, 1]     # Outline color (RGBA)\n"
+        "# use_box: false                  # Enable background box behind text\n"
+        "# box_color: [0, 0, 0, 0.5]       # Box color (RGBA)\n"
+        "# Any other key is forwarded verbatim to the Blender TextStrip attribute of the\n"
+        "# same name (see bpy.types.TextStrip), e.g. shadow_color / shadow_offset /\n"
+        "# shadow_blur / box_margin. An unknown key is logged and skipped."
+    )
+    font_size: int = Field(50)
+    alignment_x: str = Field("CENTER", description="LEFT | CENTER | RIGHT")
+    anchor_y: str = Field("BOTTOM", description="TOP | CENTER | BOTTOM")
+    location_x: float = Field(0.5, description="Horizontal position (0.0 - 1.0)")
+    location_y: float = Field(0.05, description="Vertical position (0.0 - 1.0)")
+    use_shadow: bool = Field(True, description="Enable text shadow")
+    wrap_width: float = Field(0.90, description="Text wrap width (0.0 = no wrap, 0.0 - 1.0)")
+
+
+class OverlayStyleConfig(BaseModel):
+    model_config = ConfigDict(extra="allow")
+    section_comment: ClassVar[str] = (
+        "Overlay TEXT strip style for <overlay text=\"...\"> markers in _edits.txt.\n"
+        "Any field not set here is inherited from caption_style."
+    )
+    example_extra: ClassVar[str] = (
+        "# font_size: 50       # inherits from caption_style if omitted\n"
+        "# alignment_x: CENTER\n"
+        "# location_x: 0.5\n"
+        "# color: [1, 1, 1, 1]  # overrides caption_style"
+    )
+    anchor_y: str = Field("TOP", description="default: TOP (overlays sit at top of frame)")
+    location_y: float = Field(0.95, description="default: 0.95")
+
+
+class SpeedMarkConfig(BaseModel):
+    model_config = ConfigDict(extra="allow")
+    section_comment: ClassVar[str] = "Speed-up mark: auto on-screen badge over every <speed> region."
+    example_extra: ClassVar[str] = "# color: [1, 1, 1, 1]   # Font fill color (RGBA); overrides caption_style"
+    enabled: bool = Field(True, description="set false to disable all speed badges")
+    template: str = Field("x{factor}", description="{factor} is the speed factor (one decimal, e.g. 2.0)")
+    font_size: int = Field(35)
+    alignment_x: str = Field("RIGHT")
+    anchor_y: str = Field("TOP")
+    location_x: float = Field(0.95)
+    location_y: float = Field(0.95)
+
+
+class BlenderConfig(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    section_comment: ClassVar[str] = "blender stage: Blender VSE layout."
+    default_fps: float = Field(30.0, description="Fallback FPS when source metadata unavailable")
+    use_proxy: bool = Field(True, description="Enable proxy on movie strips for smooth VSE playback")
+    proxy_size: int = Field(100, description="Proxy render size percentage: 25 | 50 | 75 | 100")
+    caption_style: CaptionStyleConfig = Field(default_factory=CaptionStyleConfig)
+    overlay_style: OverlayStyleConfig = Field(default_factory=OverlayStyleConfig)
+    speed_mark: SpeedMarkConfig = Field(default_factory=SpeedMarkConfig)
+
+
+class PipelineConfig(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    input_videos_dir: str = Field("src_video")
+    output_dir: str = Field("output", description="Root dir; stage outputs go to per-stage named subdirs")
+    from_stage: str = Field("transcription", description="Start from this stage; reuses earlier stage outputs")
+    to_stage: str = Field("blender", description="Stop after this stage (inclusive). Must not precede from_stage")
+
+
+class NagareClipConfig(BaseSettings):
+    """Root config. ``BaseSettings`` keeps env-var support available for the
+    future, but ``get_effective_config`` uses ``model_validate`` (which does not
+    read env), so current precedence is exactly CLI > YAML file > defaults."""
+    model_config = SettingsConfigDict(extra="forbid")
+    general: GeneralConfig = Field(default_factory=GeneralConfig)
+    transcription: TranscriptionConfig = Field(default_factory=TranscriptionConfig)
+    audio_silence: AudioSilenceConfig = Field(default_factory=AudioSilenceConfig)
+    sentence_split: SentenceSplitConfig = Field(default_factory=SentenceSplitConfig)
+    text_filter: TextFilterConfig = Field(default_factory=TextFilterConfig)
+    summary: SummaryConfig = Field(default_factory=SummaryConfig)
+    plan: PlanConfig = Field(default_factory=PlanConfig)
+    director: DirectorConfig = Field(default_factory=DirectorConfig)
+    guided_edit: GuidedEditConfig = Field(default_factory=GuidedEditConfig)
+    intervals: IntervalsConfig = Field(default_factory=IntervalsConfig)
+    blender: BlenderConfig = Field(default_factory=BlenderConfig)
+    pipeline: PipelineConfig = Field(default_factory=PipelineConfig)
+
+
+# Derived, NOT hand-authored: the canonical default dict.
+DEFAULTS: dict[str, Any] = NagareClipConfig.model_validate({}).model_dump()
+
+
+# ---------------------------------------------------------------------------
+# Loading + merging (dict boundary preserved)
+# ---------------------------------------------------------------------------
+
+def load_config(path: Path | None) -> dict:
+    """Load a YAML config file. Returns ``{}`` when *path* is ``None``."""
+    if path is None:
+        return {}
+    with path.open("r", encoding="utf-8") as f:
+        data = yaml.safe_load(f)
+    return data if isinstance(data, dict) else {}
+
+
+def deep_merge(base: dict, override: dict) -> dict:
+    """Recursively merge *override* into a copy of *base*. *override* wins."""
+    result = copy.deepcopy(base)
+    for key, value in override.items():
+        if key in result and isinstance(result[key], dict) and isinstance(value, dict):
+            result[key] = deep_merge(result[key], value)
+        else:
+            result[key] = copy.deepcopy(value)
+    return result
+
+
+def get_effective_config(
+    config_path: Path | None,
+    cli_overrides: dict | None = None,
+) -> dict:
+    """Return the fully resolved, validated config as a plain dict.
+
+    Precedence (highest wins): CLI overrides > YAML file > model defaults.
+    Unknown or wrongly-typed keys raise ``pydantic.ValidationError`` (except in
+    the open-ended Blender style blocks, which accept arbitrary extra keys).
+    """
+    merged = deep_merge(load_config(config_path), cli_overrides or {})
+    return NagareClipConfig.model_validate(merged).model_dump()
+```
+
+- [ ] **Step 4: Run the full config test module — verify PASS**
+
+Run: `uv run pytest tests/test_config.py -v`
+Expected: PASS. The new validation tests pass; `test_defaults_only` still passes (`get_effective_config(None) == DEFAULTS`); the untouched `TestExampleConfigInSync` still passes (every new DEFAULTS leaf already appears in the current `config.example.yml`).
+
+- [ ] **Step 5: Verify the mutation-catch (per TDD guideline)**
+
+Confirm the rejection tests actually bite: temporarily change `NagareClipConfig`'s `model_config` to `SettingsConfigDict(extra="ignore")`, run `uv run pytest tests/test_config.py -k "rejected" -v`, confirm they FAIL (permissive model accepts the bad keys), then revert to `extra="forbid"` and confirm PASS again. Record the before/after in the task notes.
+
+- [ ] **Step 6: Run the full suite + validate (nothing else regressed)**
+
+Run: `uv run pytest -q && make validate`
+Expected: all pass (no stage consumer changed; dict boundary holds).
+
+- [ ] **Step 7: Commit**
+
+```bash
+git add src/nagare_clip/config.py tests/test_config.py
+git commit -m "refactor(config): typed pydantic-settings models with load-time validation
+
+DEFAULTS is now derived from the models; unknown/typo'd/mistyped keys are
+rejected at get_effective_config (except open-ended blender style blocks).
+Reconciles pipeline.from_stage/to_stage to stage-name strings and promotes
+blender.caption_style.use_shadow/wrap_width to real defaults."
+```
+
+---
+
+## Task 2: Generate `config.example.yml` from the models
+
+Add `generate_example_yaml()` + a `--write-example` entry point, regenerate `config.example.yml`, and replace the heuristic sync test with an exact-equality (drift) test plus a completeness test.
+
+**Files:**
+- Modify: `src/nagare_clip/config.py` (append generator + `__main__` block)
+- Regenerate: `config.example.yml`
+- Modify: `tests/test_config.py` (replace `TestExampleConfigInSync`)
+- Modify: `Makefile` (add `config-example` target)
+
+**Interfaces:**
+- Consumes: all section models + `DEFAULTS` from Task 1.
+- Produces:
+  - `PREAMBLE: str`
+  - `generate_example_yaml() -> str`
+  - `python -m nagare_clip.config --write-example`
+
+- [ ] **Step 1: Write the failing tests**
+
+In `tests/test_config.py`, DELETE the entire `class TestExampleConfigInSync` and its module-level helpers `_leaf_paths`, `_has_real_path`, `_section_block`, `_missing_example_paths` ONLY IF no other test uses them — `_leaf_paths` is reused below, so KEEP `_leaf_paths` and delete the other three helpers and the class. Then add:
+
+```python
+from nagare_clip.config import generate_example_yaml
+
+
+def test_example_file_matches_generator():
+    """config.example.yml must be exactly what the generator emits (regenerate
+    with `make config-example` to fix drift)."""
+    on_disk = Path("config.example.yml").read_text(encoding="utf-8")
+    assert generate_example_yaml() == on_disk
+
+
+def test_generated_example_is_valid_yaml_covering_all_defaults():
+    """Every DEFAULTS leaf appears in the generated example as a real key or a
+    commented `# leaf:` line in its own top-level section."""
+    text = generate_example_yaml()
+    data = yaml.safe_load(text) or {}
+
+    def has_real(path: str) -> bool:
+        cur: Any = data
+        for part in path.split("."):
+            if not isinstance(cur, dict) or part not in cur:
+                return False
+            cur = cur[part]
+        return True
+
+    lines = text.splitlines()
+    for path in _leaf_paths(DEFAULTS):
+        if has_real(path):
+            continue
+        leaf = path.split(".")[-1]
+        assert any(re.match(rf"^\s*#\s*{re.escape(leaf)}\s*:", ln) for ln in lines), (
+            f"DEFAULTS leaf {path!r} missing from generated example"
+        )
+```
+
+- [ ] **Step 2: Run — verify FAIL**
+
+Run: `uv run pytest tests/test_config.py -k "example_file_matches or generated_example" -v`
+Expected: FAIL — `generate_example_yaml` does not exist yet (ImportError/AttributeError).
+
+- [ ] **Step 3: Append the generator to `src/nagare_clip/config.py`**
+
+Add this to the end of `config.py`:
+
+```python
+# ---------------------------------------------------------------------------
+# config.example.yml generation
+# ---------------------------------------------------------------------------
+
+PREAMBLE = """\
+# Example configuration for nagare-clip pipeline.
+# Copy to your project and pass via --config flag.
+# All values shown are the defaults; remove or comment out any you don't want.
+#
+# LLM provider selection (applies to every LLM stage below):
+#   Set `provider` to one of: ollama_chat (default, local), openai, gemini, anthropic.
+#   `model` is the provider's model name; LiteLLM receives "<provider>/<model>".
+#   For cloud providers set `api_key` (or the provider's env var, e.g.
+#   OPENAI_API_KEY / GEMINI_API_KEY / ANTHROPIC_API_KEY) and leave `api_base` empty.
+#
+# Langfuse tracing (optional, off unless keys are present):
+#   Export LANGFUSE_PUBLIC_KEY and LANGFUSE_SECRET_KEY to enable tracing. Disable
+#   via general.langfuse: false or NAGARE_LANGFUSE=0.
+"""
+
+
+def _fmt_scalar(value: object) -> str:
+    """Render a scalar/list default as inline YAML (deterministic)."""
+    if isinstance(value, bool):
+        return "true" if value else "false"
+    if isinstance(value, (int, float)):
+        return repr(value)
+    if isinstance(value, list):
+        return "[" + ", ".join(_fmt_scalar(v) for v in value) + "]"
+    if value is None:
+        return "null"
+    s = str(value)
+    if s == "":
+        return '""'
+    if re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", s):
+        return s
+    return '"' + s.replace('"', '\\"') + '"'
+
+
+def _render_model(model_cls: type[BaseModel], indent: int) -> list[str]:
+    """Render a model's fields (and nested models) as indented YAML lines."""
+    pad = " " * indent
+    lines: list[str] = []
+    for name, field in model_cls.model_fields.items():
+        ann = field.annotation
+        if isinstance(ann, type) and issubclass(ann, BaseModel):
+            sub_comment = getattr(ann, "section_comment", "")
+            if sub_comment:
+                lines += [f"{pad}# {c}" for c in sub_comment.split("\n")]
+            lines.append(f"{pad}{name}:")
+            lines += _render_model(ann, indent + 2)
+            continue
+        extra = field.json_schema_extra or {}
+        desc = field.description or ""
+        desc_suffix = f"   # {desc}" if desc else ""
+        if extra.get("emit") == "commented":
+            lines.append(f"{pad}# {name}: {extra['sample']}{desc_suffix}")
+        else:
+            lines.append(f"{pad}{name}: {_fmt_scalar(field.default)}{desc_suffix}")
+    example_extra = getattr(model_cls, "example_extra", "")
+    if example_extra:
+        lines += [f"{pad}{c}" for c in example_extra.split("\n")]
+    return lines
+
+
+def generate_example_yaml() -> str:
+    """Generate config.example.yml text from the models (single source of truth)."""
+    out: list[str] = [PREAMBLE.rstrip("\n"), ""]
+    for name, field in NagareClipConfig.model_fields.items():
+        model_cls = field.annotation
+        section_comment = getattr(model_cls, "section_comment", "")
+        if section_comment:
+            out += [f"# {c}" for c in section_comment.split("\n")]
+        out.append(f"{name}:")
+        out += _render_model(model_cls, 2)
+        out.append("")
+    return "\n".join(out).rstrip("\n") + "\n"
+
+
+def _main(argv: list[str]) -> int:
+    if argv and argv[0] == "--write-example":
+        Path("config.example.yml").write_text(generate_example_yaml(), encoding="utf-8")
+        print("Wrote config.example.yml")
+        return 0
+    print("usage: python -m nagare_clip.config --write-example", file=sys.stderr)
+    return 2
+
+
+if __name__ == "__main__":
+    raise SystemExit(_main(sys.argv[1:]))
+```
+
+Note: `_render_model` reads `section_comment`/`example_extra` as plain class attributes (they are `ClassVar`, so they are NOT pydantic fields and are safe to read via `getattr`).
+
+- [ ] **Step 4: Regenerate the example file**
+
+Run: `uv run python -m nagare_clip.config --write-example`
+Then inspect it: `uv run python -c "import yaml; yaml.safe_load(open('config.example.yml')); print('valid yaml')"`
+Expected: prints `Wrote config.example.yml` then `valid yaml`. Open the file and eyeball that every section is present with sensible comments (this regenerated file replaces the hand-formatted one — incidental formatting differs, content is equivalent).
+
+- [ ] **Step 5: Run the sync tests — verify PASS**
+
+Run: `uv run pytest tests/test_config.py -v`
+Expected: PASS — `test_example_file_matches_generator` passes by construction (file == generator output), and the completeness test confirms no DEFAULTS leaf was dropped.
+
+- [ ] **Step 6: Verify the drift guard bites (mutation check)**
+
+Edit `config.example.yml` by hand (e.g. change `min_keep: 1.0` to `min_keep: 2.0`), run `uv run pytest tests/test_config.py::test_example_file_matches_generator -v`, confirm it FAILS (drift detected), then regenerate with `uv run python -m nagare_clip.config --write-example` and confirm PASS. Record in notes.
+
+- [ ] **Step 7: Add the Makefile target**
+
+In `Makefile`, add a `config-example` target near the other dev targets and list it in `help`:
+
+```makefile
+config-example: ## Regenerate config.example.yml from the config models
+	uv run python -m nagare_clip.config --write-example
+```
+
+Run: `make config-example` and confirm it prints `Wrote config.example.yml` and leaves the file unchanged (git diff empty).
+
+- [ ] **Step 8: Commit**
+
+```bash
+git add src/nagare_clip/config.py config.example.yml tests/test_config.py Makefile
+git commit -m "feat(config): generate config.example.yml from models; exact-match sync test
+
+Replaces the heuristic drift test with generate_example_yaml() equality plus a
+completeness check. Adds `make config-example` / --write-example."
+```
+
+---
+
+## Task 3: Docs + final verification
+
+Update agent/user docs to describe the new system and run the full CI-equivalent gate.
+
+**Files:**
+- Modify: `AGENTS.md` (Configuration System section)
+- Check/modify: `README.md`
+
+**Interfaces:** none (documentation + verification only).
+
+- [ ] **Step 1: Update `AGENTS.md`**
+
+In the "Configuration System" section, replace the description of the `DEFAULTS` dict + `TestExampleConfigInSync` heuristic with the new model. Edit the bullet list to read:
+
+```markdown
+All tunable parameters are defined as typed **pydantic-settings models** in
+`src/nagare_clip/config.py` (one `BaseModel` per section, composed by
+`NagareClipConfig`):
+
+- The models are the single source of truth for defaults, types, and docs.
+  `DEFAULTS` is **derived** (`NagareClipConfig.model_validate({}).model_dump()`).
+- `get_effective_config(config_path, cli_overrides)` merges defaults ← file ←
+  CLI, then **validates**: unknown or wrongly-typed keys raise `ValidationError`
+  (so a typo no longer vanishes silently). Exception: `blender.caption_style`,
+  `overlay_style`, and `speed_mark` use `extra="allow"` — they are open-ended
+  Blender TextStrip pass-throughs (any RNA attribute incl. `font`).
+- It still returns a plain `dict` (the "dict boundary"), so all stage CLIs and
+  `call_llm`/`llm_retry` are unchanged.
+- `config.example.yml` is **generated** from the models — run
+  `make config-example`. A test (`tests/test_config.py::test_example_file_matches_generator`)
+  fails if the committed file drifts from the generator output.
+
+**Priority order (highest first):** CLI flags > YAML config file > model defaults.
+
+Known residual: `scripts/run_pipeline.sh` still reads a few `pipeline.*`,
+`transcription.*`, and `audio_silence.*` values from raw YAML with its own inline
+defaults (not validated). Keep those defaults consistent with the models.
+```
+
+Confirm the surrounding text (the `intervals/cli.py ... --config` paragraph and the `run_pipeline.sh reads pipeline.*` paragraph) still reads correctly after the edit.
+
+- [ ] **Step 2: Check README for stale config docs**
+
+Run: `grep -n "DEFAULTS\|config.example\|TestExampleConfigInSync\|deep_merge" README.md`
+If any hit describes the old hand-maintained dict or the heuristic sync test, update it to reference the generated example (`make config-example`) and validation. If no hits, note "README needs no change" and skip.
+
+- [ ] **Step 3: Full CI gate**
+
+Run: `make check`
+Expected: `lint`, `format-check`, `validate`, and `test` all pass. If ruff format flags `config.py`, run `make format` and re-run `make check`.
+
+- [ ] **Step 4: Commit**
+
+```bash
+git add AGENTS.md README.md
+git commit -m "docs(config): document pydantic-settings config system and generated example"
+```
+
+---
+
+## Self-Review Notes
+
+**Spec coverage:**
+- Typed models / single source of truth → Task 1 (models + derived DEFAULTS).
+- Load-time validation, unknown-key rejection → Task 1 (Steps 1, 3; `extra="forbid"`).
+- Blender open-ended `extra="allow"` → Task 1 (models + `test_blender_style_allows_extra_keys`).
+- `pipeline.to_stage` + string stage defaults → Task 1 (`PipelineConfig` + tests).
+- `caption_style.use_shadow`/`wrap_width` promotion → Task 1 (`CaptionStyleConfig` + test).
+- Generated example + structural sync test → Task 2.
+- Dict boundary (consumers unchanged) → Global Constraints + no CLI edits anywhere.
+- Docs update → Task 3.
+- Known residual (`run_pipeline.sh`) → documented in AGENTS.md (Task 3), not migrated (spec non-goal).
+
+**Type consistency:** `generate_example_yaml`, `NagareClipConfig`, `DEFAULTS`, `get_effective_config`, `load_config`, `deep_merge`, `_render_model`, `_fmt_scalar`, `PREAMBLE` names are used identically across tasks. `ClassVar` attrs `section_comment`/`example_extra` read via `getattr` (not fields). `thinking: bool | str` matches `call_llm`'s tolerance of bool-or-level.
+
+**Placeholder scan:** no TBD/TODO; all code blocks are complete; prompt strings copied verbatim from the existing module.
