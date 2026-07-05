@@ -17,17 +17,13 @@ dependencies = [
     "pydantic-settings>=2.14.2",
 ]
 
-[project.optional-dependencies]
-dev = [
-    "pytest",
-]
-
 [project.scripts]
 nagare-clip-intervals = "nagare_clip.intervals.cli:main"
 
 [dependency-groups]
 dev = [
     "pytest",
+    "ruff",
 ]
 
 [tool.hatch.build.targets.wheel]
@@ -35,3 +31,22 @@ packages = ["src/nagare_clip"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+
+[tool.ruff]
+target-version = "py311"
+line-length = 100
+
+[tool.ruff.lint]
+# E/F: pyflakes + pycodestyle errors, I: import sorting, UP: pyupgrade,
+# B: bugbear. Keep the set small so it stays green and useful.
+select = ["E", "F", "I", "UP", "B"]
+ignore = [
+    "E501",  # line length is handled by the formatter, not enforced hard
+    "B905",  # zip strict=: adding it could change runtime truncation behavior
+]
+
+[tool.ruff.lint.per-file-ignores]
+# Tests deliberately do mid-file imports (path/env setup) and bare re-raises.
+"tests/**" = ["E402", "B904"]
+# blender_cli bootstraps sys.path before importing bpy and the package.
+"src/nagare_clip/blender/blender_cli.py" = ["E402"]
