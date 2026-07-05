@@ -1,0 +1,5 @@
+# audio_silence — runtime notes
+
+See the [stage overview in AGENTS.md](../../AGENTS.md#audio_silence--audio-silence-jump-cut-detection).
+
+- Audio-silence detection runs ffmpeg `silencedetect` in the whisperx container; `run_pipeline.sh` redirects stderr to `{stem}_silencedetect.log`, `detect.py` parses it (duration from ffmpeg's own `Duration:` line, no ffprobe), `cuts_file.py` writes `{stem}_cuts.txt`. Config: `audio_silence.enabled` (default `true`), `.noise` (dB, default `-30.0`), `.min_silence` (s, default `0.8`) — distinct from `intervals.silence_threshold` (a WhisperX word-gap heuristic in the interval stage). `_cuts.txt` is human-editable; blank/`#`/malformed/`start>=end` lines are skipped with a warning by `read_cuts()`. The interval stage's optional `--cuts-txt` unions these ranges into the word-timing excludes before invert; omitting it reproduces the prior behaviour exactly (regression-guarded by `tests/test_cli_cuts_merge.py`).
