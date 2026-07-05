@@ -202,13 +202,28 @@ tests/
 
 ## Configuration System
 
-All tunable parameters are centralised in `src/nagare_clip/config.py`:
+All tunable parameters are defined as typed **pydantic-settings models** in
+`src/nagare_clip/config.py` (one `BaseModel` per section, composed by
+`NagareClipConfig`):
 
-- `DEFAULTS` dict holds the canonical defaults for all sections.
-- `get_effective_config(config_path, cli_overrides)` merges DEFAULTS ← config file ← CLI overrides (highest priority wins).
-- `config.example.yml` documents every key with its default value; copy it to start a project config. **A lint test (`tests/test_config.py::TestExampleConfigInSync`) fails if any `DEFAULTS` leaf is absent from `config.example.yml`** — every new default must be added to the example (as a real key, or as a documented `# key:` comment in the same top-level section for things like prompts / advanced blocks). Extra example keys are ignored by design.
+- The models are the single source of truth for defaults, types, and docs.
+  `DEFAULTS` is **derived** (`NagareClipConfig.model_validate({}).model_dump()`).
+- `get_effective_config(config_path, cli_overrides)` merges defaults ← file ←
+  CLI, then **validates**: unknown or wrongly-typed keys raise `ValidationError`
+  (so a typo no longer vanishes silently). Exception: `blender.caption_style`,
+  `overlay_style`, and `speed_mark` use `extra="allow"` — they are open-ended
+  Blender TextStrip pass-throughs (any RNA attribute incl. `font`).
+- It still returns a plain `dict` (the "dict boundary"), so all stage CLIs and
+  `call_llm`/`llm_retry` are unchanged.
+- `config.example.yml` is **generated** from the models — run
+  `make config-example`. A test (`tests/test_config.py::test_example_file_matches_generator`)
+  fails if the committed file drifts from the generator output.
 
-**Priority order (highest first):** CLI flags > YAML config file > built-in defaults.
+**Priority order (highest first):** CLI flags > YAML config file > model defaults.
+
+Known residual: `scripts/run_pipeline.sh` still reads a few `pipeline.*`,
+`transcription.*`, and `audio_silence.*` values from raw YAML with its own inline
+defaults (not validated). Keep those defaults consistent with the models.
 
 All LLM stages (`sentence_split`, `text_filter` + its `summary_llm`, `summary`, `plan`, `director`, `guided_edit`) route through `nagare_clip.llm_client.call_llm` (LiteLLM). Each block selects its backend with a `provider` key (default `ollama_chat`); the model id sent to LiteLLM is `"<provider>/<model>"`. An empty `api_base` falls back to `http://localhost:11434` for an ollama provider, or is omitted for a cloud provider. `api_key` is forwarded when set (or use the provider's env var). `response_format: "json"` maps to a JSON-object request; `thinking` maps to LiteLLM `reasoning_effort` (best-effort per provider).
 
