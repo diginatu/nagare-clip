@@ -83,9 +83,23 @@ NagareClipConfig(BaseSettings)          # extra="forbid"
 └─ pipeline:       PipelineConfig
 ```
 
-- **`model_config = SettingsConfigDict(extra="forbid")`** on every model. This is
-  the validation win: unknown top-level sections *and* unknown/typo'd leaf keys
-  raise `ValidationError`.
+- **`extra` is a per-model policy, not global:**
+  - **`extra="forbid"`** on every model *except* the three Blender style blocks.
+    This is the validation win: unknown top-level sections *and* unknown/typo'd
+    leaf keys raise `ValidationError`.
+  - **`extra="allow"`** on `CaptionStyleConfig`, `OverlayStyleConfig`, and
+    `SpeedMarkConfig`. These are **intentionally open-ended style pass-throughs**:
+    `blender/timeline.py::apply_text_style` forwards *arbitrary* keys 1:1 to
+    Blender TextStrip RNA attributes (`font` — an absolute font path loaded into
+    a `VectorFont` — plus `shadow_blur`, `shadow_color`, `box_margin`, …), none
+    of which live in `DEFAULTS`. Forbidding extras here would break custom fonts
+    and arbitrary styling (covered by `tests/blender/test_text_style.py`). The
+    known 5 layout keys (`font_size`, `alignment_x`, `anchor_y`, `location_x`,
+    `location_y`) are still typed fields; only *additional* keys are allowed
+    through. A typo'd style key (`font_sze`) is therefore *not* caught at config
+    load — but that already matches today's behavior (Blender RNA rejects it and
+    `apply_text_style` logs "Unknown caption_style key ignored"), so nothing
+    regresses.
 - **Every field carries its default and a `description`** ported from the
   corresponding comment in today's `config.example.yml` (e.g.
   `log_level: str = Field("INFO", description="DEBUG | INFO | WARNING | ERROR | CRITICAL")`).
@@ -159,6 +173,10 @@ Changed / added:
   Drift becomes impossible; regenerating is the fix.
 - **New `test_pipeline_to_stage_valid`.** `pipeline.to_stage` set in YAML is
   accepted (guards the migration hazard above).
+- **New `test_blender_style_allows_extra_keys`.** `blender.caption_style.font`
+  (and an arbitrary key like `shadow_blur`) survive `get_effective_config` and
+  appear in the returned dict — guards the open-ended-style-block hazard so a
+  future "tighten everything to forbid" change can't silently break custom fonts.
 - **New default-snapshot guard** (optional): assert a handful of representative
   `DEFAULTS` leaves keep their current values, so refactoring the models can't
   silently change a default.
@@ -190,9 +208,12 @@ migration.
   comments into field `description`s + `section_comment`s so the output stays
   human-friendly. The sync test then guarantees the committed file *is* the
   generated output.
-- **`extra="forbid"` breaks a real, currently-used key.** Only known instance is
-  `pipeline.to_stage`, explicitly added. Inventory confirmed all keys read by
-  `run_pipeline.sh` exist in the models.
+- **`extra="forbid"` breaks a real, currently-used key.** Two instances found:
+  (1) `pipeline.to_stage`, explicitly added to the model; (2) the Blender style
+  blocks' open-ended `font`/RNA pass-through keys, handled by scoping those three
+  models to `extra="allow"` (see Model structure). Inventory confirmed all other
+  keys read by `run_pipeline.sh` and by `blender/timeline.py` exist in / are
+  permitted by the models.
 - **Behavior flip is intended but visible.** `test_unknown_keys_preserved`
   flipping is a deliberate, documented change, not a regression.
 
