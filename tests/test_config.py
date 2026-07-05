@@ -30,6 +30,22 @@ def _leaf_paths(d: dict[str, Any], prefix: str = "") -> Iterator[str]:
             yield path
 
 
+def _top_section_lines(text: str, top: str) -> list[str]:
+    """Lines of the ``top:`` top-level section (until the next column-0 key or EOF)."""
+    lines = text.splitlines()
+    start = next(
+        (i for i, ln in enumerate(lines) if re.match(rf"^{re.escape(top)}\s*:", ln)),
+        None,
+    )
+    if start is None:
+        return []
+    end = next(
+        (j for j in range(start + 1, len(lines)) if re.match(r"^\w+\s*:", lines[j])),
+        len(lines),
+    )
+    return lines[start:end]
+
+
 def test_example_file_matches_generator():
     """config.example.yml must be exactly what the generator emits (regenerate
     with `make config-example` to fix drift)."""
@@ -51,13 +67,13 @@ def test_generated_example_is_valid_yaml_covering_all_defaults():
             cur = cur[part]
         return True
 
-    lines = text.splitlines()
     for path in _leaf_paths(DEFAULTS):
         if has_real(path):
             continue
-        leaf = path.split(".")[-1]
-        assert any(re.match(rf"^\s*#\s*{re.escape(leaf)}\s*:", ln) for ln in lines), (
-            f"DEFAULTS leaf {path!r} missing from generated example"
+        top, leaf = path.split(".")[0], path.split(".")[-1]
+        block = _top_section_lines(text, top)
+        assert any(re.match(rf"^\s*#\s*{re.escape(leaf)}\s*:", ln) for ln in block), (
+            f"DEFAULTS leaf {path!r} missing from generated example section {top!r}"
         )
 
 
