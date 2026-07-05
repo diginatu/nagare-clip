@@ -19,7 +19,6 @@ from typing import Any, ClassVar
 
 import yaml
 from pydantic import BaseModel, ConfigDict, Field
-from pydantic_settings import BaseSettings, SettingsConfigDict
 
 # ---------------------------------------------------------------------------
 # Long prompt defaults (verbatim; kept out of the class bodies for readability)
@@ -633,12 +632,13 @@ class PipelineConfig(BaseModel):
     )
 
 
-class NagareClipConfig(BaseSettings):
-    """Root config. ``BaseSettings`` keeps env-var support available for the
-    future, but ``get_effective_config`` uses ``model_validate`` (which does not
-    read env), so current precedence is exactly CLI > YAML file > defaults."""
+class NagareClipConfig(BaseModel):
+    """Root config model. Plain BaseModel -- no environment-variable source.
+    Precedence (CLI > YAML file > model defaults) is realised entirely by the
+    explicit merge in get_effective_config; validation happens via
+    model_validate."""
 
-    model_config = SettingsConfigDict(extra="forbid")
+    model_config = ConfigDict(extra="forbid")
     general: GeneralConfig = Field(default_factory=GeneralConfig)
     transcription: TranscriptionConfig = Field(default_factory=TranscriptionConfig)
     audio_silence: AudioSilenceConfig = Field(default_factory=AudioSilenceConfig)

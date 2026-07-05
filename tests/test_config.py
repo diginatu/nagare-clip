@@ -400,3 +400,19 @@ def test_sentence_split_defaults_present():
     assert sp["max_retries"] == 2
     assert sp["response_format"] == "json"
     assert isinstance(sp["prompt"], str) and sp["prompt"]
+
+
+def test_section_named_env_var_does_not_override_default(monkeypatch):
+    """A top-level section name as an env var must NOT leak into config
+    (no environment config source; precedence is CLI > file > defaults only)."""
+    monkeypatch.setenv("SUMMARY", '{"model":"LEAKED"}')
+    cfg = get_effective_config(None)
+    assert cfg["summary"]["model"] == "gpt-oss:120b"
+
+
+def test_scalar_env_var_colliding_with_section_does_not_crash(monkeypatch):
+    """A non-JSON env var whose name collides with a section must not make
+    get_effective_config raise."""
+    monkeypatch.setenv("PLAN", "short")
+    cfg = get_effective_config(None)  # must not raise
+    assert cfg["plan"]["enabled"] is False
