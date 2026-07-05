@@ -14,14 +14,16 @@ from __future__ import annotations
 
 import json
 import logging
+from collections.abc import Callable
 from dataclasses import dataclass, field
-from typing import Any, Callable, Dict, List, Optional, Tuple
+from typing import Any
 
 from nagare_clip.director.director_llm import (
     _FENCE_RE,
     _coerce_lines,
     format_numbered_transcript,
 )
+from nagare_clip.llm_client import with_trace_meta
 from nagare_clip.llm_report import (
     DROPPED_ITEMS,
     LLM_ERROR,
@@ -31,28 +33,27 @@ from nagare_clip.llm_report import (
     UNPARSEABLE,
     Recorder,
 )
-from nagare_clip.llm_client import with_trace_meta
 from nagare_clip.llm_retry import cfg_for_attempt, retry_attempts
 from nagare_clip.text_filter.llm_filter import _call_llm
 
 logger = logging.getLogger(__name__)
 
-CallLLM = Callable[[List[Dict[str, str]], Dict[str, Any]], str]
+CallLLM = Callable[[list[dict[str, str]], dict[str, Any]], str]
 
 
 @dataclass
 class PartSummary:
     stem: str
-    lines: Tuple[int, int]  # 1-based inclusive (start, end)
+    lines: tuple[int, int]  # 1-based inclusive (start, end)
     summary: str
-    start: Optional[float] = None  # part start time (s), from WhisperX segments
-    end: Optional[float] = None    # part end time (s)
+    start: float | None = None  # part start time (s), from WhisperX segments
+    end: float | None = None  # part end time (s)
 
 
 @dataclass
 class ProjectSummary:
     summary: str
-    parts: List[PartSummary] = field(default_factory=list)
+    parts: list[PartSummary] = field(default_factory=list)
 
 
 def _strip_fence(response: str) -> str:
@@ -62,14 +63,15 @@ def _strip_fence(response: str) -> str:
 
 
 def _parse_parts_response(
-    response: str, stem: str, num_lines: int, drops: Optional[List[str]] = None
-) -> Optional[List[PartSummary]]:
+    response: str, stem: str, num_lines: int, drops: list[str] | None = None
+) -> list[PartSummary] | None:
     """Parse a ``{"parts": [{"lines": [a,b], "summary": "…"}]}`` response.
 
     Returns ``None`` on a hard parse failure (invalid JSON / no ``parts`` array)
     so the caller can retry; otherwise the (possibly empty) validated list, with
     malformed/out-of-range entries dropped (logged).
     """
+
     def _drop(msg: str) -> None:
         logger.warning("summary: %s", msg)
         if drops is not None:
@@ -84,7 +86,7 @@ def _parse_parts_response(
         logger.warning("summary: parts response has no 'parts' array; ignoring")
         return None
 
-    parts: List[PartSummary] = []
+    parts: list[PartSummary] = []
     for raw in data["parts"]:
         if not isinstance(raw, dict):
             continue
@@ -102,12 +104,12 @@ def _parse_parts_response(
 
 def segment_video(
     stem: str,
-    clean_lines: List[str],
-    cfg: Dict[str, Any],
+    clean_lines: list[str],
+    cfg: dict[str, Any],
     *,
     call_llm: CallLLM = _call_llm,
     recorder: Recorder = NULL_RECORDER,
-) -> List[PartSummary]:
+) -> list[PartSummary]:
     """Segment one video's transcript into summarised parts (line ranges)."""
     messages = [
         {"role": "system", "content": cfg.get("prompt", "")},
@@ -122,27 +124,40 @@ def segment_video(
         except Exception as e:  # noqa: BLE001 - recoverable
             logger.warning(
                 "summary: segment LLM call failed (attempt %d/%d) for %s",
-                attempt + 1, attempts, stem, exc_info=True,
+                attempt + 1,
+                attempts,
+                stem,
+                exc_info=True,
             )
             recorder.attempt(
-                unit=stem, attempt=attempt, total=attempts, messages=messages,
-                error=str(e), outcome=LLM_ERROR, reason="LLM call failed",
+                unit=stem,
+                attempt=attempt,
+                total=attempts,
+                messages=messages,
+                error=str(e),
+                outcome=LLM_ERROR,
+                reason="LLM call failed",
                 cfg=attempt_cfg,
             )
             continue
-        drops: List[str] = []
-        parts = _parse_parts_response(
-            response, stem, num_lines=len(clean_lines), drops=drops
-        )
+        drops: list[str] = []
+        parts = _parse_parts_response(response, stem, num_lines=len(clean_lines), drops=drops)
         if parts is None:
             recorder.attempt(
-                unit=stem, attempt=attempt, total=attempts, messages=messages,
-                response=response, outcome=UNPARSEABLE,
-                reason="invalid JSON / no 'parts' array", cfg=attempt_cfg,
+                unit=stem,
+                attempt=attempt,
+                total=attempts,
+                messages=messages,
+                response=response,
+                outcome=UNPARSEABLE,
+                reason="invalid JSON / no 'parts' array",
+                cfg=attempt_cfg,
             )
             logger.warning(
                 "summary: segment response unparseable (attempt %d/%d) for %s",
-                attempt + 1, attempts, stem,
+                attempt + 1,
+                attempts,
+                stem,
             )
             continue
         if drops:
@@ -152,8 +167,14 @@ def segment_video(
         else:
             outcome, reason = OK, ""
         recorder.attempt(
-            unit=stem, attempt=attempt, total=attempts, messages=messages,
-            response=response, outcome=outcome, reason=reason, cfg=attempt_cfg,
+            unit=stem,
+            attempt=attempt,
+            total=attempts,
+            messages=messages,
+            response=response,
+            outcome=outcome,
+            reason=reason,
+            cfg=attempt_cfg,
         )
         recorder.flush_unit(stem, outcome=outcome, reason=reason)
         return parts
@@ -162,14 +183,13 @@ def segment_video(
     return []
 
 
-def _format_parts_doc(parts: List[PartSummary]) -> str:
+def _format_parts_doc(parts: list[PartSummary]) -> str:
     return "\n".join(
-        f"{i + 1}: {p.stem} [{p.lines[0]}-{p.lines[1]}] — {p.summary}"
-        for i, p in enumerate(parts)
+        f"{i + 1}: {p.stem} [{p.lines[0]}-{p.lines[1]}] — {p.summary}" for i, p in enumerate(parts)
     )
 
 
-def _parse_overall_response(response: str) -> Optional[str]:
+def _parse_overall_response(response: str) -> str | None:
     try:
         data = json.loads(_strip_fence(response))
     except (ValueError, TypeError):
@@ -181,8 +201,8 @@ def _parse_overall_response(response: str) -> Optional[str]:
 
 
 def generate_project_summary(
-    parts: List[PartSummary],
-    cfg: Dict[str, Any],
+    parts: list[PartSummary],
+    cfg: dict[str, Any],
     *,
     call_llm: CallLLM = _call_llm,
     recorder: Recorder = NULL_RECORDER,
@@ -208,16 +228,26 @@ def generate_project_summary(
                 exc_info=True,
             )
             recorder.attempt(
-                unit="overall", attempt=attempt, total=attempts, messages=messages,
-                error=str(e), outcome=LLM_ERROR, reason="LLM call failed",
+                unit="overall",
+                attempt=attempt,
+                total=attempts,
+                messages=messages,
+                error=str(e),
+                outcome=LLM_ERROR,
+                reason="LLM call failed",
                 cfg=attempt_cfg,
             )
             continue
         summary = _parse_overall_response(response)
         if summary is None:
             recorder.attempt(
-                unit="overall", attempt=attempt, total=attempts, messages=messages,
-                response=response, outcome=UNPARSEABLE, reason="no 'summary' string",
+                unit="overall",
+                attempt=attempt,
+                total=attempts,
+                messages=messages,
+                response=response,
+                outcome=UNPARSEABLE,
+                reason="no 'summary' string",
                 cfg=attempt_cfg,
             )
             logger.warning(
@@ -228,8 +258,13 @@ def generate_project_summary(
             continue
         outcome = OK_EMPTY if summary == "" else OK
         recorder.attempt(
-            unit="overall", attempt=attempt, total=attempts, messages=messages,
-            response=response, outcome=outcome, cfg=attempt_cfg,
+            unit="overall",
+            attempt=attempt,
+            total=attempts,
+            messages=messages,
+            response=response,
+            outcome=outcome,
+            cfg=attempt_cfg,
         )
         recorder.flush_unit("overall", outcome=outcome)
         return summary
@@ -240,7 +275,7 @@ def generate_project_summary(
 
 def _attach_part_times(
     part: PartSummary,
-    seg_times: Optional[List[Tuple[Optional[float], Optional[float]]]],
+    seg_times: list[tuple[float | None, float | None]] | None,
 ) -> None:
     """Set ``part.start``/``part.end`` from segment times for its line range."""
     if not seg_times:
@@ -253,21 +288,17 @@ def _attach_part_times(
 
 
 def build_summary(
-    parts_input: List[Tuple[str, List[str]]],
-    cfg: Dict[str, Any],
+    parts_input: list[tuple[str, list[str]]],
+    cfg: dict[str, Any],
     *,
     call_llm: CallLLM = _call_llm,
     recorder: Recorder = NULL_RECORDER,
-    seg_times_by_stem: Optional[
-        Dict[str, List[Tuple[Optional[float], Optional[float]]]]
-    ] = None,
+    seg_times_by_stem: dict[str, list[tuple[float | None, float | None]]] | None = None,
 ) -> ProjectSummary:
     """Map (``segment_video`` per video) then reduce (``generate_project_summary``)."""
-    parts: List[PartSummary] = []
+    parts: list[PartSummary] = []
     for stem, clean_lines in parts_input:
-        parts.extend(
-            segment_video(stem, clean_lines, cfg, call_llm=call_llm, recorder=recorder)
-        )
+        parts.extend(segment_video(stem, clean_lines, cfg, call_llm=call_llm, recorder=recorder))
     if seg_times_by_stem:
         for p in parts:
             _attach_part_times(p, seg_times_by_stem.get(p.stem))
@@ -275,10 +306,10 @@ def build_summary(
     return ProjectSummary(summary=summary, parts=parts)
 
 
-def summary_to_dict(ps: ProjectSummary) -> Dict[str, Any]:
-    parts: List[Dict[str, Any]] = []
+def summary_to_dict(ps: ProjectSummary) -> dict[str, Any]:
+    parts: list[dict[str, Any]] = []
     for p in ps.parts:
-        entry: Dict[str, Any] = {
+        entry: dict[str, Any] = {
             "stem": p.stem,
             "lines": [p.lines[0], p.lines[1]],
             "summary": p.summary,
@@ -291,7 +322,7 @@ def summary_to_dict(ps: ProjectSummary) -> Dict[str, Any]:
     return {"summary": ps.summary, "parts": parts}
 
 
-def _coerce_pair(value: Any) -> Optional[Tuple[int, int]]:
+def _coerce_pair(value: Any) -> tuple[int, int] | None:
     if not (isinstance(value, (list, tuple)) and len(value) == 2):
         return None
     a, b = value
@@ -307,7 +338,7 @@ def summary_from_dict(data: Any) -> ProjectSummary:
         return ProjectSummary(summary="", parts=[])
     summary = data.get("summary")
     summary = summary if isinstance(summary, str) else ""
-    parts: List[PartSummary] = []
+    parts: list[PartSummary] = []
     raw_parts = data.get("parts")
     if isinstance(raw_parts, list):
         for raw in raw_parts:
@@ -322,7 +353,5 @@ def summary_from_dict(data: Any) -> ProjectSummary:
             end = raw.get("end")
             start = float(start) if isinstance(start, (int, float)) else None
             end = float(end) if isinstance(end, (int, float)) else None
-            parts.append(
-                PartSummary(stem=stem, lines=lines, summary=s, start=start, end=end)
-            )
+            parts.append(PartSummary(stem=stem, lines=lines, summary=s, start=start, end=end))
     return ProjectSummary(summary=summary, parts=parts)

@@ -56,7 +56,7 @@ def main() -> None:
     argv = sys.argv
     if "--" not in argv:
         raise SystemExit("Usage: blender --background --python <script> -- <video> <output_json>")
-    user_args = argv[argv.index("--") + 1:]
+    user_args = argv[argv.index("--") + 1 :]
     video_path = user_args[0]
     output_json = user_args[1]
 
@@ -82,9 +82,7 @@ def main() -> None:
     place_strips(intervals, video_path, seq_col, effective_fps)
 
     actual = {
-        s.name: int(s.content_start + s.left_handle_offset)
-        for s in seq_col
-        if s.type == "MOVIE"
+        s.name: int(s.content_start + s.left_handle_offset) for s in seq_col if s.type == "MOVIE"
     }
     strips = []
     for i, entry in enumerate(tl_map, 1):

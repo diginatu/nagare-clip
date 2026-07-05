@@ -1,7 +1,5 @@
 """Tests for subtract_intervals: carve cut ranges out of a base interval list."""
 
-import pytest
-
 from nagare_clip.intervals.intervals import subtract_intervals
 
 

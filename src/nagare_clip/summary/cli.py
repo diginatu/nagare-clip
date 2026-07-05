@@ -52,9 +52,7 @@ def parse_args() -> argparse.Namespace:
         dest="json",
         help="WhisperX {stem}.json for per-part timing (repeat, matched by stem)",
     )
-    parser.add_argument(
-        "--output", required=True, dest="output", help="Output summary.json path"
-    )
+    parser.add_argument("--output", required=True, dest="output", help="Output summary.json path")
     parser.add_argument(
         "--config", dest="config_path", default=None, help="Path to YAML config file"
     )
@@ -66,7 +64,9 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--log-file", default=None)
     parser.add_argument("--llm-report-dir", default=None, dest="llm_report_dir")
     parser.add_argument(
-        "--llm-report-no-clear", action="store_true", dest="llm_report_no_clear",
+        "--llm-report-no-clear",
+        action="store_true",
+        dest="llm_report_no_clear",
         help="Do not wipe this stage's report subdir at startup (for per-source loop iterations after the first)",
     )
     return parser.parse_args()
@@ -101,9 +101,7 @@ def main() -> None:
         for raw in args.edits_txt:
             path = Path(raw)
             stem = _stem_from_edits(path)
-            clean_lines = clean_for_display(
-                path.read_text(encoding="utf-8").splitlines()
-            )
+            clean_lines = clean_for_display(path.read_text(encoding="utf-8").splitlines())
             parts_input.append((stem, clean_lines))
         seg_times_by_stem = {}
         for raw in args.json or []:
@@ -117,7 +115,9 @@ def main() -> None:
                     logging.warning("summary: could not read --json %s", jpath)
         logging.info("summary: analysing %d video(s) with LLM", len(parts_input))
         project = build_summary(
-            parts_input, summary_cfg, recorder=recorder,
+            parts_input,
+            summary_cfg,
+            recorder=recorder,
             seg_times_by_stem=seg_times_by_stem or None,
         )
         logging.info(

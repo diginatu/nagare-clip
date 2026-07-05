@@ -6,13 +6,11 @@ import yaml
 
 from nagare_clip.llm_report import (
     DROPPED_ITEMS,
-    LLM_ERROR,
     NULL_RECORDER,
     OK,
     OK_EMPTY,
     VERIFY_FAIL,
     Recorder,
-    recorder_from_config,
     rebuild_index,
 )
 
@@ -32,13 +30,22 @@ class TestUnitFile:
             {"role": "user", "content": "USER"},
         ]
         rec.attempt(
-            unit="my_video", attempt=0, total=2, messages=msgs,
-            response="bad json", outcome="unparseable", reason="no ops",
+            unit="my_video",
+            attempt=0,
+            total=2,
+            messages=msgs,
+            response="bad json",
+            outcome="unparseable",
+            reason="no ops",
             cfg={"temperature": 0.1, "model": "qwen3.5:30b", "thinking": "low"},
         )
         rec.attempt(
-            unit="my_video", attempt=1, total=2, messages=msgs,
-            response='{"ops": []}', outcome=OK_EMPTY,
+            unit="my_video",
+            attempt=1,
+            total=2,
+            messages=msgs,
+            response='{"ops": []}',
+            outcome=OK_EMPTY,
             cfg={"temperature": 0.3, "model": "qwen3.5:30b", "thinking": "low"},
         )
         rec.flush_unit("my_video", outcome=OK_EMPTY)
@@ -62,9 +69,13 @@ class TestUnitFile:
     def test_thinking_defaults_to_false_when_omitted(self, tmp_path):
         rec = Recorder("director", tmp_path, enabled=True)
         rec.attempt(
-            unit="my_video", attempt=0, total=1,
+            unit="my_video",
+            attempt=0,
+            total=1,
             messages=[{"role": "user", "content": "x"}],
-            response="y", outcome=OK, cfg={"temperature": 0.0, "model": "m"},
+            response="y",
+            outcome=OK,
+            cfg={"temperature": 0.0, "model": "m"},
         )
         rec.flush_unit("my_video", outcome=OK)
         fm = _front_matter(tmp_path / "director" / "my_video.md")
@@ -73,9 +84,13 @@ class TestUnitFile:
     def test_slug_handles_punctuation(self, tmp_path):
         rec = Recorder("text_filter", tmp_path, enabled=True)
         rec.attempt(
-            unit="lines 11-20 (size 10)", attempt=0, total=1,
+            unit="lines 11-20 (size 10)",
+            attempt=0,
+            total=1,
             messages=[{"role": "user", "content": "x"}],
-            response="ok", outcome=OK, cfg={"temperature": 0.0},
+            response="ok",
+            outcome=OK,
+            cfg={"temperature": 0.0},
         )
         rec.flush_unit("lines 11-20 (size 10)", outcome=OK)
         files = list((tmp_path / "text_filter").glob("*.md"))
@@ -90,14 +105,22 @@ class TestDisabled:
     def test_disabled_recorder_writes_nothing(self, tmp_path):
         rec = Recorder("director", tmp_path, enabled=False)
         rec.attempt(
-            unit="u", attempt=0, total=1, messages=[], outcome=OK,
+            unit="u",
+            attempt=0,
+            total=1,
+            messages=[],
+            outcome=OK,
         )
         rec.flush_unit("u", outcome=OK)
         assert not (tmp_path / "director").exists()
 
     def test_null_recorder_is_disabled(self, tmp_path):
         NULL_RECORDER.attempt(
-            unit="u", attempt=0, total=1, messages=[], outcome=OK,
+            unit="u",
+            attempt=0,
+            total=1,
+            messages=[],
+            outcome=OK,
         )
         NULL_RECORDER.flush_unit("u", outcome=OK)
         # nothing to assert beyond "did not raise"; NULL_RECORDER has no dir
@@ -108,9 +131,13 @@ class TestIndex:
     def _write_unit(self, tmp_path, stage, unit, outcome, reason=""):
         rec = Recorder(stage, tmp_path, enabled=True)
         rec.attempt(
-            unit=unit, attempt=0, total=1,
+            unit=unit,
+            attempt=0,
+            total=1,
             messages=[{"role": "user", "content": "x"}],
-            response="y", outcome=outcome, cfg={"temperature": 0.0, "model": "m"},
+            response="y",
+            outcome=outcome,
+            cfg={"temperature": 0.0, "model": "m"},
         )
         rec.flush_unit(unit, outcome=outcome, reason=reason)
 
@@ -147,17 +174,25 @@ class TestIndex:
         r1 = Recorder("director", tmp_path, enabled=True)
         r1.clear()
         r1.attempt(
-            unit="vid_a", attempt=0, total=1,
+            unit="vid_a",
+            attempt=0,
+            total=1,
             messages=[{"role": "user", "content": "x"}],
-            response="y", outcome=OK, cfg={"temperature": 0.0, "model": "m"},
+            response="y",
+            outcome=OK,
+            cfg={"temperature": 0.0, "model": "m"},
         )
         r1.flush_unit("vid_a", outcome=OK)
         # process 2: does NOT clear (simulates a later loop iteration), writes vid_b
         r2 = Recorder("director", tmp_path, enabled=True)
         r2.attempt(
-            unit="vid_b", attempt=0, total=1,
+            unit="vid_b",
+            attempt=0,
+            total=1,
             messages=[{"role": "user", "content": "x"}],
-            response="y", outcome=OK, cfg={"temperature": 0.0, "model": "m"},
+            response="y",
+            outcome=OK,
+            cfg={"temperature": 0.0, "model": "m"},
         )
         r2.flush_unit("vid_b", outcome=OK)
         rebuild_index(tmp_path)

@@ -5,8 +5,6 @@ from __future__ import annotations
 import json
 from unittest.mock import patch
 
-import pytest
-
 from nagare_clip.text_filter.summary_llm import (
     SummaryResult,
     build_enhanced_prompt,
@@ -17,9 +15,7 @@ from nagare_clip.text_filter.summary_llm import (
 
 class TestParseSummaryResponse:
     def test_valid_json(self):
-        response = json.dumps(
-            {"summary": "動画の概要", "keywords": ["Kubernetes", "PostgreSQL"]}
-        )
+        response = json.dumps({"summary": "動画の概要", "keywords": ["Kubernetes", "PostgreSQL"]})
         result = parse_summary_response(response)
         assert result is not None
         assert result.summary == "動画の概要"
@@ -43,9 +39,7 @@ class TestParseSummaryResponse:
         assert parse_summary_response(json.dumps(["a", "b"])) is None
 
     def test_keywords_whitespace_trimmed(self):
-        response = json.dumps(
-            {"summary": "概要", "keywords": [" word1 ", "  word2  "]}
-        )
+        response = json.dumps({"summary": "概要", "keywords": [" word1 ", "  word2  "]})
         result = parse_summary_response(response)
         assert result is not None
         assert result.keywords == ["word1", "word2"]
@@ -57,9 +51,7 @@ class TestParseSummaryResponse:
         assert result.keywords == []
 
     def test_extra_fields_ignored(self):
-        response = json.dumps(
-            {"summary": "概要", "keywords": ["w1"], "extra": "ignored"}
-        )
+        response = json.dumps({"summary": "概要", "keywords": ["w1"], "extra": "ignored"})
         result = parse_summary_response(response)
         assert result is not None
         assert result.summary == "概要"
@@ -186,9 +178,7 @@ class TestGenerateSummary:
 
     @patch("nagare_clip.text_filter.summary_llm._call_llm")
     def test_passes_correct_messages(self, mock_llm):
-        mock_llm.return_value = json.dumps(
-            {"summary": "s", "keywords": ["k"]}
-        )
+        mock_llm.return_value = json.dumps({"summary": "s", "keywords": ["k"]})
         cfg = {
             "api_base": "http://localhost:11434",
             "model": "test",

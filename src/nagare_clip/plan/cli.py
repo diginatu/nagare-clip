@@ -32,9 +32,7 @@ def parse_args() -> argparse.Namespace:
         dest="summary",
         help="Input summary.json path (from the summary stage)",
     )
-    parser.add_argument(
-        "--output", required=True, dest="output", help="Output plan.json path"
-    )
+    parser.add_argument("--output", required=True, dest="output", help="Output plan.json path")
     parser.add_argument(
         "--config", dest="config_path", default=None, help="Path to YAML config file"
     )
@@ -46,7 +44,9 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--log-file", default=None)
     parser.add_argument("--llm-report-dir", default=None, dest="llm_report_dir")
     parser.add_argument(
-        "--llm-report-no-clear", action="store_true", dest="llm_report_no_clear",
+        "--llm-report-no-clear",
+        action="store_true",
+        dest="llm_report_no_clear",
         help="Do not wipe this stage's report subdir at startup (for per-source loop iterations after the first)",
     )
     return parser.parse_args()
@@ -78,9 +78,7 @@ def main() -> None:
         directions = []
     else:
         summary_path = Path(args.summary)
-        project_summary = summary_from_dict(
-            json.loads(summary_path.read_text(encoding="utf-8"))
-        )
+        project_summary = summary_from_dict(json.loads(summary_path.read_text(encoding="utf-8")))
         logging.info("plan: directing %d part(s) with LLM", len(project_summary.parts))
         directions = generate_plan(project_summary, plan_cfg, recorder=recorder)
         logging.info("plan: %d direction(s)", len(directions))

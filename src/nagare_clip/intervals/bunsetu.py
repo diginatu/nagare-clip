@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import logging
-from typing import TYPE_CHECKING, List, Tuple
+from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     import spacy
@@ -14,11 +14,11 @@ SILENCE_MAX_WORD_SPAN = 0.6
 
 def build_bunsetu_times(
     whisperx_data: dict,
-    nlp: "spacy.language.Language",
+    nlp: spacy.language.Language,
     *,
     char_eps: float = CHAR_EPS,
     silence_max_word_span: float = SILENCE_MAX_WORD_SPAN,
-) -> List[Tuple[float, float, str]]:
+) -> list[tuple[float, float, str]]:
     """Return a flat list of (start, end, surface) for every bunsetsu across all
     segments, sorted by start time.
 
@@ -36,7 +36,7 @@ def build_bunsetu_times(
     """
     import ginza
 
-    all_bunsetu: List[Tuple[float, float, str]] = []
+    all_bunsetu: list[tuple[float, float, str]] = []
 
     for segment in whisperx_data.get("segments", []):
         seg_text = segment.get("text", "").strip()
@@ -46,7 +46,7 @@ def build_bunsetu_times(
 
         # Build char_starts: one start time per character of seg_text,
         # inheriting the last valid start for entries with missing start times.
-        char_starts: List[float] = []
+        char_starts: list[float] = []
         last_valid = float(char_entries[0].get("start") or 0.0)
         for entry in char_entries:
             s = entry.get("start")
@@ -67,7 +67,7 @@ def build_bunsetu_times(
         # SILENCE_MAX_WORD_SPAN, WhisperX likely misaligned the earlier
         # character.  The later cluster carries the true timing, so we snap
         # m_start forward to that cluster.
-        seg_bunsetu: List[Tuple[float, float, str]] = []
+        seg_bunsetu: list[tuple[float, float, str]] = []
         for span in spans:
             start_char = span.start_char
             end_char = span.end_char  # exclusive
@@ -108,7 +108,7 @@ def build_bunsetu_times(
     return all_bunsetu
 
 
-def flatten_bunsetu(whisperx_data: dict) -> List[Tuple[float, float, str]]:
+def flatten_bunsetu(whisperx_data: dict) -> list[tuple[float, float, str]]:
     """Convenience wrapper: loads the ``ja_ginza`` model and calls
     ``build_bunsetu_times``."""
     import spacy

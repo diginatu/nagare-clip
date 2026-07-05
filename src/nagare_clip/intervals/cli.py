@@ -6,13 +6,11 @@ import argparse
 import json
 import logging
 from pathlib import Path
-from typing import List, Tuple
 
 import spacy
 
 from nagare_clip.audio_silence.cuts_file import read_cuts
 from nagare_clip.config import get_effective_config
-from nagare_clip.logging_setup import setup_logging
 from nagare_clip.intervals.bunsetu import build_bunsetu_times
 from nagare_clip.intervals.captions import apply_caption_margins, collect_captions
 from nagare_clip.intervals.intervals import (
@@ -31,6 +29,7 @@ from nagare_clip.intervals.sync_json import (
     extract_speed_ranges,
     sync_text_to_json,
 )
+from nagare_clip.logging_setup import setup_logging
 
 
 def parse_args() -> argparse.Namespace:
@@ -43,9 +42,7 @@ def parse_args() -> argparse.Namespace:
         dest="edits_txt",
         help="text_filter _edits.txt path (may contain {{old->new}} markers)",
     )
-    parser.add_argument(
-        "--json", required=True, dest="json_path", help="WhisperX JSON path"
-    )
+    parser.add_argument("--json", required=True, dest="json_path", help="WhisperX JSON path")
     parser.add_argument(
         "--cuts-txt",
         dest="cuts_txt",
@@ -130,9 +127,7 @@ def parse_args() -> argparse.Namespace:
         default=None,
         help="Seconds to extend each caption after its end (default: 0.0)",
     )
-    parser.add_argument(
-        "--output", required=True, dest="output_path", help="Output JSON path"
-    )
+    parser.add_argument("--output", required=True, dest="output_path", help="Output JSON path")
     parser.add_argument(
         "--log-level",
         default=None,
@@ -218,9 +213,7 @@ def main() -> None:
     speed_ranges = extract_speed_ranges(edit_lines, whisperx_data)
     overlay_ranges = extract_overlay_ranges(edit_lines, whisperx_data)
     if force_keep_ranges:
-        logging.info(
-            "Force-keep ranges from <keep>: %d", len(force_keep_ranges)
-        )
+        logging.info("Force-keep ranges from <keep>: %d", len(force_keep_ranges))
     if speed_ranges:
         logging.info("Speed ranges from <speed>: %d", len(speed_ranges))
     if overlay_ranges:
@@ -244,7 +237,7 @@ def main() -> None:
     duration_sec = get_duration_sec(whisperx_data, all_bunsetu_times)
     logging.info("Duration: %.1fs, bunsetsu: %d", duration_sec, len(all_bunsetu_times))
 
-    excludes: List[Tuple[float, float]] = []
+    excludes: list[tuple[float, float]] = []
 
     silence_excludes = 0
     for idx in range(len(speech_spans) - 1):
@@ -252,9 +245,7 @@ def main() -> None:
         next_start = speech_spans[idx + 1][0]
         gap = next_start - current_end
         if gap > ivl["silence_threshold"]:
-            logging.debug(
-                "Silence gap: %.3f-%.3f (%.3fs)", current_end, next_start, gap
-            )
+            logging.debug("Silence gap: %.3f-%.3f (%.3fs)", current_end, next_start, gap)
             excludes.append((current_end, next_start))
             silence_excludes += 1
 
@@ -289,15 +280,13 @@ def main() -> None:
         )
 
     bounded_excludes = [
-        (max(0.0, start), min(duration_sec, end))
-        for start, end in excludes
-        if end > start
+        (max(0.0, start), min(duration_sec, end)) for start, end in excludes if end > start
     ]
     # Only <keep> force-preserves audio. <speed> no longer carves silence out of
     # the excludes — it is purely a playback-speed annotation (its span is still
     # emitted verbatim in speed_ranges below). To keep AND speed a region, nest
     # <speed> inside <keep>.
-    all_force_keep: List[Tuple[float, float]] = list(force_keep_ranges)
+    all_force_keep: list[tuple[float, float]] = list(force_keep_ranges)
     if all_force_keep:
         bounded_excludes = subtract_intervals(bounded_excludes, all_force_keep)
     merged_excludes = merge_intervals(bounded_excludes)
@@ -361,9 +350,7 @@ def main() -> None:
         ivl["min_keep"],
         duration_sec,
     )
-    logging.info(
-        "After min_keep enforcement: %d interval(s)", len(keep_intervals_dicts)
-    )
+    logging.info("After min_keep enforcement: %d interval(s)", len(keep_intervals_dicts))
 
     output_data = {
         "source_file": infer_source_file(whisperx_data, json_path),
@@ -376,13 +363,11 @@ def main() -> None:
         # overlays); the blender stage splits keep intervals at these boundaries so a
         # speed range may cover an arbitrary sub-range of a keep interval.
         output_data["speed_ranges"] = [
-            {"start": round(s, 3), "end": round(e, 3), "factor": f}
-            for s, e, f in speed_ranges
+            {"start": round(s, 3), "end": round(e, 3), "factor": f} for s, e, f in speed_ranges
         ]
     if overlay_ranges:
         output_data["overlays"] = [
-            {"start": round(s, 3), "end": round(e, 3), "text": t}
-            for s, e, t in overlay_ranges
+            {"start": round(s, 3), "end": round(e, 3), "text": t} for s, e, t in overlay_ranges
         ]
 
     output_path.parent.mkdir(parents=True, exist_ok=True)

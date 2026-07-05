@@ -7,14 +7,14 @@ deterministic low-temperature failure is not reproduced identically.
 
 from __future__ import annotations
 
-from typing import Any, Dict
+from typing import Any
 
 DEFAULT_MAX_RETRIES = 2
 DEFAULT_RETRY_TEMP_STEP = 0.2
 DEFAULT_RETRY_TEMP_CAP = 0.8
 
 
-def retry_attempts(cfg: Dict[str, Any]) -> int:
+def retry_attempts(cfg: dict[str, Any]) -> int:
     """Total attempts (first try + retries) for *cfg*.
 
     ``max_retries`` is the number of *extra* attempts after the first; a value
@@ -24,7 +24,7 @@ def retry_attempts(cfg: Dict[str, Any]) -> int:
     return extra + 1
 
 
-def cfg_for_attempt(cfg: Dict[str, Any], attempt: int) -> Dict[str, Any]:
+def cfg_for_attempt(cfg: dict[str, Any], attempt: int) -> dict[str, Any]:
     """Return *cfg* with ``temperature`` nudged for a 0-based *attempt* index.
 
     Attempt 0 keeps the configured temperature.  Each retry adds

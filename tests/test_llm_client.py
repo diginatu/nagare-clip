@@ -10,9 +10,7 @@ from nagare_clip import llm_client
 
 def _fake_response(content: str):
     """Mimic the litellm.completion return shape we read from."""
-    return SimpleNamespace(
-        choices=[SimpleNamespace(message=SimpleNamespace(content=content))]
-    )
+    return SimpleNamespace(choices=[SimpleNamespace(message=SimpleNamespace(content=content))])
 
 
 def _call(cfg):
@@ -43,8 +41,7 @@ def test_empty_ollama_api_base_falls_back_to_localhost():
 
 
 def test_explicit_api_base_is_forwarded():
-    _, m = _call({"provider": "ollama_chat", "model": "x",
-                  "api_base": "http://host:9999"})
+    _, m = _call({"provider": "ollama_chat", "model": "x", "api_base": "http://host:9999"})
     assert m.call_args.kwargs["api_base"] == "http://host:9999"
 
 
@@ -94,13 +91,13 @@ def test_api_key_forwarded_when_set():
 
 
 def test_trailing_slash_stripped_from_explicit_api_base():
-    _, m = _call({"provider": "ollama_chat", "model": "x",
-                  "api_base": "http://localhost:11434/"})
+    _, m = _call({"provider": "ollama_chat", "model": "x", "api_base": "http://localhost:11434/"})
     assert m.call_args.kwargs["api_base"] == "http://localhost:11434"
 
 
 def test_litellm_error_wrapped_as_connection_error():
     with patch("nagare_clip.llm_client.litellm.completion", side_effect=ValueError("boom")):
         with pytest.raises(ConnectionError):
-            llm_client.call_llm([{"role": "user", "content": "hi"}],
-                                {"provider": "openai", "model": "x"})
+            llm_client.call_llm(
+                [{"role": "user", "content": "hi"}], {"provider": "openai", "model": "x"}
+            )

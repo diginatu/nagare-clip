@@ -181,9 +181,7 @@ def test_speed_mark_spanning_multiple_keep_intervals():
 
 def test_speed_mark_outside_any_keep_interval_is_skipped():
     fps = 30.0
-    tl_map = build_timeline_map(
-        [{"start": 0.0, "end": 4.0}], effective_fps=fps, source_fps=fps
-    )
+    tl_map = build_timeline_map([{"start": 0.0, "end": 4.0}], effective_fps=fps, source_fps=fps)
     speed_ranges = [{"start": 10.0, "end": 11.0, "factor": 2.0}]
     seq, captured = _seq_with_capture()
     place_speed_marks(

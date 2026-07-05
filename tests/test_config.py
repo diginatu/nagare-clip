@@ -3,8 +3,9 @@
 from __future__ import annotations
 
 import re
+from collections.abc import Iterator
 from pathlib import Path
-from typing import Any, Dict, Iterator, List
+from typing import Any
 
 import pytest
 import yaml
@@ -12,7 +13,7 @@ import yaml
 from nagare_clip.config import DEFAULTS, deep_merge, get_effective_config, load_config
 
 
-def _leaf_paths(d: Dict[str, Any], prefix: str = "") -> Iterator[str]:
+def _leaf_paths(d: dict[str, Any], prefix: str = "") -> Iterator[str]:
     """Yield the dotted path of every non-dict leaf in *d*."""
     for key, value in d.items():
         path = f"{prefix}{key}"
@@ -49,7 +50,7 @@ def _section_block(text: str, top: str) -> str:
     return "\n".join(lines[start:end])
 
 
-def _missing_example_paths(defaults: Dict[str, Any], example_text: str) -> List[str]:
+def _missing_example_paths(defaults: dict[str, Any], example_text: str) -> list[str]:
     """Return DEFAULTS leaf paths absent from *example_text*.
 
     A path counts as present when it resolves to a real parsed key, or when its
@@ -59,7 +60,7 @@ def _missing_example_paths(defaults: Dict[str, Any], example_text: str) -> List[
     satisfying a missing one.
     """
     data = yaml.safe_load(example_text) or {}
-    missing: List[str] = []
+    missing: list[str] = []
     for path in _leaf_paths(defaults):
         if _has_real_path(data, path):
             continue
@@ -185,9 +186,7 @@ class TestGetEffectiveConfig:
 
     def test_nested_caption_override(self, tmp_path: Path):
         cfg_file = tmp_path / "cfg.yml"
-        cfg_file.write_text(
-            yaml.dump({"intervals": {"caption": {"max_bunsetu": 20}}})
-        )
+        cfg_file.write_text(yaml.dump({"intervals": {"caption": {"max_bunsetu": 20}}}))
         cfg = get_effective_config(cfg_file)
         assert cfg["intervals"]["caption"]["max_bunsetu"] == 20
         # Other caption defaults intact
@@ -195,9 +194,7 @@ class TestGetEffectiveConfig:
 
     def test_caption_style_override(self, tmp_path: Path):
         cfg_file = tmp_path / "cfg.yml"
-        cfg_file.write_text(
-            yaml.dump({"blender": {"caption_style": {"font_size": 72}}})
-        )
+        cfg_file.write_text(yaml.dump({"blender": {"caption_style": {"font_size": 72}}}))
         cfg = get_effective_config(cfg_file)
         assert cfg["blender"]["caption_style"]["font_size"] == 72
         assert cfg["blender"]["caption_style"]["alignment_x"] == "CENTER"
@@ -239,9 +236,7 @@ class TestGetEffectiveConfig:
 
     def test_summary_llm_config_override(self, tmp_path: Path):
         cfg_file = tmp_path / "cfg.yml"
-        cfg_file.write_text(
-            yaml.dump({"text_filter": {"summary_llm": {"model": "gemma3:27b"}}})
-        )
+        cfg_file.write_text(yaml.dump({"text_filter": {"summary_llm": {"model": "gemma3:27b"}}}))
         cfg = get_effective_config(cfg_file)
         assert cfg["text_filter"]["summary_llm"]["model"] == "gemma3:27b"
         # Other summary_llm defaults intact
@@ -334,6 +329,7 @@ def test_general_langfuse_defaults_true():
 
 def test_sentence_split_defaults_present():
     from nagare_clip.config import get_effective_config
+
     cfg = get_effective_config(None, {})
     sp = cfg["sentence_split"]
     assert sp["enabled"] is False

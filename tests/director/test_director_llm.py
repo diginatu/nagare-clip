@@ -62,7 +62,9 @@ class TestParseValid:
 
 class TestParseInvalidDropped:
     def test_unknown_type_dropped(self):
-        resp = '{"ops": [{"type": "frobnicate", "lines": [1, 2]}, {"type": "cut", "lines": [1, 1]}]}'
+        resp = (
+            '{"ops": [{"type": "frobnicate", "lines": [1, 2]}, {"type": "cut", "lines": [1, 1]}]}'
+        )
         ops = parse_director_response(resp, num_lines=5)
         assert [o.type for o in ops] == ["cut"]
 
@@ -118,9 +120,7 @@ class TestGenerate:
             captured["user"] = messages[1]["content"]
             return '{"ops": [{"type": "cut", "lines": [1, 2]}]}'
 
-        ops = generate_director_ops(
-            ["あ{{えー->}}い", "うえ"], {"prompt": "P"}, call_llm=fake_llm
-        )
+        ops = generate_director_ops(["あ{{えー->}}い", "うえ"], {"prompt": "P"}, call_llm=fake_llm)
         assert captured["user"] == "1: あい\n2: うえ"
         assert ops[0].type == "cut" and ops[0].lines == (1, 2)
 
@@ -147,9 +147,7 @@ class TestGenerate:
             captured["system"] = messages[0]["content"]
             return '{"ops": []}'
 
-        generate_director_ops(
-            ["あ"], {"prompt": "P"}, call_llm=fake_llm, overview_context="CTX"
-        )
+        generate_director_ops(["あ"], {"prompt": "P"}, call_llm=fake_llm, overview_context="CTX")
         assert captured["system"] == "P\n\nCTX"
 
 
@@ -170,46 +168,32 @@ class TestTryParse:
 
 class TestRetry:
     def test_retries_on_llm_error_then_succeeds(self):
-        fake = _seq_llm(
-            [ConnectionError("x"), '{"ops": [{"type": "cut", "lines": [1, 1]}]}']
-        )
-        ops = generate_director_ops(
-            ["あ"], {"prompt": "P", "max_retries": 2}, call_llm=fake
-        )
+        fake = _seq_llm([ConnectionError("x"), '{"ops": [{"type": "cut", "lines": [1, 1]}]}'])
+        ops = generate_director_ops(["あ"], {"prompt": "P", "max_retries": 2}, call_llm=fake)
         assert fake.calls["i"] == 2
         assert ops[0].type == "cut"
 
     def test_retries_on_unparseable_then_succeeds(self):
-        fake = _seq_llm(
-            ["garbage", "still bad", '{"ops": [{"type": "keep", "lines": [1, 1]}]}']
-        )
-        ops = generate_director_ops(
-            ["あ"], {"prompt": "P", "max_retries": 2}, call_llm=fake
-        )
+        fake = _seq_llm(["garbage", "still bad", '{"ops": [{"type": "keep", "lines": [1, 1]}]}'])
+        ops = generate_director_ops(["あ"], {"prompt": "P", "max_retries": 2}, call_llm=fake)
         assert fake.calls["i"] == 3
         assert ops[0].type == "keep"
 
     def test_all_attempts_fail_returns_empty(self):
         fake = _seq_llm([ConnectionError("x")] * 3)
-        ops = generate_director_ops(
-            ["あ"], {"prompt": "P", "max_retries": 2}, call_llm=fake
-        )
+        ops = generate_director_ops(["あ"], {"prompt": "P", "max_retries": 2}, call_llm=fake)
         assert ops == []
         assert fake.calls["i"] == 3
 
     def test_valid_empty_ops_does_not_retry(self):
         fake = _seq_llm(['{"ops": []}'])
-        ops = generate_director_ops(
-            ["あ"], {"prompt": "P", "max_retries": 2}, call_llm=fake
-        )
+        ops = generate_director_ops(["あ"], {"prompt": "P", "max_retries": 2}, call_llm=fake)
         assert ops == []
         assert fake.calls["i"] == 1
 
     def test_max_retries_zero_is_single_attempt(self):
         fake = _seq_llm([ConnectionError("x")])
-        ops = generate_director_ops(
-            ["あ"], {"prompt": "P", "max_retries": 0}, call_llm=fake
-        )
+        ops = generate_director_ops(["あ"], {"prompt": "P", "max_retries": 0}, call_llm=fake)
         assert ops == []
         assert fake.calls["i"] == 1
 
@@ -251,8 +235,11 @@ class TestDirectorRecorder:
         rec = Recorder("director", tmp_path, enabled=True)
         fake = _seq_llm(["nonsense", '{"ops": []}'])
         ops = generate_director_ops(
-            ["a", "b"], {"max_retries": 2}, call_llm=fake,
-            recorder=rec, unit="vid",
+            ["a", "b"],
+            {"max_retries": 2},
+            call_llm=fake,
+            recorder=rec,
+            unit="vid",
         )
         assert ops == []
         assert _outcome(tmp_path, "director", "vid") == "ok-empty"
@@ -265,8 +252,11 @@ class TestDirectorRecorder:
         resp = '{"ops": [{"type":"cut","lines":[1,1]},{"type":"cut","lines":[9,9]}]}'
         fake = _seq_llm([resp])
         ops = generate_director_ops(
-            ["a", "b"], {"max_retries": 0}, call_llm=fake,
-            recorder=rec, unit="vid",
+            ["a", "b"],
+            {"max_retries": 0},
+            call_llm=fake,
+            recorder=rec,
+            unit="vid",
         )
         assert len(ops) == 1
         assert _outcome(tmp_path, "director", "vid") == "dropped-items"
@@ -292,7 +282,9 @@ class TestTimedTranscript:
             return '{"ops": []}'
 
         generate_director_ops(
-            ["あ", "い"], {"prompt": "P"}, call_llm=fake_llm,
+            ["あ", "い"],
+            {"prompt": "P"},
+            call_llm=fake_llm,
             seg_times=[(1.0, 3.0), (4.0, 6.5)],
         )
         assert captured["user"] == "1: あ  [2.0s, gap 1.0s]\n2: い  [2.5s]"
@@ -315,7 +307,9 @@ class TestTimedTranscript:
             return '{"ops": []}'
 
         generate_director_ops(
-            ["あ", "い"], {"prompt": "P"}, call_llm=fake_llm,
+            ["あ", "い"],
+            {"prompt": "P"},
+            call_llm=fake_llm,
             seg_times=[(1.0, 3.0)],  # only 1 entry for 2 lines
         )
         assert captured["user"] == "1: あ\n2: い"

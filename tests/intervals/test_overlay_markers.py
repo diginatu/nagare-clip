@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-import pytest
-
 from nagare_clip.intervals.sync_json import (
     extract_overlay_ranges,
     sync_text_to_json,
@@ -48,9 +46,7 @@ class TestSyncStripsOverlayTags:
             _word("う", 0.6, 0.8),
         ]
         data = _whisperx(_segment("あえーう", words))
-        result = sync_text_to_json(
-            data, ['あ<overlay text="X">{{えー->}}</overlay>う']
-        )
+        result = sync_text_to_json(data, ['あ<overlay text="X">{{えー->}}</overlay>う'])
         assert result["segments"][0]["text"] == "あう"
         assert [w["word"] for w in result["segments"][0]["words"]] == ["あ", "う"]
 
@@ -78,9 +74,7 @@ class TestExtractOverlayRanges:
             _word("え", 0.9, 1.2),
         ]
         data = _whisperx(_segment("あいうえ", words))
-        ranges = extract_overlay_ranges(
-            ['あ<overlay text="Chapter 1">いう</overlay>え'], data
-        )
+        ranges = extract_overlay_ranges(['あ<overlay text="Chapter 1">いう</overlay>え'], data)
         assert ranges == [(0.2, 0.9, "Chapter 1")]
 
     def test_multiple_overlay_blocks_emit_multiple_triples(self):
@@ -105,9 +99,7 @@ class TestExtractOverlayRanges:
             _segment("あい", seg1_words),
             _segment("うえ", seg2_words),
         )
-        ranges = extract_overlay_ranges(
-            ['あ<overlay text="X">い', "う</overlay>え"], data
-        )
+        ranges = extract_overlay_ranges(['あ<overlay text="X">い', "う</overlay>え"], data)
         # First wrapped word "い" → 0.2; last wrapped word "う" → 1.2
         assert ranges == [(0.2, 1.2, "X")]
 
@@ -146,7 +138,7 @@ class TestExtractOverlayRanges:
         # - "え" advances pos to 4; trailing </overlay> is unmatched → warn
         assert ranges == [(0.0, 0.6, "A")]
         assert "Nested <overlay>" in caplog.text
-        assert "Unmatched <" "/overlay>" in caplog.text
+        assert "Unmatched </overlay>" in caplog.text
 
     def test_overlay_coexists_with_keep_and_speed(self):
         words = [

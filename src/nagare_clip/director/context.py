@@ -7,15 +7,13 @@ so ``summary`` can keep importing it without a cycle.
 
 from __future__ import annotations
 
-from typing import List
-
 from nagare_clip.plan.plan_llm import PartDirection
 from nagare_clip.summary.summarize import ProjectSummary
 
 
 def build_director_context(
     project_summary: ProjectSummary,
-    directions: List[PartDirection],
+    directions: list[PartDirection],
     stem: str,
 ) -> str:
     """Render the context for one video: global summary + this video's parts
@@ -31,7 +29,7 @@ def build_director_context(
 
     dir_by_key = {(d.stem, d.lines): d.direction for d in directions}
 
-    out: List[str] = ["Project context (all videos):"]
+    out: list[str] = ["Project context (all videos):"]
     if project_summary.summary:
         out.append(f"Overall: {project_summary.summary}")
 

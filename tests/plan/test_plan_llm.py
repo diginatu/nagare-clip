@@ -52,8 +52,7 @@ class TestParse:
 
     def test_out_of_range_index_dropped(self):
         out = try_parse_plan_response(
-            '{"directions": [{"index": 9, "direction": "x"},'
-            ' {"index": 1, "direction": "ok"}]}',
+            '{"directions": [{"index": 9, "direction": "x"}, {"index": 1, "direction": "ok"}]}',
             num_parts=3,
         )
         assert out == {1: "ok"}
@@ -103,9 +102,7 @@ class TestGeneratePlan:
         assert generate_plan(_project(), {"prompt": "P"}, call_llm=boom) == []
 
     def test_retries_then_succeeds(self):
-        fake = _seq_llm(
-            ["junk", '{"directions": [{"index": 1, "direction": "keep"}]}']
-        )
+        fake = _seq_llm(["junk", '{"directions": [{"index": 1, "direction": "keep"}]}'])
         out = generate_plan(_project(), {"prompt": "P", "max_retries": 2}, call_llm=fake)
         assert fake.calls["i"] == 2
         assert out == [PartDirection("a", (1, 4), "keep")]
@@ -149,28 +146,37 @@ def _outcome(tmp_path, unit):
 
 class TestFormatPartsTiming:
     def test_same_stem_gap_and_last_part_no_gap(self):
-        ps = ProjectSummary(summary="", parts=[
-            PartSummary("v", (1, 2), "intro", start=0.0, end=10.0),
-            PartSummary("v", (3, 4), "demo", start=11.5, end=19.5),
-        ])
+        ps = ProjectSummary(
+            summary="",
+            parts=[
+                PartSummary("v", (1, 2), "intro", start=0.0, end=10.0),
+                PartSummary("v", (3, 4), "demo", start=11.5, end=19.5),
+            ],
+        )
         out = _format_parts_for_plan(ps)
         assert "1: v [1-2] [10.0s, gap 1.5s] — intro" in out
         assert "2: v [3-4] [8.0s] — demo" in out
 
     def test_cross_video_boundary_has_no_gap(self):
-        ps = ProjectSummary(summary="", parts=[
-            PartSummary("a", (1, 2), "x", start=0.0, end=10.0),
-            PartSummary("b", (1, 2), "y", start=2.0, end=8.0),
-        ])
+        ps = ProjectSummary(
+            summary="",
+            parts=[
+                PartSummary("a", (1, 2), "x", start=0.0, end=10.0),
+                PartSummary("b", (1, 2), "y", start=2.0, end=8.0),
+            ],
+        )
         out = _format_parts_for_plan(ps)
         # part 1 is last of stem "a" -> dur only, no gap into "b"
         assert "1: a [1-2] [10.0s] — x" in out
         assert "2: b [1-2] [6.0s] — y" in out
 
     def test_missing_times_no_bracket(self):
-        ps = ProjectSummary(summary="", parts=[
-            PartSummary("v", (1, 2), "intro"),
-        ])
+        ps = ProjectSummary(
+            summary="",
+            parts=[
+                PartSummary("v", (1, 2), "intro"),
+            ],
+        )
         out = _format_parts_for_plan(ps)
         assert out == "1: v [1-2] — intro"
 

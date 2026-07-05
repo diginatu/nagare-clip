@@ -82,9 +82,7 @@ def _run_cli(monkeypatch, tmp_path, edits_text: str):
 def test_overlays_key_present_when_marker_used(monkeypatch, tmp_path):
     out = _run_cli(monkeypatch, tmp_path, 'あ<overlay text="Chapter 1">いう</overlay>え')
     assert "overlays" in out
-    assert out["overlays"] == [
-        {"start": 0.8, "end": 5.3, "text": "Chapter 1"}
-    ]
+    assert out["overlays"] == [{"start": 0.8, "end": 5.3, "text": "Chapter 1"}]
 
 
 def test_overlays_key_absent_without_markers(monkeypatch, tmp_path):

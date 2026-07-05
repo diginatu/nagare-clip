@@ -18,7 +18,7 @@ import shutil
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Union
+from typing import Any
 
 import yaml
 
@@ -39,12 +39,12 @@ STAGE_ORDER = ["text_filter", "summary", "plan", "director", "guided_edit"]
 class _Attempt:
     attempt: int
     total: int
-    temperature: Optional[float]
+    temperature: float | None
     model: str
     thinking: Any
-    messages: List[Dict[str, str]]
-    response: Optional[str]
-    error: Optional[str]
+    messages: list[dict[str, str]]
+    response: str | None
+    error: str | None
     outcome: str
     reason: str
     section: str
@@ -55,22 +55,20 @@ def _slug(unit: str) -> str:
     return s.strip("_") or "unit"
 
 
-def _fence(text: str) -> List[str]:
+def _fence(text: str) -> list[str]:
     return ["```", text, "```"]
 
 
 class Recorder:
-    def __init__(
-        self, stage: str, report_dir: Optional[Union[str, Path]], enabled: bool = True
-    ) -> None:
+    def __init__(self, stage: str, report_dir: str | Path | None, enabled: bool = True) -> None:
         self.stage = stage
         self.report_dir = Path(report_dir) if report_dir else None
         self.enabled = bool(enabled) and self.report_dir is not None
-        self._buffers: Dict[str, List[_Attempt]] = {}
-        self._started: Dict[str, datetime] = {}
+        self._buffers: dict[str, list[_Attempt]] = {}
+        self._started: dict[str, datetime] = {}
 
     @property
-    def _stage_dir(self) -> Optional[Path]:
+    def _stage_dir(self) -> Path | None:
         return self.report_dir / self.stage if self.report_dir else None
 
     def clear(self) -> None:
@@ -89,12 +87,12 @@ class Recorder:
         unit: str,
         attempt: int,
         total: int,
-        messages: List[Dict[str, str]],
-        response: Optional[str] = None,
-        error: Optional[str] = None,
+        messages: list[dict[str, str]],
+        response: str | None = None,
+        error: str | None = None,
         outcome: str,
         reason: str = "",
-        cfg: Optional[Dict[str, Any]] = None,
+        cfg: dict[str, Any] | None = None,
         section: str = "",
     ) -> None:
         if not self.enabled:
@@ -132,8 +130,15 @@ class Recorder:
             self._stage_dir.mkdir(parents=True, exist_ok=True)
             (self._stage_dir / f"{_slug(unit)}.md").write_text(
                 _render_unit(
-                    self.stage, unit, attempts, outcome, reason, model, thinking,
-                    started.isoformat(timespec="seconds"), duration_ms,
+                    self.stage,
+                    unit,
+                    attempts,
+                    outcome,
+                    reason,
+                    model,
+                    thinking,
+                    started.isoformat(timespec="seconds"),
+                    duration_ms,
                 ),
                 encoding="utf-8",
             )
@@ -149,7 +154,7 @@ class Recorder:
 def _render_unit(
     stage: str,
     unit: str,
-    attempts: List[_Attempt],
+    attempts: list[_Attempt],
     outcome: str,
     reason: str,
     model: str,
@@ -168,7 +173,7 @@ def _render_unit(
         "started_at": started_at,
         "duration_ms": duration_ms,
     }
-    out: List[str] = [
+    out: list[str] = [
         "---",
         yaml.safe_dump(fm, sort_keys=False, allow_unicode=True).strip(),
         "---",
@@ -202,7 +207,7 @@ def _render_unit(
 
 
 def recorder_from_config(
-    stage: str, cfg: Dict[str, Any], *, override_dir: Optional[str] = None
+    stage: str, cfg: dict[str, Any], *, override_dir: str | None = None
 ) -> Recorder:
     general = cfg.get("general", {}) if isinstance(cfg, dict) else {}
     enabled = bool(general.get("llm_report", True))
@@ -213,7 +218,7 @@ def recorder_from_config(
 NULL_RECORDER = Recorder("", None, enabled=False)
 
 
-def _read_front_matter(path: Path) -> Optional[Dict[str, Any]]:
+def _read_front_matter(path: Path) -> dict[str, Any] | None:
     try:
         text = path.read_text(encoding="utf-8")
     except OSError:
@@ -240,7 +245,7 @@ def _cell(value: Any) -> str:
 
 def rebuild_index(report_dir: Any) -> None:
     report_dir = Path(report_dir)
-    rows: List[tuple] = []
+    rows: list[tuple] = []
     try:
         detail_files = sorted(report_dir.glob("*/*.md"))
     except OSError:
@@ -252,7 +257,7 @@ def rebuild_index(report_dir: Any) -> None:
         rows.append((fm, path.relative_to(report_dir)))
     rows.sort(key=lambda r: (_stage_rank(str(r[0].get("stage", ""))), str(r[1])))
 
-    counts: Dict[str, int] = {}
+    counts: dict[str, int] = {}
     for fm, _ in rows:
         counts[str(fm.get("outcome", ""))] = counts.get(str(fm.get("outcome", "")), 0) + 1
     totals = ", ".join(f"{k}: {v}" for k, v in sorted(counts.items())) or "no calls recorded"

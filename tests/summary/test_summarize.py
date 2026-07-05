@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-import pytest
-
 from nagare_clip.summary.summarize import (
     PartSummary,
     ProjectSummary,
@@ -54,15 +52,8 @@ class TestSegmentVideo:
         assert parts == [PartSummary(stem="v", lines=(1, 1), summary="x")]
 
     def test_out_of_range_lines_dropped(self):
-        resp = (
-            '{"parts": ['
-            '{"lines": [1, 9], "summary": "bad"},'
-            '{"lines": [1, 2], "summary": "ok"}'
-            "]}"
-        )
-        parts = segment_video(
-            "v", ["a", "b", "c"], {"prompt": "P"}, call_llm=lambda m, c: resp
-        )
+        resp = '{"parts": [{"lines": [1, 9], "summary": "bad"},{"lines": [1, 2], "summary": "ok"}]}'
+        parts = segment_video("v", ["a", "b", "c"], {"prompt": "P"}, call_llm=lambda m, c: resp)
         assert parts == [PartSummary(stem="v", lines=(1, 2), summary="ok")]
 
     def test_empty_summary_dropped(self):
@@ -87,18 +78,11 @@ class TestSegmentVideo:
         assert segment_video("v", ["a"], {"prompt": "P"}, call_llm=boom) == []
 
     def test_unparseable_returns_empty(self):
-        assert (
-            segment_video("v", ["a"], {"prompt": "P"}, call_llm=lambda m, c: "junk")
-            == []
-        )
+        assert segment_video("v", ["a"], {"prompt": "P"}, call_llm=lambda m, c: "junk") == []
 
     def test_retries_then_succeeds(self):
-        fake = _seq_llm(
-            ["junk", '{"parts": [{"lines": [1, 1], "summary": "s"}]}']
-        )
-        parts = segment_video(
-            "v", ["a"], {"prompt": "P", "max_retries": 2}, call_llm=fake
-        )
+        fake = _seq_llm(["junk", '{"parts": [{"lines": [1, 1], "summary": "s"}]}'])
+        parts = segment_video("v", ["a"], {"prompt": "P", "max_retries": 2}, call_llm=fake)
         assert fake.calls["i"] == 2
         assert parts[0].summary == "s"
 
@@ -140,9 +124,7 @@ class TestBuildSummary:
                 '{"summary": "whole project"}',
             ]
         )
-        ps = build_summary(
-            [("a", ["x"]), ("b", ["y", "z"])], {"prompt": "P"}, call_llm=seq
-        )
+        ps = build_summary([("a", ["x"]), ("b", ["y", "z"])], {"prompt": "P"}, call_llm=seq)
         assert ps.summary == "whole project"
         assert ps.parts == [
             PartSummary(stem="a", lines=(1, 1), summary="a-intro"),
@@ -257,22 +239,21 @@ class TestPartTimes:
     def test_to_dict_includes_times_when_set(self):
         ps = ProjectSummary(
             summary="S",
-            parts=[PartSummary(stem="v", lines=(1, 2), summary="x",
-                               start=1.0, end=6.5)],
+            parts=[PartSummary(stem="v", lines=(1, 2), summary="x", start=1.0, end=6.5)],
         )
         d = summary_to_dict(ps)
         assert d["parts"][0]["start"] == 1.0
         assert d["parts"][0]["end"] == 6.5
 
     def test_from_dict_round_trip_times(self):
-        data = {"summary": "S", "parts": [
-            {"stem": "v", "lines": [1, 2], "summary": "x",
-             "start": 1.0, "end": 6.5}]}
+        data = {
+            "summary": "S",
+            "parts": [{"stem": "v", "lines": [1, 2], "summary": "x", "start": 1.0, "end": 6.5}],
+        }
         ps = summary_from_dict(data)
         assert ps.parts[0].start == 1.0 and ps.parts[0].end == 6.5
 
     def test_from_dict_missing_times_are_none(self):
-        data = {"summary": "S", "parts": [
-            {"stem": "v", "lines": [1, 2], "summary": "x"}]}
+        data = {"summary": "S", "parts": [{"stem": "v", "lines": [1, 2], "summary": "x"}]}
         ps = summary_from_dict(data)
         assert ps.parts[0].start is None and ps.parts[0].end is None

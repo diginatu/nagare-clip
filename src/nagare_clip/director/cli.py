@@ -27,15 +27,11 @@ from nagare_clip.timing import segment_times
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(
-        description="director stage: LLM high-level edit operations."
-    )
+    parser = argparse.ArgumentParser(description="director stage: LLM high-level edit operations.")
     parser.add_argument(
         "--edits-txt", required=True, dest="edits_txt", help="Input _edits.txt path"
     )
-    parser.add_argument(
-        "--output", required=True, dest="output", help="Output _director.json path"
-    )
+    parser.add_argument("--output", required=True, dest="output", help="Output _director.json path")
     parser.add_argument(
         "--summary",
         dest="summary",
@@ -71,7 +67,9 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--log-file", default=None)
     parser.add_argument("--llm-report-dir", default=None, dest="llm_report_dir")
     parser.add_argument(
-        "--llm-report-no-clear", action="store_true", dest="llm_report_no_clear",
+        "--llm-report-no-clear",
+        action="store_true",
+        dest="llm_report_no_clear",
         help="Do not wipe this stage's report subdir at startup (for per-source loop iterations after the first)",
     )
     return parser.parse_args()
@@ -89,9 +87,7 @@ def _build_overview_context(args: argparse.Namespace) -> str:
         )
     directions = []
     if args.plan and Path(args.plan).is_file():
-        directions = plan_from_dict(
-            json.loads(Path(args.plan).read_text(encoding="utf-8"))
-        )
+        directions = plan_from_dict(json.loads(Path(args.plan).read_text(encoding="utf-8")))
     return build_director_context(project_summary, directions, args.stem)
 
 
@@ -126,15 +122,17 @@ def main() -> None:
         seg_times = None
         if args.json and Path(args.json).is_file():
             try:
-                seg_times = segment_times(
-                    json.loads(Path(args.json).read_text(encoding="utf-8"))
-                )
+                seg_times = segment_times(json.loads(Path(args.json).read_text(encoding="utf-8")))
             except (ValueError, OSError):
                 logging.warning("director: could not read --json %s", args.json)
         logging.info("director: analysing %d line(s) with LLM", len(edit_lines))
         ops = generate_director_ops(
-            edit_lines, director_cfg, overview_context=overview_context,
-            recorder=recorder, unit=stem, seg_times=seg_times,
+            edit_lines,
+            director_cfg,
+            overview_context=overview_context,
+            recorder=recorder,
+            unit=stem,
+            seg_times=seg_times,
         )
         logging.info("director: %d operation(s)", len(ops))
 

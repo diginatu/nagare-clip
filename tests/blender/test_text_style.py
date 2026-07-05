@@ -84,9 +84,7 @@ def _seq_returning(strip):
 
 
 def _simple_tl_map(fps: float = 30.0):
-    return build_timeline_map(
-        [{"start": 0.0, "end": 4.0}], effective_fps=fps, source_fps=fps
-    )
+    return build_timeline_map([{"start": 0.0, "end": 4.0}], effective_fps=fps, source_fps=fps)
 
 
 # --- unit tests for the helper itself -------------------------------------
@@ -194,9 +192,7 @@ def test_apply_text_style_loads_font_from_absolute_path(tmp_path):
     font_file.write_bytes(b"\x00")
     fake_vfont = object()
     strip = FakeStrip()
-    with mock.patch.object(
-        timeline.bpy.data.fonts, "load", return_value=fake_vfont
-    ) as load:
+    with mock.patch.object(timeline.bpy.data.fonts, "load", return_value=fake_vfont) as load:
         apply_text_style(strip, {"font": str(font_file)})
     load.assert_called_once_with(str(font_file), check_existing=True)
     assert strip.font is fake_vfont
@@ -224,9 +220,7 @@ def test_place_captions_loads_font(tmp_path):
     fps = 30.0
     strip = FakeStrip()
     seq = _seq_returning(strip)
-    with mock.patch.object(
-        timeline.bpy.data.fonts, "load", return_value=fake_vfont
-    ):
+    with mock.patch.object(timeline.bpy.data.fonts, "load", return_value=fake_vfont):
         place_captions(
             [{"start": 0.5, "end": 1.5, "text": "hi"}],
             _simple_tl_map(fps),

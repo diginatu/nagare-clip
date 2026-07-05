@@ -30,15 +30,15 @@ import json
 import re
 import sys
 from pathlib import Path
-from typing import Any, Dict, List, NamedTuple, Optional
+from typing import Any, NamedTuple
 
-from nagare_clip.text_filter.llm_filter import PATCH_RE, apply_patches_to_lines
 from nagare_clip.intervals.sync_json import (
     CUT_TAG_RE,
     KEEP_TAG_RE,
     OVERLAY_TAG_RE,
     SPEED_TAG_RE,
 )
+from nagare_clip.text_filter.llm_filter import PATCH_RE, apply_patches_to_lines
 
 
 class Problem(NamedTuple):
@@ -48,7 +48,7 @@ class Problem(NamedTuple):
     file-level problems such as a line-count mismatch).
     """
 
-    line: Optional[int]
+    line: int | None
     message: str
 
 
@@ -56,10 +56,10 @@ class Problem(NamedTuple):
 # intervals-stage extractors accept.  Used to tokenise a line for balance checking and,
 # by subtraction, to spot malformed tags.
 _ANY_TAG_RE = re.compile(
-    r'<keep>|</keep>'
+    r"<keep>|</keep>"
     r'|<speed\s+factor="[0-9.]+">|</speed>'
     r'|<overlay\s+text="[^"]*">|</overlay>'
-    r'|<cut>|</cut>'
+    r"|<cut>|</cut>"
 )
 # A tag-like fragment that survives stripping the valid tags above → malformed.
 _TAGLIKE_RE = re.compile(r"</?(?:keep|speed|overlay|cut)\b")
@@ -76,15 +76,13 @@ def _strip_tags(line: str) -> str:
     `{{wrapped->}}` deletion, whose ``old`` side must decompose against the
     original), so the standard keep-text decomposition check covers it.
     """
-    stripped = OVERLAY_TAG_RE.sub(
-        "", SPEED_TAG_RE.sub("", KEEP_TAG_RE.sub("", line))
-    )
+    stripped = OVERLAY_TAG_RE.sub("", SPEED_TAG_RE.sub("", KEEP_TAG_RE.sub("", line)))
     return CUT_TAG_RE.sub("", stripped)
 
 
-def _check_patch_syntax(cleaned_line: str) -> List[str]:
+def _check_patch_syntax(cleaned_line: str) -> list[str]:
     """Return patch-syntax problem messages for a tag-stripped line."""
-    messages: List[str] = []
+    messages: list[str] = []
     # Empty no-op patch: both sides empty.
     for m in PATCH_RE.finditer(cleaned_line):
         if m.group(1) == "" and m.group(2) == "":
@@ -92,13 +90,11 @@ def _check_patch_syntax(cleaned_line: str) -> List[str]:
     # Strip valid patches; any leftover brace pair signals a malformed marker.
     leftover = PATCH_RE.sub("", cleaned_line)
     if "{{" in leftover or "}}" in leftover:
-        messages.append(
-            "malformed {{old->new}} patch (unbalanced braces or missing '->')"
-        )
+        messages.append("malformed {{old->new}} patch (unbalanced braces or missing '->')")
     return messages
 
 
-def _diagnose_decomposition(edit_line: str, original_text: str) -> Optional[str]:
+def _diagnose_decomposition(edit_line: str, original_text: str) -> str | None:
     """Diagnose why ``edit_line`` does not decompose against ``original_text``.
 
     Mirrors ``sync_json._decompose_edit_line`` but returns a human-readable
@@ -111,7 +107,7 @@ def _diagnose_decomposition(edit_line: str, original_text: str) -> Optional[str]
     edit_pos = 0
     orig_pos = 0
     for m in markers:
-        prefix = edit_line[edit_pos:m.start()]
+        prefix = edit_line[edit_pos : m.start()]
         if prefix:
             orig_end = orig_pos + len(prefix)
             if original_text[orig_pos:orig_end] != prefix:
@@ -145,7 +141,7 @@ def _diagnose_decomposition(edit_line: str, original_text: str) -> Optional[str]
     return None
 
 
-def _check_tags(edit_lines: List[str]) -> List[Problem]:
+def _check_tags(edit_lines: list[str]) -> list[Problem]:
     """Check keep/speed/overlay tag balance and well-formedness across lines.
 
     Tracks one open state per tag type (nesting of the same type is not
@@ -153,9 +149,9 @@ def _check_tags(edit_lines: List[str]) -> List[Problem]:
     sliced to the segment count, mirroring the extractors' ``break`` at
     ``seg_idx >= len(segments)``.
     """
-    problems: List[Problem] = []
+    problems: list[Problem] = []
     # tag name -> opening line number (None == not open)
-    open_at: Dict[str, Optional[int]] = {
+    open_at: dict[str, int | None] = {
         "keep": None,
         "speed": None,
         "overlay": None,
@@ -183,35 +179,27 @@ def _check_tags(edit_lines: List[str]) -> List[Problem]:
                 if name == "speed":
                     fm = _SPEED_FACTOR_RE.match(text)
                     if fm is not None and float(fm.group(1)) <= 0:
-                        problems.append(
-                            Problem(lineno, "<speed> factor must be greater than 0")
-                        )
+                        problems.append(Problem(lineno, "<speed> factor must be greater than 0"))
                 elif name == "overlay":
                     tm = _OVERLAY_TEXT_RE.match(text)
                     if tm is not None and tm.group(1) == "":
                         problems.append(
-                            Problem(lineno, "<overlay> has empty text=\"\"; nothing to display")
+                            Problem(lineno, '<overlay> has empty text=""; nothing to display')
                         )
         # Malformed tags: tag-like fragments left after removing valid tags.
         if _TAGLIKE_RE.search(_ANY_TAG_RE.sub("", line)):
-            problems.append(
-                Problem(lineno, "malformed <keep>/<speed>/<overlay>/<cut> tag")
-            )
+            problems.append(Problem(lineno, "malformed <keep>/<speed>/<overlay>/<cut> tag"))
 
     for name, opened in open_at.items():
         if opened is not None:
-            problems.append(
-                Problem(opened, f"unclosed <{name}> (opened here, never closed)")
-            )
+            problems.append(Problem(opened, f"unclosed <{name}> (opened here, never closed)"))
     return problems
 
 
-def check_edits(
-    edit_lines: List[str], json_data: Dict[str, Any]
-) -> List[Problem]:
+def check_edits(edit_lines: list[str], json_data: dict[str, Any]) -> list[Problem]:
     """Validate ``edit_lines`` against ``json_data`` and return all problems."""
     segments = json_data.get("segments", [])
-    problems: List[Problem] = []
+    problems: list[Problem] = []
 
     if len(edit_lines) != len(segments):
         problems.append(
@@ -253,7 +241,7 @@ def _format(problem: Problem) -> str:
     return f"{where}: {problem.message}"
 
 
-def parse_args(argv: Optional[List[str]] = None) -> argparse.Namespace:
+def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description=(
             "Check an _edits.txt for syntax/integrity problems against "
@@ -266,16 +254,14 @@ def parse_args(argv: Optional[List[str]] = None) -> argparse.Namespace:
         dest="edits_txt",
         help="_edits.txt path (may contain {{old->new}} and keep/speed/overlay markers)",
     )
-    parser.add_argument(
-        "--json", required=True, dest="json_path", help="WhisperX JSON path"
-    )
+    parser.add_argument("--json", required=True, dest="json_path", help="WhisperX JSON path")
     return parser.parse_args(argv)
 
 
-def main(argv: Optional[List[str]] = None) -> None:
+def main(argv: list[str] | None = None) -> None:
     args = parse_args(argv)
     edit_lines = Path(args.edits_txt).read_text(encoding="utf-8").splitlines()
-    with open(args.json_path, "r", encoding="utf-8") as f:
+    with open(args.json_path, encoding="utf-8") as f:
         json_data = json.load(f)
 
     problems = check_edits(edit_lines, json_data)

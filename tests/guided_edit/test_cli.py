@@ -37,7 +37,10 @@ def _argv(edits, director, out, cfg):
 
 def test_disabled_copies_through(monkeypatch, tmp_path):
     cfg, edits, director, out = _setup(
-        tmp_path, {"guided_edit": {"enabled": False}}, "あ\nい\n", [{"type": "cut", "lines": [1, 1]}]
+        tmp_path,
+        {"guided_edit": {"enabled": False}},
+        "あ\nい\n",
+        [{"type": "cut", "lines": [1, 1]}],
     )
     monkeypatch.setattr(sys, "argv", _argv(edits, director, out, cfg))
     ge_cli.main()

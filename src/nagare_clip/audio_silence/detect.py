@@ -9,11 +9,8 @@ needs no ffmpeg/Docker in the test path.
 from __future__ import annotations
 
 import re
-from typing import List, Tuple
 
-_DURATION_RE = re.compile(
-    r"Duration:\s*(\d+):(\d{2}):(\d{2}(?:\.\d+)?)"
-)
+_DURATION_RE = re.compile(r"Duration:\s*(\d+):(\d{2}):(\d{2}(?:\.\d+)?)")
 _SILENCE_START_RE = re.compile(r"silence_start:\s*(-?\d+(?:\.\d+)?)")
 _SILENCE_END_RE = re.compile(r"silence_end:\s*(-?\d+(?:\.\d+)?)")
 
@@ -26,7 +23,7 @@ def _parse_duration(stderr: str) -> float | None:
     return int(hours) * 3600 + int(minutes) * 60 + float(seconds)
 
 
-def parse_silencedetect_output(stderr: str) -> List[Tuple[float, float]]:
+def parse_silencedetect_output(stderr: str) -> list[tuple[float, float]]:
     """Parse ffmpeg stderr into a list of ``(start, end)`` silence ranges.
 
     A trailing ``silence_start`` with no matching ``silence_end`` (silence
@@ -35,7 +32,7 @@ def parse_silencedetect_output(stderr: str) -> List[Tuple[float, float]]:
     lines are ignored.
     """
     duration = _parse_duration(stderr)
-    ranges: List[Tuple[float, float]] = []
+    ranges: list[tuple[float, float]] = []
     pending_start: float | None = None
 
     for line in stderr.splitlines():
@@ -56,9 +53,7 @@ def parse_silencedetect_output(stderr: str) -> List[Tuple[float, float]]:
     return ranges
 
 
-def build_ffmpeg_args(
-    rel_source: str, noise: float, min_silence: float
-) -> List[str]:
+def build_ffmpeg_args(rel_source: str, noise: float, min_silence: float) -> list[str]:
     """ffmpeg argument list run inside the whisperx container.
 
     ``rel_source`` is the path relative to the mounted input-videos dir

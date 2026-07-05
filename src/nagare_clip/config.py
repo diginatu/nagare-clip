@@ -5,11 +5,11 @@ from __future__ import annotations
 import copy
 import logging
 from pathlib import Path
-from typing import Any, Dict
+from typing import Any
 
 import yaml
 
-DEFAULTS: Dict[str, Any] = {
+DEFAULTS: dict[str, Any] = {
     "general": {
         "log_level": "INFO",
         "log_file": "",
@@ -181,7 +181,7 @@ DEFAULTS: Dict[str, Any] = {
             "(e.g. a part that repeats an earlier one can be removed). Reference "
             "parts by their 1-based index. Output ONLY a JSON object.\n"
             "\n"
-            "By default, non-speech stretches are dropped. \"keep\" preserves ALL "
+            'By default, non-speech stretches are dropped. "keep" preserves ALL '
             "content in the range (silences and non-speech gaps included) — use "
             "it when those moments matter.\n"
             "\n"

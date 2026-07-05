@@ -2,19 +2,19 @@
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, List, Tuple
+from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     import spacy
 
 
-def load_nlp() -> "spacy.language.Language":
+def load_nlp() -> spacy.language.Language:
     import spacy
 
     return spacy.load("ja_ginza")
 
 
-def bunsetsu_units(text: str, nlp: "spacy.language.Language") -> List[Tuple[int, int, str]]:
+def bunsetsu_units(text: str, nlp: spacy.language.Language) -> list[tuple[int, int, str]]:
     """Return ``(start_char, end_char, surface)`` for every bunsetsu in ``text``."""
     import ginza
 

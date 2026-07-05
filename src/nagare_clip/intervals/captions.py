@@ -4,14 +4,13 @@ from __future__ import annotations
 
 import logging
 import math
-from typing import List, Tuple
 
 
 def expand_short_captions(
-    captions: List[dict],
+    captions: list[dict],
     min_duration: float,
     duration_sec: float,
-) -> List[dict]:
+) -> list[dict]:
     """Expand captions shorter than min_duration symmetrically.
 
     Expansion is clamped to:
@@ -75,11 +74,11 @@ def expand_short_captions(
 
 
 def apply_caption_margins(
-    captions: List[dict],
+    captions: list[dict],
     pre_margin: float,
     post_margin: float,
     duration_sec: float,
-) -> List[dict]:
+) -> list[dict]:
     """Extend each caption by pre/post margins, clamped to neighbors.
 
     Each caption's start is expanded backward by ``pre_margin`` (clamped to
@@ -91,7 +90,7 @@ def apply_caption_margins(
     if not captions or (pre_margin <= 0.0 and post_margin <= 0.0):
         return captions
 
-    result: List[dict] = []
+    result: list[dict] = []
     n = len(captions)
     for i, cap in enumerate(captions):
         start = float(cap["start"])
@@ -122,8 +121,8 @@ def apply_caption_margins(
 
 
 def collect_captions(
-    morpheme_times: List[Tuple[float, float, str]],
-    keep_intervals: List[dict],
+    morpheme_times: list[tuple[float, float, str]],
+    keep_intervals: list[dict],
     max_duration: float = 4.0,
     max_bunsetu: int = 12,
     min_bunsetu: int = 3,
@@ -131,7 +130,7 @@ def collect_captions(
     silence_flush: float = 1.5,
     duration_sec: float = math.inf,
     bunsetu_separator: str = " ",
-) -> List[dict]:
+) -> list[dict]:
     keep_ranges = [
         (float(iv["start"]), float(iv["end"]))
         for iv in keep_intervals
@@ -144,9 +143,9 @@ def collect_captions(
                 return True
         return False
 
-    captions: List[dict] = []
+    captions: list[dict] = []
 
-    chunk: List[str] = []
+    chunk: list[str] = []
     chunk_start = 0.0
     chunk_end = 0.0
     chunk_overlaps_keep = False
@@ -171,12 +170,8 @@ def collect_captions(
             silence_gap = m_start - chunk_end
             crossed_keep_boundary = current_overlaps_keep != chunk_overlaps_keep
 
-            size_limit_reached = (
-                speech_duration > max_duration or len(chunk) >= max_bunsetu
-            )
-            flush_allowed = (
-                len(chunk) >= min_bunsetu and speech_duration >= min_duration
-            )
+            size_limit_reached = speech_duration > max_duration or len(chunk) >= max_bunsetu
+            flush_allowed = len(chunk) >= min_bunsetu and speech_duration >= min_duration
             should_flush = (
                 (size_limit_reached and flush_allowed)
                 or silence_gap > silence_flush

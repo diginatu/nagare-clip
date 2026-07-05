@@ -5,9 +5,10 @@ from __future__ import annotations
 import logging
 import re
 from collections import defaultdict
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any
 
-from nagare_clip.llm_client import call_llm as _call_llm, with_trace_meta
+from nagare_clip.llm_client import call_llm as _call_llm
+from nagare_clip.llm_client import with_trace_meta
 from nagare_clip.llm_report import DROPPED_ITEMS, LLM_ERROR, NULL_RECORDER, OK, Recorder
 
 logger = logging.getLogger(__name__)
@@ -16,7 +17,7 @@ PATCH_RE = re.compile(r"\{\{([^}]*?)->(.*?)\}\}")
 _LINE_RE = re.compile(r"^(\d+):\s?(.*)")
 
 
-def apply_patches_to_lines(lines: List[str]) -> List[str]:
+def apply_patches_to_lines(lines: list[str]) -> list[str]:
     """Apply {{old->new}} patches in each line, returning clean text.
 
     Lines without patches are returned as-is.  For each line that contains
@@ -24,7 +25,7 @@ def apply_patches_to_lines(lines: List[str]) -> List[str]:
     is stripped.  If validation fails for a line, the original text (with
     markers removed by keeping ``old``) is returned instead.
     """
-    clean: List[str] = []
+    clean: list[str] = []
     for line in lines:
         original = PATCH_RE.sub(r"\1", line)
         result = _apply_patches(line, original)
@@ -33,12 +34,12 @@ def apply_patches_to_lines(lines: List[str]) -> List[str]:
 
 
 def filter_transcript(
-    lines: List[str],
-    cfg: Dict[str, Any],
+    lines: list[str],
+    cfg: dict[str, Any],
     *,
     call_llm=None,
     recorder: Recorder = NULL_RECORDER,
-) -> List[str]:
+) -> list[str]:
     """Send transcript lines to LLM in batches, return lines with {{old->new}} markers.
 
     The returned lines preserve the ``{{old->new}}`` patch syntax so that
@@ -54,7 +55,7 @@ def filter_transcript(
     batches = _batch_lines(lines, batch_size)
     result = list(lines)  # copy
 
-    stats: Dict[int, Dict[str, int]] = defaultdict(lambda: {"total": 0, "succeeded": 0})
+    stats: dict[int, dict[str, int]] = defaultdict(lambda: {"total": 0, "succeeded": 0})
     for batch in batches:
         _process_batch(batch, result, cfg, batch_size, stats, call_llm=call_llm, recorder=recorder)
 
@@ -63,11 +64,11 @@ def filter_transcript(
 
 
 def _process_batch(
-    batch: List[Tuple[int, str]],
-    result: List[str],
-    cfg: Dict[str, Any],
+    batch: list[tuple[int, str]],
+    result: list[str],
+    cfg: dict[str, Any],
     current_size: int,
-    stats: Optional[Dict[int, Dict[str, int]]] = None,
+    stats: dict[int, dict[str, int]] | None = None,
     *,
     call_llm=None,
     recorder: Recorder = NULL_RECORDER,
@@ -97,8 +98,14 @@ def _process_batch(
             exc_info=True,
         )
         recorder.attempt(
-            unit=unit, attempt=0, total=1, messages=messages, error=str(e),
-            outcome=LLM_ERROR, reason="LLM call failed", cfg=cfg,
+            unit=unit,
+            attempt=0,
+            total=1,
+            messages=messages,
+            error=str(e),
+            outcome=LLM_ERROR,
+            reason="LLM call failed",
+            cfg=cfg,
         )
         recorder.flush_unit(unit, outcome=LLM_ERROR, reason="LLM call failed")
         return
@@ -118,8 +125,14 @@ def _process_batch(
         outcome = OK
         reason = ""
     recorder.attempt(
-        unit=unit, attempt=0, total=1, messages=messages, response=response,
-        outcome=outcome, reason=reason, cfg=cfg,
+        unit=unit,
+        attempt=0,
+        total=1,
+        messages=messages,
+        response=response,
+        outcome=outcome,
+        reason=reason,
+        cfg=cfg,
     )
     recorder.flush_unit(unit, outcome=outcome, reason=reason)
 
@@ -142,19 +155,26 @@ def _process_batch(
     )
     for i in range(0, len(failed), new_size):
         _process_batch(
-            failed[i : i + new_size], result, cfg, new_size, stats,
-            call_llm=call_llm, recorder=recorder,
+            failed[i : i + new_size],
+            result,
+            cfg,
+            new_size,
+            stats,
+            call_llm=call_llm,
+            recorder=recorder,
         )
 
 
-def _log_stats(stats: Dict[int, Dict[str, int]], initial_size: int) -> None:
+def _log_stats(stats: dict[int, dict[str, int]], initial_size: int) -> None:
     if not stats:
         return
     for size in sorted(stats.keys(), reverse=True):
         s = stats[size]
         label = f"batch_size={size}" if size == initial_size else f"batch_size={size} (retry)"
         pct = 100.0 * s["succeeded"] / s["total"] if s["total"] else 0.0
-        logger.info("LLM filter %s: %d/%d succeeded (%.0f%%)", label, s["succeeded"], s["total"], pct)
+        logger.info(
+            "LLM filter %s: %d/%d succeeded (%.0f%%)", label, s["succeeded"], s["total"], pct
+        )
 
     retry_saved = sum(s["succeeded"] for sz, s in stats.items() if sz < initial_size)
     retry_total = sum(s["total"] for sz, s in stats.items() if sz < initial_size)
@@ -163,26 +183,26 @@ def _log_stats(stats: Dict[int, Dict[str, int]], initial_size: int) -> None:
     if retry_total > 0:
         logger.info(
             "LLM filter total: %d/%d line-attempts succeeded; retries saved %d/%d lines (%.0f%%)",
-            all_succeeded, all_total, retry_saved, retry_total, 100.0 * retry_saved / retry_total,
+            all_succeeded,
+            all_total,
+            retry_saved,
+            retry_total,
+            100.0 * retry_saved / retry_total,
         )
 
 
-def _batch_lines(
-    lines: List[str], batch_size: int
-) -> List[List[Tuple[int, str]]]:
+def _batch_lines(lines: list[str], batch_size: int) -> list[list[tuple[int, str]]]:
     """Group (index, line) into batches of batch_size."""
     indexed = list(enumerate(lines))
     return [indexed[i : i + batch_size] for i in range(0, len(indexed), batch_size)]
 
 
-def _format_batch(batch: List[Tuple[int, str]]) -> str:
+def _format_batch(batch: list[tuple[int, str]]) -> str:
     """Format batch as numbered lines (1-indexed for LLM readability)."""
     return "\n".join(f"{idx + 1}: {text}" for idx, text in batch)
 
 
-def _parse_response(
-    response: str, original_batch: List[Tuple[int, str]]
-) -> Dict[int, str]:
+def _parse_response(response: str, original_batch: list[tuple[int, str]]) -> dict[int, str]:
     """Parse LLM response lines, validate {{old->new}} markers.
 
     Returns a mapping from original index to response text with markers
@@ -190,10 +210,10 @@ def _parse_response(
     keeps the original).
     """
     original_map = {idx: text for idx, text in original_batch}
-    result: Dict[int, str] = {}
+    result: dict[int, str] = {}
 
     # Parse response lines with line-number prefix
-    response_lines: Dict[int, str] = {}
+    response_lines: dict[int, str] = {}
     for raw_line in response.splitlines():
         m = _LINE_RE.match(raw_line)
         if m:

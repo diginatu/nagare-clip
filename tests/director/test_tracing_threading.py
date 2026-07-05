@@ -1,14 +1,14 @@
 from nagare_clip.director.director_llm import generate_director_ops
-from nagare_clip.plan.plan_llm import generate_plan
-from nagare_clip.summary.summarize import segment_video, generate_project_summary, PartSummary
-from nagare_clip.plan.plan_llm import ProjectSummary
 from nagare_clip.llm_report import Recorder
+from nagare_clip.plan.plan_llm import ProjectSummary, generate_plan
+from nagare_clip.summary.summarize import PartSummary, generate_project_summary, segment_video
 
 
 def _capturing_call_llm(store, response):
     def fake(messages, cfg):
         store.append(cfg)
         return response
+
     return fake
 
 

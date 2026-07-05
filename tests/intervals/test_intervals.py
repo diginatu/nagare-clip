@@ -8,7 +8,6 @@ from nagare_clip.intervals.intervals import (
     ensure_keep_covers_captions,
 )
 
-
 # apply_margins
 
 

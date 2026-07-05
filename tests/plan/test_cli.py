@@ -16,9 +16,7 @@ def _run(monkeypatch, tmp_path, cfg_dict, project_summary):
     cfg = tmp_path / "config.yml"
     cfg.write_text(yaml.safe_dump(cfg_dict), encoding="utf-8")
     summary = tmp_path / "summary.json"
-    summary.write_text(
-        json.dumps(summary_to_dict(project_summary)), encoding="utf-8"
-    )
+    summary.write_text(json.dumps(summary_to_dict(project_summary)), encoding="utf-8")
     out = tmp_path / "plan.json"
     monkeypatch.setattr(
         sys,
@@ -44,9 +42,7 @@ def test_disabled_writes_empty(monkeypatch, tmp_path):
 
 
 def test_enabled_writes_directions(monkeypatch, tmp_path):
-    ps = ProjectSummary(
-        "all", [PartSummary("a", (1, 2), "x"), PartSummary("b", (1, 1), "y")]
-    )
+    ps = ProjectSummary("all", [PartSummary("a", (1, 2), "x"), PartSummary("b", (1, 1), "y")])
 
     def fake_generate(project_summary, cfg, **kwargs):
         # confirms the loaded summary round-tripped into the stage

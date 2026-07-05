@@ -35,12 +35,28 @@ def long_video(tmp_path_factory) -> Path:
     vid = tmp_path_factory.mktemp("media") / "long.mp4"
     subprocess.run(
         [
-            ffmpeg, "-y",
-            "-f", "lavfi", "-i", "color=c=black:s=320x240:r=60:d=1200",
-            "-f", "lavfi", "-i", "anullsrc=r=44100:cl=mono",
-            "-t", "1200",
-            "-c:v", "libx264", "-preset", "ultrafast", "-g", "600",
-            "-c:a", "aac", "-b:a", "64k",
+            ffmpeg,
+            "-y",
+            "-f",
+            "lavfi",
+            "-i",
+            "color=c=black:s=320x240:r=60:d=1200",
+            "-f",
+            "lavfi",
+            "-i",
+            "anullsrc=r=44100:cl=mono",
+            "-t",
+            "1200",
+            "-c:v",
+            "libx264",
+            "-preset",
+            "ultrafast",
+            "-g",
+            "600",
+            "-c:a",
+            "aac",
+            "-b:a",
+            "64k",
             str(vid),
         ],
         check=True,
@@ -54,8 +70,14 @@ def retiming_result(long_video, tmp_path_factory) -> dict:
     out_json = tmp_path_factory.mktemp("blender") / "result.json"
     result = subprocess.run(
         [
-            BLENDER, "--background", "--factory-startup", "--python", str(SCRIPT),
-            "--", str(long_video), str(out_json),
+            BLENDER,
+            "--background",
+            "--factory-startup",
+            "--python",
+            str(SCRIPT),
+            "--",
+            str(long_video),
+            str(out_json),
         ],
         capture_output=True,
         text=True,
@@ -81,14 +103,7 @@ def test_every_strip_at_expected_position(retiming_result):
     """Each placed strip's visible start must equal the position
     build_timeline_map() computed for it. Without Phase D the retiming
     operators leave many strips shifted by their un-retimed length."""
-    misplaced = [
-        s for s in retiming_result["strips"]
-        if s["actual_start"] != s["expected_start"]
-    ]
-    assert not misplaced, (
-        "strips not at computed positions: "
-        + ", ".join(
-            f"{s['name']} exp={s['expected_start']} act={s['actual_start']}"
-            for s in misplaced[:10]
-        )
+    misplaced = [s for s in retiming_result["strips"] if s["actual_start"] != s["expected_start"]]
+    assert not misplaced, "strips not at computed positions: " + ", ".join(
+        f"{s['name']} exp={s['expected_start']} act={s['actual_start']}" for s in misplaced[:10]
     )

@@ -11,7 +11,8 @@ from __future__ import annotations
 import atexit
 import logging
 import os
-from typing import Any, Dict, Iterable, List
+from collections.abc import Iterable
+from typing import Any
 
 import litellm
 
@@ -64,12 +65,12 @@ def _tracing_enabled() -> bool:
 
 
 def with_trace_meta(
-    cfg: Dict[str, Any],
+    cfg: dict[str, Any],
     *,
     stage: str,
     unit: str,
     extra_tags: Iterable[str] = (),
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     """Return a copy of *cfg* carrying Langfuse grouping metadata under ``_trace``.
 
     ``call_llm`` pops ``_trace`` and forwards it (plus the run session id) to
@@ -83,7 +84,7 @@ def with_trace_meta(
     return out
 
 
-def call_llm(messages: List[Dict[str, str]], cfg: Dict[str, Any]) -> str:
+def call_llm(messages: list[dict[str, str]], cfg: dict[str, Any]) -> str:
     """Send chat ``messages`` to the configured provider, return text content.
 
     Falls back to the local Ollama base URL when an Ollama provider is selected
@@ -96,7 +97,7 @@ def call_llm(messages: List[Dict[str, str]], cfg: Dict[str, Any]) -> str:
     provider = cfg.get("provider", "ollama_chat")
     model = cfg.get("model", "")
 
-    kwargs: Dict[str, Any] = {
+    kwargs: dict[str, Any] = {
         "model": f"{provider}/{model}",
         "messages": messages,
         "timeout": cfg.get("timeout", 300),

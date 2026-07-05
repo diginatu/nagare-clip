@@ -23,7 +23,5 @@ def setup_logging(level: str, log_file: str | None = None) -> None:
 
     if log_file:
         fh = logging.FileHandler(log_file, mode="a", encoding="utf-8")
-        fh.setFormatter(
-            logging.Formatter("%(asctime)s %(levelname)s: %(message)s")
-        )
+        fh.setFormatter(logging.Formatter("%(asctime)s %(levelname)s: %(message)s"))
         root.addHandler(fh)

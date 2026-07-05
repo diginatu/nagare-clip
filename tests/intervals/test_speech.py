@@ -22,9 +22,7 @@ def test_build_speech_spans_caps_inflated_word_end_for_gap_detection():
     spans = build_speech_spans(whisperx_data)
 
     ic_idx = next(
-        i
-        for i, (start, _) in enumerate(spans)
-        if start == pytest.approx(75.073, abs=1e-3)
+        i for i, (start, _) in enumerate(spans) if start == pytest.approx(75.073, abs=1e-3)
     )
     assert spans[ic_idx][1] == pytest.approx(75.673, abs=1e-3)
     gap = spans[ic_idx + 1][0] - spans[ic_idx][1]

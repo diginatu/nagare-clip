@@ -6,14 +6,12 @@ Extract per-segment times from a WhisperX JSON and render a compact
 
 from __future__ import annotations
 
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any
 
 
-def segment_times(
-    json_data: Dict[str, Any]
-) -> List[Tuple[Optional[float], Optional[float]]]:
+def segment_times(json_data: dict[str, Any]) -> list[tuple[float | None, float | None]]:
     """Return ``(start, end)`` per WhisperX segment (``None`` when missing)."""
-    out: List[Tuple[Optional[float], Optional[float]]] = []
+    out: list[tuple[float | None, float | None]] = []
     for seg in json_data.get("segments", []):
         if not isinstance(seg, dict):
             out.append((None, None))
@@ -26,7 +24,7 @@ def segment_times(
     return out
 
 
-def format_dur_gap(dur: Optional[float], gap: Optional[float]) -> str:
+def format_dur_gap(dur: float | None, gap: float | None) -> str:
     """Compact bracket: ``[4.2s, gap 0.8s]``.
 
     - ``dur is None`` -> ``""`` (no bracket at all).

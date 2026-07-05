@@ -51,9 +51,7 @@ def test_enabled_writes_parsed_ops(monkeypatch, tmp_path):
         ),
     )
 
-    data = _run(
-        monkeypatch, tmp_path, {"director": {"enabled": True}}, "あい\nうえ\n"
-    )
+    data = _run(monkeypatch, tmp_path, {"director": {"enabled": True}}, "あい\nうえ\n")
     assert data["ops"] == [{"type": "cut", "lines": [1, 2], "note": "boring"}]
 
 
@@ -77,10 +75,14 @@ def test_llm_report_no_clear_preserves_existing_report(monkeypatch, tmp_path):
         "argv",
         [
             "director",
-            "--edits-txt", str(edits),
-            "--output", str(out),
-            "--config", str(cfg),
-            "--llm-report-dir", str(report_dir),
+            "--edits-txt",
+            str(edits),
+            "--output",
+            str(out),
+            "--config",
+            str(cfg),
+            "--llm-report-dir",
+            str(report_dir),
             "--llm-report-no-clear",
         ],
     )
@@ -94,10 +96,14 @@ def test_llm_report_no_clear_preserves_existing_report(monkeypatch, tmp_path):
         "argv",
         [
             "director",
-            "--edits-txt", str(edits),
-            "--output", str(out),
-            "--config", str(cfg),
-            "--llm-report-dir", str(report_dir),
+            "--edits-txt",
+            str(edits),
+            "--output",
+            str(out),
+            "--config",
+            str(cfg),
+            "--llm-report-dir",
+            str(report_dir),
         ],
     )
     director_cli.main()
@@ -120,13 +126,7 @@ def test_overview_context_injected_for_stem(monkeypatch, tmp_path):
     )
     plan = tmp_path / "plan.json"
     plan.write_text(
-        _json.dumps(
-            {
-                "directions": [
-                    {"stem": "clip", "lines": [1, 2], "direction": "keep tight"}
-                ]
-            }
-        ),
+        _json.dumps({"directions": [{"stem": "clip", "lines": [1, 2], "direction": "keep tight"}]}),
         encoding="utf-8",
     )
 
@@ -148,12 +148,18 @@ def test_overview_context_injected_for_stem(monkeypatch, tmp_path):
         "argv",
         [
             "director",
-            "--edits-txt", str(edits),
-            "--output", str(out),
-            "--summary", str(summary),
-            "--plan", str(plan),
-            "--stem", "clip",
-            "--config", str(cfg),
+            "--edits-txt",
+            str(edits),
+            "--output",
+            str(out),
+            "--summary",
+            str(summary),
+            "--plan",
+            str(plan),
+            "--stem",
+            "clip",
+            "--config",
+            str(cfg),
         ],
     )
     director_cli.main()
@@ -167,10 +173,14 @@ def test_json_passes_seg_times(monkeypatch, tmp_path):
 
     js = tmp_path / "clip.json"
     js.write_text(
-        _json.dumps({"segments": [
-            {"start": 1.0, "end": 3.0, "text": "あい"},
-            {"start": 4.0, "end": 6.5, "text": "うえ"},
-        ]}),
+        _json.dumps(
+            {
+                "segments": [
+                    {"start": 1.0, "end": 3.0, "text": "あい"},
+                    {"start": 4.0, "end": 6.5, "text": "うえ"},
+                ]
+            }
+        ),
         encoding="utf-8",
     )
 
@@ -192,11 +202,16 @@ def test_json_passes_seg_times(monkeypatch, tmp_path):
         "argv",
         [
             "director",
-            "--edits-txt", str(edits),
-            "--output", str(out),
-            "--json", str(js),
-            "--stem", "clip",
-            "--config", str(cfg),
+            "--edits-txt",
+            str(edits),
+            "--output",
+            str(out),
+            "--json",
+            str(js),
+            "--stem",
+            "clip",
+            "--config",
+            str(cfg),
         ],
     )
     director_cli.main()
@@ -222,9 +237,12 @@ def test_missing_json_passes_none_seg_times(monkeypatch, tmp_path):
         "argv",
         [
             "director",
-            "--edits-txt", str(edits),
-            "--output", str(out),
-            "--config", str(cfg),
+            "--edits-txt",
+            str(edits),
+            "--output",
+            str(out),
+            "--config",
+            str(cfg),
         ],
     )
     director_cli.main()

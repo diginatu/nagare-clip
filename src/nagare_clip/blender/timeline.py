@@ -23,9 +23,7 @@ def sec_to_frames(seconds: float, fps: float) -> int:
 # caption_style keys that need name mapping or per-call defaults; each placement
 # function applies these explicitly (their defaults differ per feature), so the
 # generic passthrough below skips them.
-_MAPPED_STYLE_KEYS = frozenset(
-    {"font_size", "alignment_x", "anchor_y", "location_x", "location_y"}
-)
+_MAPPED_STYLE_KEYS = frozenset({"font_size", "alignment_x", "anchor_y", "location_x", "location_y"})
 
 
 def _load_font(path: object) -> object:
@@ -38,9 +36,7 @@ def _load_font(path: object) -> object:
     dedupes the datablock when several strips/sources share the same font.
     """
     if not isinstance(path, str) or not os.path.isabs(path):
-        raise ValueError(
-            f"caption_style 'font' must be an absolute filepath, got: {path!r}"
-        )
+        raise ValueError(f"caption_style 'font' must be an absolute filepath, got: {path!r}")
     if not os.path.isfile(path):
         raise FileNotFoundError(f"caption_style 'font' not found: {path!r}")
     return bpy.data.fonts.load(path, check_existing=True)
@@ -173,7 +169,9 @@ def _sequencer_op(window, area, op_func, **kwargs):
     if area is None or window is None:
         return False
     with bpy.context.temp_override(
-        window=window, area=area, region=area.regions[-1],
+        window=window,
+        area=area,
+        region=area.regions[-1],
     ):
         op_func(**kwargs)
     return True
@@ -296,8 +294,7 @@ def place_strips(
 
         if not _sequencer_op(window, sequencer_area, bpy.ops.sequencer.duplicate):
             logging.warning(
-                "%sStrip %d: no SEQUENCE_EDITOR area found, cannot duplicate.",
-                src_tag, idx
+                "%sStrip %d: no SEQUENCE_EDITOR area found, cannot duplicate.", src_tag, idx
             )
             continue
 
@@ -314,8 +311,7 @@ def place_strips(
 
         if new_video is None or new_sound is None:
             logging.warning(
-                "%sStrip %d: duplicate did not produce expected strips, skipping.",
-                src_tag, idx
+                "%sStrip %d: duplicate did not produce expected strips, skipping.", src_tag, idx
             )
             continue
 
@@ -334,9 +330,7 @@ def place_strips(
         new_sound.mute = False
         new_sound.content_start = timeline_cursor - bounded_start
         new_sound.left_handle_offset = bounded_start
-        new_sound.right_handle_offset = sound_full_duration - (
-            bounded_start + keep_frame_count
-        )
+        new_sound.right_handle_offset = sound_full_duration - (bounded_start + keep_frame_count)
         if new_sound.right_handle_offset < 0:
             new_sound.right_handle_offset = 0
         new_sound.channel = 2
@@ -368,9 +362,12 @@ def place_strips(
             for strip in (new_video, new_sound):
                 se.active_strip = strip
                 strip.show_retiming_keys = True
-                _sequencer_op(window, sequencer_area,
-                              bpy.ops.sequencer.retiming_segment_speed_set,
-                              speed=speed * 100.0)
+                _sequencer_op(
+                    window,
+                    sequencer_area,
+                    bpy.ops.sequencer.retiming_segment_speed_set,
+                    speed=speed * 100.0,
+                )
                 strip.show_retiming_keys = False
 
         logging.debug(
@@ -398,9 +395,7 @@ def place_strips(
     if _sequencer_op(window, sequencer_area, bpy.ops.sequencer.delete):
         logging.debug("%sTemplate strips deleted.", src_tag)
     else:
-        logging.warning(
-            "%sCould not delete template strips: no SEQUENCE_EDITOR area.", src_tag
-        )
+        logging.warning("%sCould not delete template strips: no SEQUENCE_EDITOR area.", src_tag)
 
     # --- Phase D: re-assert strip positions ---
     # WORKAROUND (remove once the underlying Blender bug is fixed): the Blender
@@ -455,15 +450,11 @@ def place_captions(
                 )
                 entry_tl_start = entry["tl_start"] + offset_start
                 entry_tl_end = entry["tl_start"] + offset_end
-                tl_start = (
-                    entry_tl_start if tl_start is None else min(tl_start, entry_tl_start)
-                )
+                tl_start = entry_tl_start if tl_start is None else min(tl_start, entry_tl_start)
                 tl_end = entry_tl_end if tl_end is None else max(tl_end, entry_tl_end)
 
         if tl_start is None or tl_end is None or tl_end <= tl_start:
-            logging.warning(
-                "Caption skipped (no matching keep interval): %r", text[:60]
-            )
+            logging.warning("Caption skipped (no matching keep interval): %r", text[:60])
             continue
         length = max(1, tl_end - tl_start)
         text_strip = sequence_collection.new_effect(
@@ -530,15 +521,11 @@ def place_overlays(
                 )
                 entry_tl_start = entry["tl_start"] + offset_start
                 entry_tl_end = entry["tl_start"] + offset_end
-                tl_start = (
-                    entry_tl_start if tl_start is None else min(tl_start, entry_tl_start)
-                )
+                tl_start = entry_tl_start if tl_start is None else min(tl_start, entry_tl_start)
                 tl_end = entry_tl_end if tl_end is None else max(tl_end, entry_tl_end)
 
         if tl_start is None or tl_end is None:
-            logging.warning(
-                "Overlay skipped (no matching keep interval): %r", text[:60]
-            )
+            logging.warning("Overlay skipped (no matching keep interval): %r", text[:60])
             continue
         length = max(1, tl_end - tl_start)
         tl_end = tl_start + length
@@ -558,9 +545,7 @@ def place_overlays(
         text_strip.location[0] = style.get("location_x", 0.5)
         text_strip.location[1] = style.get("location_y", 0.95)
         apply_text_style(text_strip, style)
-        logging.debug(
-            "Overlay '%s': timeline frames %d-%d", text[:40], tl_start, tl_end
-        )
+        logging.debug("Overlay '%s': timeline frames %d-%d", text[:40], tl_start, tl_end)
 
 
 def place_speed_marks(
@@ -605,15 +590,11 @@ def place_speed_marks(
                 )
                 entry_tl_start = entry["tl_start"] + offset_start
                 entry_tl_end = entry["tl_start"] + offset_end
-                tl_start = (
-                    entry_tl_start if tl_start is None else min(tl_start, entry_tl_start)
-                )
+                tl_start = entry_tl_start if tl_start is None else min(tl_start, entry_tl_start)
                 tl_end = entry_tl_end if tl_end is None else max(tl_end, entry_tl_end)
 
         if tl_start is None or tl_end is None:
-            logging.warning(
-                "Speed mark skipped (no matching keep interval): %r", text[:60]
-            )
+            logging.warning("Speed mark skipped (no matching keep interval): %r", text[:60])
             continue
         length = max(1, tl_end - tl_start)
 
@@ -632,6 +613,4 @@ def place_speed_marks(
         text_strip.location[0] = style.get("location_x", 0.95)
         text_strip.location[1] = style.get("location_y", 0.95)
         apply_text_style(text_strip, style)
-        logging.debug(
-            "Speed mark '%s': timeline frames %d-%d", text, tl_start, tl_start + length
-        )
+        logging.debug("Speed mark '%s': timeline frames %d-%d", text, tl_start, tl_start + length)

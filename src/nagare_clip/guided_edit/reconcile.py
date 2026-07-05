@@ -13,18 +13,16 @@ tag never corrupts the file.
 
 from __future__ import annotations
 
-from typing import List, Optional
-
 from nagare_clip.director.director_llm import DirectorOp
-from nagare_clip.text_filter.llm_filter import PATCH_RE
 from nagare_clip.intervals.sync_json import (
+    _OVERLAY_OPEN_RE,
+    _SPEED_OPEN_RE,
     CUT_TAG_RE,
     KEEP_TAG_RE,
     OVERLAY_TAG_RE,
     SPEED_TAG_RE,
-    _OVERLAY_OPEN_RE,
-    _SPEED_OPEN_RE,
 )
+from nagare_clip.text_filter.llm_filter import PATCH_RE
 
 
 def clean_old(line: str) -> str:
@@ -36,9 +34,7 @@ def clean_old(line: str) -> str:
     """
     no_tags = CUT_TAG_RE.sub(
         "",
-        OVERLAY_TAG_RE.sub(
-            "", SPEED_TAG_RE.sub("", KEEP_TAG_RE.sub("", line))
-        ),
+        OVERLAY_TAG_RE.sub("", SPEED_TAG_RE.sub("", KEEP_TAG_RE.sub("", line))),
     )
     return PATCH_RE.sub(r"\1", no_tags)
 
@@ -63,8 +59,8 @@ _SPAN_TAGS = {
 
 
 def _reflection_failure(
-    before: List[str], after: List[str], lo: int, hi: int, op: DirectorOp
-) -> Optional[str]:
+    before: list[str], after: list[str], lo: int, hi: int, op: DirectorOp
+) -> str | None:
     a, b = op.lines
     if op.type == "edit":
         if "".join(after[lo:hi]) == "".join(before[lo:hi]):
@@ -82,9 +78,7 @@ def _reflection_failure(
     return None
 
 
-def verify_op(
-    before: List[str], after: List[str], op: DirectorOp
-) -> Optional[str]:
+def verify_op(before: list[str], after: list[str], op: DirectorOp) -> str | None:
     """Return ``None`` if *op* is applied cleanly, else a human-readable reason.
 
     *before*/*after* are the full edit-line lists around the op's application.

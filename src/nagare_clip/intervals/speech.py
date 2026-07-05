@@ -2,14 +2,14 @@
 
 from __future__ import annotations
 
-from typing import List, Sequence, Tuple
+from collections.abc import Sequence
 
 from nagare_clip.intervals.bunsetu import CHAR_EPS, SILENCE_MAX_WORD_SPAN
 
 
-def build_speech_spans(whisperx_data: dict) -> List[Tuple[float, float]]:
+def build_speech_spans(whisperx_data: dict) -> list[tuple[float, float]]:
     """Build speech spans from WhisperX word timings for silence detection."""
-    spans: List[Tuple[float, float]] = []
+    spans: list[tuple[float, float]] = []
 
     for segment in whisperx_data.get("segments", []):
         raw_entries = segment.get("words", [])
@@ -40,9 +40,7 @@ def build_speech_spans(whisperx_data: dict) -> List[Tuple[float, float]]:
     return spans
 
 
-def get_duration_sec(
-    whisperx_data: dict, words: Sequence[Tuple[float, float, str]]
-) -> float:
+def get_duration_sec(whisperx_data: dict, words: Sequence[tuple[float, float, str]]) -> float:
     max_end = 0.0
     if words:
         max_end = max(max_end, max(end for _, end, _ in words))

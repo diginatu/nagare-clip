@@ -16,16 +16,18 @@ from nagare_clip.llm_report import recorder_from_config
 from nagare_clip.logging_setup import setup_logging
 from nagare_clip.text_filter.llm_filter import filter_transcript
 from nagare_clip.text_filter.rule_filter import remove_midstream_closing
-from nagare_clip.text_filter.summary_llm import SummaryResult, build_enhanced_prompt, generate_summary
+from nagare_clip.text_filter.summary_llm import (
+    SummaryResult,
+    build_enhanced_prompt,
+    generate_summary,
+)
 
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description="Text editing checkpoint for WhisperX transcriptions."
     )
-    parser.add_argument(
-        "--txt", required=True, dest="txt_path", help="WhisperX .txt path"
-    )
+    parser.add_argument("--txt", required=True, dest="txt_path", help="WhisperX .txt path")
     parser.add_argument(
         "--output-txt",
         required=True,
@@ -56,7 +58,9 @@ def parse_args() -> argparse.Namespace:
         help="Directory for LLM report output (overrides config)",
     )
     parser.add_argument(
-        "--llm-report-no-clear", action="store_true", dest="llm_report_no_clear",
+        "--llm-report-no-clear",
+        action="store_true",
+        dest="llm_report_no_clear",
         help="Do not wipe this stage's report subdir at startup (for per-source loop iterations after the first)",
     )
     return parser.parse_args()
@@ -110,9 +114,7 @@ def main() -> None:
             summary_result = generate_summary("\n".join(lines), summary_cfg, recorder=recorder)
             if summary_result is not None:
                 summary_result.keywords = constant_keywords + summary_result.keywords
-                filter_cfg["prompt"] = build_enhanced_prompt(
-                    s2.get("prompt", ""), summary_result
-                )
+                filter_cfg["prompt"] = build_enhanced_prompt(s2.get("prompt", ""), summary_result)
                 logging.info(
                     "text_filter: summary generated, %d keywords",
                     len(summary_result.keywords),

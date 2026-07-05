@@ -7,10 +7,12 @@ from nagare_clip.timing import format_dur_gap, segment_times
 
 class TestSegmentTimes:
     def test_extracts_start_end_per_segment(self):
-        data = {"segments": [
-            {"start": 1.0, "end": 3.5, "text": "a"},
-            {"start": 4.0, "end": 6.0, "text": "b"},
-        ]}
+        data = {
+            "segments": [
+                {"start": 1.0, "end": 3.5, "text": "a"},
+                {"start": 4.0, "end": 6.0, "text": "b"},
+            ]
+        }
         assert segment_times(data) == [(1.0, 3.5), (4.0, 6.0)]
 
     def test_missing_keys_become_none(self):

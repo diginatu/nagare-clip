@@ -40,9 +40,7 @@ def test_cli_disabled_writes_header_only_even_with_raw(tmp_path, monkeypatch):
     raw = tmp_path / "sd.log"
     raw.write_text(_RAW, encoding="utf-8")
     cfg = tmp_path / "config.yml"
-    cfg.write_text(
-        yaml.safe_dump({"audio_silence": {"enabled": False}}), encoding="utf-8"
-    )
+    cfg.write_text(yaml.safe_dump({"audio_silence": {"enabled": False}}), encoding="utf-8")
     out = tmp_path / "clip_cuts.txt"
     _run(
         monkeypatch,

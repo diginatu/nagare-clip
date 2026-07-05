@@ -1,16 +1,17 @@
 """Tests that trace metadata is threaded through single-call stage functions."""
 
+from nagare_clip.director.director_llm import DirectorOp
+from nagare_clip.guided_edit.apply import apply_ops
+from nagare_clip.llm_report import Recorder
 from nagare_clip.text_filter.llm_filter import _process_batch
 from nagare_clip.text_filter.summary_llm import generate_summary
-from nagare_clip.guided_edit.apply import apply_ops
-from nagare_clip.director.director_llm import DirectorOp
-from nagare_clip.llm_report import Recorder
 
 
 def _capture(store, response):
     def fake(messages, cfg):
         store.append(cfg)
         return response
+
     return fake
 
 

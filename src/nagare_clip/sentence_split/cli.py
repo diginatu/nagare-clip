@@ -13,9 +13,8 @@ import argparse
 import json
 import logging
 import shutil
-import sys
 from pathlib import Path
-from typing import Any, Dict
+from typing import Any
 
 from nagare_clip.config import get_effective_config
 from nagare_clip.llm_report import NULL_RECORDER, Recorder, recorder_from_config
@@ -33,13 +32,13 @@ from nagare_clip.sentence_split.segment import (
 
 
 def resegment_json(
-    json_data: Dict[str, Any],
-    sp_cfg: Dict[str, Any],
+    json_data: dict[str, Any],
+    sp_cfg: dict[str, Any],
     nlp: Any,
     *,
     recorder: Recorder = NULL_RECORDER,
     stem: str = "",
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     """Return a new WhisperX data dict with re-segmented segments.
 
     On a verbatim-invariant violation, returns ``json_data`` unchanged.
@@ -64,9 +63,7 @@ def resegment_json(
             continue
         bunsetsu = bunsetsu_units(text, nlp)
         ranges = (
-            split_window(
-                bunsetsu, sp_cfg, recorder=recorder, unit=f"{stem}.w{base + 1}"
-            )
+            split_window(bunsetsu, sp_cfg, recorder=recorder, unit=f"{stem}.w{base + 1}")
             if bunsetsu
             else None
         )
@@ -117,31 +114,24 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--stem", default="", dest="stem")
     parser.add_argument("--config", dest="config_path", default=None)
     parser.add_argument(
-        "--log-level", default=None,
+        "--log-level",
+        default=None,
         choices=["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"],
     )
     parser.add_argument("--log-file", default=None)
     parser.add_argument("--llm-report-dir", default=None, dest="llm_report_dir")
-    parser.add_argument(
-        "--llm-report-no-clear", action="store_true", dest="llm_report_no_clear"
-    )
+    parser.add_argument("--llm-report-no-clear", action="store_true", dest="llm_report_no_clear")
     return parser.parse_args()
 
 
 def main() -> None:
     args = parse_args()
-    cli_overrides: Dict[str, Any] = {}
+    cli_overrides: dict[str, Any] = {}
     if args.log_level is not None:
         cli_overrides.setdefault("general", {})["log_level"] = args.log_level
-    cfg = get_effective_config(
-        Path(args.config_path) if args.config_path else None, cli_overrides
-    )
-    setup_logging(
-        cfg["general"]["log_level"], args.log_file or cfg["general"]["log_file"] or None
-    )
-    recorder = recorder_from_config(
-        "sentence_split", cfg, override_dir=args.llm_report_dir
-    )
+    cfg = get_effective_config(Path(args.config_path) if args.config_path else None, cli_overrides)
+    setup_logging(cfg["general"]["log_level"], args.log_file or cfg["general"]["log_file"] or None)
+    recorder = recorder_from_config("sentence_split", cfg, override_dir=args.llm_report_dir)
     if not args.llm_report_no_clear:
         recorder.clear()
 
@@ -159,9 +149,7 @@ def main() -> None:
 
         json_data = json.loads(Path(args.json).read_text(encoding="utf-8"))
         nlp = load_nlp()
-        new_data = resegment_json(
-            json_data, sp_cfg, nlp, recorder=recorder, stem=args.stem
-        )
+        new_data = resegment_json(json_data, sp_cfg, nlp, recorder=recorder, stem=args.stem)
 
         if new_data is json_data:
             # verbatim violation already logged; copy through for safety
@@ -177,7 +165,9 @@ def main() -> None:
         )
         logging.info(
             "sentence_split: %s %d -> %d segments",
-            args.stem, len(json_data.get("segments", [])), len(new_data["segments"]),
+            args.stem,
+            len(json_data.get("segments", [])),
+            len(new_data["segments"]),
         )
     finally:
         recorder.rebuild_index()

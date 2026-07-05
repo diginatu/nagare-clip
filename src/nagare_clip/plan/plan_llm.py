@@ -13,10 +13,12 @@ from __future__ import annotations
 
 import json
 import logging
+from collections.abc import Callable
 from dataclasses import dataclass
-from typing import Any, Callable, Dict, List, Optional, Tuple
+from typing import Any
 
 from nagare_clip.director.director_llm import _FENCE_RE
+from nagare_clip.llm_client import with_trace_meta
 from nagare_clip.llm_report import (
     DROPPED_ITEMS,
     LLM_ERROR,
@@ -26,40 +28,35 @@ from nagare_clip.llm_report import (
     UNPARSEABLE,
     Recorder,
 )
-from nagare_clip.llm_client import with_trace_meta
 from nagare_clip.llm_retry import cfg_for_attempt, retry_attempts
-from nagare_clip.text_filter.llm_filter import _call_llm
 from nagare_clip.summary.summarize import ProjectSummary
+from nagare_clip.text_filter.llm_filter import _call_llm
 from nagare_clip.timing import format_dur_gap
 
 logger = logging.getLogger(__name__)
 
-CallLLM = Callable[[List[Dict[str, str]], Dict[str, Any]], str]
+CallLLM = Callable[[list[dict[str, str]], dict[str, Any]], str]
 
 
 @dataclass
 class PartDirection:
     stem: str
-    lines: Tuple[int, int]  # 1-based inclusive (start, end)
+    lines: tuple[int, int]  # 1-based inclusive (start, end)
     direction: str
 
 
 def _format_parts_for_plan(project_summary: ProjectSummary) -> str:
-    lines: List[str] = []
+    lines: list[str] = []
     if project_summary.summary:
         lines.append(f"Overall: {project_summary.summary}")
         lines.append("")
     parts = project_summary.parts
     for i, p in enumerate(parts):
         dur = p.end - p.start if p.start is not None and p.end is not None else None
-        gap: Optional[float] = None
+        gap: float | None = None
         if i + 1 < len(parts):
             nxt = parts[i + 1]
-            if (
-                nxt.stem == p.stem
-                and p.end is not None
-                and nxt.start is not None
-            ):
+            if nxt.stem == p.stem and p.end is not None and nxt.start is not None:
                 gap = nxt.start - p.end
         bracket = format_dur_gap(dur, gap)
         prefix = f"{i + 1}: {p.stem} [{p.lines[0]}-{p.lines[1]}]"
@@ -69,14 +66,15 @@ def _format_parts_for_plan(project_summary: ProjectSummary) -> str:
 
 
 def try_parse_plan_response(
-    response: str, num_parts: int, drops: Optional[List[str]] = None
-) -> Optional[Dict[int, str]]:
+    response: str, num_parts: int, drops: list[str] | None = None
+) -> dict[int, str] | None:
     """Parse ``{"directions": [{"index": N, "direction": "…"}]}``.
 
     Returns ``None`` on a hard parse failure (invalid JSON / no ``directions``
     array) so the caller can retry; otherwise a (possibly empty) ``{index:
     direction}`` map with malformed/out-of-range entries dropped (logged).
     """
+
     def _drop(msg: str) -> None:
         logger.warning("plan: %s", msg)
         if drops is not None:
@@ -95,7 +93,7 @@ def try_parse_plan_response(
         logger.warning("plan: response has no 'directions' array; ignoring")
         return None
 
-    out: Dict[int, str] = {}
+    out: dict[int, str] = {}
     for raw in data["directions"]:
         if not isinstance(raw, dict):
             continue
@@ -116,12 +114,12 @@ def try_parse_plan_response(
 
 def generate_plan(
     project_summary: ProjectSummary,
-    cfg: Dict[str, Any],
+    cfg: dict[str, Any],
     *,
     call_llm: CallLLM = _call_llm,
     recorder: Recorder = NULL_RECORDER,
     unit: str = "plan",
-) -> List[PartDirection]:
+) -> list[PartDirection]:
     """Run the plan LLM and return one rough direction per part (where given)."""
     parts = project_summary.parts
     if not parts:
@@ -138,26 +136,36 @@ def generate_plan(
             response = call_llm(messages, attempt_cfg)
         except Exception as e:  # noqa: BLE001 - recoverable
             logger.warning(
-                "plan: LLM call failed (attempt %d/%d)", attempt + 1, attempts,
+                "plan: LLM call failed (attempt %d/%d)",
+                attempt + 1,
+                attempts,
                 exc_info=True,
             )
             recorder.attempt(
-                unit=unit, attempt=attempt, total=attempts, messages=messages,
-                error=str(e), outcome=LLM_ERROR, reason="LLM call failed",
+                unit=unit,
+                attempt=attempt,
+                total=attempts,
+                messages=messages,
+                error=str(e),
+                outcome=LLM_ERROR,
+                reason="LLM call failed",
                 cfg=attempt_cfg,
             )
             continue
-        drops: List[str] = []
+        drops: list[str] = []
         mapping = try_parse_plan_response(response, num_parts=len(parts), drops=drops)
         if mapping is None:
             recorder.attempt(
-                unit=unit, attempt=attempt, total=attempts, messages=messages,
-                response=response, outcome=UNPARSEABLE,
-                reason="invalid JSON / no 'directions' array", cfg=attempt_cfg,
+                unit=unit,
+                attempt=attempt,
+                total=attempts,
+                messages=messages,
+                response=response,
+                outcome=UNPARSEABLE,
+                reason="invalid JSON / no 'directions' array",
+                cfg=attempt_cfg,
             )
-            logger.warning(
-                "plan: response unparseable (attempt %d/%d)", attempt + 1, attempts
-            )
+            logger.warning("plan: response unparseable (attempt %d/%d)", attempt + 1, attempts)
             continue
         if drops:
             outcome, reason = DROPPED_ITEMS, f"{len(drops)} dropped: " + "; ".join(drops)
@@ -166,8 +174,14 @@ def generate_plan(
         else:
             outcome, reason = OK, ""
         recorder.attempt(
-            unit=unit, attempt=attempt, total=attempts, messages=messages,
-            response=response, outcome=outcome, reason=reason, cfg=attempt_cfg,
+            unit=unit,
+            attempt=attempt,
+            total=attempts,
+            messages=messages,
+            response=response,
+            outcome=outcome,
+            reason=reason,
+            cfg=attempt_cfg,
         )
         recorder.flush_unit(unit, outcome=outcome, reason=reason)
         return [
@@ -180,7 +194,7 @@ def generate_plan(
     return []
 
 
-def plan_to_dict(directions: List[PartDirection]) -> Dict[str, Any]:
+def plan_to_dict(directions: list[PartDirection]) -> dict[str, Any]:
     return {
         "directions": [
             {
@@ -193,7 +207,7 @@ def plan_to_dict(directions: List[PartDirection]) -> Dict[str, Any]:
     }
 
 
-def _coerce_pair(value: Any) -> Optional[Tuple[int, int]]:
+def _coerce_pair(value: Any) -> tuple[int, int] | None:
     if not (isinstance(value, (list, tuple)) and len(value) == 2):
         return None
     a, b = value
@@ -204,13 +218,13 @@ def _coerce_pair(value: Any) -> Optional[Tuple[int, int]]:
     return (a, b)
 
 
-def plan_from_dict(data: Any) -> List[PartDirection]:
+def plan_from_dict(data: Any) -> list[PartDirection]:
     if not isinstance(data, dict):
         return []
     raw_directions = data.get("directions")
     if not isinstance(raw_directions, list):
         return []
-    out: List[PartDirection] = []
+    out: list[PartDirection] = []
     for raw in raw_directions:
         if not isinstance(raw, dict):
             continue

@@ -5,7 +5,7 @@ from __future__ import annotations
 import copy
 import logging
 import re
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any
 
 from nagare_clip.text_filter.llm_filter import PATCH_RE, apply_patches_to_lines
 
@@ -47,12 +47,10 @@ _CUT_SPLIT_RE = re.compile(r"(<cut>|</cut>)")
 _CUT_PAIR_RE = re.compile(r"<cut>.*?</cut>")
 
 # Type alias: (kind, orig_start, orig_end, new_text)
-Region = Tuple[str, int, int, str]
+Region = tuple[str, int, int, str]
 
 
-def _decompose_edit_line(
-    edit_line: str, original_text: str
-) -> Optional[List[Region]]:
+def _decompose_edit_line(edit_line: str, original_text: str) -> list[Region] | None:
     """Decompose an edit line with ``{{old->new}}`` markers into regions.
 
     Returns a list of ``(kind, orig_start, orig_end, new_text)`` tuples, or
@@ -67,13 +65,13 @@ def _decompose_edit_line(
     if not markers:
         return None
 
-    regions: List[Region] = []
+    regions: list[Region] = []
     edit_pos = 0
     orig_pos = 0
 
     for m in markers:
         # Text before this marker is a keep region
-        prefix = edit_line[edit_pos:m.start()]
+        prefix = edit_line[edit_pos : m.start()]
         if prefix:
             orig_end = orig_pos + len(prefix)
             if original_text[orig_pos:orig_end] != prefix:
@@ -129,7 +127,7 @@ def _decompose_edit_line(
     return regions
 
 
-def _expand_cut_tags(edit_lines: List[str]) -> List[str]:
+def _expand_cut_tags(edit_lines: list[str]) -> list[str]:
     """Desugar `<cut>...</cut>` spans into `{{wrapped->}}` deletion patches.
 
     The wrapped text (with any inner ``{{old->new}}`` markers resolved back to
@@ -142,10 +140,10 @@ def _expand_cut_tags(edit_lines: List[str]) -> List[str]:
     ignored with a warning (the offending tag is dropped, surrounding text
     kept); the function never raises.
     """
-    result: List[str] = []
+    result: list[str] = []
     cut_open = False
     for line in edit_lines:
-        out: List[str] = []
+        out: list[str] = []
         for part in _CUT_SPLIT_RE.split(line):
             if part == "<cut>":
                 if cut_open:
@@ -171,8 +169,8 @@ def _expand_cut_tags(edit_lines: List[str]) -> List[str]:
 
 
 def _word_time_span(
-    words: List[Dict[str, Any]],
-) -> Optional[Tuple[float, float]]:
+    words: list[dict[str, Any]],
+) -> tuple[float, float] | None:
     """Return (start, end) time span across *words*, or None if no timing."""
     starts = [w["start"] for w in words if "start" in w]
     ends = [w["end"] for w in words if "end" in w]
@@ -182,11 +180,11 @@ def _word_time_span(
 
 
 def _redistribute_timing(
-    original_words: List[Dict[str, Any]],
+    original_words: list[dict[str, Any]],
     new_text: str,
     seg_start: float,
     seg_end: float,
-) -> List[Dict[str, Any]]:
+) -> list[dict[str, Any]]:
     """Linearly redistribute character timing across new_text within [seg_start, seg_end]."""
     if not new_text:
         return []
@@ -208,11 +206,11 @@ def _redistribute_timing(
 
 
 def _sync_segment_with_regions(
-    original_words: List[Dict[str, Any]],
-    regions: List[Region],
-) -> List[Dict[str, Any]]:
+    original_words: list[dict[str, Any]],
+    regions: list[Region],
+) -> list[dict[str, Any]]:
     """Build new word list using fine-grained regions."""
-    new_words: List[Dict[str, Any]] = []
+    new_words: list[dict[str, Any]] = []
 
     for kind, orig_start, orig_end, new_text in regions:
         region_words = original_words[orig_start:orig_end]
@@ -234,24 +232,20 @@ def _sync_segment_with_regions(
                 boundary = original_words[orig_end].get("start", 0.0)
             else:
                 boundary = 0.0
-            new_words.extend(
-                _redistribute_timing([], new_text, boundary, boundary)
-            )
+            new_words.extend(_redistribute_timing([], new_text, boundary, boundary))
             continue
 
         span = _word_time_span(region_words)
         if span:
-            new_words.extend(
-                _redistribute_timing(region_words, new_text, span[0], span[1])
-            )
+            new_words.extend(_redistribute_timing(region_words, new_text, span[0], span[1]))
 
     return new_words
 
 
 def sync_text_to_json(
-    json_data: Dict[str, Any],
-    edit_lines: List[str],
-) -> Dict[str, Any]:
+    json_data: dict[str, Any],
+    edit_lines: list[str],
+) -> dict[str, Any]:
     """Update WhisperX JSON segments using ``{{old->new}}`` edit lines.
 
     Each edit line corresponds to a segment in ``json_data["segments"]``.
@@ -272,9 +266,7 @@ def sync_text_to_json(
     """
     expanded_lines = _expand_cut_tags(edit_lines)
     cleaned_lines = [
-        OVERLAY_TAG_RE.sub(
-            "", SPEED_TAG_RE.sub("", KEEP_TAG_RE.sub("", line))
-        )
+        OVERLAY_TAG_RE.sub("", SPEED_TAG_RE.sub("", KEEP_TAG_RE.sub("", line)))
         for line in expanded_lines
     ]
     corrected_lines = apply_patches_to_lines(cleaned_lines)
@@ -325,16 +317,14 @@ def _patched_visible_length(text: str) -> int:
     word list."""
     cleaned = _CUT_PAIR_RE.sub("", text)
     cleaned = CUT_TAG_RE.sub("", cleaned)
-    cleaned = OVERLAY_TAG_RE.sub(
-        "", SPEED_TAG_RE.sub("", KEEP_TAG_RE.sub("", cleaned))
-    )
+    cleaned = OVERLAY_TAG_RE.sub("", SPEED_TAG_RE.sub("", KEEP_TAG_RE.sub("", cleaned)))
     patched = PATCH_RE.sub(lambda m: m.group(2), cleaned)
     return sum(1 for ch in patched if not ch.isspace())
 
 
 def _first_word_at_or_after(
-    segments: List[Dict[str, Any]], seg_idx: int, pos: int
-) -> Optional[Dict[str, Any]]:
+    segments: list[dict[str, Any]], seg_idx: int, pos: int
+) -> dict[str, Any] | None:
     """First word at index >= pos in segments[seg_idx]; falls through to the
     next segment's first word when pos is past the current segment's words."""
     while seg_idx < len(segments):
@@ -347,8 +337,8 @@ def _first_word_at_or_after(
 
 
 def _last_word_before(
-    segments: List[Dict[str, Any]], seg_idx: int, pos: int
-) -> Optional[Dict[str, Any]]:
+    segments: list[dict[str, Any]], seg_idx: int, pos: int
+) -> dict[str, Any] | None:
     """Last word at index < pos in segments[seg_idx]; falls back to the
     previous segment's last word when pos is 0 (or all earlier indices are
     out of range)."""
@@ -364,10 +354,10 @@ def _last_word_before(
 
 
 def _resolve_keep_range(
-    segments: List[Dict[str, Any]],
-    start_anchor: Tuple[int, int],
-    end_anchor: Tuple[int, int],
-) -> Optional[Tuple[float, float]]:
+    segments: list[dict[str, Any]],
+    start_anchor: tuple[int, int],
+    end_anchor: tuple[int, int],
+) -> tuple[float, float] | None:
     """Resolve `(segment_index, position)` anchors to `(start_time, end_time)`.
 
     Returns ``None`` when the resolved range wraps no words, is missing
@@ -387,8 +377,8 @@ def _resolve_keep_range(
 
 
 def extract_keep_ranges(
-    edit_lines: List[str], synced_json: Dict[str, Any]
-) -> List[Tuple[float, float]]:
+    edit_lines: list[str], synced_json: dict[str, Any]
+) -> list[tuple[float, float]]:
     """Extract force-keep time ranges from `<keep>...</keep>` blocks.
 
     `<keep>` may be opened on one edit line and closed on a later one; the
@@ -401,9 +391,9 @@ def extract_keep_ranges(
     are skipped with a warning; they do not raise.
     """
     segments = synced_json.get("segments", [])
-    ranges: List[Tuple[float, float]] = []
+    ranges: list[tuple[float, float]] = []
     # `keep_start = None` means no `<keep>` is currently open.
-    keep_start: Optional[Tuple[int, int]] = None
+    keep_start: tuple[int, int] | None = None
 
     for seg_idx, line in enumerate(edit_lines):
         if seg_idx >= len(segments):
@@ -419,14 +409,10 @@ def extract_keep_ranges(
                 if keep_start is None:
                     logger.warning("Unmatched </keep>; ignoring")
                     continue
-                resolved = _resolve_keep_range(
-                    segments, keep_start, (seg_idx, output_pos)
-                )
+                resolved = _resolve_keep_range(segments, keep_start, (seg_idx, output_pos))
                 keep_start = None
                 if resolved is None:
-                    logger.warning(
-                        "<keep> resolved to an empty/invalid range; ignoring"
-                    )
+                    logger.warning("<keep> resolved to an empty/invalid range; ignoring")
                     continue
                 ranges.append(resolved)
             else:
@@ -439,8 +425,8 @@ def extract_keep_ranges(
 
 
 def extract_speed_ranges(
-    edit_lines: List[str], synced_json: Dict[str, Any]
-) -> List[Tuple[float, float, float]]:
+    edit_lines: list[str], synced_json: dict[str, Any]
+) -> list[tuple[float, float, float]]:
     """Extract `(start, end, factor)` triples from `<speed factor="N.N">...</speed>` blocks.
 
     Behaves like :func:`extract_keep_ranges` for span resolution (multi-line
@@ -448,10 +434,10 @@ def extract_speed_ranges(
     speed factor parsed from each opening tag.
     """
     segments = synced_json.get("segments", [])
-    ranges: List[Tuple[float, float, float]] = []
+    ranges: list[tuple[float, float, float]] = []
     # `speed_start = None` means no `<speed>` is currently open.
-    speed_start: Optional[Tuple[int, int]] = None
-    speed_factor: Optional[float] = None
+    speed_start: tuple[int, int] | None = None
+    speed_factor: float | None = None
 
     for seg_idx, line in enumerate(edit_lines):
         if seg_idx >= len(segments):
@@ -469,16 +455,12 @@ def extract_speed_ranges(
                 if speed_start is None:
                     logger.warning("Unmatched </speed>; ignoring")
                     continue
-                resolved = _resolve_keep_range(
-                    segments, speed_start, (seg_idx, output_pos)
-                )
+                resolved = _resolve_keep_range(segments, speed_start, (seg_idx, output_pos))
                 factor = speed_factor
                 speed_start = None
                 speed_factor = None
                 if resolved is None or factor is None:
-                    logger.warning(
-                        "<speed> resolved to an empty/invalid range; ignoring"
-                    )
+                    logger.warning("<speed> resolved to an empty/invalid range; ignoring")
                     continue
                 start_t, end_t = resolved
                 ranges.append((start_t, end_t, factor))
@@ -492,8 +474,8 @@ def extract_speed_ranges(
 
 
 def extract_overlay_ranges(
-    edit_lines: List[str], synced_json: Dict[str, Any]
-) -> List[Tuple[float, float, str]]:
+    edit_lines: list[str], synced_json: dict[str, Any]
+) -> list[tuple[float, float, str]]:
     """Extract `(start, end, text)` triples from `<overlay text="...">...</overlay>` blocks.
 
     Behaves like :func:`extract_speed_ranges` for span resolution (multi-line
@@ -506,9 +488,9 @@ def extract_overlay_ranges(
     warning (an overlay with no text would have nothing to display).
     """
     segments = synced_json.get("segments", [])
-    ranges: List[Tuple[float, float, str]] = []
-    overlay_start: Optional[Tuple[int, int]] = None
-    overlay_text: Optional[str] = None
+    ranges: list[tuple[float, float, str]] = []
+    overlay_start: tuple[int, int] | None = None
+    overlay_text: str | None = None
 
     for seg_idx, line in enumerate(edit_lines):
         if seg_idx >= len(segments):
@@ -518,9 +500,7 @@ def extract_overlay_ranges(
             open_match = _OVERLAY_OPEN_RE.fullmatch(part) if part else None
             if open_match is not None:
                 if overlay_start is not None:
-                    logger.warning(
-                        "Nested <overlay> opener; ignoring inner tag"
-                    )
+                    logger.warning("Nested <overlay> opener; ignoring inner tag")
                     continue
                 overlay_start = (seg_idx, output_pos)
                 overlay_text = open_match.group(1)
@@ -528,16 +508,12 @@ def extract_overlay_ranges(
                 if overlay_start is None:
                     logger.warning("Unmatched </overlay>; ignoring")
                     continue
-                resolved = _resolve_keep_range(
-                    segments, overlay_start, (seg_idx, output_pos)
-                )
+                resolved = _resolve_keep_range(segments, overlay_start, (seg_idx, output_pos))
                 text = overlay_text
                 overlay_start = None
                 overlay_text = None
                 if resolved is None or not text:
-                    logger.warning(
-                        "<overlay> resolved to an empty/invalid range; ignoring"
-                    )
+                    logger.warning("<overlay> resolved to an empty/invalid range; ignoring")
                     continue
                 start_t, end_t = resolved
                 ranges.append((start_t, end_t, text))

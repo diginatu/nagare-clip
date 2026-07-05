@@ -2,17 +2,17 @@
 
 from __future__ import annotations
 
-from typing import Iterable, List, Sequence, Tuple
+from collections.abc import Iterable, Sequence
 
 
 def merge_intervals(
-    intervals: Iterable[Tuple[float, float]], epsilon: float = 1e-6
-) -> List[List[float]]:
+    intervals: Iterable[tuple[float, float]], epsilon: float = 1e-6
+) -> list[list[float]]:
     sorted_intervals = sorted(intervals, key=lambda x: x[0])
     if not sorted_intervals:
         return []
 
-    merged: List[List[float]] = [[sorted_intervals[0][0], sorted_intervals[0][1]]]
+    merged: list[list[float]] = [[sorted_intervals[0][0], sorted_intervals[0][1]]]
     for start, end in sorted_intervals[1:]:
         last = merged[-1]
         if start <= last[1] + epsilon:
@@ -23,9 +23,9 @@ def merge_intervals(
 
 
 def subtract_intervals(
-    base: Iterable[Tuple[float, float]],
-    cuts: Iterable[Tuple[float, float]],
-) -> List[Tuple[float, float]]:
+    base: Iterable[tuple[float, float]],
+    cuts: Iterable[tuple[float, float]],
+) -> list[tuple[float, float]]:
     """Carve *cuts* out of each interval in *base*.
 
     Each base interval is shortened or split where a cut overlaps it.  Cuts
@@ -34,7 +34,7 @@ def subtract_intervals(
     Output is sorted by start.
     """
     merged_cuts = merge_intervals(cuts)
-    result: List[Tuple[float, float]] = []
+    result: list[tuple[float, float]] = []
 
     for b_start, b_end in sorted(base, key=lambda x: x[0]):
         cursor = b_start
@@ -54,10 +54,8 @@ def subtract_intervals(
     return result
 
 
-def invert_intervals(
-    excludes: Sequence[Sequence[float]], duration_sec: float
-) -> List[List[float]]:
-    keeps: List[List[float]] = []
+def invert_intervals(excludes: Sequence[Sequence[float]], duration_sec: float) -> list[list[float]]:
+    keeps: list[list[float]] = []
     cursor = 0.0
     for start, end in excludes:
         start_f = max(0.0, min(float(start), duration_sec))
@@ -71,11 +69,11 @@ def invert_intervals(
 
 
 def apply_margins(
-    intervals: List[dict],
+    intervals: list[dict],
     pre_margin: float,
     post_margin: float,
     duration_sec: float,
-) -> List[dict]:
+) -> list[dict]:
     """
     Expand each interval by pre_margin before start and post_margin
     after end, clamp to [0, duration_sec], then merge overlaps.
@@ -102,10 +100,10 @@ def apply_margins(
 
 
 def ensure_keep_covers_captions(
-    keep_intervals: List[dict], captions: List[dict], duration_sec: float
-) -> List[dict]:
+    keep_intervals: list[dict], captions: list[dict], duration_sec: float
+) -> list[dict]:
     """Expand keep intervals so every caption has timeline overlap."""
-    merged_input: List[Tuple[float, float]] = []
+    merged_input: list[tuple[float, float]] = []
 
     for iv in keep_intervals:
         start = max(0.0, min(float(iv["start"]), duration_sec))
@@ -124,13 +122,13 @@ def ensure_keep_covers_captions(
 
 
 def enforce_min_keep_duration(
-    keep_intervals: List[dict], min_keep: float, duration_sec: float
-) -> List[dict]:
+    keep_intervals: list[dict], min_keep: float, duration_sec: float
+) -> list[dict]:
     """Ensure each keep interval is at least min_keep seconds long."""
     if min_keep <= 0.0:
         return keep_intervals
 
-    expanded: List[Tuple[float, float]] = []
+    expanded: list[tuple[float, float]] = []
     for iv in keep_intervals:
         start = max(0.0, min(float(iv["start"]), duration_sec))
         end = max(0.0, min(float(iv["end"]), duration_sec))

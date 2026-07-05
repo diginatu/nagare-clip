@@ -4,7 +4,8 @@ from __future__ import annotations
 
 import json
 import logging
-from typing import Any, Callable, Dict, List, Optional, Tuple
+from collections.abc import Callable
+from typing import Any
 
 from nagare_clip.llm_client import with_trace_meta
 from nagare_clip.llm_report import (
@@ -19,12 +20,12 @@ from nagare_clip.text_filter.llm_filter import _call_llm
 
 logger = logging.getLogger(__name__)
 
-CallLLM = Callable[[List[Dict[str, str]], Dict[str, Any]], str]
+CallLLM = Callable[[list[dict[str, str]], dict[str, Any]], str]
 
 
 def build_messages(
-    bunsetsu: List[Tuple[int, int, str]], system_prompt: str
-) -> List[Dict[str, str]]:
+    bunsetsu: list[tuple[int, int, str]], system_prompt: str
+) -> list[dict[str, str]]:
     listing = " ".join(f"{i}:{s}" for i, (_, _, s) in enumerate(bunsetsu))
     return [
         {"role": "system", "content": system_prompt},
@@ -32,7 +33,7 @@ def build_messages(
     ]
 
 
-def parse_ranges(response: str, num_bunsetsu: int) -> Optional[List[Tuple[int, int]]]:
+def parse_ranges(response: str, num_bunsetsu: int) -> list[tuple[int, int]] | None:
     """Parse and validate ``{"sentences":[[a,b],…]}`` bunsetsu-index ranges.
 
     Returns the ranges only if they are contiguous, non-overlapping, and cover
@@ -45,7 +46,7 @@ def parse_ranges(response: str, num_bunsetsu: int) -> Optional[List[Tuple[int, i
     raw = data.get("sentences") if isinstance(data, dict) else None
     if not isinstance(raw, list) or not raw:
         return None
-    ranges: List[Tuple[int, int]] = []
+    ranges: list[tuple[int, int]] = []
     for item in raw:
         if (
             not isinstance(item, list)
@@ -66,13 +67,13 @@ def parse_ranges(response: str, num_bunsetsu: int) -> Optional[List[Tuple[int, i
 
 
 def split_window(
-    bunsetsu: List[Tuple[int, int, str]],
-    cfg: Dict[str, Any],
+    bunsetsu: list[tuple[int, int, str]],
+    cfg: dict[str, Any],
     *,
     call_llm: CallLLM = _call_llm,
     recorder: Recorder = NULL_RECORDER,
     unit: str = "window",
-) -> Optional[List[Tuple[int, int]]]:
+) -> list[tuple[int, int]] | None:
     """Return validated sentence ranges, or ``None`` to keep original segments.
 
     Retries (``max_retries``) on LLM exception or invalid ranges, nudging
@@ -92,34 +93,48 @@ def split_window(
             response = call_llm(messages, attempt_cfg)
         except Exception as e:  # noqa: BLE001 - recoverable
             logger.warning(
-                "sentence_split LLM call failed (attempt %d/%d)", attempt + 1, attempts,
+                "sentence_split LLM call failed (attempt %d/%d)",
+                attempt + 1,
+                attempts,
                 exc_info=True,
             )
             recorder.attempt(
-                unit=unit, attempt=attempt, total=attempts, messages=messages,
-                error=str(e), outcome=LLM_ERROR, reason="LLM call failed",
+                unit=unit,
+                attempt=attempt,
+                total=attempts,
+                messages=messages,
+                error=str(e),
+                outcome=LLM_ERROR,
+                reason="LLM call failed",
                 cfg=attempt_cfg,
             )
             continue
         ranges = parse_ranges(response, num)
         if ranges is None:
             recorder.attempt(
-                unit=unit, attempt=attempt, total=attempts, messages=messages,
-                response=response, outcome=UNPARSEABLE,
-                reason="invalid/non-contiguous sentence ranges", cfg=attempt_cfg,
+                unit=unit,
+                attempt=attempt,
+                total=attempts,
+                messages=messages,
+                response=response,
+                outcome=UNPARSEABLE,
+                reason="invalid/non-contiguous sentence ranges",
+                cfg=attempt_cfg,
             )
-            logger.warning(
-                "sentence_split ranges invalid (attempt %d/%d)", attempt + 1, attempts
-            )
+            logger.warning("sentence_split ranges invalid (attempt %d/%d)", attempt + 1, attempts)
             continue
         recorder.attempt(
-            unit=unit, attempt=attempt, total=attempts, messages=messages,
-            response=response, outcome=OK, reason="", cfg=attempt_cfg,
+            unit=unit,
+            attempt=attempt,
+            total=attempts,
+            messages=messages,
+            response=response,
+            outcome=OK,
+            reason="",
+            cfg=attempt_cfg,
         )
         recorder.flush_unit(unit, outcome=OK, reason="")
         return ranges
     recorder.flush_unit(unit, outcome=LLM_ERROR, reason=f"all {attempts} attempt(s) failed")
-    logger.warning(
-        "sentence_split: all %d attempt(s) failed; keeping original window", attempts
-    )
+    logger.warning("sentence_split: all %d attempt(s) failed; keeping original window", attempts)
     return None

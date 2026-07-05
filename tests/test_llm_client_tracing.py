@@ -78,6 +78,7 @@ def test_flush_traces_calls_force_flush(monkeypatch):
             calls.append(True)
 
     import opentelemetry.trace as ot
+
     monkeypatch.setattr(ot, "get_tracer_provider", lambda: FakeProvider())
     llm_client.flush_traces()
     assert calls == [True]
@@ -85,6 +86,7 @@ def test_flush_traces_calls_force_flush(monkeypatch):
 
 def test_flush_traces_swallows_missing_force_flush(monkeypatch):
     import opentelemetry.trace as ot
+
     monkeypatch.setattr(ot, "get_tracer_provider", lambda: object())
     llm_client.flush_traces()  # must not raise
 
@@ -136,7 +138,9 @@ def test_call_llm_omits_session_when_no_run_id(lf_keys, reset_tracing, monkeypat
     monkeypatch.delenv("NAGARE_RUN_ID", raising=False)
     captured = _capture_completion(monkeypatch)
 
-    cfg = llm_client.with_trace_meta({"provider": "openai", "model": "m"}, stage="plan", unit="plan")
+    cfg = llm_client.with_trace_meta(
+        {"provider": "openai", "model": "m"}, stage="plan", unit="plan"
+    )
     llm_client.call_llm([{"role": "user", "content": "hi"}], cfg)
 
     assert "session_id" not in captured["metadata"]
@@ -151,6 +155,6 @@ def test_call_llm_no_metadata_when_disabled(reset_tracing, monkeypatch):
     cfg = llm_client.with_trace_meta({"provider": "openai", "model": "m"}, stage="plan", unit="p")
     llm_client.call_llm([{"role": "user", "content": "hi"}], cfg)
 
-    assert "metadata" not in captured       # regression: identical to pre-tracing
+    assert "metadata" not in captured  # regression: identical to pre-tracing
     assert "_trace" not in captured
-    assert litellm.callbacks == []          # callbacks untouched when disabled
+    assert litellm.callbacks == []  # callbacks untouched when disabled

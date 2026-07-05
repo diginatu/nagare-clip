@@ -78,6 +78,7 @@ def test_file_format_has_timestamp():
         content = open(log_path, encoding="utf-8").read()
         # Timestamp format: YYYY-MM-DD HH:MM:SS,mmm
         import re
+
         assert re.search(r"\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}", content)
     finally:
         os.unlink(log_path)
@@ -85,6 +86,7 @@ def test_file_format_has_timestamp():
 
 def test_console_format_no_timestamp():
     import io
+
     stream = io.StringIO()
     setup_logging("INFO")
     root = logging.getLogger()
@@ -97,6 +99,7 @@ def test_console_format_no_timestamp():
     assert "format check" in output
     # Console should NOT have a timestamp (no year-like pattern at start)
     import re
+
     assert not re.match(r"\d{4}-\d{2}-\d{2}", output.strip())
 
 

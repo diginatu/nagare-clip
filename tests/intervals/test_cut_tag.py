@@ -96,9 +96,7 @@ class TestCutSyncRemovesWords:
             "word_segments": s1 + s2 + s3,
         }
         # cut from "い" through "け": keep あ ... こ
-        result = sync_text_to_json(
-            json_data, ["あ<cut>い", "かき", "け</cut>こ"]
-        )
+        result = sync_text_to_json(json_data, ["あ<cut>い", "かき", "け</cut>こ"])
         segs = result["segments"]
         assert [x["word"] for x in segs[0]["words"]] == ["あ"]
         assert segs[1]["words"] == []

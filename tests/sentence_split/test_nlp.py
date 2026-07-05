@@ -11,6 +11,7 @@ def nlp():
 
 def test_bunsetsu_units_offsets_match_surface(nlp):
     from nagare_clip.sentence_split.nlp import bunsetsu_units
+
     text = "今日は水槽の水を替えました"
     units = bunsetsu_units(text, nlp)
     assert units, "expected at least one bunsetsu"

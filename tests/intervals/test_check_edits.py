@@ -66,12 +66,8 @@ class TestLineCount:
         assert any("2" in m and "3" in m for m in msgs)
 
     def test_too_many_lines_reported(self):
-        problems = check_edits(
-            ["hello", "world", "foo bar", "extra"], _fixture()
-        )
-        assert any(
-            "4" in m and "3" in m for m in _messages(problems)
-        )
+        problems = check_edits(["hello", "world", "foo bar", "extra"], _fixture())
+        assert any("4" in m and "3" in m for m in _messages(problems))
 
 
 class TestPatchSyntax:
@@ -88,9 +84,7 @@ class TestPatchSyntax:
     def test_syntax_error_suppresses_decomposition_noise(self):
         # A malformed patch should produce the syntax problem only, not also a
         # confusing decomposition message on the same line.
-        problems = _on_line(
-            check_edits(["hel{{lo->lo!}", "world", "foo bar"], _fixture()), 1
-        )
+        problems = _on_line(check_edits(["hel{{lo->lo!}", "world", "foo bar"], _fixture()), 1)
         assert len(problems) == 1
 
 
@@ -99,29 +93,21 @@ class TestDecomposition:
         # seg 1 ("world") edited to "word" with no patch marker.
         problems = check_edits(["hello", "word", "foo bar"], _fixture())
         assert _on_line(problems, 2)
-        assert any(
-            "marker" in m for m in _messages(_on_line(problems, 2))
-        )
+        assert any("marker" in m for m in _messages(_on_line(problems, 2)))
 
     def test_old_side_mismatch_reported(self):
         # old="hallo" does not match original "hello".
         problems = check_edits(["{{hallo->X}}", "world", "foo bar"], _fixture())
-        assert any(
-            "old" in m.lower() for m in _messages(_on_line(problems, 1))
-        )
+        assert any("old" in m.lower() for m in _messages(_on_line(problems, 1)))
 
     def test_old_mismatch_message_shows_literal_double_braces(self):
         # The message must show {{old->new}}, not a mangled {old->new}.
         problems = check_edits(["{{hallo->X}}", "world", "foo bar"], _fixture())
-        assert any(
-            "{{old->new}}" in m for m in _messages(_on_line(problems, 1))
-        )
+        assert any("{{old->new}}" in m for m in _messages(_on_line(problems, 1)))
 
     def test_keep_text_mismatch_reported(self):
         # Text outside markers (inside <keep>) altered without a patch.
-        problems = check_edits(
-            ["<keep>helo</keep>", "world", "foo bar"], _fixture()
-        )
+        problems = check_edits(["<keep>helo</keep>", "world", "foo bar"], _fixture())
         assert _on_line(problems, 1)
 
 
@@ -132,9 +118,7 @@ class TestTagBalance:
         assert any("nested" in m for m in _messages(_on_line(problems, 2)))
 
     def test_unmatched_close_reported(self):
-        problems = check_edits(
-            ["hello", "world</keep>", "foo bar"], _fixture()
-        )
+        problems = check_edits(["hello", "world</keep>", "foo bar"], _fixture())
         assert any("unmatched" in m for m in _messages(_on_line(problems, 2)))
 
     def test_unclosed_open_reported_at_opening_line(self):
@@ -142,17 +126,11 @@ class TestTagBalance:
         assert any("unclosed" in m for m in _messages(_on_line(problems, 1)))
 
     def test_zero_speed_factor_reported(self):
-        problems = check_edits(
-            ['<speed factor="0">hello</speed>', "world", "foo bar"], _fixture()
-        )
-        assert any(
-            "factor" in m for m in _messages(_on_line(problems, 1))
-        )
+        problems = check_edits(['<speed factor="0">hello</speed>', "world", "foo bar"], _fixture())
+        assert any("factor" in m for m in _messages(_on_line(problems, 1)))
 
     def test_empty_overlay_text_reported(self):
-        problems = check_edits(
-            ['<overlay text="">hello</overlay>', "world", "foo bar"], _fixture()
-        )
+        problems = check_edits(['<overlay text="">hello</overlay>', "world", "foo bar"], _fixture())
         assert any("overlay" in m for m in _messages(_on_line(problems, 1)))
 
     def test_malformed_overlay_tag_reported(self):
@@ -218,9 +196,7 @@ class TestCli:
             main()
         assert exc.value.code == 0
 
-    def test_dirty_file_exits_one_and_lists_problems(
-        self, tmp_path, monkeypatch, capsys
-    ):
+    def test_dirty_file_exits_one_and_lists_problems(self, tmp_path, monkeypatch, capsys):
         edits, jpath = self._write(
             tmp_path, ["word", "world", "foo bar"], ("hello", "world", "foo bar")
         )

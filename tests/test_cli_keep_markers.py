@@ -172,9 +172,7 @@ def test_speed_marker_does_not_carve_silence_but_emits_range(tmp_path, monkeypat
     """`<speed factor="2.0">いう</speed>` does NOT force-keep: the silent gap it
     spans is still cut by silence detection, yet a top-level speed_ranges entry
     with factor=2.0 is still emitted verbatim over the wrapped time range."""
-    json_path, edits, cfg = _setup(
-        tmp_path, 'あ<speed factor="2.0">いう</speed>え\n'
-    )
+    json_path, edits, cfg = _setup(tmp_path, 'あ<speed factor="2.0">いう</speed>え\n')
     out = tmp_path / "intervals.json"
     data = _run(monkeypatch, json_path, edits, cfg, out)
     keep = data["keep_intervals"]
@@ -189,9 +187,7 @@ def test_speed_marker_does_not_carve_silence_but_emits_range(tmp_path, monkeypat
 
 def test_speed_marker_factor_below_one(tmp_path, monkeypatch):
     """A factor < 1.0 (slow-motion) is preserved correctly."""
-    json_path, edits, cfg = _setup(
-        tmp_path, 'あ<speed factor="0.5">いう</speed>え\n'
-    )
+    json_path, edits, cfg = _setup(tmp_path, 'あ<speed factor="0.5">いう</speed>え\n')
     out = tmp_path / "intervals.json"
     data = _run(monkeypatch, json_path, edits, cfg, out)
     assert _speed_at(data["speed_ranges"], 2.5) == 0.5
@@ -249,9 +245,7 @@ def test_nested_keep_speed_preserves_silence_and_emits_range(tmp_path, monkeypat
     """Nesting `<keep><speed>...</speed></keep>` restores the force-keep: the
     `<keep>` preserves the internal silence while the `<speed>` still emits its
     speed range. This is how a user keeps audio AND speeds it up post-change."""
-    json_path, edits, cfg = _setup(
-        tmp_path, 'あ<keep><speed factor="2.0">いう</speed></keep>え\n'
-    )
+    json_path, edits, cfg = _setup(tmp_path, 'あ<keep><speed factor="2.0">いう</speed></keep>え\n')
     out = tmp_path / "intervals.json"
     data = _run(monkeypatch, json_path, edits, cfg, out)
     keep = data["keep_intervals"]

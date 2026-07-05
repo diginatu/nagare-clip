@@ -1,10 +1,10 @@
 """Tests for bunsetsu timing functions."""
 
-import pytest
 from unittest.mock import patch
 
-from nagare_clip.intervals.bunsetu import build_bunsetu_times, flatten_bunsetu
+import pytest
 
+from nagare_clip.intervals.bunsetu import build_bunsetu_times
 from tests.intervals.conftest import make_nlp
 
 
@@ -223,6 +223,5 @@ def test_build_bunsetu_times_multichar_bunsetu_preserves_silence_gap():
     # Silence gap must appear between the two bunsetsu, not hidden inside.
     gap = atowa[0] - ne[1]
     assert gap > 1.5, (
-        f"gap between 'ね' and 'あとは' is only {gap:.3f} s; "
-        f"silence is hidden inside the bunsetsu"
+        f"gap between 'ね' and 'あとは' is only {gap:.3f} s; silence is hidden inside the bunsetsu"
     )

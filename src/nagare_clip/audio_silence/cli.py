@@ -20,9 +20,7 @@ from nagare_clip.logging_setup import setup_logging
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(
-        description="Audio-silence (jump-cut) detection checkpoint."
-    )
+    parser = argparse.ArgumentParser(description="Audio-silence (jump-cut) detection checkpoint.")
     parser.add_argument(
         "--raw",
         dest="raw_path",

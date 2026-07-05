@@ -89,9 +89,7 @@ class TestSpanDeterministic:
         assert unapplied == []
 
     def test_keep_single_line(self):
-        out, unapplied = apply_ops(
-            ["あいう"], [_op("keep", 1, 1)], CFG, call_llm=_no_llm
-        )
+        out, unapplied = apply_ops(["あいう"], [_op("keep", 1, 1)], CFG, call_llm=_no_llm)
         assert out == ["<keep>あいう</keep>"]
         assert unapplied == []
 
@@ -99,9 +97,7 @@ class TestSpanDeterministic:
         # speed applied over a line that already carries an overlay + patches:
         # the whole line range is wrapped, underlying text untouched.
         lines = ['<overlay text="x">はい</overlay>{{で->}}これ', "おわり"]
-        out, unapplied = apply_ops(
-            lines, [_op("speed", 1, 2, factor=4.0)], CFG, call_llm=_no_llm
-        )
+        out, unapplied = apply_ops(lines, [_op("speed", 1, 2, factor=4.0)], CFG, call_llm=_no_llm)
         assert out[0] == '<speed factor="4.0"><overlay text="x">はい</overlay>{{で->}}これ'
         assert out[1] == "おわり</speed>"
         assert unapplied == []
@@ -110,9 +106,7 @@ class TestSpanDeterministic:
         # lines 1-2 already carry a <speed> span; a director speed[1-4] is
         # clipped to the free tail [3-4] so the same-type tags stay disjoint.
         lines = ['<speed factor="3.0">L1', "L2</speed>", "L3", "L4"]
-        out, unapplied = apply_ops(
-            lines, [_op("speed", 1, 4, factor=2.0)], CFG, call_llm=_no_llm
-        )
+        out, unapplied = apply_ops(lines, [_op("speed", 1, 4, factor=2.0)], CFG, call_llm=_no_llm)
         assert out == [
             '<speed factor="3.0">L1',
             "L2</speed>",
@@ -123,9 +117,7 @@ class TestSpanDeterministic:
 
     def test_fully_overlapping_same_type_dropped(self):
         lines = ['<speed factor="3.0">L1', "L2</speed>"]
-        out, unapplied = apply_ops(
-            lines, [_op("speed", 1, 2, factor=1.5)], CFG, call_llm=_no_llm
-        )
+        out, unapplied = apply_ops(lines, [_op("speed", 1, 2, factor=1.5)], CFG, call_llm=_no_llm)
         assert out == lines  # unchanged
         assert [u[0].type for u in unapplied] == ["speed"]
 
@@ -152,9 +144,7 @@ class TestSpanDeterministic:
     def test_different_type_does_not_block(self):
         # an existing <overlay> never blocks a <speed> op (independent types).
         lines = ['<overlay text="x">L1</overlay>', "L2"]
-        out, unapplied = apply_ops(
-            lines, [_op("speed", 1, 2, factor=2.0)], CFG, call_llm=_no_llm
-        )
+        out, unapplied = apply_ops(lines, [_op("speed", 1, 2, factor=2.0)], CFG, call_llm=_no_llm)
         assert out[0] == '<speed factor="2.0"><overlay text="x">L1</overlay>'
         assert out[1] == "L2</speed>"
         assert unapplied == []
@@ -315,7 +305,12 @@ class TestGuidedEditRecorder:
 
         lines = ["hello world"]
         new_lines, unapplied = apply_ops(
-            lines, [op], {"max_retries": 1}, call_llm=fake, recorder=rec, unit="vid",
+            lines,
+            [op],
+            {"max_retries": 1},
+            call_llm=fake,
+            recorder=rec,
+            unit="vid",
         )
         assert len(unapplied) == 1
         fm = _fm(tmp_path, "vid")
@@ -328,8 +323,12 @@ class TestGuidedEditRecorder:
         op = DirectorOp(type="keep", lines=(1, 1), note="")
 
         new_lines, unapplied = apply_ops(
-            ["hello world"], [op], {"max_retries": 0}, call_llm=_no_llm,
-            recorder=rec, unit="vid",
+            ["hello world"],
+            [op],
+            {"max_retries": 0},
+            call_llm=_no_llm,
+            recorder=rec,
+            unit="vid",
         )
         assert new_lines == ["<keep>hello world</keep>"]
         assert unapplied == []

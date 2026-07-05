@@ -17,8 +17,6 @@ if str(_SRC) not in sys.path:
 
 import bpy
 
-from nagare_clip.config import get_effective_config
-from nagare_clip.logging_setup import setup_logging
 from nagare_clip.blender.scene import load_source_metadata, reset_scene
 from nagare_clip.blender.timeline import (
     OVERLAY_CHANNEL,
@@ -30,22 +28,29 @@ from nagare_clip.blender.timeline import (
     place_strips,
     split_intervals_by_speed,
 )
+from nagare_clip.config import get_effective_config
+from nagare_clip.logging_setup import setup_logging
+
 
 def parse_blender_args(argv: list[str]) -> argparse.Namespace:
     if "--" not in argv:
         raise ValueError("Expected '--' before script arguments.")
 
     user_args = argv[argv.index("--") + 1 :]
-    parser = argparse.ArgumentParser(
-        description="Build rough-cut VSE layout from keep intervals."
+    parser = argparse.ArgumentParser(description="Build rough-cut VSE layout from keep intervals.")
+    parser.add_argument(
+        "--source",
+        required=True,
+        action="append",
+        dest="sources",
+        help="Source video file path (repeat for multiple sources)",
     )
     parser.add_argument(
-        "--source", required=True, action="append", dest="sources",
-        help="Source video file path (repeat for multiple sources)"
-    )
-    parser.add_argument(
-        "--intervals", required=True, action="append", dest="intervals_paths",
-        help="Intervals JSON path (repeat to match each --source)"
+        "--intervals",
+        required=True,
+        action="append",
+        dest="intervals_paths",
+        help="Intervals JSON path (repeat to match each --source)",
     )
     parser.add_argument("--output", required=True, help="Output .blend path")
     parser.add_argument(
@@ -65,9 +70,7 @@ def resolve_speed_mark_style(caption_style: dict, speed_mark_cfg: dict) -> dict:
     Non-style config keys (``enabled``, ``template``) are excluded so they do
     not leak onto the TEXT strip.
     """
-    overrides = {
-        k: v for k, v in speed_mark_cfg.items() if k not in ("enabled", "template")
-    }
+    overrides = {k: v for k, v in speed_mark_cfg.items() if k not in ("enabled", "template")}
     return {**caption_style, **overrides}
 
 
@@ -121,14 +124,19 @@ def main() -> None:
 
     # Warn if subsequent sources differ in resolution/FPS
     for i, src in enumerate(sources[1:], start=1):
-        fps_i, w_i, h_i = load_source_metadata(
-            src, default_fps=cfg["blender"]["default_fps"]
-        )
+        fps_i, w_i, h_i = load_source_metadata(src, default_fps=cfg["blender"]["default_fps"])
         if abs(fps_i - first_fps) > 0.01 or w_i != first_width or h_i != first_height:
             logging.warning(
                 "Source %d (%s) differs from first source: fps=%.3f vs %.3f, "
                 "resolution=%dx%d vs %dx%d",
-                i + 1, src.name, fps_i, first_fps, w_i, h_i, first_width, first_height,
+                i + 1,
+                src.name,
+                fps_i,
+                first_fps,
+                w_i,
+                h_i,
+                first_width,
+                first_height,
             )
 
     # Loop over (source, intervals) pairs, accumulating timeline position
@@ -138,9 +146,7 @@ def main() -> None:
     for src_num, (source_path, intervals_data) in enumerate(
         zip(sources, all_intervals_data), start=1
     ):
-        logging.info(
-            "Source %d/%d: %s", src_num, len(sources), source_path.name
-        )
+        logging.info("Source %d/%d: %s", src_num, len(sources), source_path.name)
         keep_intervals = intervals_data.get("keep_intervals", [])
         captions = intervals_data.get("captions", [])
         overlays = intervals_data.get("overlays", [])
@@ -219,11 +225,7 @@ def main() -> None:
     output_path.parent.mkdir(parents=True, exist_ok=True)
 
     total_strips = sum(
-        len(
-            split_intervals_by_speed(
-                d.get("keep_intervals", []), d.get("speed_ranges", [])
-            )
-        )
+        len(split_intervals_by_speed(d.get("keep_intervals", []), d.get("speed_ranges", [])))
         for d in all_intervals_data
     )
     logging.info(

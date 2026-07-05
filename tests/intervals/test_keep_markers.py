@@ -166,9 +166,7 @@ class TestExtractKeepRanges:
         seg1_words = [_word("あ", 0.0, 0.2), _word("い", 0.2, 0.4)]
         seg2_words = [_word("う", 1.0, 1.2), _word("え", 1.2, 1.4)]
         data = _whisperx(_segment("あい", seg1_words), _segment("うえ", seg2_words))
-        ranges = extract_keep_ranges(
-            ["<keep>あい</keep>", "う<keep>え</keep>"], data
-        )
+        ranges = extract_keep_ranges(["<keep>あい</keep>", "う<keep>え</keep>"], data)
         assert ranges == [(0.0, 0.4), (1.2, 1.4)]
 
     def test_extra_edit_lines_ignored(self):
@@ -187,9 +185,7 @@ class TestExtractKeepRangesCrossLine:
         seg0 = [_word("あ", 0.0, 0.2), _word("い", 0.2, 0.4)]
         seg1 = [_word("う", 1.0, 1.2), _word("え", 1.2, 1.4)]
         data = _whisperx(_segment("あい", seg0), _segment("うえ", seg1))
-        ranges = extract_keep_ranges(
-            ["あ<keep>い", "う</keep>え"], data
-        )
+        ranges = extract_keep_ranges(["あ<keep>い", "う</keep>え"], data)
         # First wrapped word = seg0 'い' (start=0.2); last wrapped word = seg1 'う' (end=1.2)
         assert ranges == [(0.2, 1.2)]
 
@@ -197,12 +193,8 @@ class TestExtractKeepRangesCrossLine:
         seg0 = [_word("あ", 0.0, 0.2), _word("い", 0.2, 0.4)]
         seg1 = [_word("う", 1.0, 1.2)]
         seg2 = [_word("え", 2.0, 2.2), _word("お", 2.2, 2.4)]
-        data = _whisperx(
-            _segment("あい", seg0), _segment("う", seg1), _segment("えお", seg2)
-        )
-        ranges = extract_keep_ranges(
-            ["あ<keep>い", "う", "え</keep>お"], data
-        )
+        data = _whisperx(_segment("あい", seg0), _segment("う", seg1), _segment("えお", seg2))
+        ranges = extract_keep_ranges(["あ<keep>い", "う", "え</keep>お"], data)
         # First wrapped = seg0 'い' (0.2); last wrapped = seg2 'え' (2.2)
         # The inter-segment silences fall inside the single (0.2, 2.2) range.
         assert ranges == [(0.2, 2.2)]
@@ -213,9 +205,7 @@ class TestExtractKeepRangesCrossLine:
         seg0 = [_word("あ", 0.0, 0.2), _word("い", 0.2, 0.4)]
         seg1 = [_word("う", 1.0, 1.2), _word("え", 1.2, 1.4)]
         data = _whisperx(_segment("あい", seg0), _segment("うえ", seg1))
-        ranges = extract_keep_ranges(
-            ["あい<keep>", "う</keep>え"], data
-        )
+        ranges = extract_keep_ranges(["あい<keep>", "う</keep>え"], data)
         # seg0 has no word at pos 2 → fall through to seg1[0] = 'う' (start=1.0)
         assert ranges == [(1.0, 1.2)]
 
@@ -225,9 +215,7 @@ class TestExtractKeepRangesCrossLine:
         seg0 = [_word("あ", 0.0, 0.2), _word("い", 0.2, 0.4)]
         seg1 = [_word("う", 1.0, 1.2), _word("え", 1.2, 1.4)]
         data = _whisperx(_segment("あい", seg0), _segment("うえ", seg1))
-        ranges = extract_keep_ranges(
-            ["あ<keep>い", "</keep>うえ"], data
-        )
+        ranges = extract_keep_ranges(["あ<keep>い", "</keep>うえ"], data)
         # closer at seg1 pos 0 → fall back to seg0[-1] = 'い' (end=0.4)
         assert ranges == [(0.2, 0.4)]
 
@@ -237,9 +225,7 @@ class TestExtractKeepRangesCrossLine:
         seg0 = [_word("あ", 0.0, 0.2), _word("い", 0.2, 0.4)]
         seg1 = [_word("う", 1.0, 1.2), _word("え", 1.2, 1.4)]
         data = _whisperx(_segment("あい", seg0), _segment("うえ", seg1))
-        ranges = extract_keep_ranges(
-            ["あい<keep>", "</keep>うえ"], data
-        )
+        ranges = extract_keep_ranges(["あい<keep>", "</keep>うえ"], data)
         assert ranges == []
 
     def test_unclosed_at_eof_skipped(self):
@@ -261,9 +247,7 @@ class TestExtractKeepRangesCrossLine:
             _segment("え", seg1),
             _segment("おか", seg2),
         )
-        ranges = extract_keep_ranges(
-            ["<keep>あ</keep>い<keep>う", "え", "お</keep>か"], data
-        )
+        ranges = extract_keep_ranges(["<keep>あ</keep>い<keep>う", "え", "お</keep>か"], data)
         # First block: single-line, seg0 'あ' → (0.0, 0.2)
         # Second block: cross-line, seg0 'う' → seg2 'お' → (0.4, 2.2)
         assert ranges == [(0.0, 0.2), (0.4, 2.2)]
@@ -294,9 +278,7 @@ class TestSyncStripsSpeedTags:
             _word("う", 0.6, 0.8),
         ]
         data = _whisperx(_segment("あえーう", words))
-        result = sync_text_to_json(
-            data, ['あ<speed factor="0.5">{{えー->}}</speed>う']
-        )
+        result = sync_text_to_json(data, ['あ<speed factor="0.5">{{えー->}}</speed>う'])
         assert result["segments"][0]["text"] == "あう"
         assert [w["word"] for w in result["segments"][0]["words"]] == ["あ", "う"]
 
@@ -315,9 +297,7 @@ class TestSyncStripsSpeedTags:
             _word("う", 0.4, 0.6),
         ]
         data = _whisperx(_segment("あいう", words))
-        result = sync_text_to_json(
-            data, ['<keep>あ</keep><speed factor="1.5">い</speed>う']
-        )
+        result = sync_text_to_json(data, ['<keep>あ</keep><speed factor="1.5">い</speed>う'])
         assert result["segments"][0]["text"] == "あいう"
 
 
@@ -338,18 +318,14 @@ class TestExtractSpeedRanges:
             _word("え", 0.9, 1.2),
         ]
         data = _whisperx(_segment("あいうえ", words))
-        ranges = extract_speed_ranges(
-            ['あ<speed factor="2.0">いう</speed>え'], data
-        )
+        ranges = extract_speed_ranges(['あ<speed factor="2.0">いう</speed>え'], data)
         assert ranges == [(0.2, 0.9, 2.0)]
 
     def test_factor_parses_various_floats(self):
         words = [_word("あ", 0.0, 0.2), _word("い", 0.2, 0.4)]
         data = _whisperx(_segment("あい", words))
         for factor_str, expected in (("0.5", 0.5), ("1.5", 1.5), ("3.0", 3.0)):
-            ranges = extract_speed_ranges(
-                [f'<speed factor="{factor_str}">あい</speed>'], data
-            )
+            ranges = extract_speed_ranges([f'<speed factor="{factor_str}">あい</speed>'], data)
             assert ranges == [(0.0, 0.4, expected)], (
                 f"factor {factor_str!r} should parse to {expected}"
             )
@@ -403,9 +379,7 @@ class TestExtractSpeedRanges:
         seg0 = [_word("あ", 0.0, 0.2), _word("い", 0.2, 0.4)]
         seg1 = [_word("う", 1.0, 1.2), _word("え", 1.2, 1.4)]
         data = _whisperx(_segment("あい", seg0), _segment("うえ", seg1))
-        ranges = extract_speed_ranges(
-            ['あ<speed factor="2.0">い', "う</speed>え"], data
-        )
+        ranges = extract_speed_ranges(['あ<speed factor="2.0">い', "う</speed>え"], data)
         assert ranges == [(0.2, 1.2, 2.0)]
 
     def test_keep_and_speed_do_not_interfere(self):

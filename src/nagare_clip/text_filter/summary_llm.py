@@ -6,13 +6,13 @@ import json
 import logging
 import re
 from dataclasses import dataclass
-from typing import Any, Dict, List
-
-_FENCE_RE = re.compile(r"^\s*```(?:json)?\s*\n(.*?)\n```\s*$", re.DOTALL | re.IGNORECASE)
+from typing import Any
 
 from nagare_clip.llm_client import with_trace_meta
 from nagare_clip.llm_report import LLM_ERROR, NULL_RECORDER, OK, UNPARSEABLE, Recorder
 from nagare_clip.text_filter.llm_filter import _call_llm
+
+_FENCE_RE = re.compile(r"^\s*```(?:json)?\s*\n(.*?)\n```\s*$", re.DOTALL | re.IGNORECASE)
 
 logger = logging.getLogger(__name__)
 
@@ -20,7 +20,7 @@ logger = logging.getLogger(__name__)
 @dataclass
 class SummaryResult:
     summary: str
-    keywords: List[str]
+    keywords: list[str]
 
 
 def parse_summary_response(response: str) -> SummaryResult | None:
@@ -59,16 +59,13 @@ def build_enhanced_prompt(base_prompt: str, summary: SummaryResult) -> str:
     if summary.keywords:
         kw_str = ", ".join(summary.keywords)
         parts.append(f"Keywords (correct spellings): {kw_str}")
-        parts.append(
-            "When you see words that sound similar to these keywords, "
-            "correct them."
-        )
+        parts.append("When you see words that sound similar to these keywords, correct them.")
     return "\n".join(parts)
 
 
 def generate_summary(
     full_text: str,
-    cfg: Dict[str, Any],
+    cfg: dict[str, Any],
     *,
     call_llm=None,
     recorder: Recorder = NULL_RECORDER,
@@ -89,8 +86,14 @@ def generate_summary(
     except Exception as e:  # noqa: BLE001 - recoverable
         logger.warning("Summary LLM call failed, proceeding without summary", exc_info=True)
         recorder.attempt(
-            unit="summary_llm", attempt=0, total=1, messages=messages, error=str(e),
-            outcome=LLM_ERROR, reason="LLM call failed", cfg=cfg,
+            unit="summary_llm",
+            attempt=0,
+            total=1,
+            messages=messages,
+            error=str(e),
+            outcome=LLM_ERROR,
+            reason="LLM call failed",
+            cfg=cfg,
         )
         recorder.flush_unit("summary_llm", outcome=LLM_ERROR, reason="LLM call failed")
         return None
@@ -99,14 +102,25 @@ def generate_summary(
     if result is None:
         logger.warning("Failed to parse summary LLM response: %s", response[:200])
         recorder.attempt(
-            unit="summary_llm", attempt=0, total=1, messages=messages, response=response,
-            outcome=UNPARSEABLE, reason="unparseable summary JSON", cfg=cfg,
+            unit="summary_llm",
+            attempt=0,
+            total=1,
+            messages=messages,
+            response=response,
+            outcome=UNPARSEABLE,
+            reason="unparseable summary JSON",
+            cfg=cfg,
         )
         recorder.flush_unit("summary_llm", outcome=UNPARSEABLE, reason="unparseable summary JSON")
         return result
     recorder.attempt(
-        unit="summary_llm", attempt=0, total=1, messages=messages, response=response,
-        outcome=OK, cfg=cfg,
+        unit="summary_llm",
+        attempt=0,
+        total=1,
+        messages=messages,
+        response=response,
+        outcome=OK,
+        cfg=cfg,
     )
     recorder.flush_unit("summary_llm", outcome=OK)
     return result

@@ -76,8 +76,7 @@ def test_json_passes_seg_times_by_stem(monkeypatch, tmp_path):
     edits.write_text("あ\nい\n", encoding="utf-8")
     js = tmp_path / "v.json"
     js.write_text(
-        json.dumps({"segments": [
-            {"start": 1.0, "end": 3.0}, {"start": 4.0, "end": 6.5}]}),
+        json.dumps({"segments": [{"start": 1.0, "end": 3.0}, {"start": 4.0, "end": 6.5}]}),
         encoding="utf-8",
     )
     out = tmp_path / "summary.json"
@@ -86,10 +85,14 @@ def test_json_passes_seg_times_by_stem(monkeypatch, tmp_path):
         "argv",
         [
             "summary",
-            "--edits-txt", str(edits),
-            "--json", str(js),
-            "--output", str(out),
-            "--config", str(cfg),
+            "--edits-txt",
+            str(edits),
+            "--json",
+            str(js),
+            "--output",
+            str(out),
+            "--config",
+            str(cfg),
         ],
     )
     summary_cli.main()

@@ -21,9 +21,9 @@ def test_resolve_speed_mark_style_merges_caption_then_overrides():
     }
     style = resolve_speed_mark_style(caption_style, speed_mark_cfg)
     # caption defaults present unless overridden
-    assert style["font_size"] == 35       # override wins
+    assert style["font_size"] == 35  # override wins
     assert style["alignment_x"] == "RIGHT"  # override wins
-    assert style["location_y"] == 0.95    # override wins
+    assert style["location_y"] == 0.95  # override wins
     # non-style keys must NOT leak into the strip style
     assert "enabled" not in style
     assert "template" not in style

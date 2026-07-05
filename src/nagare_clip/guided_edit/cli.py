@@ -20,9 +20,9 @@ from pathlib import Path
 from nagare_clip.config import get_effective_config
 from nagare_clip.director.director_llm import ops_from_dict
 from nagare_clip.guided_edit.apply import apply_ops
+from nagare_clip.intervals.check_edits import check_edits
 from nagare_clip.llm_report import recorder_from_config
 from nagare_clip.logging_setup import setup_logging
-from nagare_clip.intervals.check_edits import check_edits
 
 
 def parse_args() -> argparse.Namespace:
@@ -46,7 +46,9 @@ def parse_args() -> argparse.Namespace:
         help="Override directory for LLM report output",
     )
     parser.add_argument(
-        "--llm-report-no-clear", action="store_true", dest="llm_report_no_clear",
+        "--llm-report-no-clear",
+        action="store_true",
+        dest="llm_report_no_clear",
         help="Do not wipe this stage's report subdir at startup (for per-source loop iterations after the first)",
     )
     parser.add_argument(
@@ -86,14 +88,10 @@ def main() -> None:
         result_lines = edit_lines
         unapplied: list = []
     else:
-        director_data = json.loads(
-            Path(args.director_json).read_text(encoding="utf-8")
-        )
+        director_data = json.loads(Path(args.director_json).read_text(encoding="utf-8"))
         ops = ops_from_dict(director_data, num_lines=len(edit_lines))
         logging.info("guided_edit: applying %d director op(s)", len(ops))
-        result_lines, unapplied = apply_ops(
-            edit_lines, ops, ge_cfg, recorder=recorder, unit=stem
-        )
+        result_lines, unapplied = apply_ops(edit_lines, ops, ge_cfg, recorder=recorder, unit=stem)
         logging.info(
             "guided_edit: %d applied, %d unapplied",
             len(ops) - len(unapplied),
@@ -105,16 +103,14 @@ def main() -> None:
     logging.info("guided_edit: wrote %s", output)
 
     if args.json_path:
-        with open(args.json_path, "r", encoding="utf-8") as f:
+        with open(args.json_path, encoding="utf-8") as f:
             json_data = json.load(f)
         problems = check_edits(result_lines, json_data)
         for p in problems:
             where = "file" if p.line is None else f"line {p.line}"
             logging.warning("check_edits: %s: %s", where, p.message)
         if problems:
-            logging.warning(
-                "guided_edit: %d check_edits problem(s) in output", len(problems)
-            )
+            logging.warning("guided_edit: %d check_edits problem(s) in output", len(problems))
 
     recorder.rebuild_index()
 

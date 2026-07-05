@@ -31,9 +31,7 @@ def _seq_with_capture():
 
 def _simple_tl_map(fps: float = 30.0):
     """One 4-second keep interval starting at source 0.0, timeline frame 1."""
-    return build_timeline_map(
-        [{"start": 0.0, "end": 4.0}], effective_fps=fps, source_fps=fps
-    )
+    return build_timeline_map([{"start": 0.0, "end": 4.0}], effective_fps=fps, source_fps=fps)
 
 
 def test_overlay_within_keep_interval_creates_text_strip():
@@ -54,7 +52,7 @@ def test_overlay_within_keep_interval_creates_text_strip():
     assert kw["type"] == "TEXT"
     assert kw["channel"] == OVERLAY_CHANNEL
     assert kw["frame_start"] == 1 + 30  # 1.0s * 30fps offset within interval (tl_start=1)
-    assert kw["length"] == 60           # 2.0s duration
+    assert kw["length"] == 60  # 2.0s duration
 
 
 class _AttrTracker:

@@ -34,11 +34,7 @@ def test_write_empty_produces_header_only(tmp_path):
 def test_read_skips_comments_and_blank_lines(tmp_path):
     path = tmp_path / "c.txt"
     path.write_text(
-        "# header comment\n"
-        "\n"
-        "   \n"
-        "3.000 - 6.000\n"
-        "# trailing note\n",
+        "# header comment\n\n   \n3.000 - 6.000\n# trailing note\n",
         encoding="utf-8",
     )
     assert read_cuts(path) == [pytest.approx((3.0, 6.0))]

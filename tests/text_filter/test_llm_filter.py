@@ -414,7 +414,8 @@ class TestFilterRecorder:
         out = filter_transcript(
             ["alpha", "beta"],
             {"batch_size": 10, "retry_on_invalid": False, "model": "m"},
-            call_llm=fake, recorder=rec,
+            call_llm=fake,
+            recorder=rec,
         )
         assert out == ["alpha", "beta"]
         files = list((tmp_path / "text_filter").glob("*.md"))
