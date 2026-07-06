@@ -10,97 +10,13 @@ unchanged.
 from __future__ import annotations
 
 import argparse
-import json
-import logging
-import shutil
 from pathlib import Path
 from typing import Any
 
 from nagare_clip.config import get_effective_config
-from nagare_clip.llm_report import NULL_RECORDER, Recorder, recorder_from_config
+from nagare_clip.llm_report import recorder_from_config
 from nagare_clip.logging_setup import setup_logging
-from nagare_clip.sentence_split.llm import split_window
-from nagare_clip.sentence_split.nlp import bunsetsu_units, load_nlp
-from nagare_clip.sentence_split.segment import (
-    char_to_word_index,
-    concat_word_text,
-    iter_windows,
-    rebuild_window_segments,
-    segment_from_words,
-    window_text_and_words,
-)
-
-
-def resegment_json(
-    json_data: dict[str, Any],
-    sp_cfg: dict[str, Any],
-    nlp: Any,
-    *,
-    recorder: Recorder = NULL_RECORDER,
-    stem: str = "",
-) -> dict[str, Any]:
-    """Return a new WhisperX data dict with re-segmented segments.
-
-    On a verbatim-invariant violation, returns ``json_data`` unchanged.
-    """
-    segments = json_data.get("segments", [])
-    window = int(sp_cfg.get("window_segments", 20))
-    new_segments = []
-    # The trailing (possibly incomplete) sentence of each window is carried into
-    # the next window so a sentence straddling a window boundary is re-grouped
-    # with its continuation rather than forced to split at the seam.
-    carry_words: list = []
-    windows = list(iter_windows(segments, window))
-    for idx, (base, win) in enumerate(windows):
-        is_last = idx == len(windows) - 1
-        _, win_words = window_text_and_words(win)
-        carried_in = carry_words
-        words = carried_in + win_words
-        text = "".join(str(w.get("word", "")) for w in words)
-        carry_words = []
-        if not text:
-            new_segments.extend(win)
-            continue
-        bunsetsu = bunsetsu_units(text, nlp)
-        ranges = (
-            split_window(bunsetsu, sp_cfg, recorder=recorder, unit=f"{stem}.w{base + 1}")
-            if bunsetsu
-            else None
-        )
-        if ranges is None:
-            # Degrade: finalize anything carried in, then keep the window's
-            # original segments so the fallback stays local and lossless.
-            if carried_in:
-                new_segments.append(segment_from_words(carried_in))
-            new_segments.extend(win)
-            continue
-        char2word = char_to_word_index(words)
-        rebuilt = rebuild_window_segments(words, bunsetsu, ranges, char2word)
-        if not is_last and len(rebuilt) > 1:
-            # Hold back the trailing sentence for the next window; emit the rest.
-            carry_words = rebuilt[-1].get("words", [])
-            new_segments.extend(rebuilt[:-1])
-        else:
-            # Single-sentence window (or the last window): accept as-is.
-            new_segments.extend(rebuilt)
-
-    if concat_word_text(new_segments) != concat_word_text(segments):
-        logging.error(
-            "sentence_split: verbatim invariant violated for %s; keeping original",
-            stem,
-        )
-        return json_data
-
-    out = dict(json_data)
-    out["segments"] = new_segments
-    out["word_segments"] = [w for seg in new_segments for w in seg.get("words", [])]
-    return out
-
-
-def _copy_through(src_json: str, src_txt: str, out_json: Path, out_txt: Path) -> None:
-    """Copy the transcription ``.json``/``.txt`` through byte-identically."""
-    shutil.copyfile(src_json, out_json)
-    shutil.copyfile(src_txt, out_txt)
+from nagare_clip.sentence_split.run import run_sentence_split
 
 
 def parse_args() -> argparse.Namespace:
@@ -135,39 +51,15 @@ def main() -> None:
     if not args.llm_report_no_clear:
         recorder.clear()
 
-    sp_cfg = cfg["sentence_split"]
-    out_json = Path(args.output_json)
-    out_txt = Path(args.output_txt)
-    out_json.parent.mkdir(parents=True, exist_ok=True)
-    out_txt.parent.mkdir(parents=True, exist_ok=True)
-
     try:
-        if not sp_cfg.get("enabled", False):
-            logging.info("sentence_split: disabled, copying %s through", args.stem)
-            _copy_through(args.json, args.txt, out_json, out_txt)
-            return
-
-        json_data = json.loads(Path(args.json).read_text(encoding="utf-8"))
-        nlp = load_nlp()
-        new_data = resegment_json(json_data, sp_cfg, nlp, recorder=recorder, stem=args.stem)
-
-        if new_data is json_data:
-            # verbatim violation already logged; copy through for safety
-            _copy_through(args.json, args.txt, out_json, out_txt)
-            return
-
-        out_json.write_text(
-            json.dumps(new_data, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
-        )
-        out_txt.write_text(
-            "\n".join(seg.get("text", "") for seg in new_data["segments"]) + "\n",
-            encoding="utf-8",
-        )
-        logging.info(
-            "sentence_split: %s %d -> %d segments",
-            args.stem,
-            len(json_data.get("segments", [])),
-            len(new_data["segments"]),
+        run_sentence_split(
+            Path(args.json),
+            Path(args.txt),
+            Path(args.output_json),
+            Path(args.output_txt),
+            cfg,
+            stem=args.stem,
+            recorder=recorder,
         )
     finally:
         recorder.rebuild_index()
