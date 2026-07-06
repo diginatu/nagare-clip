@@ -1,7 +1,5 @@
 """Tests for pipeline source discovery, resolution, and staging."""
 
-from pathlib import Path
-
 import pytest
 
 from nagare_clip.pipeline.errors import PipelineError
@@ -50,9 +48,7 @@ def test_stage_sources_inside_dir_no_copy(tmp_path):
     sources, cleanup = stage_sources([tmp_path / "clip.mp4"], tmp_path)
     assert cleanup == []
     assert sources == [
-        SourceMedia(
-            abs_path=(tmp_path / "clip.mp4").resolve(), stem="clip", relative="clip.mp4"
-        )
+        SourceMedia(abs_path=(tmp_path / "clip.mp4").resolve(), stem="clip", relative="clip.mp4")
     ]
 
 

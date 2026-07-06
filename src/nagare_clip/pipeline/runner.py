@@ -53,14 +53,10 @@ def _no_outputs(ctx: PipelineContext) -> list[Path]:
 class Stage:
     name: str
     run: Callable[[PipelineContext], None]
-    required_outputs: Callable[[PipelineContext], list[Path]] = field(
-        default=_no_outputs
-    )
+    required_outputs: Callable[[PipelineContext], list[Path]] = field(default=_no_outputs)
 
 
-def resolve_window(
-    stages: Sequence[Stage], from_stage: str, to_stage: str
-) -> tuple[int, int]:
+def resolve_window(stages: Sequence[Stage], from_stage: str, to_stage: str) -> tuple[int, int]:
     names = [s.name for s in stages]
     hint = f"Use a stage name: {' '.join(names)}."
     if from_stage not in names:
@@ -70,8 +66,7 @@ def resolve_window(
     from_index, to_index = names.index(from_stage), names.index(to_stage)
     if from_index > to_index:
         raise PipelineError(
-            f"Invalid stage range: --from-stage ({from_stage}) is after "
-            f"--to-stage ({to_stage})."
+            f"Invalid stage range: --from-stage ({from_stage}) is after --to-stage ({to_stage})."
         )
     return from_index, to_index
 
@@ -88,12 +83,9 @@ def run_stages(stages: Sequence[Stage], ctx: PipelineContext) -> None:
         elif idx > ctx.to_index:
             print(f"[{stage.name}] Skipped (--to-stage {stages[ctx.to_index].name})")
         else:
-            print(
-                f"[{stage.name}] Skipped (--from-stage {stages[ctx.from_index].name})"
-            )
+            print(f"[{stage.name}] Skipped (--from-stage {stages[ctx.from_index].name})")
             for path in stage.required_outputs(ctx):
                 if not path.is_file():
                     raise PipelineError(
-                        f"Missing {stage.name} output: {path} "
-                        f"(required when skipping {stage.name})"
+                        f"Missing {stage.name} output: {path} (required when skipping {stage.name})"
                     )

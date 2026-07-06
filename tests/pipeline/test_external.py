@@ -33,15 +33,30 @@ def test_build_transcription_cmd():
     root = Path("/proj")
     cmd = build_transcription_cmd(root, ["a.mp4", "b.mp4"], _cfg())
     assert cmd == [
-        "docker", "compose", "-f", "/proj/docker-compose.yml",
-        "run", "--rm", "--user", "0:0", "whisperx", "_",
-        "a.mp4", "b.mp4",
-        "--output_dir", "/output/transcription",
-        "--output_format", "all",
-        "--language", "ja",
-        "--compute_type", "float16",
-        "--batch_size", "16",
-        "--align_model", "vumichien/wav2vec2-large-xlsr-japanese",
+        "docker",
+        "compose",
+        "-f",
+        "/proj/docker-compose.yml",
+        "run",
+        "--rm",
+        "--user",
+        "0:0",
+        "whisperx",
+        "_",
+        "a.mp4",
+        "b.mp4",
+        "--output_dir",
+        "/output/transcription",
+        "--output_format",
+        "all",
+        "--language",
+        "ja",
+        "--compute_type",
+        "float16",
+        "--batch_size",
+        "16",
+        "--align_model",
+        "vumichien/wav2vec2-large-xlsr-japanese",
     ]
 
 
@@ -55,11 +70,26 @@ def test_build_transcription_cmd_omits_empty_align_model():
 def test_build_silencedetect_cmd():
     cmd = build_silencedetect_cmd(Path("/proj"), "a.mp4", -30.0, 0.8)
     assert cmd == [
-        "docker", "compose", "-f", "/proj/docker-compose.yml",
-        "run", "--rm", "--user", "0:0", "--entrypoint", "ffmpeg", "whisperx",
-        "-hide_banner", "-nostats", "-i", "a.mp4",
-        "-af", "silencedetect=noise=-30.0dB:d=0.8",
-        "-f", "null", "-",
+        "docker",
+        "compose",
+        "-f",
+        "/proj/docker-compose.yml",
+        "run",
+        "--rm",
+        "--user",
+        "0:0",
+        "--entrypoint",
+        "ffmpeg",
+        "whisperx",
+        "-hide_banner",
+        "-nostats",
+        "-i",
+        "a.mp4",
+        "-af",
+        "silencedetect=noise=-30.0dB:d=0.8",
+        "-f",
+        "null",
+        "-",
     ]
 
 
@@ -73,21 +103,35 @@ def test_build_blender_cmd(tmp_path):
         Path("/out/pipeline.log"),
     )
     assert cmd == [
-        "blender", "--background", "--factory-startup",
-        "--python-exit-code", "1",
-        "--python", "/proj/src/nagare_clip/blender/blender_cli.py", "--",
-        "--source", "/vids/a.mp4",
-        "--intervals", "/out/intervals/a_intervals.json",
-        "--output", "/out/blender/a_edited.blend",
-        "--config", "/cfg.yml",
-        "--log-file", "/out/pipeline.log",
+        "blender",
+        "--background",
+        "--factory-startup",
+        "--python-exit-code",
+        "1",
+        "--python",
+        "/proj/src/nagare_clip/blender/blender_cli.py",
+        "--",
+        "--source",
+        "/vids/a.mp4",
+        "--intervals",
+        "/out/intervals/a_intervals.json",
+        "--output",
+        "/out/blender/a_edited.blend",
+        "--config",
+        "/cfg.yml",
+        "--log-file",
+        "/out/pipeline.log",
     ]
 
 
 def test_build_blender_cmd_without_config(tmp_path):
     cmd = build_blender_cmd(
-        Path("/proj"), [Path("/v/a.mp4")], [Path("/i/a.json")],
-        Path("/b/a.blend"), None, Path("/l.log"),
+        Path("/proj"),
+        [Path("/v/a.mp4")],
+        [Path("/i/a.json")],
+        Path("/b/a.blend"),
+        None,
+        Path("/l.log"),
     )
     assert "--config" not in cmd
 
@@ -105,7 +149,8 @@ def test_run_command_env_extra(tmp_path):
     marker = tmp_path / "env.txt"
     run_command(
         [
-            "python3", "-c",
+            "python3",
+            "-c",
             "import os, sys; open(sys.argv[1], 'w').write(os.environ['PIPE_TEST_VAR'])",
             str(marker),
         ],

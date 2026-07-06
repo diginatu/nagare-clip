@@ -23,11 +23,7 @@ class SourceMedia:
 
 def discover_sources(input_dir: Path) -> list[Path]:
     """All video files directly inside *input_dir*, sorted by name."""
-    found = [
-        p
-        for p in input_dir.iterdir()
-        if p.is_file() and p.suffix.lower() in VIDEO_EXTENSIONS
-    ]
+    found = [p for p in input_dir.iterdir() if p.is_file() and p.suffix.lower() in VIDEO_EXTENSIONS]
     if not found:
         raise PipelineError(f"No video files found in: {input_dir}")
     return sorted(found)
@@ -44,9 +40,7 @@ def resolve_cli_sources(cli_sources: list[str], input_dir: Path) -> list[Path]:
     return paths
 
 
-def stage_sources(
-    paths: list[Path], input_dir: Path
-) -> tuple[list[SourceMedia], list[Path]]:
+def stage_sources(paths: list[Path], input_dir: Path) -> tuple[list[SourceMedia], list[Path]]:
     """Make every source reachable inside *input_dir* for Docker.
 
     Sources outside the dir are copied in (returned in the cleanup list);

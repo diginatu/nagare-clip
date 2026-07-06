@@ -1,7 +1,5 @@
 """Tests for the generic stage runner: windowing, skipping, validation."""
 
-from pathlib import Path
-
 import pytest
 
 from nagare_clip.pipeline.errors import PipelineError
@@ -74,9 +72,7 @@ def test_run_stages_runs_only_window(tmp_path, capsys):
 def test_run_stages_validates_skipped_outputs(tmp_path):
     missing = tmp_path / "out" / "a" / "x.json"
     calls = []
-    stages = _stages(
-        ["a", "b"], calls, required={"a": lambda ctx: [missing]}
-    )
+    stages = _stages(["a", "b"], calls, required={"a": lambda ctx: [missing]})
     with pytest.raises(PipelineError, match="Missing a output"):
         run_stages(stages, _ctx(tmp_path, 1, 1))
     assert calls == []

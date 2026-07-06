@@ -25,25 +25,34 @@ def effective_align_model(cfg: dict) -> str:
 
 def _compose_prefix(project_root: Path) -> list[str]:
     return [
-        "docker", "compose", "-f", str(project_root / "docker-compose.yml"),
-        "run", "--rm", "--user", "0:0",
+        "docker",
+        "compose",
+        "-f",
+        str(project_root / "docker-compose.yml"),
+        "run",
+        "--rm",
+        "--user",
+        "0:0",
     ]
 
 
-def build_transcription_cmd(
-    project_root: Path, relatives: list[str], cfg: dict
-) -> list[str]:
+def build_transcription_cmd(project_root: Path, relatives: list[str], cfg: dict) -> list[str]:
     t = cfg["transcription"]
     cmd = [
         *_compose_prefix(project_root),
         "whisperx",
         "_",
         *relatives,
-        "--output_dir", "/output/transcription",
-        "--output_format", "all",
-        "--language", t["language"],
-        "--compute_type", t["compute_type"],
-        "--batch_size", str(t["batch_size"]),
+        "--output_dir",
+        "/output/transcription",
+        "--output_format",
+        "all",
+        "--language",
+        t["language"],
+        "--compute_type",
+        t["compute_type"],
+        "--batch_size",
+        str(t["batch_size"]),
     ]
     align = effective_align_model(cfg)
     if align:
@@ -56,11 +65,18 @@ def build_silencedetect_cmd(
 ) -> list[str]:
     return [
         *_compose_prefix(project_root),
-        "--entrypoint", "ffmpeg", "whisperx",
-        "-hide_banner", "-nostats",
-        "-i", relative,
-        "-af", f"silencedetect=noise={noise}dB:d={min_silence}",
-        "-f", "null", "-",
+        "--entrypoint",
+        "ffmpeg",
+        "whisperx",
+        "-hide_banner",
+        "-nostats",
+        "-i",
+        relative,
+        "-af",
+        f"silencedetect=noise={noise}dB:d={min_silence}",
+        "-f",
+        "null",
+        "-",
     ]
 
 
@@ -73,9 +89,13 @@ def build_blender_cmd(
     log_file: Path,
 ) -> list[str]:
     cmd = [
-        "blender", "--background", "--factory-startup",
-        "--python-exit-code", "1",
-        "--python", str(project_root / "src/nagare_clip/blender/blender_cli.py"),
+        "blender",
+        "--background",
+        "--factory-startup",
+        "--python-exit-code",
+        "1",
+        "--python",
+        str(project_root / "src/nagare_clip/blender/blender_cli.py"),
         "--",
     ]
     for src in source_paths:
@@ -99,8 +119,6 @@ def run_command(
     env = {**os.environ, **env_extra} if env_extra else None
     if stderr_to is not None:
         with stderr_to.open("w", encoding="utf-8") as f:
-            subprocess.run(
-                cmd, check=True, env=env, stdout=subprocess.DEVNULL, stderr=f
-            )
+            subprocess.run(cmd, check=True, env=env, stdout=subprocess.DEVNULL, stderr=f)
     else:
         subprocess.run(cmd, check=True, env=env)
