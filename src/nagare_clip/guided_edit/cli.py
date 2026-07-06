@@ -13,14 +13,10 @@ through unchanged so the pipeline behaves exactly as before.
 from __future__ import annotations
 
 import argparse
-import json
-import logging
 from pathlib import Path
 
 from nagare_clip.config import get_effective_config
-from nagare_clip.director.director_llm import ops_from_dict
-from nagare_clip.guided_edit.apply import apply_ops
-from nagare_clip.intervals.check_edits import check_edits
+from nagare_clip.guided_edit.run import run_guided_edit
 from nagare_clip.llm_report import recorder_from_config
 from nagare_clip.logging_setup import setup_logging
 
@@ -74,44 +70,18 @@ def main() -> None:
         args.log_file or cfg["general"]["log_file"] or None,
     )
 
-    ge_cfg = cfg["guided_edit"]
-    edit_lines = Path(args.edits_txt).read_text(encoding="utf-8").splitlines()
-    output = Path(args.output)
-    stem = output.stem.replace("_edits", "")
-
     recorder = recorder_from_config("guided_edit", cfg, override_dir=args.llm_report_dir)
     if not args.llm_report_no_clear:
         recorder.clear()
 
-    if not ge_cfg.get("enabled", False):
-        logging.info("guided_edit: disabled, copying edits through")
-        result_lines = edit_lines
-        unapplied: list = []
-    else:
-        director_data = json.loads(Path(args.director_json).read_text(encoding="utf-8"))
-        ops = ops_from_dict(director_data, num_lines=len(edit_lines))
-        logging.info("guided_edit: applying %d director op(s)", len(ops))
-        result_lines, unapplied = apply_ops(edit_lines, ops, ge_cfg, recorder=recorder, unit=stem)
-        logging.info(
-            "guided_edit: %d applied, %d unapplied",
-            len(ops) - len(unapplied),
-            len(unapplied),
-        )
-
-    output.parent.mkdir(parents=True, exist_ok=True)
-    output.write_text("\n".join(result_lines) + "\n", encoding="utf-8")
-    logging.info("guided_edit: wrote %s", output)
-
-    if args.json_path:
-        with open(args.json_path, encoding="utf-8") as f:
-            json_data = json.load(f)
-        problems = check_edits(result_lines, json_data)
-        for p in problems:
-            where = "file" if p.line is None else f"line {p.line}"
-            logging.warning("check_edits: %s: %s", where, p.message)
-        if problems:
-            logging.warning("guided_edit: %d check_edits problem(s) in output", len(problems))
-
+    run_guided_edit(
+        edits_txt=Path(args.edits_txt),
+        director_json=Path(args.director_json),
+        output=Path(args.output),
+        cfg=cfg,
+        json_path=Path(args.json_path) if args.json_path else None,
+        recorder=recorder,
+    )
     recorder.rebuild_index()
 
 
