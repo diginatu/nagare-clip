@@ -11,15 +11,12 @@ downstream director is unaffected and the pipeline behaves exactly as before.
 from __future__ import annotations
 
 import argparse
-import json
-import logging
 from pathlib import Path
 
 from nagare_clip.config import get_effective_config
 from nagare_clip.llm_report import recorder_from_config
 from nagare_clip.logging_setup import setup_logging
-from nagare_clip.plan.plan_llm import generate_plan, plan_to_dict
-from nagare_clip.summary.summarize import summary_from_dict
+from nagare_clip.plan.run import run_plan
 
 
 def parse_args() -> argparse.Namespace:
@@ -70,26 +67,15 @@ def main() -> None:
     if not args.llm_report_no_clear:
         recorder.clear()
 
-    plan_cfg = cfg["plan"]
-    output = Path(args.output)
-
-    if not plan_cfg.get("enabled", False):
-        logging.info("plan: disabled, writing empty plan")
-        directions = []
-    else:
-        summary_path = Path(args.summary)
-        project_summary = summary_from_dict(json.loads(summary_path.read_text(encoding="utf-8")))
-        logging.info("plan: directing %d part(s) with LLM", len(project_summary.parts))
-        directions = generate_plan(project_summary, plan_cfg, recorder=recorder)
-        logging.info("plan: %d direction(s)", len(directions))
-
-    output.parent.mkdir(parents=True, exist_ok=True)
-    output.write_text(
-        json.dumps(plan_to_dict(directions), ensure_ascii=False, indent=2) + "\n",
-        encoding="utf-8",
-    )
-    logging.info("plan: wrote %s", output)
-    recorder.rebuild_index()
+    try:
+        run_plan(
+            Path(args.summary),
+            Path(args.output),
+            cfg,
+            recorder=recorder,
+        )
+    finally:
+        recorder.rebuild_index()
 
 
 if __name__ == "__main__":

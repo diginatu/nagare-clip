@@ -1,13 +1,12 @@
-"""plan CLI: disabled no-op and enabled rough-directions paths."""
+"""plan run: disabled no-op and enabled rough-directions paths."""
 
 from __future__ import annotations
 
 import json
-import sys
 
 import yaml
 
-import nagare_clip.plan.cli as plan_cli
+import nagare_clip.plan.run as plan_run
 from nagare_clip.plan.plan_llm import PartDirection
 from nagare_clip.summary.summarize import PartSummary, ProjectSummary, summary_to_dict
 
@@ -18,20 +17,11 @@ def _run(monkeypatch, tmp_path, cfg_dict, project_summary):
     summary = tmp_path / "summary.json"
     summary.write_text(json.dumps(summary_to_dict(project_summary)), encoding="utf-8")
     out = tmp_path / "plan.json"
-    monkeypatch.setattr(
-        sys,
-        "argv",
-        [
-            "plan",
-            "--summary",
-            str(summary),
-            "--output",
-            str(out),
-            "--config",
-            str(cfg),
-        ],
+    plan_run.run_plan(
+        summary,
+        out,
+        yaml.safe_load(cfg.read_text(encoding="utf-8")),
     )
-    plan_cli.main()
     return json.loads(out.read_text(encoding="utf-8"))
 
 
@@ -49,7 +39,7 @@ def test_enabled_writes_directions(monkeypatch, tmp_path):
         assert [p.stem for p in project_summary.parts] == ["a", "b"]
         return [PartDirection("a", (1, 2), "keep"), PartDirection("b", (1, 1), "remove")]
 
-    monkeypatch.setattr(plan_cli, "generate_plan", fake_generate)
+    monkeypatch.setattr(plan_run, "generate_plan", fake_generate)
     data = _run(monkeypatch, tmp_path, {"plan": {"enabled": True}}, ps)
     assert data == {
         "directions": [
