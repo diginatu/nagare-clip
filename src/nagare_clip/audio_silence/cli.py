@@ -10,11 +10,9 @@ downstream union in the intervals stage becomes a no-op.
 from __future__ import annotations
 
 import argparse
-import logging
 from pathlib import Path
 
-from nagare_clip.audio_silence.cuts_file import write_cuts
-from nagare_clip.audio_silence.detect import parse_silencedetect_output
+from nagare_clip.audio_silence.run import run_audio_silence
 from nagare_clip.config import get_effective_config
 from nagare_clip.logging_setup import setup_logging
 
@@ -68,23 +66,10 @@ def main() -> None:
         args.log_file or cfg["general"]["log_file"] or None,
     )
 
-    a = cfg["audio_silence"]
-    output_path = Path(args.output_path)
-
-    if not a["enabled"] or args.raw_path is None:
-        reason = "disabled" if not a["enabled"] else "no ffmpeg output provided"
-        logging.info("audio_silence: audio-silence %s, writing empty cut list", reason)
-        write_cuts(output_path, [])
-        logging.info("audio_silence: wrote %s", output_path)
-        return
-
-    stderr = Path(args.raw_path).read_text(encoding="utf-8")
-    ranges = parse_silencedetect_output(stderr)
-    write_cuts(output_path, ranges)
-    logging.info(
-        "audio_silence: detected %d silence range(s), wrote %s",
-        len(ranges),
-        output_path,
+    run_audio_silence(
+        Path(args.output_path),
+        cfg,
+        raw_path=Path(args.raw_path) if args.raw_path else None,
     )
 
 
