@@ -1,84 +1,90 @@
-# Fix Pyright noise in `src/nagare_clip/config.py` (follow-up)
+# Fix Pyright noise in `src/nagare_clip/config.py` (follow-up) — DONE
 
 > Deferred follow-up, not part of the pydantic-settings migration branch. Pyright
 > is **not** in this repo's CI (`make check` = ruff + pytest, both green); this is
-> editor-LSP noise only. Written 2026-07-06 while migrating config to
-> pydantic-settings, so the investigation below is already done.
+> editor-LSP noise only. **Re-planned and fixed 2026-07-06** — the original
+> investigation (written mid-migration) had gone stale; the corrected findings and
+> the applied fix are below.
 
-## Context / findings (already investigated — don't re-derive)
+## What changed since the original plan (why it was re-planned)
 
-Environment at time of writing:
-- `pyright 1.1.391` (system CLI, `/usr/bin/pyright`)
-- `pydantic 2.12.5`, `pydantic-settings` installed in `.venv` (`.venv/lib/python3.12/...`)
-- No `pyrightconfig.json` and no `[tool.pyright]` in `pyproject.toml`.
-- Pyright is not referenced by `pyproject.toml`, `Makefile`, or `.github/` — it is
-  not a gate.
+The original plan described **three** diagnostic clusters. Re-verifying against the
+current tree (after `e4ab07c` "make root a plain BaseModel …") showed one was
+obsolete and the headline fix was pointless:
 
-`config.py` (after the pydantic-settings migration) produces **three distinct
-clusters** of Pyright diagnostics — verified by running `pyright src/nagare_clip/config.py`:
+| Original cluster | Status now | Action taken |
+|---|---|---|
+| **1** — `reportMissingImports` for `pydantic_settings`; fix via `pyrightconfig.json` | **Obsolete.** The `pydantic_settings` import is gone — `config.py` imports only `from pydantic import …`. Pyright also **already auto-discovers `.venv`** from the workspace root (verified: adding `pyrightconfig.json` changes the count 21 → 21). | **Dropped.** No `pyrightconfig.json` committed. |
+| **2** — 18 `Field(default_factory=<Class>)` false positives (`reportArgumentType`) | **Real but not code-fixable.** | Single file-level suppress (see below). |
+| **3** — 3 generator-typing errors | **Real, worth fixing.** | Fixed with type-narrowing. |
 
-1. **`reportMissingImports` for `pydantic_settings`** (1 error).
-   Cause: Pyright is not pointed at `.venv`.
-   Fix: a `pyrightconfig.json` at repo root:
-   ```json
-   { "venvPath": ".", "venv": ".venv" }
-   ```
-   **Confirmed:** this clears the import error (and lets genuine type errors surface;
-   e.g. it un-masked cluster 3 below, which was previously hidden behind the
-   unresolved import).
+## Verified root cause of cluster 2 (the 18 `default_factory` errors)
 
-2. **`reportArgumentType` on `Field(default_factory=<ModelClass>)`** (18 errors,
-   one per nested-model field: `summary_llm`, `caption`, `bunsetu`, the three
-   blender style blocks, and the 12 top-level sections in `NagareClipConfig`).
-   Cause: this Pyright build does **not** apply pydantic's `dataclass_transform`,
-   so it treats every model field as a *required* constructor parameter and
-   therefore rejects `type[X]` as a `() -> X` factory.
-   **Do NOT "fix" this in code.** Tested empirically: rewriting
-   `Field(default_factory=Class)` → `Field(default_factory=lambda: Class())` (or a
-   plain instance default `= Class()`) makes Pyright **worse** — it then emits
-   `reportCallIssue: Arguments missing for parameters "enabled", "provider", …` on
-   every model construction, because it still doesn't understand the synthesized
-   `__init__`. `default_factory=Class` is the idiomatic pydantic form; keep it.
-   Options to actually silence, in order of preference:
-   - **Preferred:** verify whether the user's editor uses Pylance / a
-     pydantic-aware Pyright. With the venv resolved (cluster 1 fixed), a
-     pydantic-aware checker models the synthesized `__init__` and these 18
-     vanish with no code change. If so, cluster 2 needs nothing.
-   - If a pydantic-unaware Pyright must stay: add a per-line
-     `# pyright: ignore[reportArgumentType]` on each of the 18 `Field(default_factory=…)`
-     lines. Explicit and local. (Do **not** globally disable `reportArgumentType`
-     — it hides real bugs elsewhere.)
+Not a venv/import problem and **not** pydantic's `dataclass_transform` being
+unsupported. Minimal repro (plain pydantic, no repo code, no `from __future__ import
+annotations` needed):
 
-3. **Generator typing imprecision** (3 errors, real and worth fixing):
-   - `field.json_schema_extra or {}` then `.get("emit")` — `json_schema_extra` is
-     typed `JsonDict | Callable | None`, so `.get`/subscript fail
-     (`config.py` `_render_model`, the `extra = field.json_schema_extra or {}`
-     line and `extra["sample"]`). Fix: coerce/guard, e.g.
-     `extra = field.json_schema_extra if isinstance(field.json_schema_extra, dict) else {}`.
-   - `_render_model(model_cls, indent)` is called with `field.annotation`, typed
-     `type[Any] | None`, against a `model_cls: type[BaseModel]` param. Fix: narrow
-     before the call (`ann = field.annotation; if isinstance(ann, type) and issubclass(ann, BaseModel): _render_model(ann, …)` already guards at runtime — add a
-     `cast`/local-typed variable so Pyright sees `type[BaseModel]`), or annotate the
-     helper param as `type[BaseModel]` and pass the already-narrowed `ann`.
+```python
+from pydantic import BaseModel, ConfigDict, Field
 
-## Recommended scope for the fix task
+class A(BaseModel):
+    model_config = ConfigDict(extra="forbid")   # <-- the trigger
+    x: str = Field("v")
 
-1. Add `pyrightconfig.json` (`{ "venvPath": ".", "venv": ".venv" }`). One commit.
-2. Fix the 3 generator-typing issues in `_render_model` with `isinstance`
-   narrowing / `cast` (no behavior change; `make check` stays green).
-3. Cluster 2 (the 18 `default_factory`): first check whether the venv fix alone
-   clears them under the user's editor checker. Only if not, add per-line
-   `# pyright: ignore[reportArgumentType]`. Decide with the user — 18 inline
-   ignores is a judgment call.
+class Root(BaseModel):
+    a: A = Field(default_factory=A)              # reportArgumentType
+```
 
-Do NOT change `Field(default_factory=Class)` to instance/lambda defaults — tested,
-it regresses Pyright and de-idiomatizes the code.
+When a model sets `model_config = ConfigDict(...)`, this pyright build wrongly
+treats each `Field(<default>)` field as **required**, so it rejects `type[A]` as a
+valid `() -> A` factory. Confirmed reproducing on **pyright 1.1.391** (system CLI)
+**and 1.1.411** (`uvx pyright@latest`) — upgrading does not help. Every alternative
+spelling is equal or worse (all verified):
 
-## Verification for the fix task
+- `Field(default_factory=lambda: A())` → `reportCallIssue: Argument missing for "x"`
+- `a: A = A()` (instance default) → `reportCallIssue`
+- `Field(default=A())` → `reportCallIssue`
 
-- `pyright src/nagare_clip/config.py` → target: 0 errors (cluster 1 + 3 fixed;
-  cluster 2 either gone via editor checker or ignored).
-- `make check` must stay green (ruff + pytest) — these changes are type-annotation
-  / config only, no runtime behavior change.
-- Add `pyrightconfig.json` to `.gitignore`? No — commit it, so the setting is
-  shared. (Confirm it doesn't conflict with any per-user editor settings.)
+So there is **no code spelling** that satisfies pyright while keeping `model_config`
+(which every section model needs for `extra="forbid"`/`"allow"` validation). Do NOT
+change `Field(default_factory=Class)` — it is the idiomatic form and every
+alternative regresses.
+
+## What was applied
+
+1. **Cluster 3 — fixed in code** (`config.py`, pure type-narrowing, no behavior
+   change; existing `tests/test_config.py` covers the runtime paths, all green):
+   - `_render_model`: `extra = field.json_schema_extra or {}` →
+     `extra = field.json_schema_extra if isinstance(field.json_schema_extra, dict) else {}`
+     (clears the `reportFunctionMemberAccess` on `.get` and `reportIndexIssue` on
+     `extra["sample"]`, since `json_schema_extra` is typed `JsonDict | Callable | None`).
+   - `generate_example_yaml`: guard `model_cls = field.annotation` (typed
+     `type[Any] | None`) with
+     `if not (isinstance(model_cls, type) and issubclass(model_cls, BaseModel)): continue`
+     before `getattr(...)`/`_render_model(model_cls, 2)` (clears the
+     `reportArgumentType` on the `_render_model` call). All top-level fields are
+     `BaseModel` subclasses, so `continue` is never hit — identical output.
+
+2. **Cluster 2 — single file-level suppress** (chosen over 18 inline
+   `# pyright: ignore` after weighing the trade-off with the user). A commented
+   `# pyright: reportArgumentType=false` at the top of `config.py` (placed after the
+   module docstring, before `from __future__ import annotations` — a comment is
+   allowed there), with an explanation of the pyright bug and the accepted risk.
+   Applied **after** cluster 3, so it masks only the 18 residual false positives, not
+   any real `reportArgumentType`. Accepted risk: a future genuine
+   `reportArgumentType` in this (declarative) module would also be silenced.
+
+## Verification (all passing)
+
+- `pyright src/nagare_clip/config.py` (system 1.1.391) → **0 errors**.
+- `uvx pyright@latest src/nagare_clip/config.py` with `.venv` resolved → **0 errors**.
+- `make check` (ruff lint + format + validate + pytest) → **green, 588 passed**.
+
+## Not done (deliberately)
+
+- **No `pyrightconfig.json` committed.** Pyright auto-finds `.venv` from the
+  workspace root, so it changes nothing here, and pyright is not a CI gate. (If a
+  future editor/CI setup runs pyright from a different cwd and can't find the venv,
+  add `{ "venvPath": ".", "venv": ".venv" }` then — it's a one-liner.)
+- **`Field(default_factory=Class)` left unchanged** — idiomatic; every alternative
+  regresses pyright (see above).

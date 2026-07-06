@@ -8,6 +8,16 @@ boundary").  ``config.example.yml`` is generated from these models
 (``generate_example_yaml`` / ``--write-example``).
 """
 
+# pyright: reportArgumentType=false
+# Suppresses false positives on every ``Field(default_factory=<ModelClass>)``
+# below: pyright (verified 1.1.391 and 1.1.411) mis-models a pydantic v2 model
+# that sets ``model_config = ConfigDict(...)`` -- it treats each ``Field(<default>)``
+# field as *required* and so rejects ``type[X]`` as a valid ``() -> X`` factory.
+# Reproducible in ~5 lines of plain pydantic; no code spelling avoids it
+# (instance/lambda defaults only trade it for reportCallIssue). Editor-only noise
+# -- pyright is not in this repo's CI. Trade-off: a genuine reportArgumentType in
+# this (declarative) module would also be silenced.
+
 from __future__ import annotations
 
 import copy
@@ -750,7 +760,7 @@ def _render_model(model_cls: type[BaseModel], indent: int) -> list[str]:
             lines.append(f"{pad}{name}:")
             lines += _render_model(ann, indent + 2)
             continue
-        extra = field.json_schema_extra or {}
+        extra = field.json_schema_extra if isinstance(field.json_schema_extra, dict) else {}
         desc = field.description or ""
         desc_suffix = f"   # {desc}" if desc else ""
         if extra.get("emit") == "commented":
@@ -768,6 +778,8 @@ def generate_example_yaml() -> str:
     out: list[str] = [PREAMBLE.rstrip("\n"), ""]
     for name, field in NagareClipConfig.model_fields.items():
         model_cls = field.annotation
+        if not (isinstance(model_cls, type) and issubclass(model_cls, BaseModel)):
+            continue
         section_comment = getattr(model_cls, "section_comment", "")
         if section_comment:
             out += [f"# {c}" for c in section_comment.split("\n")]
