@@ -12,18 +12,12 @@ before.
 from __future__ import annotations
 
 import argparse
-import json
-import logging
 from pathlib import Path
 
 from nagare_clip.config import get_effective_config
-from nagare_clip.director.context import build_director_context
-from nagare_clip.director.director_llm import generate_director_ops, ops_to_dict
+from nagare_clip.director.run import run_director
 from nagare_clip.llm_report import recorder_from_config
 from nagare_clip.logging_setup import setup_logging
-from nagare_clip.plan.plan_llm import plan_from_dict
-from nagare_clip.summary.summarize import ProjectSummary, summary_from_dict
-from nagare_clip.timing import segment_times
 
 
 def parse_args() -> argparse.Namespace:
@@ -75,22 +69,6 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
-def _build_overview_context(args: argparse.Namespace) -> str:
-    """Load summary/plan artifacts (tolerating missing/empty) and render the
-    cross-video context for this video's stem.  Returns ``""`` if unavailable."""
-    if not args.stem:
-        return ""
-    project_summary = ProjectSummary(summary="", parts=[])
-    if args.summary and Path(args.summary).is_file():
-        project_summary = summary_from_dict(
-            json.loads(Path(args.summary).read_text(encoding="utf-8"))
-        )
-    directions = []
-    if args.plan and Path(args.plan).is_file():
-        directions = plan_from_dict(json.loads(Path(args.plan).read_text(encoding="utf-8")))
-    return build_director_context(project_summary, directions, args.stem)
-
-
 def main() -> None:
     args = parse_args()
 
@@ -109,39 +87,16 @@ def main() -> None:
     if not args.llm_report_no_clear:
         recorder.clear()
 
-    director_cfg = cfg["director"]
-    edit_lines = Path(args.edits_txt).read_text(encoding="utf-8").splitlines()
-    output = Path(args.output)
-    stem = args.stem or output.stem.replace("_director", "")
-
-    if not director_cfg.get("enabled", False):
-        logging.info("director: disabled, writing empty op list")
-        ops = []
-    else:
-        overview_context = _build_overview_context(args)
-        seg_times = None
-        if args.json and Path(args.json).is_file():
-            try:
-                seg_times = segment_times(json.loads(Path(args.json).read_text(encoding="utf-8")))
-            except (ValueError, OSError):
-                logging.warning("director: could not read --json %s", args.json)
-        logging.info("director: analysing %d line(s) with LLM", len(edit_lines))
-        ops = generate_director_ops(
-            edit_lines,
-            director_cfg,
-            overview_context=overview_context,
-            recorder=recorder,
-            unit=stem,
-            seg_times=seg_times,
-        )
-        logging.info("director: %d operation(s)", len(ops))
-
-    output.parent.mkdir(parents=True, exist_ok=True)
-    output.write_text(
-        json.dumps(ops_to_dict(ops), ensure_ascii=False, indent=2) + "\n",
-        encoding="utf-8",
+    run_director(
+        edits_txt=Path(args.edits_txt),
+        output=Path(args.output),
+        cfg=cfg,
+        summary=Path(args.summary) if args.summary else None,
+        plan=Path(args.plan) if args.plan else None,
+        stem=args.stem,
+        json_path=Path(args.json) if args.json else None,
+        recorder=recorder,
     )
-    logging.info("director: wrote %s", output)
     recorder.rebuild_index()
 
 
