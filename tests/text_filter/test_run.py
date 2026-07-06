@@ -1,10 +1,11 @@
-"""Tests for constant keywords injection in text_filter CLI."""
+"""Tests for run_text_filter function and keyword injection."""
 
 from __future__ import annotations
 
 from unittest.mock import patch
 
-from nagare_clip.text_filter import cli as text_filter_cli
+from nagare_clip.config import get_effective_config
+from nagare_clip.text_filter.run import run_text_filter
 from nagare_clip.text_filter.summary_llm import SummaryResult
 
 
@@ -40,7 +41,7 @@ def _s2_config(
 
 
 def _run(tmp_path, s2_config, summary_result=None, lines=None):
-    """Run CLI main() and return the filter_cfg passed to filter_transcript."""
+    """Run run_text_filter and return the filter_cfg passed to filter_transcript."""
     if lines is None:
         lines = ["test line"]
 
@@ -60,13 +61,10 @@ def _run(tmp_path, s2_config, summary_result=None, lines=None):
     }
 
     with (
-        patch("nagare_clip.text_filter.cli.get_effective_config", return_value=config),
-        patch("nagare_clip.text_filter.cli.filter_transcript", side_effect=mock_filter),
-        patch("nagare_clip.text_filter.cli.generate_summary", return_value=summary_result),
-        patch("nagare_clip.text_filter.cli.setup_logging"),
-        patch("sys.argv", ["cli", "--txt", str(txt), "--output-txt", str(output)]),
+        patch("nagare_clip.text_filter.run.filter_transcript", side_effect=mock_filter),
+        patch("nagare_clip.text_filter.run.generate_summary", return_value=summary_result),
     ):
-        text_filter_cli.main()
+        run_text_filter(txt, output, config)
 
     return captured
 
@@ -96,3 +94,12 @@ class TestConstantKeywords:
         summary_result = SummaryResult(summary="summary text", keywords=[])
         cfg = _run(tmp_path, s2, summary_result=summary_result)
         assert "Const" in cfg.get("prompt", "")
+
+
+def test_disabled_copies_input(tmp_path):
+    """When use_llm is false, input is copied to output unchanged."""
+    src = tmp_path / "clip.txt"
+    src.write_text("l1\nl2\n", encoding="utf-8")
+    out = tmp_path / "clip_edits.txt"
+    run_text_filter(src, out, get_effective_config(None, {}))
+    assert out.read_text(encoding="utf-8") == "l1\nl2\n"

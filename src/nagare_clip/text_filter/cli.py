@@ -8,19 +8,12 @@ preserved for human review.
 from __future__ import annotations
 
 import argparse
-import logging
 from pathlib import Path
 
 from nagare_clip.config import get_effective_config
-from nagare_clip.llm_report import recorder_from_config
+from nagare_clip.llm_report import NULL_RECORDER, recorder_from_config
 from nagare_clip.logging_setup import setup_logging
-from nagare_clip.text_filter.llm_filter import filter_transcript
-from nagare_clip.text_filter.rule_filter import remove_midstream_closing
-from nagare_clip.text_filter.summary_llm import (
-    SummaryResult,
-    build_enhanced_prompt,
-    generate_summary,
-)
+from nagare_clip.text_filter.run import run_text_filter
 
 
 def parse_args() -> argparse.Namespace:
@@ -86,64 +79,20 @@ def main() -> None:
     txt_path = Path(args.txt_path)
     output_txt = Path(args.output_txt)
 
-    # Read input
-    lines = txt_path.read_text(encoding="utf-8").splitlines()
-
-    # Rule filter — mark hallucinated closing phrases with {{->}} markers
-    original_lines = lines
-    lines = remove_midstream_closing(lines)
-    rule_changes = sum(1 for o, r in zip(original_lines, lines) if o != r)
-    if rule_changes:
-        logging.info("text_filter: rule filter marked %d line(s)", rule_changes)
-
-    if not s2["use_llm"]:
-        logging.info("text_filter: AI filter disabled, writing edits file")
-        result_lines = lines
-    else:
-        logging.info("text_filter: filtering %d lines with AI", len(lines))
-
+    # Create recorder only when use_llm is true
+    if s2["use_llm"]:
         recorder = recorder_from_config("text_filter", cfg, override_dir=args.llm_report_dir)
         if not args.llm_report_no_clear:
             recorder.clear()
+    else:
+        recorder = NULL_RECORDER
 
-        # Summary LLM — generate context for the filter LLM
-        filter_cfg = dict(s2)
-        summary_cfg = s2.get("summary_llm", {})
-        constant_keywords: list = summary_cfg.get("keywords", [])
-        if summary_cfg.get("enabled", False):
-            summary_result = generate_summary("\n".join(lines), summary_cfg, recorder=recorder)
-            if summary_result is not None:
-                summary_result.keywords = constant_keywords + summary_result.keywords
-                filter_cfg["prompt"] = build_enhanced_prompt(s2.get("prompt", ""), summary_result)
-                logging.info(
-                    "text_filter: summary generated, %d keywords",
-                    len(summary_result.keywords),
-                )
-            elif constant_keywords:
-                filter_cfg["prompt"] = build_enhanced_prompt(
-                    s2.get("prompt", ""),
-                    SummaryResult(summary="", keywords=constant_keywords),
-                )
-        elif constant_keywords:
-            filter_cfg["prompt"] = build_enhanced_prompt(
-                s2.get("prompt", ""),
-                SummaryResult(summary="", keywords=constant_keywords),
-            )
+    # Run text_filter
+    run_text_filter(txt_path, output_txt, cfg, recorder=recorder)
 
-        # AI filter — returns lines with {{old->new}} markers preserved
-        result_lines = filter_transcript(lines, filter_cfg, recorder=recorder)
-
-        # Count changes
-        changes = sum(1 for o, c in zip(lines, result_lines) if o != c)
-        logging.info("text_filter: %d/%d lines modified by AI", changes, len(lines))
-
+    # Rebuild index if recorder was used
+    if s2["use_llm"]:
         recorder.rebuild_index()
-
-    # Write output
-    output_txt.parent.mkdir(parents=True, exist_ok=True)
-    output_txt.write_text("\n".join(result_lines) + "\n", encoding="utf-8")
-
-    logging.info("text_filter: wrote %s", output_txt)
 
 
 if __name__ == "__main__":
