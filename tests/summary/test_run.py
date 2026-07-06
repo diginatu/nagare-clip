@@ -1,31 +1,38 @@
-"""summary CLI: disabled no-op and enabled project-wide summary paths."""
+"""summary run: disabled no-op and enabled project-wide summary paths."""
 
 from __future__ import annotations
 
 import json
-import sys
 
 import yaml
 
-import nagare_clip.summary.cli as summary_cli
+import nagare_clip.summary.run as summary_run
 from nagare_clip.summary.summarize import PartSummary, ProjectSummary
 
 
-def _run(monkeypatch, tmp_path, cfg_dict, edits_by_stem):
+def _run(monkeypatch, tmp_path, cfg_dict, edits_by_stem, json_by_stem=None):
     cfg = tmp_path / "config.yml"
     cfg.write_text(yaml.safe_dump(cfg_dict), encoding="utf-8")
     edits_args = []
     for stem, text in edits_by_stem.items():
         p = tmp_path / f"{stem}_edits.txt"
         p.write_text(text, encoding="utf-8")
-        edits_args += ["--edits-txt", str(p)]
+        edits_args.append(p)
+
+    json_args = []
+    if json_by_stem:
+        for stem, js_data in json_by_stem.items():
+            p = tmp_path / f"{stem}.json"
+            p.write_text(json.dumps(js_data), encoding="utf-8")
+            json_args.append(p)
+
     out = tmp_path / "summary.json"
-    monkeypatch.setattr(
-        sys,
-        "argv",
-        ["summary", *edits_args, "--output", str(out), "--config", str(cfg)],
+    summary_run.run_summary(
+        edits_args,
+        out,
+        yaml.safe_load(cfg.read_text(encoding="utf-8")),
+        json_paths=json_args if json_args else None,
     )
-    summary_cli.main()
     return json.loads(out.read_text(encoding="utf-8"))
 
 
@@ -44,7 +51,7 @@ def test_enabled_writes_summary_with_stems_from_basename(monkeypatch, tmp_path):
             parts=[PartSummary("a", (1, 1), "ay"), PartSummary("b", (1, 1), "be")],
         )
 
-    monkeypatch.setattr(summary_cli, "build_summary", fake_build)
+    monkeypatch.setattr(summary_run, "build_summary", fake_build)
     data = _run(
         monkeypatch,
         tmp_path,
@@ -68,32 +75,13 @@ def test_json_passes_seg_times_by_stem(monkeypatch, tmp_path):
         captured["seg_times_by_stem"] = kwargs.get("seg_times_by_stem")
         return ProjectSummary(summary="all", parts=[PartSummary("v", (1, 1), "x")])
 
-    monkeypatch.setattr(summary_cli, "build_summary", fake_build)
+    monkeypatch.setattr(summary_run, "build_summary", fake_build)
 
-    cfg = tmp_path / "config.yml"
-    cfg.write_text(yaml.safe_dump({"summary": {"enabled": True}}), encoding="utf-8")
-    edits = tmp_path / "v_edits.txt"
-    edits.write_text("あ\nい\n", encoding="utf-8")
-    js = tmp_path / "v.json"
-    js.write_text(
-        json.dumps({"segments": [{"start": 1.0, "end": 3.0}, {"start": 4.0, "end": 6.5}]}),
-        encoding="utf-8",
+    _run(
+        monkeypatch,
+        tmp_path,
+        {"summary": {"enabled": True}},
+        {"v": "あ\nい\n"},
+        {"v": {"segments": [{"start": 1.0, "end": 3.0}, {"start": 4.0, "end": 6.5}]}},
     )
-    out = tmp_path / "summary.json"
-    monkeypatch.setattr(
-        sys,
-        "argv",
-        [
-            "summary",
-            "--edits-txt",
-            str(edits),
-            "--json",
-            str(js),
-            "--output",
-            str(out),
-            "--config",
-            str(cfg),
-        ],
-    )
-    summary_cli.main()
     assert captured["seg_times_by_stem"] == {"v": [(1.0, 3.0), (4.0, 6.5)]}

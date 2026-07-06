@@ -12,26 +12,12 @@ downstream stages are no-ops and the pipeline behaves exactly as before.
 from __future__ import annotations
 
 import argparse
-import json
-import logging
 from pathlib import Path
 
 from nagare_clip.config import get_effective_config
-from nagare_clip.director.director_llm import clean_for_display
 from nagare_clip.llm_report import recorder_from_config
 from nagare_clip.logging_setup import setup_logging
-from nagare_clip.summary.summarize import (
-    ProjectSummary,
-    build_summary,
-    summary_to_dict,
-)
-from nagare_clip.timing import segment_times
-
-
-def _stem_from_edits(path: Path) -> str:
-    name = path.name
-    suffix = "_edits.txt"
-    return name[: -len(suffix)] if name.endswith(suffix) else path.stem
+from nagare_clip.summary.run import run_summary
 
 
 def parse_args() -> argparse.Namespace:
@@ -90,49 +76,16 @@ def main() -> None:
     if not args.llm_report_no_clear:
         recorder.clear()
 
-    summary_cfg = cfg["summary"]
-    output = Path(args.output)
-
-    if not summary_cfg.get("enabled", False):
-        logging.info("summary: disabled, writing empty summary")
-        project = ProjectSummary(summary="", parts=[])
-    else:
-        parts_input = []
-        for raw in args.edits_txt:
-            path = Path(raw)
-            stem = _stem_from_edits(path)
-            clean_lines = clean_for_display(path.read_text(encoding="utf-8").splitlines())
-            parts_input.append((stem, clean_lines))
-        seg_times_by_stem = {}
-        for raw in args.json or []:
-            jpath = Path(raw)
-            if jpath.is_file():
-                try:
-                    seg_times_by_stem[jpath.stem] = segment_times(
-                        json.loads(jpath.read_text(encoding="utf-8"))
-                    )
-                except (ValueError, OSError):
-                    logging.warning("summary: could not read --json %s", jpath)
-        logging.info("summary: analysing %d video(s) with LLM", len(parts_input))
-        project = build_summary(
-            parts_input,
-            summary_cfg,
+    try:
+        run_summary(
+            [Path(p) for p in args.edits_txt],
+            Path(args.output),
+            cfg,
+            json_paths=[Path(p) for p in args.json] if args.json else None,
             recorder=recorder,
-            seg_times_by_stem=seg_times_by_stem or None,
         )
-        logging.info(
-            "summary: %d part(s) across %d video(s)",
-            len(project.parts),
-            len(parts_input),
-        )
-
-    output.parent.mkdir(parents=True, exist_ok=True)
-    output.write_text(
-        json.dumps(summary_to_dict(project), ensure_ascii=False, indent=2) + "\n",
-        encoding="utf-8",
-    )
-    logging.info("summary: wrote %s", output)
-    recorder.rebuild_index()
+    finally:
+        recorder.rebuild_index()
 
 
 if __name__ == "__main__":
