@@ -17,9 +17,6 @@ dependencies = [
     "pydantic-settings>=2.14.2",
 ]
 
-[project.scripts]
-nagare-clip-intervals = "nagare_clip.intervals.cli:main"
-
 [dependency-groups]
 dev = [
     "pytest",
