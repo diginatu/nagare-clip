@@ -4,7 +4,7 @@
 
 **Status: complete** (2026-07-07; branch `worktree-python-orchestration`; design in `docs/superpowers/` sdd task specs).
 
-`scripts/run_pipeline.sh` (633 lines of bash) was ported to a Python package,
+`scripts/run_pipeline.sh` (634 lines of bash) was ported to a Python package,
 `src/nagare_clip/pipeline/` — `errors.py` (`PipelineError`), `sources.py`
 (source discovery/resolution/staging), `external.py` (docker/blender command
 builders + `run_command()`, the only remaining subprocesses), `runner.py`
