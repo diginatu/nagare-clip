@@ -3,11 +3,12 @@ a large enough deletion then falls out of the timeline because the gap between
 the surviving neighbouring words exceeds the word-gap silence threshold."""
 
 import json
-import sys
 
 import yaml
 
-import nagare_clip.intervals.cli as stage_cli
+import nagare_clip.intervals.run as stage_run
+from nagare_clip.config import get_effective_config
+from nagare_clip.intervals.run import run_intervals
 
 
 def _whisperx_three_segments():
@@ -71,26 +72,12 @@ def _run(monkeypatch, tmp_path, edits_text):
     json_path.write_text(json.dumps(_whisperx_three_segments()), encoding="utf-8")
     edits = tmp_path / "clip_edits.txt"
     edits.write_text(edits_text, encoding="utf-8")
-    cfg = _config(tmp_path)
+    cfg_path = _config(tmp_path)
     out = tmp_path / "intervals.json"
-    monkeypatch.setattr(stage_cli.spacy, "load", lambda *a, **k: object())
-    monkeypatch.setattr(stage_cli, "build_bunsetu_times", lambda *a, **k: [])
-    monkeypatch.setattr(
-        sys,
-        "argv",
-        [
-            "nagare_clip.intervals.cli",
-            "--edits-txt",
-            str(edits),
-            "--json",
-            str(json_path),
-            "--config",
-            str(cfg),
-            "--output",
-            str(out),
-        ],
-    )
-    stage_cli.main()
+    monkeypatch.setattr(stage_run.spacy, "load", lambda *a, **k: object())
+    monkeypatch.setattr(stage_run, "build_bunsetu_times", lambda *a, **k: [])
+    cfg = get_effective_config(cfg_path, {})
+    run_intervals(edits, json_path, out, cfg)
     return json.loads(out.read_text(encoding="utf-8"))
 
 

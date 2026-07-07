@@ -2,11 +2,12 @@
 underlying time range, carving it out of both word-gap silence and _cuts.txt."""
 
 import json
-import sys
 
 import yaml
 
-import nagare_clip.intervals.cli as stage_cli
+import nagare_clip.intervals.run as stage_run
+from nagare_clip.config import get_effective_config
+from nagare_clip.intervals.run import run_intervals
 
 
 def _whisperx_with_silence():
@@ -60,25 +61,12 @@ def _setup(tmp_path, edits_text):
     return json_path, edits, _config(tmp_path)
 
 
-def _run(monkeypatch, json_path, edits, cfg, out, cuts=None):
-    monkeypatch.setattr(stage_cli.spacy, "load", lambda *a, **k: object())
+def _run(monkeypatch, json_path, edits, cfg_path, out, cuts=None):
+    monkeypatch.setattr(stage_run.spacy, "load", lambda *a, **k: object())
     # Bypass GiNZA bunsetsu parsing — captions aren't asserted in these tests.
-    monkeypatch.setattr(stage_cli, "build_bunsetu_times", lambda *a, **k: [])
-    argv = [
-        "nagare_clip.intervals.cli",
-        "--edits-txt",
-        str(edits),
-        "--json",
-        str(json_path),
-        "--config",
-        str(cfg),
-        "--output",
-        str(out),
-    ]
-    if cuts is not None:
-        argv += ["--cuts-txt", str(cuts)]
-    monkeypatch.setattr(sys, "argv", argv)
-    stage_cli.main()
+    monkeypatch.setattr(stage_run, "build_bunsetu_times", lambda *a, **k: [])
+    cfg = get_effective_config(cfg_path, {})
+    run_intervals(edits, json_path, out, cfg, cuts_txt=cuts)
     return json.loads(out.read_text(encoding="utf-8"))
 
 

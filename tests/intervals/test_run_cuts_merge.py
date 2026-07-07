@@ -1,11 +1,12 @@
 """Integration: --cuts-txt ranges are unioned into the interval excludes."""
 
 import json
-import sys
 
 import yaml
 
-import nagare_clip.intervals.cli as stage_cli
+import nagare_clip.intervals.run as stage_run
+from nagare_clip.config import get_effective_config
+from nagare_clip.intervals.run import run_intervals
 
 
 def _whisperx():
@@ -47,25 +48,12 @@ def _setup(tmp_path):
     return json_path, edits, cfg
 
 
-def _run(monkeypatch, json_path, edits, cfg, out, cuts=None):
+def _run(monkeypatch, json_path, edits, cfg_path, out, cuts=None):
     # Avoid loading the real ja_ginza model; segments have empty text so
     # build_bunsetu_times never invokes nlp.
-    monkeypatch.setattr(stage_cli.spacy, "load", lambda *a, **k: object())
-    argv = [
-        "nagare_clip.intervals.cli",
-        "--edits-txt",
-        str(edits),
-        "--json",
-        str(json_path),
-        "--config",
-        str(cfg),
-        "--output",
-        str(out),
-    ]
-    if cuts is not None:
-        argv += ["--cuts-txt", str(cuts)]
-    monkeypatch.setattr(sys, "argv", argv)
-    stage_cli.main()
+    monkeypatch.setattr(stage_run.spacy, "load", lambda *a, **k: object())
+    cfg = get_effective_config(cfg_path, {})
+    run_intervals(edits, json_path, out, cfg, cuts_txt=cuts)
     return json.loads(out.read_text(encoding="utf-8"))
 
 
