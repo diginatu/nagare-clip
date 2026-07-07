@@ -1,4 +1,4 @@
-"""Run the pipeline orchestrator via ``python -m nagare_clip``."""
+"""Run the pipeline orchestrator via ``python -m nagare_clip.pipeline``."""
 
 import sys
 
