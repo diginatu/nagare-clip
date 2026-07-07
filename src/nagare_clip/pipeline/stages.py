@@ -1,0 +1,306 @@
+"""The declarative stage registry: one Stage entry per pipeline stage.
+
+Adapters translate the PipelineContext into each stage's typed run()
+function (or external command), print the same progress lines the bash
+orchestrator echoed, and own the per-stage LLM-report recorder lifecycle
+(clear once before the stem loop, rebuild the index after).
+"""
+
+from __future__ import annotations
+
+from pathlib import Path
+
+from nagare_clip.audio_silence.run import run_audio_silence
+from nagare_clip.director.run import run_director
+from nagare_clip.guided_edit.run import run_guided_edit
+from nagare_clip.intervals.run import run_intervals
+from nagare_clip.llm_report import recorder_from_config
+from nagare_clip.pipeline.external import (
+    build_blender_cmd,
+    build_silencedetect_cmd,
+    build_transcription_cmd,
+    run_command,
+)
+from nagare_clip.pipeline.runner import PipelineContext, Stage
+from nagare_clip.plan.run import run_plan
+from nagare_clip.sentence_split.run import run_sentence_split
+from nagare_clip.summary.run import run_summary
+from nagare_clip.text_filter.run import run_text_filter
+
+STAGE_NAMES = [
+    "transcription",
+    "audio_silence",
+    "sentence_split",
+    "text_filter",
+    "summary",
+    "plan",
+    "director",
+    "guided_edit",
+    "intervals",
+    "blender",
+]
+
+
+def _docker_env(ctx: PipelineContext) -> dict[str, str]:
+    return {
+        "INPUT_VIDEOS_DIR": str(ctx.input_videos_dir),
+        "OUTPUT_DIR": str(ctx.output_dir),
+    }
+
+
+def _recorder(ctx: PipelineContext, stage: str):
+    return recorder_from_config(stage, ctx.cfg, override_dir=str(ctx.llm_report_dir))
+
+
+# --- transcription -----------------------------------------------------------
+
+
+def _transcription_run(ctx: PipelineContext) -> None:
+    rels = [s.relative for s in ctx.sources]
+    print(f"[transcription] WhisperX: {' '.join(rels)}")
+    run_command(
+        build_transcription_cmd(ctx.project_root, rels, ctx.cfg),
+        env_extra=_docker_env(ctx),
+    )
+
+
+def _transcription_required(ctx: PipelineContext) -> list[Path]:
+    # {stem}.json/.txt are consumed only by sentence_split; later start points
+    # read output/sentence_split/ instead (validated by that stage's entry).
+    if ctx.from_index > STAGE_NAMES.index("sentence_split"):
+        return []
+    d = ctx.stage_dir("transcription")
+    return [d / f"{s}{ext}" for s in ctx.stems for ext in (".json", ".txt")]
+
+
+# --- audio_silence -----------------------------------------------------------
+
+
+def _audio_silence_run(ctx: PipelineContext) -> None:
+    a = ctx.cfg["audio_silence"]
+    d = ctx.stage_dir("audio_silence")
+    for src in ctx.sources:
+        print(f"[audio_silence] Detection: {src.stem}")
+        raw_path = None
+        if a["enabled"]:
+            raw_path = d / f"{src.stem}_silencedetect.log"
+            run_command(
+                build_silencedetect_cmd(
+                    ctx.project_root, src.relative, a["noise"], a["min_silence"]
+                ),
+                env_extra=_docker_env(ctx),
+                stderr_to=raw_path,
+            )
+        run_audio_silence(d / f"{src.stem}_cuts.txt", ctx.cfg, raw_path=raw_path)
+
+
+def _audio_silence_required(ctx: PipelineContext) -> list[Path]:
+    d = ctx.stage_dir("audio_silence")
+    return [d / f"{s}_cuts.txt" for s in ctx.stems]
+
+
+# --- sentence_split ----------------------------------------------------------
+
+
+def _sentence_split_run(ctx: PipelineContext) -> None:
+    rec = _recorder(ctx, "sentence_split")
+    rec.clear()
+    try:
+        tdir = ctx.stage_dir("transcription")
+        odir = ctx.stage_dir("sentence_split")
+        for src in ctx.sources:
+            print(f"[sentence_split] Sentence re-segmentation: {src.stem}")
+            run_sentence_split(
+                tdir / f"{src.stem}.json",
+                tdir / f"{src.stem}.txt",
+                odir / f"{src.stem}.json",
+                odir / f"{src.stem}.txt",
+                ctx.cfg,
+                stem=src.stem,
+                recorder=rec,
+            )
+    finally:
+        rec.rebuild_index()
+
+
+def _sentence_split_required(ctx: PipelineContext) -> list[Path]:
+    d = ctx.stage_dir("sentence_split")
+    return [d / f"{s}{ext}" for s in ctx.stems for ext in (".json", ".txt")]
+
+
+# --- text_filter -------------------------------------------------------------
+
+
+def _text_filter_run(ctx: PipelineContext) -> None:
+    rec = _recorder(ctx, "text_filter")
+    rec.clear()
+    try:
+        sdir = ctx.stage_dir("sentence_split")
+        odir = ctx.stage_dir("text_filter")
+        for src in ctx.sources:
+            print(f"[text_filter] Text editing checkpoint: {src.stem}")
+            run_text_filter(
+                sdir / f"{src.stem}.txt",
+                odir / f"{src.stem}_edits.txt",
+                ctx.cfg,
+                recorder=rec,
+            )
+    finally:
+        rec.rebuild_index()
+
+
+def _text_filter_required(ctx: PipelineContext) -> list[Path]:
+    d = ctx.stage_dir("text_filter")
+    return [d / f"{s}_edits.txt" for s in ctx.stems]
+
+
+# --- summary -----------------------------------------------------------------
+
+
+def _summary_run(ctx: PipelineContext) -> None:
+    print("[summary] Project-wide summaries")
+    rec = _recorder(ctx, "summary")
+    rec.clear()
+    try:
+        run_summary(
+            [ctx.stage_dir("text_filter") / f"{s}_edits.txt" for s in ctx.stems],
+            ctx.stage_dir("summary") / "summary.json",
+            ctx.cfg,
+            json_paths=[ctx.stage_dir("sentence_split") / f"{s}.json" for s in ctx.stems],
+            recorder=rec,
+        )
+    finally:
+        rec.rebuild_index()
+
+
+def _summary_required(ctx: PipelineContext) -> list[Path]:
+    return [ctx.stage_dir("summary") / "summary.json"]
+
+
+# --- plan --------------------------------------------------------------------
+
+
+def _plan_run(ctx: PipelineContext) -> None:
+    print("[plan] Cross-video rough directions")
+    rec = _recorder(ctx, "plan")
+    rec.clear()
+    try:
+        run_plan(
+            ctx.stage_dir("summary") / "summary.json",
+            ctx.stage_dir("plan") / "plan.json",
+            ctx.cfg,
+            recorder=rec,
+        )
+    finally:
+        rec.rebuild_index()
+
+
+def _plan_required(ctx: PipelineContext) -> list[Path]:
+    return [ctx.stage_dir("plan") / "plan.json"]
+
+
+# --- director ----------------------------------------------------------------
+
+
+def _director_run(ctx: PipelineContext) -> None:
+    rec = _recorder(ctx, "director")
+    rec.clear()
+    try:
+        for src in ctx.sources:
+            print(f"[director] Edit operations: {src.stem}")
+            run_director(
+                ctx.stage_dir("text_filter") / f"{src.stem}_edits.txt",
+                ctx.stage_dir("director") / f"{src.stem}_director.json",
+                ctx.cfg,
+                summary=ctx.stage_dir("summary") / "summary.json",
+                plan=ctx.stage_dir("plan") / "plan.json",
+                stem=src.stem,
+                json_path=ctx.stage_dir("sentence_split") / f"{src.stem}.json",
+                recorder=rec,
+            )
+    finally:
+        rec.rebuild_index()
+
+
+def _director_required(ctx: PipelineContext) -> list[Path]:
+    d = ctx.stage_dir("director")
+    return [d / f"{s}_director.json" for s in ctx.stems]
+
+
+# --- guided_edit -------------------------------------------------------------
+
+
+def _guided_edit_run(ctx: PipelineContext) -> None:
+    rec = _recorder(ctx, "guided_edit")
+    rec.clear()
+    try:
+        for src in ctx.sources:
+            print(f"[guided_edit] Applying director ops: {src.stem}")
+            run_guided_edit(
+                ctx.stage_dir("text_filter") / f"{src.stem}_edits.txt",
+                ctx.stage_dir("director") / f"{src.stem}_director.json",
+                ctx.stage_dir("guided_edit") / f"{src.stem}_edits.txt",
+                ctx.cfg,
+                json_path=ctx.stage_dir("sentence_split") / f"{src.stem}.json",
+                recorder=rec,
+            )
+    finally:
+        rec.rebuild_index()
+
+
+def _guided_edit_required(ctx: PipelineContext) -> list[Path]:
+    d = ctx.stage_dir("guided_edit")
+    return [d / f"{s}_edits.txt" for s in ctx.stems]
+
+
+# --- intervals ---------------------------------------------------------------
+
+
+def _intervals_run(ctx: PipelineContext) -> None:
+    for src in ctx.sources:
+        print(f"[intervals] Patch application + keep intervals: {src.stem}")
+        run_intervals(
+            ctx.stage_dir("guided_edit") / f"{src.stem}_edits.txt",
+            ctx.stage_dir("sentence_split") / f"{src.stem}.json",
+            ctx.stage_dir("intervals") / f"{src.stem}_intervals.json",
+            ctx.cfg,
+            cuts_txt=ctx.stage_dir("audio_silence") / f"{src.stem}_cuts.txt",
+        )
+
+
+def _intervals_required(ctx: PipelineContext) -> list[Path]:
+    d = ctx.stage_dir("intervals")
+    return [d / f"{s}_intervals.json" for s in ctx.stems]
+
+
+# --- blender -----------------------------------------------------------------
+
+
+def _blender_run(ctx: PipelineContext) -> None:
+    print("[blender] VSE project generation")
+    output_blend = ctx.stage_dir("blender") / f"{ctx.stems[0]}_edited.blend"
+    intervals_paths = [ctx.stage_dir("intervals") / f"{s}_intervals.json" for s in ctx.stems]
+    run_command(
+        build_blender_cmd(
+            ctx.project_root,
+            [s.abs_path for s in ctx.sources],
+            intervals_paths,
+            output_blend,
+            ctx.config_path,
+            ctx.log_file,
+        )
+    )
+
+
+STAGES = [
+    Stage("transcription", _transcription_run, _transcription_required),
+    Stage("audio_silence", _audio_silence_run, _audio_silence_required),
+    Stage("sentence_split", _sentence_split_run, _sentence_split_required),
+    Stage("text_filter", _text_filter_run, _text_filter_required),
+    Stage("summary", _summary_run, _summary_required),
+    Stage("plan", _plan_run, _plan_required),
+    Stage("director", _director_run, _director_required),
+    Stage("guided_edit", _guided_edit_run, _guided_edit_required),
+    Stage("intervals", _intervals_run, _intervals_required),
+    Stage("blender", _blender_run),
+]
