@@ -99,7 +99,7 @@ def main(argv: list[str] | None = None) -> int:
         input_dir.mkdir(parents=True, exist_ok=True)
         for name in STAGE_NAMES:
             (output_dir / name).mkdir(parents=True, exist_ok=True)
-        Path("cache").mkdir(exist_ok=True)
+        (PROJECT_ROOT / "cache").mkdir(exist_ok=True)
 
         setup_logging(cfg["general"]["log_level"], str(output_dir / "pipeline.log"))
 

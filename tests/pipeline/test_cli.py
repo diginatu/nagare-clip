@@ -61,6 +61,7 @@ def test_invalid_stage_name_errors(tmp_path, monkeypatch, capsys):
 
 def test_pipeline_wires_context_and_prints_done(tmp_path, monkeypatch, capsys):
     monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(cli, "PROJECT_ROOT", tmp_path)
     (tmp_path / "src_video").mkdir()
     (tmp_path / "src_video" / "a.mp4").write_bytes(b"x")
     seen = {}
