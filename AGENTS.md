@@ -30,7 +30,7 @@ Final deliverable is a `.blend` project for human editing.
 
 ## Pipeline Overview
 
-`scripts/run_pipeline.sh` orchestrates all stages end-to-end. Use `--from-stage <name>` to skip earlier stages and reuse their outputs.
+`scripts/run_pipeline.sh` is a thin shim that execs `uv run python -m nagare_clip.pipeline "$@"` — the orchestration itself lives in the Python package `src/nagare_clip/pipeline/` (see [`docs/stages/pipeline.md`](docs/stages/pipeline.md)). Use `--from-stage <name>` to skip earlier stages and reuse their outputs.
 
 ### transcription — WhisperX Transcription
 
@@ -41,7 +41,7 @@ Speech-to-text with word-level alignment. Runs in a single Docker container for 
 
 ### audio_silence — Audio-Silence (Jump-Cut) Detection
 
-Runs ffmpeg `silencedetect` on the waveform inside the whisperx Docker image (mirrors the transcription stage — no host/Python ffmpeg dependency). `run_pipeline.sh` captures stderr; `nagare_clip.audio_silence.cli --raw` parses it into an editable `{stem}_cuts.txt`. Disabled (or no `--raw`) → header-only file, so the downstream union is a no-op.
+Runs ffmpeg `silencedetect` on the waveform inside the whisperx Docker image (mirrors the transcription stage — no host/Python ffmpeg dependency). The pipeline orchestrator captures stderr to a log file and passes it to `audio_silence.run.run_audio_silence()` as `raw_path`, which parses it into an editable `{stem}_cuts.txt`. Disabled (or no captured output) → header-only file, so the downstream union is a no-op.
 
 - **Inputs:** source video file
 - **Outputs:** `{stem}_cuts.txt` (one `START - END` silent span per line; delete a line to keep that span)
@@ -137,36 +137,44 @@ src/nagare_clip/          # Main Python package (src layout)
   llm_report.py               # Structured per-call LLM report: Recorder + rebuild_index (index.md + per-call <stage>/<unit>.md)
   llm_client.py               # Unified LiteLLM transport: call_llm(messages, cfg) -> str (OpenAI/Gemini/Anthropic/Ollama)
   timing.py                   # Pure timing helpers: segment_times(), format_dur_gap() (plan/director duration context)
-  __main__.py                 # python -m nagare_clip support (runs the intervals stage)
+  __main__.py                 # python -m nagare_clip support (re-aliased to the pipeline CLI)
+  pipeline/                   # pipeline orchestrator (replaces bash run_pipeline.sh)
+    errors.py                 # PipelineError — user-facing orchestration failure
+    sources.py                # SourceMedia; discover/resolve/stage source videos for Docker
+    external.py               # docker/blender command builders + run_command() — the only subprocesses
+    runner.py                 # Stage dataclass, PipelineContext, resolve_window(), run_stages() (windowing/skip-validation)
+    stages.py                 # STAGE_NAMES + one adapter per stage + STAGES registry (owns per-stage LLM-report recorder lifecycle)
+    cli.py                    # pipeline CLI: same flags as the old bash script; CLI > YAML > defaults via get_effective_config
+    __main__.py                # python -m nagare_clip.pipeline entry point
   audio_silence/              # audio_silence stage (audio-silence detection)
     detect.py                 # parse_silencedetect_output(), build_ffmpeg_args() (pure)
     cuts_file.py              # write_cuts() / read_cuts() — editable cut-list format
-    cli.py                    # audio_silence stage CLI (consumes --raw ffmpeg stderr)
+    run.py                    # run_audio_silence() — consumes captured ffmpeg stderr
   sentence_split/             # sentence_split stage (LLM re-segmentation)
     segment.py                # pure: windowing, char/word map, rebuild_window_segments, verbatim check
     nlp.py                    # GiNZA bunsetsu extraction (lazy import)
     llm.py                    # prompt + bunsetsu-range parse/validate + retry/degrade
-    cli.py                    # stage CLI (copy-through when disabled)
+    run.py                    # run_sentence_split() (copy-through when disabled)
   text_filter/                # text_filter stage modules (text editing checkpoint)
-    cli.py                    # text-editing checkpoint CLI entry point
+    run.py                    # run_text_filter() typed entry point
     llm_filter.py             # LLM API calls, {{old->new}} patch parsing, apply_patches_to_lines()
     summary_llm.py            # Summary LLM: generates transcript summary + keywords for filter context
   summary/                    # summary stage (project-wide): per-part + all-videos summaries
     summarize.py              # PartSummary/ProjectSummary, segment_video(), build_summary()
-    cli.py                    # summary CLI (repeated --edits-txt -> summary.json)
+    run.py                    # run_summary() (repeated edits-txt/json paths -> summary.json)
   plan/                       # plan stage (project-wide): cross-video rough directions
     plan_llm.py               # PartDirection, generate_plan(), plan_to/from_dict()
-    cli.py                    # plan CLI (summary.json -> plan.json)
+    run.py                    # run_plan() (summary.json -> plan.json)
   director/                   # director stage (Pass A): high-level edit ops
     director_llm.py           # DirectorOp, parse/validate JSON ops, generate via LLM
     context.py                # build_director_context(): summary+plan -> prompt overview block
-    cli.py                    # director CLI (writes _director.json; --summary/--plan/--stem)
+    run.py                    # run_director() (writes _director.json; summary/plan/stem/json_path)
   guided_edit/                # guided_edit stage (Pass B2): apply director ops
     apply.py                  # per-op LLM call + splice + revert-on-failure
     reconcile.py              # verify_op(): verbatim-safety + op-reflection checks
-    cli.py                    # guided_edit CLI (writes augmented _edits.txt)
+    run.py                    # run_guided_edit() (writes augmented _edits.txt)
   intervals/                  # intervals stage modules (patch application + intervals)
-    cli.py                    # intervals stage CLI entry point (patch + intervals; --cuts-txt)
+    run.py                    # run_intervals() typed entry point (patch + intervals; cuts_txt)
     check_edits.py            # Standalone _edits.txt integrity checker (reports ALL problems at once)
     sync_json.py              # Sync corrected text back into WhisperX JSON
     bunsetu.py                # Bunsetsu-level timing (GiNZA)
@@ -175,28 +183,26 @@ src/nagare_clip/          # Main Python package (src layout)
     captions.py                # Caption chunking
     io.py                     # Source file inference
   blender/                    # blender stage modules (Blender VSE)
-    blender_cli.py            # Blender-stage CLI (runs inside Blender)
+    blender_cli.py            # Blender-stage CLI (separate process, runs inside Blender)
     scene.py                  # Blender scene setup
     timeline.py               # Strip and caption placement
 scripts/
-  run_pipeline.sh             # Main orchestrator (name-based stages; --from-stage by name)
+  run_pipeline.sh             # Shim: exec uv run python -m nagare_clip.pipeline "$@"
 docs/
   stages/                     # Deep per-stage runtime notes (loaded on demand)
 Makefile                      # Canonical dev commands (make help / check / validate / test)
 .github/workflows/ci.yml      # CI: ruff lint + format check, shell syntax, pytest
 tests/
   test_config.py              # Config module unit tests + example-config sync lint
-  test_cli_cuts_merge.py      # --cuts-txt union into interval excludes
-  test_cli_keep_markers.py    # <keep>...</keep> force-keep markers (CLI integration)
-  test_cli_cut_marker.py      # <cut>...</cut> deletion → silence-gap cut (CLI integration)
-  audio_silence/              # audio_silence (detect / cuts_file / cli) unit tests
-  sentence_split/             # sentence_split unit + CLI tests
+  pipeline/                   # pipeline orchestrator tests: cli/external/runner/sources/stages
+  audio_silence/              # audio_silence (detect / cuts_file / run) unit tests
+  sentence_split/             # sentence_split unit + run() tests
   text_filter/                # text-editing checkpoint unit tests
-  summary/                    # summary segment/build + CLI tests
-  plan/                       # plan generate/parse + CLI tests
-  director/                   # director op parsing/generation + context + CLI tests
-  guided_edit/                # guided_edit apply/reconcile + CLI tests
-  intervals/                  # interval-stage unit tests (incl. <cut> desugar)
+  summary/                    # summary segment/build + run() tests
+  plan/                       # plan generate/parse + run() tests
+  director/                   # director op parsing/generation + context + run() tests
+  guided_edit/                # guided_edit apply/reconcile + run() tests
+  intervals/                  # interval-stage unit tests (incl. <keep>/<cut> markers, --cuts-txt union)
   blender/                    # Blender-stage tests
 ```
 
@@ -213,23 +219,17 @@ All tunable parameters are defined as typed **pydantic-settings models** in
   (so a typo no longer vanishes silently). Exception: `blender.caption_style`,
   `overlay_style`, and `speed_mark` use `extra="allow"` — they are open-ended
   Blender TextStrip pass-throughs (any RNA attribute incl. `font`).
-- It still returns a plain `dict` (the "dict boundary"), so all stage CLIs and
-  `call_llm`/`llm_retry` are unchanged.
+- It still returns a plain `dict` (the "dict boundary"), so all stage `run()`
+  functions and `call_llm`/`llm_retry` are unchanged.
 - `config.example.yml` is **generated** from the models — run
   `make config-example`. A test (`tests/test_config.py::test_example_file_matches_generator`)
   fails if the committed file drifts from the generator output.
 
 **Priority order (highest first):** CLI flags > YAML config file > model defaults.
 
-Known residual: `scripts/run_pipeline.sh` still reads a few `pipeline.*`,
-`transcription.*`, and `audio_silence.*` values from raw YAML with its own inline
-defaults (not validated). Keep those defaults consistent with the models.
-
 All LLM stages (`sentence_split`, `text_filter` + its `summary_llm`, `summary`, `plan`, `director`, `guided_edit`) route through `nagare_clip.llm_client.call_llm` (LiteLLM). Each block selects its backend with a `provider` key (default `ollama_chat`); the model id sent to LiteLLM is `"<provider>/<model>"`. An empty `api_base` falls back to `http://localhost:11434` for an ollama provider, or is omitted for a cloud provider. `api_key` is forwarded when set (or use the provider's env var). `response_format: "json"` maps to a JSON-object request; `thinking` maps to LiteLLM `reasoning_effort` (best-effort per provider).
 
-`intervals/cli.py`, `audio_silence/cli.py`, and `blender/blender_cli.py` all accept a `--config <path>` flag, passed through by `scripts/run_pipeline.sh` when `--config` is provided.
-
-`scripts/run_pipeline.sh` also reads `pipeline.*`, `transcription.*`, and `audio_silence.*` config keys directly via Python/yaml for arguments not forwarded to a Python CLI: `transcription.language` (default `ja`), and `audio_silence.enabled/noise/min_silence` (deciding whether/how to run the docker ffmpeg call).
+Only `blender/blender_cli.py` still takes a `--config <path>` flag on its command line — it runs as a separate Blender subprocess, so the pipeline CLI (`nagare_clip.pipeline.cli`) passes its resolved `config_path` through explicitly. Every other stage receives the already-merged `cfg` dict in-process (no subprocess, no re-parsing of `--config`).
 
 ## Current Runtime Quirks
 
@@ -241,7 +241,7 @@ the relevant file before touching a stage:**
 - text_filter (+ summary LLM) → [`docs/stages/text_filter.md`](docs/stages/text_filter.md)
 - intervals (`<keep>`/`<speed>`/`<overlay>`/`<cut>` markers, margins, captions) → [`docs/stages/intervals.md`](docs/stages/intervals.md)
 - blender (VSE layout, text styling, retiming) → [`docs/stages/blender.md`](docs/stages/blender.md)
-- pipeline orchestration (`run_pipeline.sh`) → [`docs/stages/pipeline.md`](docs/stages/pipeline.md)
+- pipeline orchestration (`nagare_clip.pipeline`) → [`docs/stages/pipeline.md`](docs/stages/pipeline.md)
 - observability (LLM report + Langfuse tracing) → [`docs/stages/observability.md`](docs/stages/observability.md)
 
 ## Python Execution
@@ -250,7 +250,7 @@ Always use `uv run` to invoke Python tools in this repo. Examples:
 
 ```bash
 uv run pytest
-uv run python -m nagare_clip.intervals.cli
+uv run python -m nagare_clip.pipeline --from-stage intervals --to-stage intervals
 ```
 
 ## Preferred Validation

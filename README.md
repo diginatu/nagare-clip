@@ -81,11 +81,11 @@ cloud; EU cloud: `https://cloud.langfuse.com`).
 
 To disable tracing even when keys are present, set `general.langfuse: false` in
 your config file, or export `NAGARE_LANGFUSE=0` before running the pipeline.
-`run_pipeline.sh` maps the config flag to `NAGARE_LANGFUSE` automatically. Note:
-`call_llm` reads only the env var, so `general.langfuse: false` takes effect
-**only through `run_pipeline.sh`** — if you invoke a stage CLI directly (e.g.
-`python -m nagare_clip.director.cli`) with the keys exported, set
-`NAGARE_LANGFUSE=0` yourself to disable.
+`run_pipeline.sh` (via `python -m nagare_clip.pipeline`) maps the config flag to
+`NAGARE_LANGFUSE` automatically, once, for the whole run. Note: `call_llm` reads
+only the env var, so `general.langfuse: false` takes effect only when run
+through the pipeline CLI — there is no standalone per-stage CLI anymore to
+bypass it.
 
 Traces are grouped by pipeline run (`session_id` = one timestamp per
 `run_pipeline.sh` invocation, exported as `NAGARE_RUN_ID`), by stage
@@ -313,54 +313,42 @@ Notes:
 
 ### audio_silence only (audio-silence detection)
 
-ffmpeg runs inside the whisperx image; capture its stderr, then parse it:
+There is no standalone stage CLI anymore — every stage runs through the
+pipeline orchestrator. Run just this stage with `--from-stage`/`--to-stage`
+(it drives the ffmpeg `silencedetect` Docker call and parses its stderr into
+`{stem}_cuts.txt` internally):
 
 ```bash
-INPUT_VIDEOS_DIR=src_video OUTPUT_DIR=output \
-docker compose run --rm --user "0:0" --entrypoint ffmpeg whisperx \
-  -hide_banner -nostats -i "myvideo.mp4" \
-  -af "silencedetect=noise=-30.0dB:d=0.8" -f null - \
-  >/dev/null 2> output/audio_silence/myvideo_silencedetect.log
-
-uv run python -m nagare_clip.audio_silence.cli \
-  --raw output/audio_silence/myvideo_silencedetect.log \
-  --output output/audio_silence/myvideo_cuts.txt \
-  --config my_project.yml
+./scripts/run_pipeline.sh --from-stage audio_silence --to-stage audio_silence \
+  --source myvideo.mp4 --config my_project.yml
 ```
 
-Omit `--raw` (or set `audio_silence.enabled: false`) to write an empty cut list.
+Set `audio_silence.enabled: false` in config to write an empty cut list instead.
 
 ### intervals only (patch application + interval generation)
 
 ```bash
-uv run python -m nagare_clip.intervals.cli \
-  --edits-txt output/text_filter/myvideo_edits.txt \
-  --json output/transcription/myvideo.json \
-  --cuts-txt output/audio_silence/myvideo_cuts.txt \
-  --config my_project.yml \
-  --output output/intervals/myvideo_intervals.json
+./scripts/run_pipeline.sh --from-stage intervals --to-stage intervals \
+  --source myvideo.mp4 --config my_project.yml
 ```
 
-CLI flags override config file values:
+`--keep-pre-margin`/`--keep-post-margin` are exposed as top-level pipeline
+flags and override the config file:
 
 ```bash
-uv run python -m nagare_clip.intervals.cli \
-  --edits-txt output/text_filter/myvideo_edits.txt \
-  --json output/transcription/myvideo.json \
-  --cuts-txt output/audio_silence/myvideo_cuts.txt \
-  --silence_threshold 1.5 \
-  --min_keep 1.0 \
-  --keep_pre_margin 1.0 \
-  --keep_post_margin 1.0 \
-  --caption_max_bunsetu 12 \
-  --caption_min_bunsetu 3 \
-  --caption_max_duration 4.0 \
-  --caption_min_duration 1.5 \
-  --caption_silence_flush 1.5 \
-  --output output/intervals/myvideo_intervals.json
-
-Keep-interval silence detection uses WhisperX word timings (`word.start`/`word.end`) with a per-word max-span cap (0.6s) so inflated token ends do not mask real pauses. Bunsetsu timing uses `ginza.bunsetu_spans(doc)` (GiNZA/spaCy) so particles and auxiliaries are attached to the preceding content word, producing natural subtitle line-break units. It detects large intra-bunsetsu character gaps (> 0.6s) caused by WhisperX misalignment and snaps the bunsetsu start forward to the later character cluster so silence is not hidden inside a single bunsetsu. Caption chunks use bunsetsu-level timing (`end = min(start+0.02s, next_bunsetu_start)`) and are split on detected silence gaps and keep-boundary crossings. Captions are preserved as transcript chunks and the interval stage expands keep intervals to include caption spans so subtitle text is not dropped at the Blender stage, then re-applies minimum keep duration (`--min_keep`) to avoid tiny strips. Tune chunking with `--caption_max_bunsetu`, `--caption_min_bunsetu`, `--caption_max_duration`, `--caption_min_duration`, and `--caption_silence_flush`.
+./scripts/run_pipeline.sh --from-stage intervals --to-stage intervals \
+  --source myvideo.mp4 \
+  --keep-pre-margin 1.0 \
+  --keep-post-margin 1.0
 ```
+
+The remaining intervals knobs (`silence_threshold`, `min_keep`,
+`caption.max_bunsetu`, `caption.min_bunsetu`, `caption.max_duration`,
+`caption.min_duration`, `caption.silence_flush`, …) no longer have dedicated
+CLI flags — set them under `intervals:`/`intervals.caption:` in your config
+file (see `config.example.yml`).
+
+Keep-interval silence detection uses WhisperX word timings (`word.start`/`word.end`) with a per-word max-span cap (0.6s) so inflated token ends do not mask real pauses. Bunsetsu timing uses `ginza.bunsetu_spans(doc)` (GiNZA/spaCy) so particles and auxiliaries are attached to the preceding content word, producing natural subtitle line-break units. It detects large intra-bunsetsu character gaps (> 0.6s) caused by WhisperX misalignment and snaps the bunsetsu start forward to the later character cluster so silence is not hidden inside a single bunsetsu. Caption chunks use bunsetsu-level timing (`end = min(start+0.02s, next_bunsetu_start)`) and are split on detected silence gaps and keep-boundary crossings. Captions are preserved as transcript chunks and the interval stage expands keep intervals to include caption spans so subtitle text is not dropped at the Blender stage, then re-applies minimum keep duration (`min_keep`) to avoid tiny strips.
 
 ### blender only (Blender VSE project)
 

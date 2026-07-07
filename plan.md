@@ -1,5 +1,29 @@
 # nagare-clip — Implementation Status
 
+## Python Pipeline Orchestration
+
+**Status: complete** (2026-07-07; branch `worktree-python-orchestration`; design in `docs/superpowers/` sdd task specs).
+
+`scripts/run_pipeline.sh` (633 lines of bash) was ported to a Python package,
+`src/nagare_clip/pipeline/` — `errors.py` (`PipelineError`), `sources.py`
+(source discovery/resolution/staging), `external.py` (docker/blender command
+builders + `run_command()`, the only remaining subprocesses), `runner.py`
+(`Stage`, `PipelineContext`, `resolve_window()`, `run_stages()` — windowing and
+skip-validation), `stages.py` (`STAGE_NAMES` + one adapter per stage +
+`STAGES` registry; each LLM-stage adapter owns its `llm_report.Recorder`
+lifecycle), and `cli.py` (same flags as the old bash script; CLI values become
+validated config overrides via `get_effective_config`, so precedence is
+CLI > YAML > defaults). `scripts/run_pipeline.sh` is now a 6-line shim that
+execs `uv run python -m nagare_clip.pipeline "$@"`, so user-facing usage is
+unchanged. Every stage exposes a typed `run()` in `src/nagare_clip/<stage>/run.py`;
+the eight per-stage `cli.py` files (and the `nagare-clip-intervals` console
+script) were deleted — `python -m nagare_clip` is re-aliased from the
+intervals stage to the pipeline CLI. Single-stage runs now use
+`--from-stage X --to-stage X` on the pipeline CLI. Unknown stage names and
+inverted `--from-stage`/`--to-stage` ranges raise a friendly `PipelineError`
+(the old bash `stage_index` set-e quirk is gone). See
+[`docs/stages/pipeline.md`](docs/stages/pipeline.md) for full runtime detail.
+
 ## sentence_split Stage
 
 **Status: complete** (branch `sentence-split-stage`, Tasks 1–7; design in `docs/superpowers/specs/2026-06-29-sentence-split-stage-design.md`).
