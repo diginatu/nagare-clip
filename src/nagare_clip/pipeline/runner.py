@@ -8,6 +8,7 @@ adding a registry entry, without renumbering anything. Skipped-over stages
 
 from __future__ import annotations
 
+import logging
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -79,6 +80,7 @@ def run_stages(stages: Sequence[Stage], ctx: PipelineContext) -> None:
             except PipelineError:
                 raise
             except Exception as exc:
+                logging.exception("[%s] stage failed", stage.name)
                 raise PipelineError(f"[{stage.name}] failed: {exc}") from exc
         elif idx > ctx.to_index:
             print(f"[{stage.name}] Skipped (--to-stage {stages[ctx.to_index].name})")

@@ -1,5 +1,7 @@
 """Tests for the generic stage runner: windowing, skipping, validation."""
 
+import logging
+
 import pytest
 
 from nagare_clip.pipeline.errors import PipelineError
@@ -94,6 +96,19 @@ def test_run_stages_wraps_stage_exception(tmp_path):
     stages = [Stage(name="a", run=boom)]
     with pytest.raises(PipelineError, match=r"\[a\] failed: kaput"):
         run_stages(stages, _ctx(tmp_path, 0, 0))
+
+
+def test_run_stages_logs_traceback_on_stage_failure(tmp_path, caplog):
+    def boom(ctx):
+        raise ValueError("kaput")
+
+    stages = [Stage(name="a", run=boom)]
+    with caplog.at_level(logging.ERROR):
+        with pytest.raises(PipelineError, match=r"\[a\] failed: kaput"):
+            run_stages(stages, _ctx(tmp_path, 0, 0))
+
+    assert "ValueError: kaput" in caplog.text
+    assert caplog.records[0].exc_info is not None
 
 
 def test_context_paths(tmp_path):
