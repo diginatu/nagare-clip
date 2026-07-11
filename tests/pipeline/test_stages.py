@@ -82,6 +82,36 @@ def test_sentence_split_adapter_clears_recorder_once(tmp_path, monkeypatch):
     assert calls == ["clear", "run", "run", "rebuild"]
 
 
+def test_sentence_split_adapter_passes_cuts_path(tmp_path, monkeypatch):
+    seen = []
+    monkeypatch.setattr(st, "recorder_from_config", lambda *a, **k: _NullRec())
+    monkeypatch.setattr(
+        st,
+        "run_sentence_split",
+        lambda ji, ti, oj, ot, cfg, *, stem="", recorder=None, cuts_txt=None: seen.append(
+            (ji, oj, cuts_txt)
+        ),
+    )
+    by_name = {s.name: s for s in st.STAGES}
+    by_name["sentence_split"].run(_ctx(tmp_path, stems=("a",)))
+    out = tmp_path / "out"
+    assert seen == [
+        (
+            out / "transcription" / "a.json",
+            out / "sentence_split" / "a.json",
+            out / "audio_silence" / "a_cuts.txt",
+        )
+    ]
+
+
+class _NullRec:
+    def clear(self):
+        pass
+
+    def rebuild_index(self):
+        pass
+
+
 def test_intervals_adapter_calls_run_per_source(tmp_path, monkeypatch):
     seen = []
     monkeypatch.setattr(

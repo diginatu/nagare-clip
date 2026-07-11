@@ -288,6 +288,14 @@ class SentenceSplitConfig(BaseModel):
         20,
         description="Segments per LLM window (the batch size); a window carries its trailing sentence to the next",
     )
+    force_split: bool = Field(
+        True,
+        description="Force a sentence boundary at long audio_silence spans (post-enforced on LLM output; no extra LLM calls)",
+    )
+    force_split_min_silence: float = Field(
+        3.0,
+        description="Seconds; only audio_silence cut spans at least this long force a split",
+    )
     prompt: str = _commented(
         SENTENCE_SPLIT_PROMPT,
         sample='"..."',

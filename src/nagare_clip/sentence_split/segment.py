@@ -86,3 +86,59 @@ def rebuild_window_segments(
 def concat_word_text(segments: list[dict[str, Any]]) -> str:
     """Concatenate every word field across segments (verbatim-invariant key)."""
     return "".join(str(w.get("word", "")) for seg in segments for w in seg.get("words", []))
+
+
+def split_segment_at_silences(
+    seg: dict[str, Any], silences: list[tuple[float, float]]
+) -> list[dict[str, Any]]:
+    """Split ``seg`` at word gaps that a silence midpoint corroborates.
+
+    ``silences`` are already-qualifying ``(start, end)`` spans (threshold
+    filtering happens upstream). The split point for a silence is the first word
+    whose effective start time is ``>=`` the silence midpoint, and only when the
+    previous word's effective end is ``<=`` that midpoint — i.e. a genuine
+    inter-word gap brackets the midpoint. WhisperX often stretches one word
+    across an entire pause; the midpoint then falls inside that word and which
+    sentence the word belongs to is undecidable from timing, so such a silence
+    is skipped rather than split one word too late. A word without a ``start``
+    (``end``) inherits the last known time, so a split never lands between a
+    timed word and a following untimed one. Boundaries at word 0 or the segment
+    end are dropped, so a silence outside the word range is a no-op. Words are
+    only reassigned (via :func:`segment_from_words`), never edited.
+    """
+    words = seg.get("words", [])
+    if not silences or len(words) < 2:
+        return [seg]
+
+    eff_start: list[float] = []
+    last = float("-inf")
+    for w in words:
+        if "start" in w:
+            last = float(w["start"])
+        eff_start.append(last)
+    eff_end: list[float] = []
+    last = float("-inf")
+    for w in words:
+        if "end" in w:
+            last = float(w["end"])
+        eff_end.append(last)
+
+    bounds: set[int] = set()
+    for start, end in silences:
+        mid = (start + end) / 2.0
+        for i, t in enumerate(eff_start):
+            if t >= mid:
+                if 0 < i < len(words) and eff_end[i - 1] <= mid:
+                    bounds.add(i)
+                break
+
+    if not bounds:
+        return [seg]
+
+    cuts = sorted(bounds)
+    pieces: list[dict[str, Any]] = []
+    prev = 0
+    for c in [*cuts, len(words)]:
+        pieces.append(segment_from_words(words[prev:c]))
+        prev = c
+    return pieces

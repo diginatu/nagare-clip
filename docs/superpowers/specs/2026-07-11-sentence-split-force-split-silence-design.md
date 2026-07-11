@@ -82,6 +82,19 @@ split_segment_at_silences(seg, silences) -> list[segment]
   bookkeeping; robust to WhisperX alignment jitter at silence edges). Words
   lacking `start` inherit the last known time (never split between a timed
   word and a following untimed one).
+- **Revision (2026-07-11, after real-project testing):** the split only fires
+  when the previous word's effective `end` is also ≤ the midpoint — a genuine
+  inter-word gap must corroborate the silence. WhisperX frequently stretches
+  one word across an entire pause (e.g. 'は' timed 2.06–7.40 over a 2.23–6.50
+  silence, its end abutting the next word); the midpoint then falls *inside*
+  that word and the original rule split one word too late, chopping the
+  sentence's first character(s) off (116 of 199 long silences in the test
+  video). Which sentence a stretched word belongs to is undecidable from
+  timing alone — sometimes the previous ('だけ**ど** | こんな'), sometimes the
+  next ('**い**きます') — so ambiguous silences are skipped (false negative
+  over wrong split). Pure word-gap detection without the cuts file was
+  evaluated and rejected: the same stretching hides the gaps, leaving only 3
+  of 199 pauses detectable.
 - Pieces are rebuilt with the existing `segment_from_words()`; empty slices
   (split point at position 0 or `len(words)`) are dropped, so a silence
   outside the segment's word range is a no-op.

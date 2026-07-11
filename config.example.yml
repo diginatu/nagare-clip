@@ -52,6 +52,8 @@ sentence_split:
   retry_temp_step: 0.2
   retry_temp_cap: 0.8
   window_segments: 20   # Segments per LLM window (the batch size); a window carries its trailing sentence to the next
+  force_split: true   # Force a sentence boundary at long audio_silence spans (post-enforced on LLM output; no extra LLM calls)
+  force_split_min_silence: 3.0   # Seconds; only audio_silence cut spans at least this long force a split
   # prompt: "..."   # Bunsetsu-grouping prompt (has a sensible default)
 
 # text_filter stage: text editing checkpoint.

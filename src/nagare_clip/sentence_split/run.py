@@ -14,6 +14,7 @@ import shutil
 from pathlib import Path
 from typing import Any
 
+from nagare_clip.audio_silence.cuts_file import read_cuts
 from nagare_clip.llm_report import NULL_RECORDER, Recorder
 from nagare_clip.sentence_split.llm import split_window
 from nagare_clip.sentence_split.nlp import bunsetsu_units, load_nlp
@@ -23,6 +24,7 @@ from nagare_clip.sentence_split.segment import (
     iter_windows,
     rebuild_window_segments,
     segment_from_words,
+    split_segment_at_silences,
     window_text_and_words,
 )
 
@@ -34,14 +36,27 @@ def resegment_json(
     *,
     recorder: Recorder = NULL_RECORDER,
     stem: str = "",
+    silences: list[tuple[float, float]] | None = None,
 ) -> dict[str, Any]:
     """Return a new WhisperX data dict with re-segmented segments.
 
+    ``silences`` are already-qualifying ``(start, end)`` spans (threshold
+    filtering happens in :func:`run_sentence_split`); every emitted segment is
+    deterministically split at them, so no output segment spans a silence even
+    when the LLM groups across one or the window degrades. Empty/omitted →
+    behaviour is byte-identical to before.
+
     On a verbatim-invariant violation, returns ``json_data`` unchanged.
     """
+    forced = silences or []
+
+    def emit(segs: list[dict[str, Any]]) -> None:
+        for s in segs:
+            new_segments.extend(split_segment_at_silences(s, forced))
+
     segments = json_data.get("segments", [])
     window = int(sp_cfg.get("window_segments", 20))
-    new_segments = []
+    new_segments: list[dict[str, Any]] = []
     # The trailing (possibly incomplete) sentence of each window is carried into
     # the next window so a sentence straddling a window boundary is re-grouped
     # with its continuation rather than forced to split at the seam.
@@ -55,7 +70,7 @@ def resegment_json(
         text = "".join(str(w.get("word", "")) for w in words)
         carry_words = []
         if not text:
-            new_segments.extend(win)
+            emit(win)
             continue
         bunsetsu = bunsetsu_units(text, nlp)
         ranges = (
@@ -67,18 +82,18 @@ def resegment_json(
             # Degrade: finalize anything carried in, then keep the window's
             # original segments so the fallback stays local and lossless.
             if carried_in:
-                new_segments.append(segment_from_words(carried_in))
-            new_segments.extend(win)
+                emit([segment_from_words(carried_in)])
+            emit(win)
             continue
         char2word = char_to_word_index(words)
         rebuilt = rebuild_window_segments(words, bunsetsu, ranges, char2word)
         if not is_last and len(rebuilt) > 1:
             # Hold back the trailing sentence for the next window; emit the rest.
             carry_words = rebuilt[-1].get("words", [])
-            new_segments.extend(rebuilt[:-1])
+            emit(rebuilt[:-1])
         else:
             # Single-sentence window (or the last window): accept as-is.
-            new_segments.extend(rebuilt)
+            emit(rebuilt)
 
     if concat_word_text(new_segments) != concat_word_text(segments):
         logging.error(
@@ -99,6 +114,19 @@ def _copy_through(src_json: Path, src_txt: Path, out_json: Path, out_txt: Path) 
     shutil.copyfile(src_txt, out_txt)
 
 
+def _forced_silences(cuts_txt: Path | None, sp_cfg: dict[str, Any]) -> list[tuple[float, float]]:
+    """Cut spans that qualify to force a sentence split.
+
+    Reads the human-editable audio_silence cut list and keeps only spans at
+    least ``force_split_min_silence`` seconds long. Disabled / missing file /
+    nothing qualifying → ``[]`` (no forced boundaries).
+    """
+    if not cuts_txt or not sp_cfg.get("force_split", True):
+        return []
+    threshold = float(sp_cfg.get("force_split_min_silence", 3.0))
+    return [(s, e) for s, e in read_cuts(cuts_txt) if e - s >= threshold]
+
+
 def run_sentence_split(
     json_in: Path,
     txt_in: Path,
@@ -108,6 +136,7 @@ def run_sentence_split(
     *,
     stem: str = "",
     recorder: Recorder = NULL_RECORDER,
+    cuts_txt: Path | None = None,
 ) -> None:
     sp_cfg = cfg["sentence_split"]
     output_json.parent.mkdir(parents=True, exist_ok=True)
@@ -118,9 +147,12 @@ def run_sentence_split(
         _copy_through(json_in, txt_in, output_json, output_txt)
         return
 
+    silences = _forced_silences(cuts_txt, sp_cfg)
     json_data = json.loads(json_in.read_text(encoding="utf-8"))
     nlp = load_nlp()
-    new_data = resegment_json(json_data, sp_cfg, nlp, recorder=recorder, stem=stem)
+    new_data = resegment_json(
+        json_data, sp_cfg, nlp, recorder=recorder, stem=stem, silences=silences
+    )
 
     if new_data is json_data:
         # verbatim violation already logged; copy through for safety

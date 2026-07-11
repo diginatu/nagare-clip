@@ -226,12 +226,16 @@ The `sentence_split` stage rewrites the WhisperX transcript into one-sentence-pe
 
 When enabled, the LLM receives a numbered list of GiNZA bunsetsu units (Japanese morpho-syntactic chunks) and returns contiguous bunsetsu-index ranges (`{"sentences":[[0,3],[4,7],…]}`) that map to one sentence each. The stage reconstructs new segments by slicing the original word list at those boundaries — words are only reassigned, never edited, so word timings are preserved and output text is verbatim. Processing is windowed (`sentence_split.window_segments`, default 20 segments per call — the batch size); each window falls back to the original segmentation independently on LLM failure. Windows carry their trailing sentence over the seam, so a sentence split across a window boundary is re-joined with its continuation in the next window (a single-sentence window keeps the boundary, bounding context growth).
 
+**Force split at long silences.** When `force_split` is `true` (default), a long silence detected by the `audio_silence` stage becomes a hard sentence boundary: after the LLM segments a window, every output segment is deterministically split before the first word that starts past the silence's midpoint — but only when the word timings corroborate the silence with a real inter-word gap there. WhisperX often stretches one word across a pause; splitting next to such a word would chop off the sentence's first characters, so those ambiguous silences are skipped instead. Only cut spans at least `force_split_min_silence` seconds long (default 3.0) qualify — `audio_silence.min_silence` is tuned for short jump-cut pauses, which would over-split. The forced split reads the human-editable `output/audio_silence/{stem}_cuts.txt`, so deleting a cut line (to keep that span's audio) also stops it forcing a split, and it survives even a total LLM failure. It adds no extra LLM calls.
+
 ```yaml
 sentence_split:
   enabled: true
   provider: "ollama_chat"   # see "Choosing an LLM provider" above
   model: "gpt-oss:120b"
   window_segments: 20       # segments per LLM window
+  force_split: true         # split sentences at long detected silences
+  force_split_min_silence: 3.0   # seconds; only cut spans at least this long
 ```
 
 Outputs land in `output/sentence_split/{stem}.json` and `output/sentence_split/{stem}.txt`; all downstream stages (text_filter, summary, director, etc.) read from there.
