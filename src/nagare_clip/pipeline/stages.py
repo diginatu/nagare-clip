@@ -31,8 +31,8 @@ STAGE_NAMES = [
     "transcription",
     "audio_silence",
     "sentence_split",
-    "text_filter",
     "summary",
+    "text_filter",
     "plan",
     "director",
     "guided_edit",
@@ -130,6 +130,29 @@ def _sentence_split_required(ctx: PipelineContext) -> list[Path]:
     return [d / f"{s}{ext}" for s in ctx.stems for ext in (".json", ".txt")]
 
 
+# --- summary -----------------------------------------------------------------
+
+
+def _summary_run(ctx: PipelineContext) -> None:
+    print("[summary] Project-wide summaries")
+    rec = _recorder(ctx, "summary")
+    rec.clear()
+    try:
+        run_summary(
+            [ctx.stage_dir("sentence_split") / f"{s}.txt" for s in ctx.stems],
+            ctx.stage_dir("summary") / "summary.json",
+            ctx.cfg,
+            json_paths=[ctx.stage_dir("sentence_split") / f"{s}.json" for s in ctx.stems],
+            recorder=rec,
+        )
+    finally:
+        rec.rebuild_index()
+
+
+def _summary_required(ctx: PipelineContext) -> list[Path]:
+    return [ctx.stage_dir("summary") / "summary.json"]
+
+
 # --- text_filter -------------------------------------------------------------
 
 
@@ -145,6 +168,7 @@ def _text_filter_run(ctx: PipelineContext) -> None:
                 sdir / f"{src.stem}.txt",
                 odir / f"{src.stem}_edits.txt",
                 ctx.cfg,
+                summary_json=ctx.stage_dir("summary") / "summary.json",
                 recorder=rec,
             )
     finally:
@@ -154,29 +178,6 @@ def _text_filter_run(ctx: PipelineContext) -> None:
 def _text_filter_required(ctx: PipelineContext) -> list[Path]:
     d = ctx.stage_dir("text_filter")
     return [d / f"{s}_edits.txt" for s in ctx.stems]
-
-
-# --- summary -----------------------------------------------------------------
-
-
-def _summary_run(ctx: PipelineContext) -> None:
-    print("[summary] Project-wide summaries")
-    rec = _recorder(ctx, "summary")
-    rec.clear()
-    try:
-        run_summary(
-            [ctx.stage_dir("text_filter") / f"{s}_edits.txt" for s in ctx.stems],
-            ctx.stage_dir("summary") / "summary.json",
-            ctx.cfg,
-            json_paths=[ctx.stage_dir("sentence_split") / f"{s}.json" for s in ctx.stems],
-            recorder=rec,
-        )
-    finally:
-        rec.rebuild_index()
-
-
-def _summary_required(ctx: PipelineContext) -> list[Path]:
-    return [ctx.stage_dir("summary") / "summary.json"]
 
 
 # --- plan --------------------------------------------------------------------
@@ -298,8 +299,8 @@ STAGES = [
     Stage("transcription", _transcription_run, _transcription_required),
     Stage("audio_silence", _audio_silence_run, _audio_silence_required),
     Stage("sentence_split", _sentence_split_run, _sentence_split_required),
-    Stage("text_filter", _text_filter_run, _text_filter_required),
     Stage("summary", _summary_run, _summary_required),
+    Stage("text_filter", _text_filter_run, _text_filter_required),
     Stage("plan", _plan_run, _plan_required),
     Stage("director", _director_run, _director_required),
     Stage("guided_edit", _guided_edit_run, _guided_edit_required),

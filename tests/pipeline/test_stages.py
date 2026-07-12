@@ -27,8 +27,8 @@ def test_stage_names_canonical_order():
         "transcription",
         "audio_silence",
         "sentence_split",
-        "text_filter",
         "summary",
+        "text_filter",
         "plan",
         "director",
         "guided_edit",
@@ -100,6 +100,46 @@ def test_sentence_split_adapter_passes_cuts_path(tmp_path, monkeypatch):
             out / "transcription" / "a.json",
             out / "sentence_split" / "a.json",
             out / "audio_silence" / "a_cuts.txt",
+        )
+    ]
+
+
+def test_summary_adapter_reads_sentence_split_txts(tmp_path, monkeypatch):
+    seen = {}
+    monkeypatch.setattr(st, "recorder_from_config", lambda *a, **k: _NullRec())
+    monkeypatch.setattr(
+        st,
+        "run_summary",
+        lambda txts, out, cfg, *, json_paths=None, recorder=None: seen.update(
+            txts=txts, out=out, json_paths=json_paths
+        ),
+    )
+    by_name = {s.name: s for s in st.STAGES}
+    by_name["summary"].run(_ctx(tmp_path, stems=("a",)))
+    out = tmp_path / "out"
+    assert seen["txts"] == [out / "sentence_split" / "a.txt"]
+    assert seen["json_paths"] == [out / "sentence_split" / "a.json"]
+    assert seen["out"] == out / "summary" / "summary.json"
+
+
+def test_text_filter_adapter_passes_summary_json(tmp_path, monkeypatch):
+    seen = []
+    monkeypatch.setattr(st, "recorder_from_config", lambda *a, **k: _NullRec())
+    monkeypatch.setattr(
+        st,
+        "run_text_filter",
+        lambda txt, out, cfg, *, summary_json=None, recorder=None: seen.append(
+            (txt, out, summary_json)
+        ),
+    )
+    by_name = {s.name: s for s in st.STAGES}
+    by_name["text_filter"].run(_ctx(tmp_path, stems=("a",)))
+    out = tmp_path / "out"
+    assert seen == [
+        (
+            out / "sentence_split" / "a.txt",
+            out / "text_filter" / "a_edits.txt",
+            out / "summary" / "summary.json",
         )
     ]
 
