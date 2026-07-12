@@ -10,14 +10,14 @@ import nagare_clip.summary.run as summary_run
 from nagare_clip.summary.summarize import PartSummary, ProjectSummary
 
 
-def _run(monkeypatch, tmp_path, cfg_dict, edits_by_stem, json_by_stem=None):
+def _run(monkeypatch, tmp_path, cfg_dict, txt_by_stem, json_by_stem=None):
     cfg = tmp_path / "config.yml"
     cfg.write_text(yaml.safe_dump(cfg_dict), encoding="utf-8")
-    edits_args = []
-    for stem, text in edits_by_stem.items():
-        p = tmp_path / f"{stem}_edits.txt"
+    txt_args = []
+    for stem, text in txt_by_stem.items():
+        p = tmp_path / f"{stem}.txt"
         p.write_text(text, encoding="utf-8")
-        edits_args.append(p)
+        txt_args.append(p)
 
     json_args = []
     if json_by_stem:
@@ -28,7 +28,7 @@ def _run(monkeypatch, tmp_path, cfg_dict, edits_by_stem, json_by_stem=None):
 
     out = tmp_path / "summary.json"
     summary_run.run_summary(
-        edits_args,
+        txt_args,
         out,
         yaml.safe_load(cfg.read_text(encoding="utf-8")),
         json_paths=json_args if json_args else None,
@@ -86,3 +86,24 @@ def test_json_passes_seg_times_by_stem(monkeypatch, tmp_path):
         {"v": {"segments": [{"start": 1.0, "end": 3.0}, {"start": 4.0, "end": 6.5}]}},
     )
     assert captured["seg_times_by_stem"] == {"v": [(1.0, 3.0), (4.0, 6.5)]}
+
+
+def test_lines_passed_verbatim(monkeypatch, tmp_path):
+    captured = {}
+
+    def fake_build(parts_input, cfg, **kwargs):
+        captured["lines"] = parts_input[0][1]
+        return ProjectSummary(summary="", parts=[])
+
+    monkeypatch.setattr(summary_run, "build_summary", fake_build)
+    _run(monkeypatch, tmp_path, {"summary": {"enabled": True}}, {"v": "line {{a->b}} raw\n"})
+    assert captured["lines"] == ["line {{a->b}} raw"]
+
+
+def test_keywords_written_to_output(monkeypatch, tmp_path):
+    def fake_build(parts_input, cfg, **kwargs):
+        return ProjectSummary(summary="all", parts=[], keywords={"a": ["K"]})
+
+    monkeypatch.setattr(summary_run, "build_summary", fake_build)
+    data = _run(monkeypatch, tmp_path, {"summary": {"enabled": True}}, {"a": "ax\n"})
+    assert data["keywords"] == {"a": ["K"]}

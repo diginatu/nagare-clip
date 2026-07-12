@@ -1,7 +1,10 @@
 """summary stage: project-wide per-part + all-videos summaries.
 
-When ``summary.enabled`` is false (default) it writes an empty artifact so the
-downstream stages are no-ops and the pipeline behaves exactly as before.
+Runs before ``text_filter``, reading the sentence_split ``{stem}.txt``
+transcripts directly. When ``summary.enabled`` is false (default) it writes an
+empty artifact so the downstream stages are no-ops and the pipeline behaves
+exactly as before. When enabled, it also emits per-video keywords
+(misspelling-prone words) for the ``text_filter`` LLM to consult.
 """
 
 from __future__ import annotations
@@ -10,7 +13,6 @@ import json
 import logging
 from pathlib import Path
 
-from nagare_clip.director.director_llm import clean_for_display
 from nagare_clip.llm_report import NULL_RECORDER, Recorder
 from nagare_clip.summary.summarize import (
     ProjectSummary,
@@ -20,14 +22,8 @@ from nagare_clip.summary.summarize import (
 from nagare_clip.timing import segment_times
 
 
-def _stem_from_edits(path: Path) -> str:
-    name = path.name
-    suffix = "_edits.txt"
-    return name[: -len(suffix)] if name.endswith(suffix) else path.stem
-
-
 def run_summary(
-    edits_txts: list[Path],
+    txts: list[Path],
     output: Path,
     cfg: dict,
     *,
@@ -41,10 +37,9 @@ def run_summary(
         project = ProjectSummary(summary="", parts=[])
     else:
         parts_input = []
-        for path in edits_txts:
-            stem = _stem_from_edits(path)
-            clean_lines = clean_for_display(path.read_text(encoding="utf-8").splitlines())
-            parts_input.append((stem, clean_lines))
+        for path in txts:
+            lines = path.read_text(encoding="utf-8").splitlines()
+            parts_input.append((path.stem, lines))
         seg_times_by_stem = {}
         for jpath in json_paths or []:
             if jpath.is_file():
