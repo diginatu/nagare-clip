@@ -41,6 +41,11 @@ def test_disabled_writes_empty(monkeypatch, tmp_path):
     assert data == {"summary": "", "parts": [], "keywords": {}, "video_summaries": {}}
 
 
+def test_disabled_writes_empty_video_summaries(monkeypatch, tmp_path):
+    data = _run(monkeypatch, tmp_path, {"summary": {"enabled": False}}, {"a": "x\n"})
+    assert data["video_summaries"] == {}
+
+
 def test_enabled_writes_summary_with_stems_from_basename(monkeypatch, tmp_path):
     captured = {}
 
