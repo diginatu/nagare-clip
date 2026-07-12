@@ -210,3 +210,6 @@ __marimo__/
 output/
 src_video/
 cache/
+
+.mcp.json
+.claude/settings.local.json
