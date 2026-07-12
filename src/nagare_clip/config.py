@@ -72,11 +72,13 @@ TEXT_FILTER_PROMPT = (
 
 SUMMARY_PROMPT = (
     "You are a video editor. You receive ONE Japanese transcript as "
-    "numbered lines (one line per subtitle segment). Split it into a few "
-    "contiguous PARTS by topic/section and summarise each part. Reference "
-    "lines by their 1-based numbers (inclusive). Also list rare or "
-    "domain-specific words that speech recognition might misspell. "
-    "Output ONLY a JSON object.\n"
+    "numbered lines (one line per subtitle segment). The transcript is "
+    "produced by automatic speech recognition and may contain recognition "
+    "errors (mis-heard or misspelled words); infer the intended meaning. "
+    "Split it into a few contiguous PARTS by topic/section and summarise "
+    "each part. Reference lines by their 1-based numbers (inclusive). Also "
+    "list rare or domain-specific words that speech recognition might "
+    "misspell. Output ONLY a JSON object.\n"
     "\n"
     "JSON shape:\n"
     '{"parts": [\n'
