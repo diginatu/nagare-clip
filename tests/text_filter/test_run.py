@@ -81,6 +81,17 @@ class TestSummaryContext:
         assert "Constant" in prompt
         assert "Dynamic" in prompt
 
+    def test_merged_keywords_deduplicated(self, tmp_path):
+        summary = {
+            "summary": "overall",
+            "parts": [],
+            "keywords": {"test": ["Shared", "Dynamic"]},
+        }
+        cfg = _run(tmp_path, _s2_config(constant_keywords=["Shared"]), summary_data=summary)
+        prompt = cfg.get("prompt", "")
+        assert prompt.count("Shared") == 1
+        assert "Dynamic" in prompt
+
     def test_other_stem_entries_ignored(self, tmp_path):
         summary = {
             "summary": "overall",

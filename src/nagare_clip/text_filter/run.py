@@ -59,11 +59,11 @@ def run_text_filter(
 
         filter_cfg = dict(s2)
         summaries, summary_keywords = _summary_context(summary_json, txt.stem)
-        keywords = list(s2.get("keywords", [])) + summary_keywords
+        keywords = list(dict.fromkeys(list(s2.get("keywords", [])) + summary_keywords))
         if summaries or keywords:
             filter_cfg["prompt"] = build_enhanced_prompt(s2.get("prompt", ""), summaries, keywords)
             logging.info(
-                "text_filter: summary context: %d part summarie(s), %d keyword(s)",
+                "text_filter: summary context: %d part summaries, %d keyword(s)",
                 len(summaries),
                 len(keywords),
             )
