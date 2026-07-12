@@ -207,6 +207,9 @@ def _format_parts_doc(parts: list[PartSummary], video_summaries: dict[str, str])
     for i, p in enumerate(parts):
         if p.stem != current:
             current = p.stem
+            # Via build_summary every stem in parts has a non-empty video summary;
+            # the bare-header fallback is defensive for direct callers that pass a
+            # video_summaries dict missing this stem.
             vs = video_summaries.get(p.stem, "")
             lines.append(f"## {p.stem} — {vs}" if vs else f"## {p.stem}")
         lines.append(f"{i + 1}: [{p.lines[0]}-{p.lines[1]}] — {p.summary}")
