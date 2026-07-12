@@ -36,9 +36,9 @@ class TestSegmentVideo:
             '{"parts": ['
             '{"lines": [1, 2], "summary": "intro"},'
             '{"lines": [3, 4], "summary": "demo"}'
-            "]}"
+            '], "video_summary": "v"}'
         )
-        parts, _ = segment_video(
+        parts, _, _ = segment_video(
             "vid", ["a", "b", "c", "d"], {"prompt": "P"}, call_llm=lambda m, c: resp
         )
         assert parts == [
@@ -47,18 +47,23 @@ class TestSegmentVideo:
         ]
 
     def test_strips_fence(self):
-        resp = '```json\n{"parts": [{"lines": [1, 1], "summary": "x"}]}\n```'
-        parts, _ = segment_video("v", ["a"], {"prompt": "P"}, call_llm=lambda m, c: resp)
+        resp = '```json\n{"parts": [{"lines": [1, 1], "summary": "x"}], "video_summary": "v"}\n```'
+        parts, _, _ = segment_video("v", ["a"], {"prompt": "P"}, call_llm=lambda m, c: resp)
         assert parts == [PartSummary(stem="v", lines=(1, 1), summary="x")]
 
     def test_out_of_range_lines_dropped(self):
-        resp = '{"parts": [{"lines": [1, 9], "summary": "bad"},{"lines": [1, 2], "summary": "ok"}]}'
-        parts, _ = segment_video("v", ["a", "b", "c"], {"prompt": "P"}, call_llm=lambda m, c: resp)
+        resp = (
+            '{"parts": [{"lines": [1, 9], "summary": "bad"},{"lines": [1, 2], "summary": "ok"}],'
+            ' "video_summary": "v"}'
+        )
+        parts, _, _ = segment_video(
+            "v", ["a", "b", "c"], {"prompt": "P"}, call_llm=lambda m, c: resp
+        )
         assert parts == [PartSummary(stem="v", lines=(1, 2), summary="ok")]
 
     def test_empty_summary_dropped(self):
-        resp = '{"parts": [{"lines": [1, 1], "summary": ""}]}'
-        parts, _ = segment_video("v", ["a"], {"prompt": "P"}, call_llm=lambda m, c: resp)
+        resp = '{"parts": [{"lines": [1, 1], "summary": ""}], "video_summary": "v"}'
+        parts, _, _ = segment_video("v", ["a"], {"prompt": "P"}, call_llm=lambda m, c: resp)
         assert parts == []
 
     def test_uses_clean_numbered_input(self):
@@ -66,7 +71,7 @@ class TestSegmentVideo:
 
         def fake(messages, cfg):
             captured["user"] = messages[1]["content"]
-            return '{"parts": [{"lines": [1, 2], "summary": "s"}]}'
+            return '{"parts": [{"lines": [1, 2], "summary": "s"}], "video_summary": "v"}'
 
         segment_video("v", ["あ", "い"], {"prompt": "P"}, call_llm=fake)
         assert captured["user"] == "1: あ\n2: い"
@@ -75,41 +80,89 @@ class TestSegmentVideo:
         def boom(m, c):
             raise ConnectionError("down")
 
-        assert segment_video("v", ["a"], {"prompt": "P"}, call_llm=boom) == ([], [])
+        assert segment_video("v", ["a"], {"prompt": "P"}, call_llm=boom) == ([], [], "")
 
     def test_unparseable_returns_empty(self):
-        assert segment_video("v", ["a"], {"prompt": "P"}, call_llm=lambda m, c: "junk") == ([], [])
+        assert segment_video("v", ["a"], {"prompt": "P"}, call_llm=lambda m, c: "junk") == (
+            [],
+            [],
+            "",
+        )
 
     def test_retries_then_succeeds(self):
-        fake = _seq_llm(["junk", '{"parts": [{"lines": [1, 1], "summary": "s"}]}'])
-        parts, _ = segment_video("v", ["a"], {"prompt": "P", "max_retries": 2}, call_llm=fake)
+        fake = _seq_llm(
+            ["junk", '{"parts": [{"lines": [1, 1], "summary": "s"}], "video_summary": "v"}']
+        )
+        parts, _, _ = segment_video("v", ["a"], {"prompt": "P", "max_retries": 2}, call_llm=fake)
         assert fake.calls["i"] == 2
         assert parts[0].summary == "s"
+
+    def test_returns_video_summary(self):
+        resp = (
+            '{"parts": [{"lines": [1, 1], "summary": "s"}],'
+            ' "keywords": [], "video_summary": "whole video overview"}'
+        )
+        parts, keywords, vsum = segment_video(
+            "v", ["a"], {"prompt": "P"}, call_llm=lambda m, c: resp
+        )
+        assert parts == [PartSummary(stem="v", lines=(1, 1), summary="s")]
+        assert vsum == "whole video overview"
+
+    def test_missing_video_summary_is_hard_failure(self):
+        # No video_summary at all -> retried, then degraded to empty.
+        resp = '{"parts": [{"lines": [1, 1], "summary": "s"}], "keywords": []}'
+        assert segment_video("v", ["a"], {"prompt": "P"}, call_llm=lambda m, c: resp) == (
+            [],
+            [],
+            "",
+        )
+
+    def test_empty_video_summary_is_hard_failure(self):
+        resp = (
+            '{"parts": [{"lines": [1, 1], "summary": "s"}],'
+            ' "keywords": [], "video_summary": "   "}'
+        )
+        assert segment_video("v", ["a"], {"prompt": "P"}, call_llm=lambda m, c: resp) == (
+            [],
+            [],
+            "",
+        )
+
+    def test_non_string_video_summary_is_hard_failure(self):
+        resp = (
+            '{"parts": [{"lines": [1, 1], "summary": "s"}],'
+            ' "keywords": [], "video_summary": 5}'
+        )
+        assert segment_video("v", ["a"], {"prompt": "P"}, call_llm=lambda m, c: resp) == (
+            [],
+            [],
+            "",
+        )
 
 
 class TestSegmentVideoKeywords:
     def test_parses_keywords_stripped(self):
         resp = (
             '{"parts": [{"lines": [1, 1], "summary": "s"}],'
-            ' "keywords": [" Kubernetes ", "PostgreSQL"]}'
+            ' "keywords": [" Kubernetes ", "PostgreSQL"], "video_summary": "v"}'
         )
-        parts, keywords = segment_video("v", ["a"], {"prompt": "P"}, call_llm=lambda m, c: resp)
+        parts, keywords, _ = segment_video("v", ["a"], {"prompt": "P"}, call_llm=lambda m, c: resp)
         assert [p.summary for p in parts] == ["s"]
         assert keywords == ["Kubernetes", "PostgreSQL"]
 
     def test_missing_keywords_is_empty_list(self):
-        resp = '{"parts": [{"lines": [1, 1], "summary": "s"}]}'
-        _, keywords = segment_video("v", ["a"], {"prompt": "P"}, call_llm=lambda m, c: resp)
+        resp = '{"parts": [{"lines": [1, 1], "summary": "s"}], "video_summary": "v"}'
+        _, keywords, _ = segment_video("v", ["a"], {"prompt": "P"}, call_llm=lambda m, c: resp)
         assert keywords == []
 
     def test_malformed_keyword_entries_dropped(self):
-        resp = '{"parts": [], "keywords": ["ok", 42, "", null]}'
-        _, keywords = segment_video("v", ["a"], {"prompt": "P"}, call_llm=lambda m, c: resp)
+        resp = '{"parts": [], "keywords": ["ok", 42, "", null], "video_summary": "v"}'
+        _, keywords, _ = segment_video("v", ["a"], {"prompt": "P"}, call_llm=lambda m, c: resp)
         assert keywords == ["ok"]
 
     def test_keywords_non_list_is_empty(self):
-        resp = '{"parts": [], "keywords": "not a list"}'
-        _, keywords = segment_video("v", ["a"], {"prompt": "P"}, call_llm=lambda m, c: resp)
+        resp = '{"parts": [], "keywords": "not a list", "video_summary": "v"}'
+        _, keywords, _ = segment_video("v", ["a"], {"prompt": "P"}, call_llm=lambda m, c: resp)
         assert keywords == []
 
 
@@ -117,8 +170,10 @@ class TestProjectKeywords:
     def test_build_summary_collects_keywords_by_stem_omitting_empty(self):
         responses = iter(
             [
-                '{"parts": [{"lines": [1, 1], "summary": "sa"}], "keywords": ["KWA"]}',
-                '{"parts": [{"lines": [1, 1], "summary": "sb"}], "keywords": []}',
+                '{"parts": [{"lines": [1, 1], "summary": "sa"}], "keywords": ["KWA"],'
+                ' "video_summary": "v"}',
+                '{"parts": [{"lines": [1, 1], "summary": "sb"}], "keywords": [],'
+                ' "video_summary": "v"}',
                 '{"summary": "all"}',
             ]
         )
@@ -184,8 +239,8 @@ class TestBuildSummary:
         # 2 videos -> segment each, then 1 overall call.
         seq = _seq_llm(
             [
-                '{"parts": [{"lines": [1, 1], "summary": "a-intro"}]}',
-                '{"parts": [{"lines": [1, 2], "summary": "b-body"}]}',
+                '{"parts": [{"lines": [1, 1], "summary": "a-intro"}], "video_summary": "v"}',
+                '{"parts": [{"lines": [1, 2], "summary": "b-body"}], "video_summary": "v"}',
                 '{"summary": "whole project"}',
             ]
         )
@@ -211,23 +266,30 @@ def _outcome(tmp_path, unit):
 class TestSummaryRecorder:
     def test_segment_records_ok(self, tmp_path):
         rec = Recorder("summary", tmp_path, enabled=True)
-        resp = '{"parts":[{"lines":[1,2],"summary":"s"}]}'
+        resp = '{"parts":[{"lines":[1,2],"summary":"s"}], "video_summary": "v"}'
 
         def fake(_m, _c):
             return resp
 
-        parts, _ = segment_video("vid", ["a", "b"], {"max_retries": 0}, call_llm=fake, recorder=rec)
+        parts, _, _ = segment_video(
+            "vid", ["a", "b"], {"max_retries": 0}, call_llm=fake, recorder=rec
+        )
         assert len(parts) == 1
         assert _outcome(tmp_path, "vid") == "ok"
 
     def test_segment_records_dropped_items(self, tmp_path):
         rec = Recorder("summary", tmp_path, enabled=True)
-        resp = '{"parts":[{"lines":[1,2],"summary":"s"},{"lines":[9,9],"summary":"x"}]}'
+        resp = (
+            '{"parts":[{"lines":[1,2],"summary":"s"},{"lines":[9,9],"summary":"x"}],'
+            ' "video_summary": "v"}'
+        )
 
         def fake(_m, _c):
             return resp
 
-        parts, _ = segment_video("vid", ["a", "b"], {"max_retries": 0}, call_llm=fake, recorder=rec)
+        parts, _, _ = segment_video(
+            "vid", ["a", "b"], {"max_retries": 0}, call_llm=fake, recorder=rec
+        )
         assert len(parts) == 1
         assert _outcome(tmp_path, "vid") == "dropped-items"
 
@@ -270,7 +332,7 @@ class TestRoundTrip:
 
 class TestPartTimes:
     def test_build_summary_attaches_part_times(self):
-        resp = '{"parts": [{"lines": [1, 2], "summary": "intro"}]}'
+        resp = '{"parts": [{"lines": [1, 2], "summary": "intro"}], "video_summary": "v"}'
         overall = '{"summary": "S"}'
         seg_times = {"v": [(1.0, 3.0), (4.0, 6.5)]}
         project = build_summary(
@@ -283,7 +345,7 @@ class TestPartTimes:
         assert p.start == 1.0 and p.end == 6.5
 
     def test_build_summary_without_seg_times_leaves_none(self):
-        resp = '{"parts": [{"lines": [1, 2], "summary": "intro"}]}'
+        resp = '{"parts": [{"lines": [1, 2], "summary": "intro"}], "video_summary": "v"}'
         overall = '{"summary": "S"}'
         project = build_summary(
             [("v", ["あ", "い"])],

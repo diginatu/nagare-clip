@@ -55,6 +55,7 @@ class ProjectSummary:
     summary: str
     parts: list[PartSummary] = field(default_factory=list)
     keywords: dict[str, list[str]] = field(default_factory=dict)  # stem -> correct spellings
+    video_summaries: dict[str, str] = field(default_factory=dict)  # stem -> whole-video summary
 
 
 def _strip_fence(response: str) -> str:
@@ -72,14 +73,13 @@ def _coerce_keywords(value: Any) -> list[str]:
 
 def _parse_parts_response(
     response: str, stem: str, num_lines: int, drops: list[str] | None = None
-) -> tuple[list[PartSummary], list[str]] | None:
-    """Parse a ``{"parts": [{"lines": [a,b], "summary": "…"}], "keywords": [...]}`` response.
+) -> tuple[list[PartSummary], list[str], str] | None:
+    """Parse ``{"parts": [...], "keywords": [...], "video_summary": "…"}``.
 
-    Returns ``None`` on a hard parse failure (invalid JSON / no ``parts`` array)
-    so the caller can retry; otherwise ``(parts, keywords)`` where ``parts`` is
-    the (possibly empty) validated list, with malformed/out-of-range entries
-    dropped (logged), and ``keywords`` are the video's misspelling-prone words
-    (empty when absent).
+    Returns ``None`` on a hard parse failure — invalid JSON, no ``parts`` array,
+    or a missing/non-string/empty ``video_summary`` — so the caller can retry.
+    Otherwise ``(parts, keywords, video_summary)`` where ``parts`` is the
+    validated (possibly empty) list with malformed entries dropped (logged).
     """
 
     def _drop(msg: str) -> None:
@@ -95,6 +95,10 @@ def _parse_parts_response(
     if not isinstance(data, dict) or not isinstance(data.get("parts"), list):
         logger.warning("summary: parts response has no 'parts' array; ignoring")
         return None
+    video_summary = data.get("video_summary")
+    if not isinstance(video_summary, str) or not video_summary.strip():
+        logger.warning("summary: parts response has no 'video_summary'; ignoring")
+        return None
 
     parts: list[PartSummary] = []
     for raw in data["parts"]:
@@ -109,7 +113,7 @@ def _parse_parts_response(
             _drop("part dropped, empty/missing summary")
             continue
         parts.append(PartSummary(stem=stem, lines=lines, summary=summary))
-    return parts, _coerce_keywords(data.get("keywords"))
+    return parts, _coerce_keywords(data.get("keywords")), video_summary.strip()
 
 
 def segment_video(
@@ -119,8 +123,9 @@ def segment_video(
     *,
     call_llm: CallLLM = _call_llm,
     recorder: Recorder = NULL_RECORDER,
-) -> tuple[list[PartSummary], list[str]]:
-    """Segment one video's transcript into summarised parts + misspelling-prone keywords."""
+) -> tuple[list[PartSummary], list[str], str]:
+    """Segment one video's transcript into summarised parts, misspelling-prone
+    keywords, and a whole-video summary."""
     messages = [
         {"role": "system", "content": cfg.get("prompt", "")},
         {"role": "user", "content": format_numbered_transcript(clean_lines)},
@@ -170,7 +175,7 @@ def segment_video(
                 stem,
             )
             continue
-        parts, keywords = parsed
+        parts, keywords, video_summary = parsed
         if drops:
             outcome, reason = DROPPED_ITEMS, f"{len(drops)} dropped: " + "; ".join(drops)
         elif not parts:
@@ -188,10 +193,10 @@ def segment_video(
             cfg=attempt_cfg,
         )
         recorder.flush_unit(stem, outcome=outcome, reason=reason)
-        return parts, keywords
+        return parts, keywords, video_summary
     recorder.flush_unit(stem, outcome=LLM_ERROR, reason=f"all {attempts} attempt(s) failed")
     logger.warning("summary: all %d attempt(s) failed for %s; no parts", attempts, stem)
-    return [], []
+    return [], [], ""
 
 
 def _format_parts_doc(parts: list[PartSummary]) -> str:
@@ -310,7 +315,7 @@ def build_summary(
     parts: list[PartSummary] = []
     keywords: dict[str, list[str]] = {}
     for stem, clean_lines in parts_input:
-        video_parts, video_keywords = segment_video(
+        video_parts, video_keywords, _ = segment_video(
             stem, clean_lines, cfg, call_llm=call_llm, recorder=recorder
         )
         parts.extend(video_parts)
