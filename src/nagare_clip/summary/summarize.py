@@ -54,6 +54,7 @@ class PartSummary:
 class ProjectSummary:
     summary: str
     parts: list[PartSummary] = field(default_factory=list)
+    keywords: dict[str, list[str]] = field(default_factory=dict)  # stem -> correct spellings
 
 
 def _strip_fence(response: str) -> str:
@@ -62,14 +63,23 @@ def _strip_fence(response: str) -> str:
     return fence.group(1) if fence else text
 
 
+def _coerce_keywords(value: Any) -> list[str]:
+    """Lenient keyword list: keep stripped non-empty strings, drop everything else."""
+    if not isinstance(value, list):
+        return []
+    return [item.strip() for item in value if isinstance(item, str) and item.strip()]
+
+
 def _parse_parts_response(
     response: str, stem: str, num_lines: int, drops: list[str] | None = None
-) -> list[PartSummary] | None:
-    """Parse a ``{"parts": [{"lines": [a,b], "summary": "…"}]}`` response.
+) -> tuple[list[PartSummary], list[str]] | None:
+    """Parse a ``{"parts": [{"lines": [a,b], "summary": "…"}], "keywords": [...]}`` response.
 
     Returns ``None`` on a hard parse failure (invalid JSON / no ``parts`` array)
-    so the caller can retry; otherwise the (possibly empty) validated list, with
-    malformed/out-of-range entries dropped (logged).
+    so the caller can retry; otherwise ``(parts, keywords)`` where ``parts`` is
+    the (possibly empty) validated list, with malformed/out-of-range entries
+    dropped (logged), and ``keywords`` are the video's misspelling-prone words
+    (empty when absent).
     """
 
     def _drop(msg: str) -> None:
@@ -99,7 +109,7 @@ def _parse_parts_response(
             _drop("part dropped, empty/missing summary")
             continue
         parts.append(PartSummary(stem=stem, lines=lines, summary=summary))
-    return parts
+    return parts, _coerce_keywords(data.get("keywords"))
 
 
 def segment_video(
@@ -109,8 +119,8 @@ def segment_video(
     *,
     call_llm: CallLLM = _call_llm,
     recorder: Recorder = NULL_RECORDER,
-) -> list[PartSummary]:
-    """Segment one video's transcript into summarised parts (line ranges)."""
+) -> tuple[list[PartSummary], list[str]]:
+    """Segment one video's transcript into summarised parts + misspelling-prone keywords."""
     messages = [
         {"role": "system", "content": cfg.get("prompt", "")},
         {"role": "user", "content": format_numbered_transcript(clean_lines)},
@@ -141,8 +151,8 @@ def segment_video(
             )
             continue
         drops: list[str] = []
-        parts = _parse_parts_response(response, stem, num_lines=len(clean_lines), drops=drops)
-        if parts is None:
+        parsed = _parse_parts_response(response, stem, num_lines=len(clean_lines), drops=drops)
+        if parsed is None:
             recorder.attempt(
                 unit=stem,
                 attempt=attempt,
@@ -160,6 +170,7 @@ def segment_video(
                 stem,
             )
             continue
+        parts, keywords = parsed
         if drops:
             outcome, reason = DROPPED_ITEMS, f"{len(drops)} dropped: " + "; ".join(drops)
         elif not parts:
@@ -177,10 +188,10 @@ def segment_video(
             cfg=attempt_cfg,
         )
         recorder.flush_unit(stem, outcome=outcome, reason=reason)
-        return parts
+        return parts, keywords
     recorder.flush_unit(stem, outcome=LLM_ERROR, reason=f"all {attempts} attempt(s) failed")
     logger.warning("summary: all %d attempt(s) failed for %s; no parts", attempts, stem)
-    return []
+    return [], []
 
 
 def _format_parts_doc(parts: list[PartSummary]) -> str:
@@ -297,13 +308,19 @@ def build_summary(
 ) -> ProjectSummary:
     """Map (``segment_video`` per video) then reduce (``generate_project_summary``)."""
     parts: list[PartSummary] = []
+    keywords: dict[str, list[str]] = {}
     for stem, clean_lines in parts_input:
-        parts.extend(segment_video(stem, clean_lines, cfg, call_llm=call_llm, recorder=recorder))
+        video_parts, video_keywords = segment_video(
+            stem, clean_lines, cfg, call_llm=call_llm, recorder=recorder
+        )
+        parts.extend(video_parts)
+        if video_keywords:
+            keywords[stem] = video_keywords
     if seg_times_by_stem:
         for p in parts:
             _attach_part_times(p, seg_times_by_stem.get(p.stem))
     summary = generate_project_summary(parts, cfg, call_llm=call_llm, recorder=recorder)
-    return ProjectSummary(summary=summary, parts=parts)
+    return ProjectSummary(summary=summary, parts=parts, keywords=keywords)
 
 
 def summary_to_dict(ps: ProjectSummary) -> dict[str, Any]:
@@ -319,7 +336,7 @@ def summary_to_dict(ps: ProjectSummary) -> dict[str, Any]:
         if p.end is not None:
             entry["end"] = p.end
         parts.append(entry)
-    return {"summary": ps.summary, "parts": parts}
+    return {"summary": ps.summary, "parts": parts, "keywords": ps.keywords}
 
 
 def _coerce_pair(value: Any) -> tuple[int, int] | None:
@@ -354,4 +371,12 @@ def summary_from_dict(data: Any) -> ProjectSummary:
             start = float(start) if isinstance(start, (int, float)) else None
             end = float(end) if isinstance(end, (int, float)) else None
             parts.append(PartSummary(stem=stem, lines=lines, summary=s, start=start, end=end))
-    return ProjectSummary(summary=summary, parts=parts)
+    keywords: dict[str, list[str]] = {}
+    raw_kw = data.get("keywords")
+    if isinstance(raw_kw, dict):
+        for k, v in raw_kw.items():
+            if isinstance(k, str):
+                kws = _coerce_keywords(v)
+                if kws:
+                    keywords[k] = kws
+    return ProjectSummary(summary=summary, parts=parts, keywords=keywords)

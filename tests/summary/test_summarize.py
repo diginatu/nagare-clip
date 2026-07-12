@@ -38,7 +38,7 @@ class TestSegmentVideo:
             '{"lines": [3, 4], "summary": "demo"}'
             "]}"
         )
-        parts = segment_video(
+        parts, _ = segment_video(
             "vid", ["a", "b", "c", "d"], {"prompt": "P"}, call_llm=lambda m, c: resp
         )
         assert parts == [
@@ -48,17 +48,17 @@ class TestSegmentVideo:
 
     def test_strips_fence(self):
         resp = '```json\n{"parts": [{"lines": [1, 1], "summary": "x"}]}\n```'
-        parts = segment_video("v", ["a"], {"prompt": "P"}, call_llm=lambda m, c: resp)
+        parts, _ = segment_video("v", ["a"], {"prompt": "P"}, call_llm=lambda m, c: resp)
         assert parts == [PartSummary(stem="v", lines=(1, 1), summary="x")]
 
     def test_out_of_range_lines_dropped(self):
         resp = '{"parts": [{"lines": [1, 9], "summary": "bad"},{"lines": [1, 2], "summary": "ok"}]}'
-        parts = segment_video("v", ["a", "b", "c"], {"prompt": "P"}, call_llm=lambda m, c: resp)
+        parts, _ = segment_video("v", ["a", "b", "c"], {"prompt": "P"}, call_llm=lambda m, c: resp)
         assert parts == [PartSummary(stem="v", lines=(1, 2), summary="ok")]
 
     def test_empty_summary_dropped(self):
         resp = '{"parts": [{"lines": [1, 1], "summary": ""}]}'
-        parts = segment_video("v", ["a"], {"prompt": "P"}, call_llm=lambda m, c: resp)
+        parts, _ = segment_video("v", ["a"], {"prompt": "P"}, call_llm=lambda m, c: resp)
         assert parts == []
 
     def test_uses_clean_numbered_input(self):
@@ -75,16 +75,81 @@ class TestSegmentVideo:
         def boom(m, c):
             raise ConnectionError("down")
 
-        assert segment_video("v", ["a"], {"prompt": "P"}, call_llm=boom) == []
+        assert segment_video("v", ["a"], {"prompt": "P"}, call_llm=boom) == ([], [])
 
     def test_unparseable_returns_empty(self):
-        assert segment_video("v", ["a"], {"prompt": "P"}, call_llm=lambda m, c: "junk") == []
+        assert segment_video("v", ["a"], {"prompt": "P"}, call_llm=lambda m, c: "junk") == ([], [])
 
     def test_retries_then_succeeds(self):
         fake = _seq_llm(["junk", '{"parts": [{"lines": [1, 1], "summary": "s"}]}'])
-        parts = segment_video("v", ["a"], {"prompt": "P", "max_retries": 2}, call_llm=fake)
+        parts, _ = segment_video("v", ["a"], {"prompt": "P", "max_retries": 2}, call_llm=fake)
         assert fake.calls["i"] == 2
         assert parts[0].summary == "s"
+
+
+class TestSegmentVideoKeywords:
+    def test_parses_keywords_stripped(self):
+        resp = (
+            '{"parts": [{"lines": [1, 1], "summary": "s"}],'
+            ' "keywords": [" Kubernetes ", "PostgreSQL"]}'
+        )
+        parts, keywords = segment_video("v", ["a"], {"prompt": "P"}, call_llm=lambda m, c: resp)
+        assert [p.summary for p in parts] == ["s"]
+        assert keywords == ["Kubernetes", "PostgreSQL"]
+
+    def test_missing_keywords_is_empty_list(self):
+        resp = '{"parts": [{"lines": [1, 1], "summary": "s"}]}'
+        _, keywords = segment_video("v", ["a"], {"prompt": "P"}, call_llm=lambda m, c: resp)
+        assert keywords == []
+
+    def test_malformed_keyword_entries_dropped(self):
+        resp = '{"parts": [], "keywords": ["ok", 42, "", null]}'
+        _, keywords = segment_video("v", ["a"], {"prompt": "P"}, call_llm=lambda m, c: resp)
+        assert keywords == ["ok"]
+
+    def test_keywords_non_list_is_empty(self):
+        resp = '{"parts": [], "keywords": "not a list"}'
+        _, keywords = segment_video("v", ["a"], {"prompt": "P"}, call_llm=lambda m, c: resp)
+        assert keywords == []
+
+
+class TestProjectKeywords:
+    def test_build_summary_collects_keywords_by_stem_omitting_empty(self):
+        responses = iter(
+            [
+                '{"parts": [{"lines": [1, 1], "summary": "sa"}], "keywords": ["KWA"]}',
+                '{"parts": [{"lines": [1, 1], "summary": "sb"}], "keywords": []}',
+                '{"summary": "all"}',
+            ]
+        )
+        ps = build_summary(
+            [("a", ["x"]), ("b", ["y"])], {"prompt": "P"}, call_llm=lambda m, c: next(responses)
+        )
+        assert ps.keywords == {"a": ["KWA"]}
+
+    def test_to_dict_includes_keywords(self):
+        ps = ProjectSummary(summary="s", parts=[], keywords={"a": ["K"]})
+        assert summary_to_dict(ps)["keywords"] == {"a": ["K"]}
+
+    def test_to_dict_empty_keywords_present(self):
+        assert summary_to_dict(ProjectSummary(summary="", parts=[]))["keywords"] == {}
+
+    def test_from_dict_round_trip_keywords(self):
+        ps = ProjectSummary(
+            summary="s", parts=[PartSummary("a", (1, 2), "x")], keywords={"a": ["K"]}
+        )
+        assert summary_from_dict(summary_to_dict(ps)).keywords == {"a": ["K"]}
+
+    def test_from_dict_missing_keywords_is_empty(self):
+        assert summary_from_dict({"summary": "s", "parts": []}).keywords == {}
+
+    def test_from_dict_malformed_keywords_dropped(self):
+        data = {
+            "summary": "s",
+            "parts": [],
+            "keywords": {"a": ["ok", ""], "b": "not-a-list", "c": []},
+        }
+        assert summary_from_dict(data).keywords == {"a": ["ok"]}
 
 
 class TestGenerateProjectSummary:
@@ -151,7 +216,7 @@ class TestSummaryRecorder:
         def fake(_m, _c):
             return resp
 
-        parts = segment_video("vid", ["a", "b"], {"max_retries": 0}, call_llm=fake, recorder=rec)
+        parts, _ = segment_video("vid", ["a", "b"], {"max_retries": 0}, call_llm=fake, recorder=rec)
         assert len(parts) == 1
         assert _outcome(tmp_path, "vid") == "ok"
 
@@ -162,7 +227,7 @@ class TestSummaryRecorder:
         def fake(_m, _c):
             return resp
 
-        parts = segment_video("vid", ["a", "b"], {"max_retries": 0}, call_llm=fake, recorder=rec)
+        parts, _ = segment_video("vid", ["a", "b"], {"max_retries": 0}, call_llm=fake, recorder=rec)
         assert len(parts) == 1
         assert _outcome(tmp_path, "vid") == "dropped-items"
 
@@ -194,6 +259,7 @@ class TestRoundTrip:
                 {"stem": "a", "lines": [1, 4], "summary": "intro"},
                 {"stem": "b", "lines": [2, 9], "summary": "body"},
             ],
+            "keywords": {},
         }
         assert summary_from_dict(d) == ps
 

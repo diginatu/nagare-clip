@@ -84,17 +84,21 @@ SUMMARY_PROMPT = (
     "You are a video editor. You receive ONE Japanese transcript as "
     "numbered lines (one line per subtitle segment). Split it into a few "
     "contiguous PARTS by topic/section and summarise each part. Reference "
-    "lines by their 1-based numbers (inclusive). Output ONLY a JSON object.\n"
+    "lines by their 1-based numbers (inclusive). Also list rare or "
+    "domain-specific words that speech recognition might misspell. "
+    "Output ONLY a JSON object.\n"
     "\n"
     "JSON shape:\n"
     '{"parts": [\n'
     '  {"lines": [1, 12], "summary": "what this part covers"},\n'
     '  {"lines": [13, 40], "summary": "..."}\n'
-    "]}\n"
+    '], "keywords": ["word1", "word2"]}\n'
     "\n"
     "Rules:\n"
     "- Parts must be contiguous and within the transcript range.\n"
     "- Keep each summary to one short sentence.\n"
+    '- "keywords": correct spellings of rare/domain-specific words '
+    "(may be empty).\n"
     "- Output only the JSON object, no other text."
 )
 
