@@ -9,8 +9,8 @@ Maintain and improve a multi-stage rough-cut pipeline:
 1. WhisperX transcription in Docker
 2. Audio-silence (jump-cut) detection — ffmpeg `silencedetect`, editable cut list
 3. LLM sentence re-segmentation — rewrites `{stem}.json`/`{stem}.txt` into one-sentence-per-line units (disabled by default)
-4. Text editing checkpoint — copies `.txt` or runs LLM filter with `{{old->new}}` markers
-5. summary — a larger LLM segments every video into line-range parts + summaries and writes one all-videos summary (project-wide)
+4. summary — a larger LLM segments every video into line-range parts + summaries (and lists per-video misspelling-prone keywords) and writes one all-videos summary (project-wide)
+5. Text editing checkpoint — copies `.txt` or runs LLM filter with `{{old->new}}` markers, optionally primed with the summary stage's summaries/keywords
 6. plan — a larger LLM gives coarse, cross-video rough directions per part (project-wide)
 7. director — a larger LLM proposes high-level edits (cut/speed/overlay/keep/edit) as a reviewable JSON op list (fed the summary/plan overview context)
 8. guided_edit — a small LLM applies the director's ops into `_edits.txt`, deterministically verified
@@ -22,7 +22,7 @@ Final deliverable is a `.blend` project for human editing.
 > **Naming convention:** Stages are identified only by their **functional /
 > config-section name** — there are no stage numbers anywhere. The canonical
 > identifiers are: `transcription:`, `audio_silence:`, `sentence_split:`,
-> `text_filter:`, `summary:`, `plan:`, `director:`, `guided_edit:`,
+> `summary:`, `text_filter:`, `plan:`, `director:`, `guided_edit:`,
 > `intervals:`, `blender:`.
 > Package dirs (`src/nagare_clip/<name>/`), `output/<name>/` subdirs, and
 > `run_pipeline.sh --from-stage`/`--to-stage` all use these same names. A new
@@ -55,9 +55,16 @@ See [`docs/stages/sentence_split.md`](docs/stages/sentence_split.md) for the re-
 - **Inputs:** `{stem}.json` (word timings), `{stem}.txt` (plain text) from transcription; the audio_silence `{stem}_cuts.txt`, passed as `cuts_txt` (for force-split silences)
 - **Outputs:** re-segmented `{stem}.json` + `{stem}.txt` in `output/sentence_split/`
 
+### summary — Project-Wide Summaries
+
+A larger LLM (config `summary:`, disabled by default) runs **once project-wide, between sentence_split and text_filter**. For each video it maps the numbered transcript into line-range **parts** with a one-sentence summary each (`summarize.segment_video()`, `{"parts":[{"lines":[a,b],"summary":...}],"keywords":[...]}`), then reduces all parts into one all-videos summary (`generate_project_summary()`); `build_summary()` is the map-then-reduce entry point. Each video's `segment_video()` response also carries `"keywords"` (misspelling-prone words, per video, coerced leniently — non-string/empty entries dropped, empty list on absence). Reuses `director_llm`'s transcript-formatting helpers and `llm_retry`; any failure degrades gracefully to empty parts/summary/keywords. `summary.json` (`{summary, parts:[{stem,lines,summary,start?,end?}], keywords:{stem:[...]}}`) is human-reviewable and feeds `text_filter`/`plan`/`director`. Each part's optional `start`/`end` (seconds, via `timing.segment_times`) lets `plan` render per-part duration/gap; omitted when timing is unavailable. The orchestrator passes each source's sentence_split `{stem}.json` via `run_summary(..., json_paths=...)` to derive those times. Disabled → `{"summary":"","parts":[],"keywords":{}}` no-op.
+
+- **Inputs:** every sentence_split `{stem}.txt`, passed as `txts` (stem derived from basename); optionally the sentence_split `{stem}.json` per source, passed as `json_paths` (for part `start`/`end` times)
+- **Outputs:** `output/summary/summary.json`
+
 ### text_filter — Text Editing Checkpoint (mandatory)
 
-Produces `{stem}_edits.txt` for human review. When `text_filter.use_llm` is `false` (default), copies the transcription `.txt` as-is. When enabled, runs LLM filter and writes output with `{{old->new}}` markers preserved.
+Produces `{stem}_edits.txt` for human review. When `text_filter.use_llm` is `false` (default), copies the transcription `.txt` as-is. When enabled, runs LLM filter and writes output with `{{old->new}}` markers preserved. When `use_llm` is enabled, `run_text_filter` reads the summary stage's `summary.json` (passed as `summary_json`); this video's part summaries and keywords — merged with the constant `text_filter.keywords` list — are appended to the filter LLM's system prompt via `text_filter/context.build_enhanced_prompt`; missing/empty/malformed `summary.json` degrades to the base prompt.
 
 Humans may wrap a span in `<keep>...</keep>` to force-preserve its audio in the intervals stage. It may open on one line and close on a later one, spanning multiple WhisperX segments (and the silences between them). Added by the human *after* the LLM filter runs — the LLM never sees it.
 
@@ -67,17 +74,10 @@ Humans may wrap a span in `<keep>...</keep>` to force-preserve its audio in the 
 
 `<cut>...</cut>` is a deletion shorthand: it desugars to `{{wrapped->}}` deletion patches (`sync_json._expand_cut_tags`), so the words vanish from the JSON and the resulting gap is cut by the interval stage's word-gap silence detection — meant for deletions longer than `intervals.silence_threshold`, and immune to caption re-expansion since deleted text has no caption. Balance/nesting rules follow `<keep>`; don't overlap it with `<keep>/<speed>/<overlay>` on the same span.
 
-- **Inputs:** `{stem}.txt`
+- **Inputs:** `{stem}.txt`; `output/summary/summary.json` (as `summary_json`)
 - **Outputs:** `{stem}_edits.txt`
 
 Validate a hand-edited `_edits.txt` before resuming with `python -m nagare_clip.intervals.check_edits --edits-txt <file> --json <file>` (`src/nagare_clip/intervals/check_edits.py`). Unlike the interval stage's fail-fast `ValueError`, it collects **every** problem at once (line-numbered, exit 1 if any): line count vs. JSON segments, `{{old->new}}` syntax, decomposition integrity, and tag balance/validity for all four markers. Pure `check_edits(edit_lines, json_data) -> list[Problem]`, never raises.
-
-### summary — Project-Wide Summaries
-
-A larger LLM (config `summary:`, disabled by default) runs **once project-wide**. For each video it maps the numbered transcript into line-range **parts** with a one-sentence summary each (`summarize.segment_video()`, `{"parts":[{"lines":[a,b],"summary":...}]}`), then reduces all parts into one all-videos summary (`generate_project_summary()`); `build_summary()` is the map-then-reduce entry point. Reuses `director_llm`'s transcript-formatting helpers and `llm_retry`; any failure degrades gracefully to empty parts/summary. `summary.json` (`{summary, parts:[{stem,lines,summary,start?,end?}]}`) is human-reviewable and feeds `plan`/`director`. Each part's optional `start`/`end` (seconds, via `timing.segment_times`) lets `plan` render per-part duration/gap; omitted when timing is unavailable. The orchestrator passes each source's sentence_split `{stem}.json` via `run_summary(..., json_paths=...)` to derive those times. Disabled → `{"summary":"","parts":[]}` no-op.
-
-- **Inputs:** every `{stem}_edits.txt` (from text_filter), passed as `edits_txts` (stem derived from basename); optionally the sentence_split `{stem}.json` per source, passed as `json_paths` (for part `start`/`end` times)
-- **Outputs:** `output/summary/summary.json`
 
 ### plan — Cross-Video Rough Directions
 
@@ -160,10 +160,10 @@ src/nagare_clip/          # Main Python package (src layout)
   text_filter/                # text_filter stage modules (text editing checkpoint)
     run.py                    # run_text_filter() typed entry point
     llm_filter.py             # LLM API calls, {{old->new}} patch parsing, apply_patches_to_lines()
-    summary_llm.py            # Summary LLM: generates transcript summary + keywords for filter context
+    context.py                # build_enhanced_prompt(): summary.json context -> filter prompt
   summary/                    # summary stage (project-wide): per-part + all-videos summaries
-    summarize.py              # PartSummary/ProjectSummary, segment_video(), build_summary()
-    run.py                    # run_summary() (repeated edits-txt/json paths -> summary.json)
+    summarize.py              # PartSummary/ProjectSummary(+keywords), segment_video(), build_summary()
+    run.py                    # run_summary() (repeated sentence_split txt/json paths -> summary.json)
   plan/                       # plan stage (project-wide): cross-video rough directions
     plan_llm.py               # PartDirection, generate_plan(), plan_to/from_dict()
     run.py                    # run_plan() (summary.json -> plan.json)
@@ -229,7 +229,7 @@ All tunable parameters are defined as typed **pydantic-settings models** in
 
 **Priority order (highest first):** CLI flags > YAML config file > model defaults.
 
-All LLM stages (`sentence_split`, `text_filter` + its `summary_llm`, `summary`, `plan`, `director`, `guided_edit`) route through `nagare_clip.llm_client.call_llm` (LiteLLM). Each block selects its backend with a `provider` key (default `ollama_chat`); the model id sent to LiteLLM is `"<provider>/<model>"`. An empty `api_base` falls back to `http://localhost:11434` for an ollama provider, or is omitted for a cloud provider. `api_key` is forwarded when set (or use the provider's env var). `response_format: "json"` maps to a JSON-object request; `thinking` maps to LiteLLM `reasoning_effort` (best-effort per provider).
+All LLM stages (`sentence_split`, `text_filter`, `summary`, `plan`, `director`, `guided_edit`) route through `nagare_clip.llm_client.call_llm` (LiteLLM). Each block selects its backend with a `provider` key (default `ollama_chat`); the model id sent to LiteLLM is `"<provider>/<model>"`. An empty `api_base` falls back to `http://localhost:11434` for an ollama provider, or is omitted for a cloud provider. `api_key` is forwarded when set (or use the provider's env var). `response_format: "json"` maps to a JSON-object request; `thinking` maps to LiteLLM `reasoning_effort` (best-effort per provider).
 
 Only `blender/blender_cli.py` still takes a `--config <path>` flag on its command line — it runs as a separate Blender subprocess, so the pipeline CLI (`nagare_clip.pipeline.cli`) passes its resolved `config_path` through explicitly. Every other stage receives the already-merged `cfg` dict in-process (no subprocess, no re-parsing of `--config`).
 
@@ -243,7 +243,7 @@ the [Documentation Policy](#documentation-policy)):
 
 - audio_silence → [`docs/stages/audio_silence.md`](docs/stages/audio_silence.md)
 - sentence_split (re-segmentation, windowing/carry-over, force-split) → [`docs/stages/sentence_split.md`](docs/stages/sentence_split.md)
-- text_filter (+ summary LLM) → [`docs/stages/text_filter.md`](docs/stages/text_filter.md)
+- text_filter (+ summary-stage filter context) → [`docs/stages/text_filter.md`](docs/stages/text_filter.md)
 - intervals (`<keep>`/`<speed>`/`<overlay>`/`<cut>` markers, margins, captions) → [`docs/stages/intervals.md`](docs/stages/intervals.md)
 - blender (VSE layout, text styling, retiming) → [`docs/stages/blender.md`](docs/stages/blender.md)
 - pipeline orchestration (`nagare_clip.pipeline`) → [`docs/stages/pipeline.md`](docs/stages/pipeline.md)

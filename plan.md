@@ -35,3 +35,17 @@ The `sentence_split` stage sits between `audio_silence` and `text_filter` and is
 **Status: complete** (branch `feat/langfuse-tracing`, Tasks 1–9 committed; Task 10 docs).
 
 Langfuse tracing was implemented at the single LLM chokepoint — `nagare_clip.llm_client.call_llm` — via LiteLLM's `langfuse_otel` OTEL callback (`litellm.callbacks = ["langfuse_otel"]`). The callback is registered once per process by `_ensure_tracing()` (idempotent) and flushed on exit by an `atexit` hook (`flush_traces()`, a workaround for short-lived CLI processes). Tracing is env-gated: enabled only when `LANGFUSE_PUBLIC_KEY` and `LANGFUSE_SECRET_KEY` are both set AND `NAGARE_LANGFUSE != "0"` AND `general.langfuse` (config, default `true`) is not false; when disabled the provider call is byte-identical to the pre-tracing behaviour. Each call carries `generation_name="<stage>/<unit>"` and `tags=["stage:<stage>","stem:<unit>"]`; `session_id` is set to `NAGARE_RUN_ID` (one timestamp per `run_pipeline.sh` invocation, so all calls in a run group under one Langfuse session). Metadata is carried via `with_trace_meta(cfg, stage=..., unit=...)` under a reserved `cfg["_trace"]` key that `call_llm` pops before forwarding kwargs to the provider. `run_pipeline.sh` exports `NAGARE_RUN_ID` and maps `general.langfuse: false` to `NAGARE_LANGFUSE=0` for all stage subprocesses. The existing markdown `llm_report` is untouched and runs alongside as an independent sink. Documented fallback: if OTEL flushing proves unreliable, switch to the langfuse-SDK callback (`["langfuse"]`) with explicit `langfuse.flush()` in `flush_traces`. This is observability-only and decoupled from any future LangGraph migration.
+
+## summary/text_filter Merge
+
+**Status: complete.**
+
+The `summary` stage moved before `text_filter` (order: …, sentence_split, summary,
+text_filter, plan, …) and now reads the sentence_split `{stem}.txt` transcripts — safe
+because text_filter is line-preserving, so part line-ranges stay valid downstream. Its
+per-video LLM call also returns `"keywords"` (misspelling-prone words), stored as
+`summary.json`'s top-level `keywords: {stem: [...]}`. text_filter's built-in summary LLM
+(`text_filter/summary_llm.py`, config `text_filter.summary_llm`) was removed; the filter
+prompt is now primed from `summary.json` (+ the constant `text_filter.keywords` list) via
+`text_filter/context.build_enhanced_prompt`. Config break: `text_filter.summary_llm` now
+fails validation (migration: move `keywords` up; enable `summary.enabled`).

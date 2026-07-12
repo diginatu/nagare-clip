@@ -9,8 +9,8 @@ The pipeline creates a rough-cut Blender project for human review and fine-tunin
 1. transcription: WhisperX in Docker -> transcript outputs (`json`, `srt`, `vtt`, etc.)
 2. audio_silence: Audio-silence (jump-cut) detection -> `_cuts.txt` editable cut list
 3. sentence_split (optional): LLM re-segments the transcript into one-sentence-per-line units -> `output/sentence_split/{stem}.json` + `{stem}.txt`; disabled by default (byte-identical copy-through)
-4. text_filter: Text editing checkpoint -> `_edits.txt` (copy of `.txt`, or LLM-corrected with `{{old->new}}` markers)
-5. summary (optional, project-wide): a larger LLM segments every video into line-range parts + summaries and writes one all-videos summary -> reviewable `output/summary/summary.json`
+4. summary (optional, project-wide): a larger LLM segments every video into line-range parts + summaries and writes one all-videos summary -> reviewable `output/summary/summary.json`; also lists per-video misspelling-prone keywords used by text_filter
+5. text_filter: Text editing checkpoint -> `_edits.txt` (copy of `.txt`, or LLM-corrected with `{{old->new}}` markers), optionally primed with summary-stage context
 6. plan (optional, project-wide): a larger LLM gives a coarse, cross-video rough direction per part -> reviewable `output/plan/plan.json`
 7. director (optional): a larger LLM proposes high-level edits -> reviewable `_director.json` op list (fed the summary/plan overview context)
 8. guided_edit (optional): a small LLM applies the director's ops into `_edits.txt` (deterministically verified)
@@ -30,7 +30,7 @@ The `{{old->new}}` syntax replaces `old` with `new` in the transcript. Use `{{de
 
 The optional `director` + `guided_edit` stages automate steps like the above with LLMs: enable `director.enabled`/`guided_edit.enabled` in config, then a larger LLM proposes edits (cut/speed/overlay/keep/edit) into a reviewable `output/director/{stem}_director.json`, and guided_edit applies them — any op it cannot apply cleanly is logged and recorded in the LLM report (`output/llm_report/`). Span ops (cut/speed/overlay/keep) are a pure whole-line-range wrap, applied deterministically with no LLM call; if a span op's range overlaps a same-type tag already in the file (e.g. one you hand-authored) or an earlier op, it is clipped to the free lines (or dropped if fully covered) so the tags stay valid. Only `edit` ops (a within-line `{{old->new}}` the director only described in prose) call the small LLM, retrying per op on an error / failed verification and nudging the temperature up each attempt. The director likewise retries a failed LLM call (connection error / unparseable JSON); tune `max_retries`, `retry_temp_step`, and `retry_temp_cap` per stage (`max_retries: 0` disables retry).
 
-The optional `summary` + `plan` stages run **once over all source videos** (project-wide) before `director` and give it cross-video context. Enable `summary.enabled`/`plan.enabled` in config: `summary` segments each transcript into line-range parts with a summary each and writes one all-videos summary to `output/summary/summary.json`; `plan` reads those summaries and writes a coarse, cross-video rough direction per part (e.g. "remove — repeats an earlier part", "keep tight") to `output/plan/plan.json`. Both files are human-reviewable/editable. When enabled, the `director` for each video receives the overall summary plus that video's parts (line ranges, summaries, rough directions) and one-line context for the other videos, so its precise per-line ops follow the project-wide plan. They share the same `max_retries`/`retry_temp_step`/`retry_temp_cap` retry knobs.
+The optional `summary` + `plan` stages run **once over all source videos** (project-wide) and give downstream stages cross-video context. Enable `summary.enabled`/`plan.enabled` in config: `summary` runs before `text_filter`, segments each sentence_split transcript into line-range parts with a summary each, lists per-video misspelling-prone keywords, and writes one all-videos summary to `output/summary/summary.json` — its summaries/keywords also prime the `text_filter` LLM's prompt; `plan` still runs before `director`, reading those summaries and writing a coarse, cross-video rough direction per part (e.g. "remove — repeats an earlier part", "keep tight") to `output/plan/plan.json`. Both files are human-reviewable/editable. When enabled, the `director` for each video receives the overall summary plus that video's parts (line ranges, summaries, rough directions) and one-line context for the other videos, so its precise per-line ops follow the project-wide plan. They share the same `max_retries`/`retry_temp_step`/`retry_temp_cap` retry knobs.
 
 To help the LLMs reason about pacing, the `plan` and `director` stages now also see **calculated durations and in-between gaps**: the `director`'s numbered transcript annotates each line with `[4.2s, gap 0.8s]` (per-sentence duration + gap to the next line) and the `plan`'s per-part context shows each part's duration and gap. These times come from the WhisperX `{stem}.json`; the orchestrator feeds each stage the sentence_split `{stem}.json` automatically, so there's nothing to wire up yourself. To run a single stage on its own (reusing its inputs from a previous pipeline run), use `./scripts/run_pipeline.sh --from-stage X --to-stage X`.
 
@@ -198,7 +198,7 @@ The config file covers all sections, each named after its stage: `general`, `tra
 
 ### Choosing an LLM provider
 
-Every LLM stage (`sentence_split`, `text_filter` and its `summary_llm`, `summary`, `plan`, `director`, `guided_edit`) routes through a unified transport backed by the [LiteLLM](https://github.com/BerriAI/litellm) library, so you can point any stage at a local or cloud provider. On a stage's config block, set `provider:` to one of `ollama_chat` (default, local Ollama), `openai`, `gemini`, or `anthropic`, and set `model:` to that provider's model name — LiteLLM receives the combined `"<provider>/<model>"`. Supply credentials with `api_key:` (or the provider's standard environment variable, e.g. `OPENAI_API_KEY`, `GEMINI_API_KEY`, `ANTHROPIC_API_KEY`). Leave `api_base:` empty for cloud providers; for `ollama_chat` an empty `api_base` falls back to local Ollama (`http://localhost:11434`). Each stage chooses its provider independently, so you can mix (e.g. a cloud model for `director` and local Ollama for `guided_edit`).
+Every LLM stage (`sentence_split`, `text_filter`, `summary`, `plan`, `director`, `guided_edit`) routes through a unified transport backed by the [LiteLLM](https://github.com/BerriAI/litellm) library, so you can point any stage at a local or cloud provider. On a stage's config block, set `provider:` to one of `ollama_chat` (default, local Ollama), `openai`, `gemini`, or `anthropic`, and set `model:` to that provider's model name — LiteLLM receives the combined `"<provider>/<model>"`. Supply credentials with `api_key:` (or the provider's standard environment variable, e.g. `OPENAI_API_KEY`, `GEMINI_API_KEY`, `ANTHROPIC_API_KEY`). Leave `api_base:` empty for cloud providers; for `ollama_chat` an empty `api_base` falls back to local Ollama (`http://localhost:11434`). Each stage chooses its provider independently, so you can mix (e.g. a cloud model for `director` and local Ollama for `guided_edit`).
 
 ```yaml
 director:
@@ -238,7 +238,7 @@ sentence_split:
   force_split_min_silence: 3.0   # seconds; only cut spans at least this long
 ```
 
-Outputs land in `output/sentence_split/{stem}.json` and `output/sentence_split/{stem}.txt`; all downstream stages (text_filter, summary, director, etc.) read from there.
+Outputs land in `output/sentence_split/{stem}.json` and `output/sentence_split/{stem}.txt`; all downstream stages (summary, text_filter, director, etc.) read from there.
 
 ### text_filter: Text Editing (LLM optional)
 
@@ -261,19 +261,29 @@ Human editors can also wrap a span in `<keep>...</keep>` to force-preserve the a
 
 `thinking` enables chain-of-thought reasoning for supported models (e.g. qwen3, deepseek-r1); it maps to LiteLLM's `reasoning_effort` (best-effort per provider). Set `true`/`false`, or a string level like `"low"`, `"medium"`, `"high"` for models that support granular control (e.g. Qwen 3.5). The pipeline uses only the final answer, not the reasoning trace.
 
-#### Summary LLM (optional)
+#### Filter context from the summary stage (optional)
 
-When `text_filter.summary_llm.enabled` is `true`, a separate LLM analyzes the full transcript before filtering to generate a short summary and a list of rare/domain-specific keywords. These are appended to the filter LLM's system prompt so it can better correct mis-dictated words. The summary LLM has its own independent config (model, api_base, temperature, etc.), so you can use a larger model for summarization and a smaller one for filtering.
+When the project-wide `summary` stage is enabled (`summary.enabled: true`), it runs
+before text_filter and its `summary.json` carries, per video, the part summaries and a
+list of rare/domain-specific keywords that speech recognition might misspell. text_filter
+appends this video's summaries and keywords to the filter LLM's system prompt so it can
+better correct mis-dictated words. You can also pin constant keywords that are always
+injected, without enabling the summary stage:
 
 ```yaml
 text_filter:
   use_llm: true
-  summary_llm:
-    enabled: true
-    model: "gemma3:27b"    # can use a different/larger model
+  keywords: ["Kubernetes", "PostgreSQL"]   # always appended to the filter prompt
+summary:
+  enabled: true                            # per-video summaries + keywords for the filter
 ```
 
-Falls back gracefully if the summary LLM call fails — filtering proceeds without the extra context.
+Falls back gracefully — a missing or empty `summary.json` just means filtering proceeds
+without the extra context.
+
+> **Migration:** the former `text_filter.summary_llm` section was removed and now fails
+> validation. Move `summary_llm.keywords` to `text_filter.keywords` and use
+> `summary.enabled` for LLM-generated context.
 
 ## CLI
 
@@ -285,7 +295,7 @@ Options:
 - `--source FILE` — source video file (may be repeated for multiple sources); when omitted, all videos in `--input-videos-dir` are processed alphabetically.
 - `--config FILE` — path to a YAML config file; config values fill in between CLI overrides and built-in defaults.
 - `--language LANG` — ISO 639-1 language code passed to WhisperX (default: `ja`). Also settable via `transcription.language` in config.
-- `--from-stage NAME` — start from stage `NAME`, reusing earlier stage outputs. `NAME` is a stage name: `transcription`, `audio_silence`, `sentence_split`, `text_filter`, `summary`, `plan`, `director`, `guided_edit`, `intervals`, `blender`. Also settable via `pipeline.from_stage` in config.
+- `--from-stage NAME` — start from stage `NAME`, reusing earlier stage outputs. `NAME` is a stage name: `transcription`, `audio_silence`, `sentence_split`, `summary`, `text_filter`, `plan`, `director`, `guided_edit`, `intervals`, `blender`. Also settable via `pipeline.from_stage` in config.
 - `--to-stage NAME` — stop **after** stage `NAME` (inclusive); later stages are skipped. Same stage names as `--from-stage`, and must not precede it. Defaults to `blender` (run to the end). Also settable via `pipeline.to_stage` in config. Combine with `--from-stage` to run a window of stages, e.g. `--from-stage summary --to-stage director`.
 - Defaults: input videos under `src_video/`, outputs under `output/`.
 - If `--source` contains `/`, it is treated as the exact path; otherwise it is resolved inside `--input-videos-dir`.

@@ -51,13 +51,13 @@ runtime behavior.
 - `stages.py` — `STAGE_NAMES` (the ten canonical stage names, in order) and
   `STAGES` (the `Stage` registry consumed by `runner.run_stages`). One adapter
   function per stage translates `PipelineContext` into that stage's typed
-  `run()` call (`run_audio_silence`, `run_sentence_split`, `run_text_filter`,
-  `run_summary`, `run_plan`, `run_director`, `run_guided_edit`, `run_intervals`)
+  `run()` call (`run_audio_silence`, `run_sentence_split`, `run_summary`,
+  `run_text_filter`, `run_plan`, `run_director`, `run_guided_edit`, `run_intervals`)
   or an external command (`transcription`, `blender`). `transcription`,
   `summary`, `plan`, and `blender` run once per pipeline invocation;
   `audio_silence`, `sentence_split`, `text_filter`, `director`, `guided_edit`,
   and `intervals` loop per source inside their adapter. Each LLM stage adapter
-  (`sentence_split`, `text_filter`, `summary`, `plan`, `director`,
+  (`sentence_split`, `summary`, `text_filter`, `plan`, `director`,
   `guided_edit`) owns its `llm_report.Recorder` lifecycle: it builds one
   recorder via `recorder_from_config(stage, cfg, override_dir=...)`, calls
   `rec.clear()` **once before** its stem loop (so a stage's `output/llm_report/`
@@ -108,7 +108,7 @@ interpreter exit, instead of once per stage subprocess under the old script.
 ## Output layout
 
 Output dirs are one per stage by name, created up front by `cli.main()`:
-`output/transcription|audio_silence|sentence_split|text_filter|summary|plan|director|guided_edit|intervals|blender/`.
+`output/transcription|audio_silence|sentence_split|summary|text_filter|plan|director|guided_edit|intervals|blender/`.
 `sentence_split`/`summary`/`plan`/`director`/`guided_edit` all still run
 unconditionally (cheap no-ops when their stage is disabled in config), exactly
 as under the bash orchestrator — see [AGENTS.md](../../AGENTS.md#pipeline-overview)
