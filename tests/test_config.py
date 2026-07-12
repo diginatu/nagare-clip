@@ -252,24 +252,24 @@ class TestGetEffectiveConfig:
         assert s2["retry_on_invalid"] is True
         assert s2["retry_min_batch_size"] == 1
 
-    def test_summary_llm_defaults_present(self):
+    def test_text_filter_keywords_default_empty(self):
         cfg = get_effective_config(None)
-        slm = cfg["text_filter"]["summary_llm"]
-        assert slm["enabled"] is False
-        assert "model" in slm
-        assert "api_base" in slm
-        assert "prompt" in slm
-        assert slm["response_format"] == "json"
+        assert cfg["text_filter"]["keywords"] == []
+        assert "summary_llm" not in cfg["text_filter"]
 
-    def test_summary_llm_config_override(self, tmp_path: Path):
+    def test_text_filter_keywords_override(self, tmp_path: Path):
         cfg_file = tmp_path / "cfg.yml"
-        cfg_file.write_text(yaml.dump({"text_filter": {"summary_llm": {"model": "gemma3:27b"}}}))
+        cfg_file.write_text(yaml.dump({"text_filter": {"keywords": ["Kubernetes"]}}))
         cfg = get_effective_config(cfg_file)
-        assert cfg["text_filter"]["summary_llm"]["model"] == "gemma3:27b"
-        # Other summary_llm defaults intact
-        assert cfg["text_filter"]["summary_llm"]["enabled"] is False
+        assert cfg["text_filter"]["keywords"] == ["Kubernetes"]
         # Other text_filter defaults intact
         assert cfg["text_filter"]["batch_size"] == 10
+
+    def test_removed_summary_llm_section_rejected(self, tmp_path: Path):
+        cfg_file = tmp_path / "cfg.yml"
+        cfg_file.write_text(yaml.dump({"text_filter": {"summary_llm": {"enabled": True}}}))
+        with pytest.raises(ValidationError):
+            get_effective_config(cfg_file)
 
 
 def test_blender_style_allows_extra_keys(tmp_path):
@@ -374,7 +374,6 @@ def test_llm_sections_default_provider_and_empty_api_base():
 
     sections = [
         DEFAULTS["text_filter"],
-        DEFAULTS["text_filter"]["summary_llm"],
         DEFAULTS["summary"],
         DEFAULTS["plan"],
         DEFAULTS["director"],

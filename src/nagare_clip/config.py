@@ -70,16 +70,6 @@ TEXT_FILTER_PROMPT = (
     "3: {{(雑音)->}}"
 )
 
-SUMMARY_LLM_PROMPT = (
-    "Analyze the following Japanese transcript from a video.\n"
-    "Provide a JSON object with:\n"
-    '- "summary": A very short summary (1-2 sentences) of the content.\n'
-    '- "keywords": A list of rare or domain-specific words that speech '
-    "recognition might misspell.\n"
-    "\n"
-    "Output only the JSON object, no other text."
-)
-
 SUMMARY_PROMPT = (
     "You are a video editor. You receive ONE Japanese transcript as "
     "numbered lines (one line per subtitle segment). Split it into a few "
@@ -307,39 +297,6 @@ class SentenceSplitConfig(BaseModel):
     )
 
 
-class SummaryLLMConfig(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-    section_comment: ClassVar[str] = (
-        "Summary LLM: generates context (summary + keywords) for the filter LLM"
-    )
-    enabled: bool = Field(False, description="Enable summary generation before filtering")
-    keywords: list[str] = _commented(
-        [], sample="[]", description="Constant keywords always injected into the filter LLM prompt"
-    )
-    provider: str = Field(
-        "ollama_chat",
-        description="LiteLLM provider prefix: ollama_chat | openai | gemini | anthropic",
-    )
-    api_base: str = Field(
-        "",
-        description="Base URL; empty -> Ollama localhost default; leave empty for cloud providers",
-    )
-    model: str = Field(
-        "qwen3.5:4b",
-        description='Model name (passed to LiteLLM as "<provider>/<model>"; can differ from filter LLM)',
-    )
-    api_key: str = Field("", description="API key for the provider (or set the provider's env var)")
-    temperature: float = Field(0.3, description="Higher temperature for summarization")
-    thinking: bool | str = Field(False, description="Thinking mode for summary LLM")
-    timeout: int = Field(120, description="Longer timeout since full transcript is sent")
-    response_format: str = Field("json", description="Request a JSON object from the summary LLM")
-    prompt: str = _commented(
-        SUMMARY_LLM_PROMPT,
-        sample='"..."',
-        description="System prompt for summary LLM (has a sensible default)",
-    )
-
-
 class TextFilterConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
     section_comment: ClassVar[str] = "text_filter stage: text editing checkpoint."
@@ -375,17 +332,22 @@ class TextFilterConfig(BaseModel):
     thinking: bool | str = Field(
         False, description='Thinking mode: true/false, or "low"/"medium"/"high"'
     )
-    summary_llm: SummaryLLMConfig = Field(default_factory=SummaryLLMConfig)
+    keywords: list[str] = _commented(
+        [],
+        sample="[]",
+        description="Constant keywords always injected into the filter LLM prompt",
+    )
 
 
 class SummaryConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
     section_comment: ClassVar[str] = (
-        "summary stage: runs once project-wide (over all videos) before director. A\n"
-        "larger LLM segments each transcript into line-range parts and summarises each,\n"
-        "then a reduce step writes one all-videos summary. Output summary.json is a\n"
-        "reviewable intermediate consumed by the plan + director stages. Disabled by\n"
-        "default (writes an empty summary = no-op)."
+        "summary stage: runs once project-wide (over all videos) between sentence_split\n"
+        "and text_filter. A larger LLM segments each transcript into line-range parts\n"
+        "and summarises each (also listing misspelling-prone keywords per video), then\n"
+        "a reduce step writes one all-videos summary. Output summary.json is a\n"
+        "reviewable intermediate consumed by the text_filter, plan and director stages.\n"
+        "Disabled by default (writes an empty summary = no-op)."
     )
     enabled: bool = Field(False, description="Enable the summary LLM")
     provider: str = Field(
