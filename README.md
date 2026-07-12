@@ -9,7 +9,7 @@ The pipeline creates a rough-cut Blender project for human review and fine-tunin
 1. transcription: WhisperX in Docker -> transcript outputs (`json`, `srt`, `vtt`, etc.)
 2. audio_silence: Audio-silence (jump-cut) detection -> `_cuts.txt` editable cut list
 3. sentence_split (optional): LLM re-segments the transcript into one-sentence-per-line units -> `output/sentence_split/{stem}.json` + `{stem}.txt`; disabled by default (byte-identical copy-through)
-4. summary (optional, project-wide): a larger LLM segments every video into line-range parts + summaries and writes one all-videos summary -> reviewable `output/summary/summary.json`; also lists per-video misspelling-prone keywords used by text_filter
+4. summary (optional, project-wide): a larger LLM segments every video into line-range parts + summaries, a whole-video summary, and misspelling-prone keywords, and writes one all-videos summary -> reviewable `output/summary/summary.json`; the per-video summary and keywords are used by text_filter/plan/director
 5. text_filter: Text editing checkpoint -> `_edits.txt` (copy of `.txt`, or LLM-corrected with `{{old->new}}` markers), optionally primed with summary-stage context
 6. plan (optional, project-wide): a larger LLM gives a coarse, cross-video rough direction per part -> reviewable `output/plan/plan.json`
 7. director (optional): a larger LLM proposes high-level edits -> reviewable `_director.json` op list (fed the summary/plan overview context)
@@ -30,7 +30,7 @@ The `{{old->new}}` syntax replaces `old` with `new` in the transcript. Use `{{de
 
 The optional `director` + `guided_edit` stages automate steps like the above with LLMs: enable `director.enabled`/`guided_edit.enabled` in config, then a larger LLM proposes edits (cut/speed/overlay/keep/edit) into a reviewable `output/director/{stem}_director.json`, and guided_edit applies them — any op it cannot apply cleanly is logged and recorded in the LLM report (`output/llm_report/`). Span ops (cut/speed/overlay/keep) are a pure whole-line-range wrap, applied deterministically with no LLM call; if a span op's range overlaps a same-type tag already in the file (e.g. one you hand-authored) or an earlier op, it is clipped to the free lines (or dropped if fully covered) so the tags stay valid. Only `edit` ops (a within-line `{{old->new}}` the director only described in prose) call the small LLM, retrying per op on an error / failed verification and nudging the temperature up each attempt. The director likewise retries a failed LLM call (connection error / unparseable JSON); tune `max_retries`, `retry_temp_step`, and `retry_temp_cap` per stage (`max_retries: 0` disables retry).
 
-The optional `summary` + `plan` stages run **once over all source videos** (project-wide) and give downstream stages cross-video context. Enable `summary.enabled`/`plan.enabled` in config: `summary` runs before `text_filter`, segments each sentence_split transcript into line-range parts with a summary each, lists per-video misspelling-prone keywords, and writes one all-videos summary to `output/summary/summary.json` — its summaries/keywords also prime the `text_filter` LLM's prompt; `plan` still runs before `director`, reading those summaries and writing a coarse, cross-video rough direction per part (e.g. "remove — repeats an earlier part", "keep tight") to `output/plan/plan.json`. Both files are human-reviewable/editable. When enabled, the `director` for each video receives the overall summary plus that video's parts (line ranges, summaries, rough directions) and one-line context for the other videos, so its precise per-line ops follow the project-wide plan. They share the same `max_retries`/`retry_temp_step`/`retry_temp_cap` retry knobs.
+The optional `summary` + `plan` stages run **once over all source videos** (project-wide) and give downstream stages cross-video context. Enable `summary.enabled`/`plan.enabled` in config: `summary` runs before `text_filter`, segments each sentence_split transcript into line-range parts with a summary each, lists per-video misspelling-prone keywords, generates a whole-video summary per video, and writes one all-videos summary to `output/summary/summary.json` (`{summary, parts, keywords, video_summaries}`) — its per-video summary/part summaries/keywords also prime the `text_filter` LLM's prompt; `plan` still runs before `director`, reading those summaries and writing a coarse, cross-video rough direction per part (e.g. "remove — repeats an earlier part", "keep tight") to `output/plan/plan.json`. Both files are human-reviewable/editable. When enabled, the `director` for each video receives the overall summary plus that video's whole-video summary, its parts (line ranges, summaries, rough directions), and one-line context for the other videos (preferring each sibling's own whole-video summary), so its precise per-line ops follow the project-wide plan. They share the same `max_retries`/`retry_temp_step`/`retry_temp_cap` retry knobs.
 
 To help the LLMs reason about pacing, the `plan` and `director` stages now also see **calculated durations and in-between gaps**: the `director`'s numbered transcript annotates each line with `[4.2s, gap 0.8s]` (per-sentence duration + gap to the next line) and the `plan`'s per-part context shows each part's duration and gap. These times come from the WhisperX `{stem}.json`; the orchestrator feeds each stage the sentence_split `{stem}.json` automatically, so there's nothing to wire up yourself. To run a single stage on its own (reusing its inputs from a previous pipeline run), use `./scripts/run_pipeline.sh --from-stage X --to-stage X`.
 
@@ -264,11 +264,12 @@ Human editors can also wrap a span in `<keep>...</keep>` to force-preserve the a
 #### Filter context from the summary stage (optional)
 
 When the project-wide `summary` stage is enabled (`summary.enabled: true`), it runs
-before text_filter and its `summary.json` carries, per video, the part summaries and a
-list of rare/domain-specific keywords that speech recognition might misspell. text_filter
-appends this video's summaries and keywords to the filter LLM's system prompt so it can
-better correct mis-dictated words. You can also pin constant keywords that are always
-injected, without enabling the summary stage:
+before text_filter and its `summary.json` carries, per video, a whole-video summary, the
+part summaries, and a list of rare/domain-specific keywords that speech recognition might
+misspell. text_filter appends this video's whole-video summary, part summaries, and
+keywords to the filter LLM's system prompt so it can better correct mis-dictated words.
+You can also pin constant keywords that are always injected, without enabling the summary
+stage:
 
 ```yaml
 text_filter:

@@ -49,3 +49,24 @@ per-video LLM call also returns `"keywords"` (misspelling-prone words), stored a
 prompt is now primed from `summary.json` (+ the constant `text_filter.keywords` list) via
 `text_filter/context.build_enhanced_prompt`. Config break: `text_filter.summary_llm` now
 fails validation (migration: move `keywords` up; enable `summary.enabled`).
+
+## Per-Video Summaries in the summary Stage
+
+**Status: complete** (design in `docs/superpowers/specs/2026-07-12-summary-video-summaries-design.md`,
+plan in `docs/superpowers/plans/2026-07-12-summary-video-summaries.md`, Tasks 1-8).
+
+`summarize.segment_video()` now requires a mandatory whole-video summary in its LLM
+response (`"video_summary"`); missing/non-string/empty is a hard parse failure that
+retries, same as a missing `parts` array, and the function returns a `(parts, keywords,
+video_summary)` 3-tuple. `build_summary()` collects these into `ProjectSummary.video_summaries`
+(`{stem: video_summary}`), persisted as a new top-level `video_summaries` key in
+`summary.json` (shape now `{summary, parts, keywords, video_summaries}`); `summary_from_dict`
+reads it leniently and stays backward-compatible with older files lacking it (absent →
+`{}`). The reduce call (`generate_project_summary`) now receives its per-part input grouped
+per video — a `## <stem> — <video_summary>` header per video with its parts nested beneath,
+global 1-based part numbering preserved. `plan`, `director`, and `text_filter` each surface
+the relevant video's whole-video summary in their prompts/context (a `Video "<stem>": ...`
+header in `plan`, a `Summary: ...` line under `director`'s `This video (...)` block plus
+sibling one-liners preferring their own video summary, and a `Video summary: ...` line in
+`text_filter`'s enhanced prompt) — all byte-identical to before when `video_summaries` is
+empty (stage disabled or an older `summary.json`).
