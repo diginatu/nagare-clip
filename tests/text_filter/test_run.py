@@ -112,6 +112,27 @@ class TestSummaryContext:
         assert cfg.get("prompt") == "Base prompt."
 
 
+def test_summary_context_returns_video_summary(tmp_path):
+    from nagare_clip.text_filter.run import _summary_context
+
+    sj = tmp_path / "summary.json"
+    sj.write_text(
+        json.dumps(
+            {
+                "summary": "o",
+                "parts": [{"stem": "A", "lines": [1, 2], "summary": "p"}],
+                "keywords": {"A": ["kw"]},
+                "video_summaries": {"A": "video A overview"},
+            }
+        ),
+        encoding="utf-8",
+    )
+    summaries, keywords, vsum = _summary_context(sj, "A")
+    assert summaries == ["p"]
+    assert keywords == ["kw"]
+    assert vsum == "video A overview"
+
+
 def test_disabled_copies_input(tmp_path):
     """When use_llm is false, input is copied to output unchanged."""
     src = tmp_path / "clip.txt"

@@ -40,3 +40,14 @@ class TestBuildEnhancedPrompt:
 
     def test_blank_entries_ignored(self):
         assert build_enhanced_prompt("Base.", [""], [""]) == "Base."
+
+
+def test_video_summary_line_when_present():
+    out = build_enhanced_prompt("BASE", ["part one"], ["kw"], video_summary="the whole video")
+    assert "Video summary: the whole video" in out
+
+
+def test_byte_identical_without_video_summary():
+    # Default (no video_summary) must equal the pre-change output.
+    with_default = build_enhanced_prompt("BASE", ["part one"], ["kw"])
+    assert "Video summary:" not in with_default

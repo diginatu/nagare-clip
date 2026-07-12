@@ -20,17 +20,17 @@ from nagare_clip.text_filter.llm_filter import filter_transcript
 from nagare_clip.text_filter.rule_filter import remove_midstream_closing
 
 
-def _summary_context(summary_json: Path | None, stem: str) -> tuple[list[str], list[str]]:
-    """This stem's (part summaries, keywords) from summary.json; empty on any failure."""
+def _summary_context(summary_json: Path | None, stem: str) -> tuple[list[str], list[str], str]:
+    """This stem's (part summaries, keywords, video summary) from summary.json; empty on failure."""
     if summary_json is None or not summary_json.is_file():
-        return [], []
+        return [], [], ""
     try:
         project = summary_from_dict(json.loads(summary_json.read_text(encoding="utf-8")))
     except (ValueError, OSError):
         logging.warning("text_filter: could not read summary json %s", summary_json)
-        return [], []
+        return [], [], ""
     summaries = [p.summary for p in project.parts if p.stem == stem]
-    return summaries, project.keywords.get(stem, [])
+    return summaries, project.keywords.get(stem, []), project.video_summaries.get(stem, "")
 
 
 def run_text_filter(
@@ -58,10 +58,12 @@ def run_text_filter(
         logging.info("text_filter: filtering %d lines with AI", len(lines))
 
         filter_cfg = dict(s2)
-        summaries, summary_keywords = _summary_context(summary_json, txt.stem)
+        summaries, summary_keywords, video_summary = _summary_context(summary_json, txt.stem)
         keywords = list(dict.fromkeys(list(s2.get("keywords", [])) + summary_keywords))
-        if summaries or keywords:
-            filter_cfg["prompt"] = build_enhanced_prompt(s2.get("prompt", ""), summaries, keywords)
+        if summaries or keywords or video_summary:
+            filter_cfg["prompt"] = build_enhanced_prompt(
+                s2.get("prompt", ""), summaries, keywords, video_summary
+            )
             logging.info(
                 "text_filter: summary context: %d part summaries, %d keyword(s)",
                 len(summaries),
