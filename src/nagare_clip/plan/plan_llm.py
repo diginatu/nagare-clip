@@ -51,7 +51,14 @@ def _format_parts_for_plan(project_summary: ProjectSummary) -> str:
         lines.append(f"Overall: {project_summary.summary}")
         lines.append("")
     parts = project_summary.parts
+    video_summaries = project_summary.video_summaries
+    current: str | None = None
     for i, p in enumerate(parts):
+        if p.stem != current:
+            current = p.stem
+            vs = video_summaries.get(p.stem, "")
+            if vs:
+                lines.append(f'Video "{p.stem}": {vs}')
         dur = p.end - p.start if p.start is not None and p.end is not None else None
         gap: float | None = None
         if i + 1 < len(parts):

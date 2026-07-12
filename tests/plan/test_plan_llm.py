@@ -181,6 +181,32 @@ class TestFormatPartsTiming:
         assert out == "1: v [1-2] — intro"
 
 
+def test_format_inserts_video_summary_header():
+    ps = ProjectSummary(
+        summary="overall",
+        parts=[
+            PartSummary(stem="A", lines=(1, 2), summary="a1"),
+            PartSummary(stem="B", lines=(1, 3), summary="b1"),
+        ],
+        video_summaries={"A": "video A overview", "B": "video B overview"},
+    )
+    text = _format_parts_for_plan(ps)
+    assert 'Video "A": video A overview' in text
+    assert 'Video "B": video B overview' in text
+    # header appears before that video's part line
+    assert text.index('Video "A"') < text.index("1: A [1-2]")
+
+
+def test_format_byte_identical_when_no_video_summaries():
+    parts = [
+        PartSummary(stem="A", lines=(1, 2), summary="a1"),
+        PartSummary(stem="B", lines=(1, 3), summary="b1"),
+    ]
+    without = _format_parts_for_plan(ProjectSummary(summary="overall", parts=parts))
+    # Expected == the exact current format (no Video: lines).
+    assert 'Video "' not in without
+
+
 class TestPlanRecorder:
     def test_records_ok(self, tmp_path):
         rec = Recorder("plan", tmp_path, enabled=True)
