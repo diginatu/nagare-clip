@@ -56,22 +56,6 @@ sentence_split:
   force_split_min_silence: 3.0   # Seconds; only audio_silence cut spans at least this long force a split
   # prompt: "..."   # Bunsetsu-grouping prompt (has a sensible default)
 
-# text_filter stage: text editing checkpoint.
-text_filter:
-  use_llm: false   # Enable LLM text filter for the text-editing checkpoint
-  provider: ollama_chat   # LiteLLM provider prefix: ollama_chat | openai | gemini | anthropic
-  api_base: ""   # Base URL; empty -> Ollama localhost default; leave empty for cloud providers
-  model: "qwen3.5:4b"   # Model name (passed to LiteLLM as "<provider>/<model>")
-  api_key: ""   # API key for the provider (or set the provider's env var)
-  batch_size: 10   # Number of transcript segments per LLM call
-  timeout: 60   # API request timeout in seconds
-  retry_on_invalid: true   # On mangled lines, retry just those with a halved batch size
-  retry_min_batch_size: 1   # Floor for the halving retry; set equal to batch_size to disable
-  # prompt: "..."   # System prompt for LLM (has sensible default for Japanese)
-  temperature: 0.1   # LLM sampling temperature
-  thinking: false   # Thinking mode: true/false, or "low"/"medium"/"high"
-  # keywords: []   # Constant keywords always injected into the filter LLM prompt
-
 # summary stage: runs once project-wide (over all videos) between sentence_split
 # and text_filter. A larger LLM segments each transcript into line-range parts
 # and summarises each (also listing misspelling-prone keywords per video), then
@@ -93,6 +77,22 @@ summary:
   retry_temp_cap: 0.8
   # prompt: "..."   # Per-video segment+summarise prompt (has a sensible default)
   # overall_prompt: "..."   # All-videos reduce prompt (has a sensible default)
+
+# text_filter stage: text editing checkpoint.
+text_filter:
+  use_llm: false   # Enable LLM text filter for the text-editing checkpoint
+  provider: ollama_chat   # LiteLLM provider prefix: ollama_chat | openai | gemini | anthropic
+  api_base: ""   # Base URL; empty -> Ollama localhost default; leave empty for cloud providers
+  model: "qwen3.5:4b"   # Model name (passed to LiteLLM as "<provider>/<model>")
+  api_key: ""   # API key for the provider (or set the provider's env var)
+  batch_size: 10   # Number of transcript segments per LLM call
+  timeout: 60   # API request timeout in seconds
+  retry_on_invalid: true   # On mangled lines, retry just those with a halved batch size
+  retry_min_batch_size: 1   # Floor for the halving retry; set equal to batch_size to disable
+  # prompt: "..."   # System prompt for LLM (has sensible default for Japanese)
+  temperature: 0.1   # LLM sampling temperature
+  thinking: false   # Thinking mode: true/false, or "low"/"medium"/"high"
+  # keywords: []   # Constant keywords always injected into the filter LLM prompt
 
 # plan stage: runs once project-wide after summary, before director. A larger
 # LLM reads the per-part summaries (with line ranges) of all videos and gives a
