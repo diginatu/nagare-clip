@@ -23,6 +23,7 @@ def build_director_context(
     unchanged when the overview is empty).
     """
     parts = project_summary.parts
+    video_summaries = project_summary.video_summaries
     own = [p for p in parts if p.stem == stem]
     if not project_summary.summary and not own:
         return ""
@@ -35,6 +36,9 @@ def build_director_context(
 
     if own:
         out.append(f'This video ("{stem}"):')
+        own_summary = video_summaries.get(stem, "")
+        if own_summary:
+            out.append(f"Summary: {own_summary}")
         for p in own:
             line = f"- lines {p.lines[0]}-{p.lines[1]}: {p.summary}"
             direction = dir_by_key.get((p.stem, p.lines), "")
@@ -42,11 +46,11 @@ def build_director_context(
                 line += f" → direction: {direction}"
             out.append(line)
 
-    # One line per other source video (first part's summary as a teaser).
+    # One line per other source video (its video summary, else first part's summary).
     seen: dict[str, str] = {}
     for p in parts:
         if p.stem != stem and p.stem not in seen:
-            seen[p.stem] = p.summary
+            seen[p.stem] = video_summaries.get(p.stem) or p.summary
     if seen:
         out.append("Other videos:")
         for s, summary in seen.items():

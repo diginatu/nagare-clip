@@ -49,3 +49,38 @@ class TestBuildDirectorContext:
     def test_unknown_stem_with_summary_still_renders_global(self):
         ctx = build_director_context(_project(), _directions(), "zzz")
         assert "A two-video tutorial." in ctx
+
+
+def test_this_video_summary_line():
+    ps = ProjectSummary(
+        summary="overall",
+        parts=[PartSummary(stem="A", lines=(1, 2), summary="a1")],
+        video_summaries={"A": "video A overview"},
+    )
+    ctx = build_director_context(ps, [], "A")
+    assert "Summary: video A overview" in ctx
+
+
+def test_sibling_uses_video_summary_when_present():
+    ps = ProjectSummary(
+        summary="overall",
+        parts=[
+            PartSummary(stem="A", lines=(1, 2), summary="a1"),
+            PartSummary(stem="B", lines=(1, 3), summary="b-first-part"),
+        ],
+        video_summaries={"B": "video B overview"},
+    )
+    ctx = build_director_context(ps, [], "A")
+    assert "- B: video B overview" in ctx
+    assert "b-first-part" not in ctx
+
+
+def test_byte_identical_without_video_summaries():
+    parts = [
+        PartSummary(stem="A", lines=(1, 2), summary="a1"),
+        PartSummary(stem="B", lines=(1, 3), summary="b1"),
+    ]
+    ps = ProjectSummary(summary="overall", parts=parts)  # video_summaries == {}
+    ctx = build_director_context(ps, [], "A")
+    assert "Summary:" not in ctx
+    assert "- B: b1" in ctx  # sibling falls back to first-part summary
