@@ -77,27 +77,31 @@ SUMMARY_PROMPT = (
     "errors (mis-heard or misspelled words); infer the intended meaning. "
     "Split it into a few contiguous PARTS by topic/section and summarise "
     "each part. Reference lines by their 1-based numbers (inclusive). Also "
-    "list rare or domain-specific words that speech recognition might "
-    "misspell. Output ONLY a JSON object.\n"
+    "write ONE short summary of the whole video, and list rare or "
+    "domain-specific words that speech recognition might misspell. Output "
+    "ONLY a JSON object.\n"
     "\n"
     "JSON shape:\n"
     '{"parts": [\n'
     '  {"lines": [1, 12], "summary": "what this part covers"},\n'
     '  {"lines": [13, 40], "summary": "..."}\n'
-    '], "keywords": ["word1", "word2"]}\n'
+    '], "keywords": ["word1", "word2"], "video_summary": "the whole video in one sentence"}\n'
     "\n"
     "Rules:\n"
     "- Parts must be contiguous and within the transcript range.\n"
     "- Keep each summary to one short sentence.\n"
+    '- "video_summary": one short sentence covering the whole video '
+    "(required, non-empty).\n"
     '- "keywords": correct spellings of rare/domain-specific words '
     "(may be empty).\n"
     "- Output only the JSON object, no other text."
 )
 
 SUMMARY_OVERALL_PROMPT = (
-    "You are a video editor. You receive numbered per-part summaries "
-    "spanning several source videos of one project. Write ONE concise "
-    "overall summary of the whole project. Output ONLY a JSON object:\n"
+    "You are a video editor. You receive per-part summaries grouped by "
+    "source video: each video starts with a `## <name> — <video summary>` "
+    "header, followed by its numbered parts. Write ONE concise overall "
+    "summary of the whole project. Output ONLY a JSON object:\n"
     '{"summary": "..."}\n'
     "Output only the JSON object, no other text."
 )

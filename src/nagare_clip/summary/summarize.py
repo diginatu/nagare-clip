@@ -199,10 +199,18 @@ def segment_video(
     return [], [], ""
 
 
-def _format_parts_doc(parts: list[PartSummary]) -> str:
-    return "\n".join(
-        f"{i + 1}: {p.stem} [{p.lines[0]}-{p.lines[1]}] — {p.summary}" for i, p in enumerate(parts)
-    )
+def _format_parts_doc(parts: list[PartSummary], video_summaries: dict[str, str]) -> str:
+    """Render parts grouped under per-video ``## <stem> — <video summary>`` headers,
+    keeping global 1-based numbering across the whole document."""
+    lines: list[str] = []
+    current: str | None = None
+    for i, p in enumerate(parts):
+        if p.stem != current:
+            current = p.stem
+            vs = video_summaries.get(p.stem, "")
+            lines.append(f"## {p.stem} — {vs}" if vs else f"## {p.stem}")
+        lines.append(f"{i + 1}: [{p.lines[0]}-{p.lines[1]}] — {p.summary}")
+    return "\n".join(lines)
 
 
 def _parse_overall_response(response: str) -> str | None:
@@ -222,13 +230,14 @@ def generate_project_summary(
     *,
     call_llm: CallLLM = _call_llm,
     recorder: Recorder = NULL_RECORDER,
+    video_summaries: dict[str, str] | None = None,
 ) -> str:
     """Synthesise a single all-videos summary from the per-part summaries."""
     if not parts:
         return ""
     messages = [
         {"role": "system", "content": cfg.get("overall_prompt", "")},
-        {"role": "user", "content": _format_parts_doc(parts)},
+        {"role": "user", "content": _format_parts_doc(parts, video_summaries or {})},
     ]
     cfg = with_trace_meta(cfg, stage=recorder.stage, unit="overall")
     attempts = retry_attempts(cfg)
@@ -314,18 +323,25 @@ def build_summary(
     """Map (``segment_video`` per video) then reduce (``generate_project_summary``)."""
     parts: list[PartSummary] = []
     keywords: dict[str, list[str]] = {}
+    video_summaries: dict[str, str] = {}
     for stem, clean_lines in parts_input:
-        video_parts, video_keywords, _ = segment_video(
+        video_parts, video_keywords, video_summary = segment_video(
             stem, clean_lines, cfg, call_llm=call_llm, recorder=recorder
         )
         parts.extend(video_parts)
         if video_keywords:
             keywords[stem] = video_keywords
+        if video_summary:
+            video_summaries[stem] = video_summary
     if seg_times_by_stem:
         for p in parts:
             _attach_part_times(p, seg_times_by_stem.get(p.stem))
-    summary = generate_project_summary(parts, cfg, call_llm=call_llm, recorder=recorder)
-    return ProjectSummary(summary=summary, parts=parts, keywords=keywords)
+    summary = generate_project_summary(
+        parts, cfg, call_llm=call_llm, recorder=recorder, video_summaries=video_summaries
+    )
+    return ProjectSummary(
+        summary=summary, parts=parts, keywords=keywords, video_summaries=video_summaries
+    )
 
 
 def summary_to_dict(ps: ProjectSummary) -> dict[str, Any]:
@@ -341,7 +357,12 @@ def summary_to_dict(ps: ProjectSummary) -> dict[str, Any]:
         if p.end is not None:
             entry["end"] = p.end
         parts.append(entry)
-    return {"summary": ps.summary, "parts": parts, "keywords": ps.keywords}
+    return {
+        "summary": ps.summary,
+        "parts": parts,
+        "keywords": ps.keywords,
+        "video_summaries": ps.video_summaries,
+    }
 
 
 def _coerce_pair(value: Any) -> tuple[int, int] | None:
@@ -384,4 +405,12 @@ def summary_from_dict(data: Any) -> ProjectSummary:
                 kws = _coerce_keywords(v)
                 if kws:
                     keywords[k] = kws
-    return ProjectSummary(summary=summary, parts=parts, keywords=keywords)
+    video_summaries: dict[str, str] = {}
+    raw_vs = data.get("video_summaries")
+    if isinstance(raw_vs, dict):
+        for k, v in raw_vs.items():
+            if isinstance(k, str) and k and isinstance(v, str) and v.strip():
+                video_summaries[k] = v.strip()
+    return ProjectSummary(
+        summary=summary, parts=parts, keywords=keywords, video_summaries=video_summaries
+    )

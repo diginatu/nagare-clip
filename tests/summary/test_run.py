@@ -38,7 +38,7 @@ def _run(monkeypatch, tmp_path, cfg_dict, txt_by_stem, json_by_stem=None):
 
 def test_disabled_writes_empty(monkeypatch, tmp_path):
     data = _run(monkeypatch, tmp_path, {"summary": {"enabled": False}}, {"a": "x\n"})
-    assert data == {"summary": "", "parts": [], "keywords": {}}
+    assert data == {"summary": "", "parts": [], "keywords": {}, "video_summaries": {}}
 
 
 def test_enabled_writes_summary_with_stems_from_basename(monkeypatch, tmp_path):
@@ -66,6 +66,7 @@ def test_enabled_writes_summary_with_stems_from_basename(monkeypatch, tmp_path):
             {"stem": "b", "lines": [1, 1], "summary": "be"},
         ],
         "keywords": {},
+        "video_summaries": {},
     }
 
 

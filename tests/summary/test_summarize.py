@@ -119,8 +119,7 @@ class TestSegmentVideo:
 
     def test_empty_video_summary_is_hard_failure(self):
         resp = (
-            '{"parts": [{"lines": [1, 1], "summary": "s"}],'
-            ' "keywords": [], "video_summary": "   "}'
+            '{"parts": [{"lines": [1, 1], "summary": "s"}], "keywords": [], "video_summary": "   "}'
         )
         assert segment_video("v", ["a"], {"prompt": "P"}, call_llm=lambda m, c: resp) == (
             [],
@@ -129,10 +128,7 @@ class TestSegmentVideo:
         )
 
     def test_non_string_video_summary_is_hard_failure(self):
-        resp = (
-            '{"parts": [{"lines": [1, 1], "summary": "s"}],'
-            ' "keywords": [], "video_summary": 5}'
-        )
+        resp = '{"parts": [{"lines": [1, 1], "summary": "s"}], "keywords": [], "video_summary": 5}'
         assert segment_video("v", ["a"], {"prompt": "P"}, call_llm=lambda m, c: resp) == (
             [],
             [],
@@ -207,6 +203,55 @@ class TestProjectKeywords:
         assert summary_from_dict(data).keywords == {"a": ["ok"]}
 
 
+class TestVideoSummaries:
+    def test_build_summary_collects_video_summaries(self):
+        responses = iter(
+            [
+                '{"parts": [{"lines": [1, 1], "summary": "p"}],'
+                ' "keywords": [], "video_summary": "vid-A overview"}',
+                '{"summary": "project"}',  # reduce
+            ]
+        )
+        project = build_summary(
+            [("A", ["a"])],
+            {"prompt": "P", "overall_prompt": "O"},
+            call_llm=lambda m, c: next(responses),
+        )
+        assert project.video_summaries == {"A": "vid-A overview"}
+
+    def test_to_dict_includes_video_summaries(self):
+        ps = ProjectSummary(
+            summary="s",
+            parts=[PartSummary(stem="A", lines=(1, 1), summary="p")],
+            video_summaries={"A": "overview"},
+        )
+        d = summary_to_dict(ps)
+        assert d["video_summaries"] == {"A": "overview"}
+
+    def test_from_dict_reads_video_summaries(self):
+        d = {
+            "summary": "s",
+            "parts": [{"stem": "A", "lines": [1, 1], "summary": "p"}],
+            "video_summaries": {"A": "overview", "B": 5, "": "x"},
+        }
+        ps = summary_from_dict(d)
+        assert ps.video_summaries == {"A": "overview"}
+
+    def test_from_dict_old_file_without_video_summaries(self):
+        d = {"summary": "s", "parts": [{"stem": "A", "lines": [1, 1], "summary": "p"}]}
+        ps = summary_from_dict(d)
+        assert ps.video_summaries == {}
+
+    def test_round_trip(self):
+        ps = ProjectSummary(
+            summary="s",
+            parts=[PartSummary(stem="A", lines=(1, 2), summary="p")],
+            keywords={"A": ["kw"]},
+            video_summaries={"A": "overview"},
+        )
+        assert summary_from_dict(summary_to_dict(ps)).video_summaries == {"A": "overview"}
+
+
 class TestGenerateProjectSummary:
     def test_parses_overall_summary(self):
         parts = [PartSummary("v", (1, 2), "intro")]
@@ -232,6 +277,34 @@ class TestGenerateProjectSummary:
             raise ConnectionError("x")
 
         assert generate_project_summary(parts, {"overall_prompt": "P"}, call_llm=boom) == ""
+
+
+class TestOverallInputFormat:
+    def test_groups_parts_by_video_with_summary_header(self):
+        captured = {}
+
+        def fake(messages, cfg):
+            captured["user"] = messages[1]["content"]
+            return '{"summary": "ok"}'
+
+        parts = [
+            PartSummary(stem="A", lines=(1, 12), summary="a1"),
+            PartSummary(stem="A", lines=(13, 20), summary="a2"),
+            PartSummary(stem="B", lines=(1, 5), summary="b1"),
+        ]
+        generate_project_summary(
+            parts,
+            {"overall_prompt": "O"},
+            call_llm=fake,
+            video_summaries={"A": "video A overview", "B": "video B overview"},
+        )
+        assert captured["user"] == (
+            "## A — video A overview\n"
+            "1: [1-12] — a1\n"
+            "2: [13-20] — a2\n"
+            "## B — video B overview\n"
+            "3: [1-5] — b1"
+        )
 
 
 class TestBuildSummary:
@@ -322,6 +395,7 @@ class TestRoundTrip:
                 {"stem": "b", "lines": [2, 9], "summary": "body"},
             ],
             "keywords": {},
+            "video_summaries": {},
         }
         assert summary_from_dict(d) == ps
 
