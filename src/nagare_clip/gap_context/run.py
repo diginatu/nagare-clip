@@ -20,8 +20,6 @@ from nagare_clip.llm_client import call_llm as _call_llm
 from nagare_clip.llm_report import NULL_RECORDER, Recorder
 from nagare_clip.timing import segment_times
 
-logger = logging.getLogger(__name__)
-
 
 def _neighbour_lines(gf: GapFrames, segments: list[dict[str, Any]], seg_times) -> tuple[str, str]:
     """Text of the last line ending at/before the gap and the first starting at/after it."""
