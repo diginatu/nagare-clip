@@ -28,6 +28,7 @@ from nagare_clip.pipeline.external import (
     run_command,
 )
 from nagare_clip.pipeline.runner import PipelineContext, Stage
+from nagare_clip.pipeline.sources import SourceMedia
 from nagare_clip.plan.run import run_plan
 from nagare_clip.sentence_split.run import run_sentence_split
 from nagare_clip.summary.run import run_summary
@@ -140,7 +141,9 @@ def _sentence_split_required(ctx: PipelineContext) -> list[Path]:
 # --- gap_context ---------------------------------------------------------------
 
 
-def _extract_gap_frames(ctx: PipelineContext, src, gaps: list[tuple[float, float]]) -> list:
+def _extract_gap_frames(
+    ctx: PipelineContext, src: SourceMedia, gaps: list[tuple[float, float]]
+) -> list[GapFrames]:
     """Snapshot each gap via ffmpeg in the whisperx image; skip what fails."""
     width = ctx.cfg["gap_context"]["frame_width"]
     d = ctx.stage_dir("gap_context")
