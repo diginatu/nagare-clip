@@ -153,6 +153,15 @@ DIRECTOR_PROMPT = (
     "durations are candidates for cutting or speeding up, and long gaps are "
     'dead air (already dropped by default unless you "keep" them).\n'
     "\n"
+    "Visual context: an indented line like\n"
+    "    [silent gap 12.4s: a build runs and logs scroll past]\n"
+    "may follow a numbered line. It describes what is VISIBLE on screen "
+    "during the silence after that line (nobody is speaking). Such gaps are "
+    "dropped by default. If the gap shows something worth watching, emit a "
+    '"keep" op spanning that line and the next one — a keep over lines '
+    "[N, N+1] preserves the silence between them. Annotation lines are not "
+    "numbered; never reference them as op lines.\n"
+    "\n"
     "Operations (reference lines by their 1-based numbers, inclusive):\n"
     "- cut: remove a boring/redundant span entirely (deletes audio+video).\n"
     '- speed: play a span faster; give "factor" (e.g. 2.0). Internal silences/pauses are still dropped — add a "keep" over the same lines to preserve them while sped up.\n'
@@ -198,6 +207,23 @@ GUIDED_EDIT_PROMPT = (
     "- For a span across multiple lines, open the tag on the first line "
     "and close it on the last line.\n"
     "- Output the same numbered lines, nothing else."
+)
+
+GAP_CONTEXT_PROMPT = (
+    "You are watching frames sampled from a SILENT gap in a video (no one is "
+    "speaking). Describe what is happening ON SCREEN during the gap.\n"
+    "\n"
+    "The frames are in chronological order (start, middle, end of the gap).\n"
+    "Focus on ACTION and CHANGE between the frames: is something happening "
+    "(a demo running, code being typed, a game being played, a result "
+    "appearing), or is the screen essentially static/dead air?\n"
+    "\n"
+    "Rules:\n"
+    "- Answer in ONE or TWO short sentences of plain text. No JSON, no "
+    "markdown, no preamble.\n"
+    "- If nothing meaningful happens, say so plainly (e.g. 'Static screen, "
+    "no visible activity.').\n"
+    "- Describe only what you can see; do not speculate about the audio."
 )
 
 
@@ -510,6 +536,49 @@ class GuidedEditConfig(BaseModel):
     )
 
 
+class GapContextConfig(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    section_comment: ClassVar[str] = (
+        "gap_context stage: runs per video between sentence_split and summary. Long\n"
+        "silent spans from the audio_silence cut list are snapshotted (up to 3 frames\n"
+        "each, via ffmpeg in the whisperx image) and described by a VISION LLM, so the\n"
+        "summary and director stages can see what happens on screen while nobody is\n"
+        "speaking (and keep a gap worth watching). Output {stem}_gaps.json is a\n"
+        "reviewable intermediate. Disabled by default (writes an empty gap list = no-op)."
+    )
+    enabled: bool = Field(False, description="Enable the gap_context vision LLM")
+    provider: str = Field(
+        "ollama_chat",
+        description="LiteLLM provider prefix: ollama_chat | openai | gemini | anthropic",
+    )
+    api_base: str = Field(
+        "",
+        description="Base URL; empty -> Ollama localhost default; leave empty for cloud providers",
+    )
+    model: str = Field(
+        "qwen2.5vl:7b",
+        description='A VISION-capable model (passed to LiteLLM as "<provider>/<model>")',
+    )
+    api_key: str = Field("", description="API key for the provider (or set the provider's env var)")
+    temperature: float = Field(0.2)
+    thinking: bool | str = Field(False)
+    timeout: int = Field(300)
+    max_retries: int = Field(
+        2, description="Extra attempts on LLM error / empty response (0 = single attempt)"
+    )
+    retry_temp_step: float = Field(0.2)
+    retry_temp_cap: float = Field(0.8)
+    min_gap: float = Field(
+        3.0, description="Only silent spans at least this long (seconds) get snapshots"
+    )
+    frame_width: int = Field(
+        960, description="Downscale width (px) of the extracted JPEG frames; height is auto"
+    )
+    prompt: str = _commented(
+        GAP_CONTEXT_PROMPT, sample='"..."', description="System prompt (has a sensible default)"
+    )
+
+
 class CaptionConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
     max_bunsetu: int = Field(12, description="Maximum bunsetsu units per caption chunk")
@@ -648,6 +717,7 @@ class NagareClipConfig(BaseModel):
     transcription: TranscriptionConfig = Field(default_factory=TranscriptionConfig)
     audio_silence: AudioSilenceConfig = Field(default_factory=AudioSilenceConfig)
     sentence_split: SentenceSplitConfig = Field(default_factory=SentenceSplitConfig)
+    gap_context: GapContextConfig = Field(default_factory=GapContextConfig)
     summary: SummaryConfig = Field(default_factory=SummaryConfig)
     text_filter: TextFilterConfig = Field(default_factory=TextFilterConfig)
     plan: PlanConfig = Field(default_factory=PlanConfig)

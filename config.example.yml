@@ -56,6 +56,28 @@ sentence_split:
   force_split_min_silence: 3.0   # Seconds; only audio_silence cut spans at least this long force a split
   # prompt: "..."   # Bunsetsu-grouping prompt (has a sensible default)
 
+# gap_context stage: runs per video between sentence_split and summary. Long
+# silent spans from the audio_silence cut list are snapshotted (up to 3 frames
+# each, via ffmpeg in the whisperx image) and described by a VISION LLM, so the
+# summary and director stages can see what happens on screen while nobody is
+# speaking (and keep a gap worth watching). Output {stem}_gaps.json is a
+# reviewable intermediate. Disabled by default (writes an empty gap list = no-op).
+gap_context:
+  enabled: false   # Enable the gap_context vision LLM
+  provider: ollama_chat   # LiteLLM provider prefix: ollama_chat | openai | gemini | anthropic
+  api_base: ""   # Base URL; empty -> Ollama localhost default; leave empty for cloud providers
+  model: "qwen2.5vl:7b"   # A VISION-capable model (passed to LiteLLM as "<provider>/<model>")
+  api_key: ""   # API key for the provider (or set the provider's env var)
+  temperature: 0.2
+  thinking: false
+  timeout: 300
+  max_retries: 2   # Extra attempts on LLM error / empty response (0 = single attempt)
+  retry_temp_step: 0.2
+  retry_temp_cap: 0.8
+  min_gap: 3.0   # Only silent spans at least this long (seconds) get snapshots
+  frame_width: 960   # Downscale width (px) of the extracted JPEG frames; height is auto
+  # prompt: "..."   # System prompt (has a sensible default)
+
 # summary stage: runs once project-wide (over all videos) between sentence_split
 # and text_filter. A larger LLM segments each transcript into line-range parts
 # and summarises each (also listing misspelling-prone keywords per video), then

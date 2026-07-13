@@ -431,3 +431,28 @@ def test_scalar_env_var_colliding_with_section_does_not_crash(monkeypatch):
     monkeypatch.setenv("PLAN", "short")
     cfg = get_effective_config(None)  # must not raise
     assert cfg["plan"]["enabled"] is False
+
+
+def test_gap_context_defaults():
+    cfg = get_effective_config(None, {})
+    g = cfg["gap_context"]
+    assert g["enabled"] is False
+    assert g["min_gap"] == 3.0
+    assert g["frame_width"] == 960
+    assert g["max_retries"] == 2
+    assert g["provider"] == "ollama_chat"
+    assert g["prompt"]
+
+
+def test_gap_context_rejects_unknown_key():
+    with pytest.raises(ValidationError):
+        get_effective_config(None, {"gap_context": {"nonesuch": 1}})
+
+
+def test_director_prompt_documents_gap_annotations():
+    # The director must be told what the `[silent gap ...]` annotation line means
+    # and that a `keep` op spanning the adjacent lines rescues the moment.
+    cfg = get_effective_config(None, {})
+    prompt = cfg["director"]["prompt"]
+    assert "[silent gap" in prompt
+    assert "keep" in prompt
