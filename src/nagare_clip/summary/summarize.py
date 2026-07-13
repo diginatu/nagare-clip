@@ -123,12 +123,21 @@ def segment_video(
     *,
     call_llm: CallLLM = _call_llm,
     recorder: Recorder = NULL_RECORDER,
+    gap_block: str = "",
 ) -> tuple[list[PartSummary], list[str], str]:
     """Segment one video's transcript into summarised parts, misspelling-prone
-    keywords, and a whole-video summary."""
+    keywords, and a whole-video summary.
+
+    ``gap_block`` (from the gap_context stage) describes what is visible during
+    this video's long silences; appended to the user content when non-empty, so
+    an absent/empty block leaves the prompt byte-identical.
+    """
+    user_content = format_numbered_transcript(clean_lines)
+    if gap_block:
+        user_content = f"{user_content}\n\n{gap_block}"
     messages = [
         {"role": "system", "content": cfg.get("prompt", "")},
-        {"role": "user", "content": format_numbered_transcript(clean_lines)},
+        {"role": "user", "content": user_content},
     ]
     cfg = with_trace_meta(cfg, stage=recorder.stage, unit=stem)
     attempts = retry_attempts(cfg)
@@ -322,6 +331,7 @@ def build_summary(
     call_llm: CallLLM = _call_llm,
     recorder: Recorder = NULL_RECORDER,
     seg_times_by_stem: dict[str, list[tuple[float | None, float | None]]] | None = None,
+    gap_blocks_by_stem: dict[str, str] | None = None,
 ) -> ProjectSummary:
     """Map (``segment_video`` per video) then reduce (``generate_project_summary``)."""
     parts: list[PartSummary] = []
@@ -329,7 +339,12 @@ def build_summary(
     video_summaries: dict[str, str] = {}
     for stem, clean_lines in parts_input:
         video_parts, video_keywords, video_summary = segment_video(
-            stem, clean_lines, cfg, call_llm=call_llm, recorder=recorder
+            stem,
+            clean_lines,
+            cfg,
+            call_llm=call_llm,
+            recorder=recorder,
+            gap_block=(gap_blocks_by_stem or {}).get(stem, ""),
         )
         parts.extend(video_parts)
         if video_keywords:

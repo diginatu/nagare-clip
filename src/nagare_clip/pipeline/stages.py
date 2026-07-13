@@ -226,6 +226,7 @@ def _summary_run(ctx: PipelineContext) -> None:
             ctx.stage_dir("summary") / "summary.json",
             ctx.cfg,
             json_paths=[ctx.stage_dir("sentence_split") / f"{s}.json" for s in ctx.stems],
+            gaps_paths=[ctx.stage_dir("gap_context") / f"{s}_gaps.json" for s in ctx.stems],
             recorder=rec,
         )
     finally:

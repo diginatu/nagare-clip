@@ -13,7 +13,10 @@ import json
 import logging
 from pathlib import Path
 
+from nagare_clip.gap_context.context import anchor_gaps, format_gap_block
+from nagare_clip.gap_context.gaps import load_gaps
 from nagare_clip.llm_report import NULL_RECORDER, Recorder
+from nagare_clip.summary import summarize as summarize_mod
 from nagare_clip.summary.summarize import (
     ProjectSummary,
     build_summary,
@@ -28,6 +31,7 @@ def run_summary(
     cfg: dict,
     *,
     json_paths: list[Path] | None = None,
+    gaps_paths: list[Path] | None = None,
     recorder: Recorder = NULL_RECORDER,
 ) -> None:
     summary_cfg = cfg["summary"]
@@ -49,12 +53,23 @@ def run_summary(
                     )
                 except (ValueError, OSError):
                     logging.warning("summary: could not read --json %s", jpath)
+        gap_blocks_by_stem: dict[str, str] = {}
+        for gpath in gaps_paths or []:
+            stem = gpath.stem.removesuffix("_gaps")
+            gaps = load_gaps(gpath)
+            if not gaps:
+                continue
+            block = format_gap_block(anchor_gaps(gaps, seg_times_by_stem.get(stem, [])))
+            if block:
+                gap_blocks_by_stem[stem] = block
         logging.info("summary: analysing %d video(s) with LLM", len(parts_input))
         project = build_summary(
             parts_input,
             summary_cfg,
+            call_llm=summarize_mod._call_llm,
             recorder=recorder,
             seg_times_by_stem=seg_times_by_stem or None,
+            gap_blocks_by_stem=gap_blocks_by_stem or None,
         )
         logging.info(
             "summary: %d part(s) across %d video(s)",

@@ -108,3 +108,38 @@ def test_keywords_written_to_output(monkeypatch, tmp_path):
     monkeypatch.setattr(summary_run, "build_summary", fake_build)
     data = _run(monkeypatch, tmp_path, {"summary": {"enabled": True}}, {"a": "ax\n"})
     assert data["keywords"] == {"a": ["K"]}
+
+
+def test_run_summary_feeds_gap_descriptions_into_the_prompt(tmp_path, monkeypatch):
+    import nagare_clip.summary.summarize as summarize_mod
+
+    txt = tmp_path / "a.txt"
+    txt.write_text("いち\nに\n", encoding="utf-8")
+    jsonp = tmp_path / "a.json"
+    jsonp.write_text(
+        json.dumps({"segments": [{"start": 0.0, "end": 10.0}, {"start": 20.0, "end": 25.0}]}),
+        encoding="utf-8",
+    )
+    gapsp = tmp_path / "a_gaps.json"
+    gapsp.write_text(
+        json.dumps(
+            {"gaps": [{"start": 10.0, "end": 20.0, "frames": [], "description": "デモが動く"}]}
+        ),
+        encoding="utf-8",
+    )
+
+    seen = {}
+
+    def fake_llm(messages, cfg):
+        seen.setdefault("users", []).append(messages[1]["content"])
+        return json.dumps({"parts": [], "keywords": [], "video_summary": "v"})
+
+    monkeypatch.setattr(summarize_mod, "_call_llm", fake_llm)
+    summary_run.run_summary(
+        [txt],
+        tmp_path / "summary.json",
+        {"summary": {"enabled": True, "prompt": "P", "overall_prompt": "O", "max_retries": 0}},
+        json_paths=[jsonp],
+        gaps_paths=[gapsp],
+    )
+    assert any("after line 1" in u and "デモが動く" in u for u in seen["users"])

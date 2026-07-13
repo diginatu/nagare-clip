@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import json
+
 from nagare_clip.summary.summarize import (
     PartSummary,
     ProjectSummary,
@@ -459,3 +461,55 @@ class TestPartTimes:
         data = {"summary": "S", "parts": [{"stem": "v", "lines": [1, 2], "summary": "x"}]}
         ps = summary_from_dict(data)
         assert ps.parts[0].start is None and ps.parts[0].end is None
+
+
+def test_segment_video_appends_the_gap_block_to_the_user_prompt():
+    seen = {}
+
+    def fake_llm(messages, cfg):
+        seen["user"] = messages[1]["content"]
+        return json.dumps({"parts": [], "keywords": [], "video_summary": "v"})
+
+    segment_video(
+        "a",
+        ["いち", "に"],
+        {"prompt": "P", "max_retries": 0},
+        call_llm=fake_llm,
+        gap_block="## Silent gaps (visual context)\n- after line 1 (1.0s-5.0s, 4.0s): デモ",
+    )
+    assert seen["user"].startswith("1: いち\n2: に")
+    assert seen["user"].endswith(
+        "\n\n## Silent gaps (visual context)\n- after line 1 (1.0s-5.0s, 4.0s): デモ"
+    )
+
+
+def test_segment_video_prompt_is_byte_identical_without_a_gap_block():
+    seen = {}
+
+    def fake_llm(messages, cfg):
+        seen["user"] = messages[1]["content"]
+        return json.dumps({"parts": [], "keywords": [], "video_summary": "v"})
+
+    segment_video("a", ["いち", "に"], {"prompt": "P", "max_retries": 0}, call_llm=fake_llm)
+    assert seen["user"] == "1: いち\n2: に"
+
+
+def test_build_summary_routes_each_stem_to_its_own_gap_block():
+    seen = {}
+
+    def fake_llm(messages, cfg):
+        content = messages[1]["content"]
+        if "Silent gaps" in content:
+            seen.setdefault("with_gaps", []).append(content)
+        return json.dumps({"parts": [], "keywords": [], "video_summary": "v"})
+
+    build_summary(
+        [("a", ["いち"]), ("b", ["に"])],
+        {"prompt": "P", "overall_prompt": "O", "max_retries": 0},
+        call_llm=fake_llm,
+        gap_blocks_by_stem={
+            "a": "## Silent gaps (visual context)\n- after line 1 (1.0s-2.0s, 1.0s): X"
+        },
+    )
+    assert len(seen["with_gaps"]) == 1
+    assert seen["with_gaps"][0].startswith("1: いち")
