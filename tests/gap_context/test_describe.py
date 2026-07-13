@@ -4,6 +4,7 @@ import pytest
 
 from nagare_clip.gap_context.describe import GapFrames, build_messages, describe_gap
 from nagare_clip.gap_context.gaps import Gap
+from nagare_clip.llm_report import Recorder
 
 
 @pytest.fixture
@@ -127,3 +128,43 @@ def test_describe_gap_returns_none_when_no_frame_is_readable(tmp_path):
     result = describe_gap(gf, CFG, unit="u", call_llm=fake_llm)
     assert result is None
     assert call_count[0] == 0
+
+
+def test_describe_gap_recorder_excludes_base64_payloads(tmp_path):
+    """Verify that LLM report records frame PATHs, never base64 payloads."""
+    # Create a frame with recognizable content
+    frame_content = b"RECOGNIZABLE_FRAME_CONTENT_FOR_TESTING"
+    frame_path = tmp_path / "frames" / "test_frame.jpg"
+    frame_path.parent.mkdir(parents=True)
+    frame_path.write_bytes(frame_content)
+
+    gf = GapFrames(
+        start=1.0,
+        end=5.0,
+        frames=[frame_path],
+        relpaths=["frames/test_frame.jpg"],
+    )
+
+    def fake_llm(messages, cfg):
+        return "A description"
+
+    # Use a real Recorder
+    report_dir = tmp_path / "reports"
+    report_dir.mkdir()
+    rec = Recorder("gap_context", report_dir, enabled=True)
+
+    gap = describe_gap(gf, CFG, unit="test_unit", call_llm=fake_llm, recorder=rec)
+    assert gap is not None
+
+    # Read the generated markdown report
+    report_file = report_dir / "gap_context" / "test_unit.md"
+    assert report_file.exists()
+    report_text = report_file.read_text(encoding="utf-8")
+
+    # Assert the base64 payload does NOT appear
+    base64_payload = base64.b64encode(frame_content).decode("ascii")
+    assert base64_payload not in report_text, "base64 payload should not be in report"
+    assert "data:image/jpeg;base64," not in report_text, "data-URI prefix should not be in report"
+
+    # Assert the frame's relpath DOES appear
+    assert "frames/test_frame.jpg" in report_text, "frame relpath should be in report"
