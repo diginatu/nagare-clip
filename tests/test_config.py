@@ -342,6 +342,22 @@ def test_director_prompt_documents_speed_does_not_keep_silence():
     assert "silence" in speed_line.lower() or "pause" in speed_line.lower()
 
 
+@pytest.mark.parametrize("stage", ["director", "plan"])
+def test_prompt_documents_duration_and_gap_bracket(stage):
+    """The director/plan inputs carry a `[4.2s, gap 0.8s]` bracket per line/part
+    (rendered by timing.format_dur_gap).  The prompt must explain that notation,
+    and the example it shows must be exactly what the renderer emits — otherwise
+    the LLM is told to read a format we never produce."""
+    from nagare_clip.timing import format_dur_gap
+
+    prompt = get_effective_config(None, {})[stage]["prompt"]
+    assert format_dur_gap(4.2, 0.8) in prompt  # "[4.2s, gap 0.8s]"
+    assert format_dur_gap(4.2, None) in prompt  # "[4.2s]" — last line/part, no gap
+    lowered = prompt.lower()
+    assert "duration" in lowered
+    assert "gap" in lowered
+
+
 def test_guided_edit_defaults_present():
     cfg = get_effective_config(None, {})
     g = cfg["guided_edit"]
