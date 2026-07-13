@@ -10,9 +10,7 @@ from __future__ import annotations
 _INSET = 0.2
 
 
-def select_gaps(
-    ranges: list[tuple[float, float]], min_gap: float
-) -> list[tuple[float, float]]:
+def select_gaps(ranges: list[tuple[float, float]], min_gap: float) -> list[tuple[float, float]]:
     """Silent spans at least *min_gap* seconds long, sorted by start."""
     return sorted((s, e) for s, e in ranges if e - s >= min_gap)
 

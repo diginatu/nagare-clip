@@ -68,9 +68,7 @@ def gaps_from_dict(data: Any) -> list[Gap]:
             continue
         frames = raw.get("frames")
         frames = [f for f in frames if isinstance(f, str)] if isinstance(frames, list) else []
-        out.append(
-            Gap(start=start, end=end, frames=frames, description=description.strip())
-        )
+        out.append(Gap(start=start, end=end, frames=frames, description=description.strip()))
     return out
 
 
