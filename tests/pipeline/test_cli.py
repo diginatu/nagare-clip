@@ -74,7 +74,7 @@ def test_pipeline_wires_context_and_prints_done(tmp_path, monkeypatch, capsys):
     assert rc == 0
     ctx = seen["ctx"]
     assert ctx.stems == ["a"]
-    assert ctx.from_index == 0 and ctx.to_index == 9
+    assert ctx.from_index == 0 and ctx.to_index == len(cli.STAGE_NAMES) - 1
     assert ctx.output_dir == (tmp_path / "output").resolve()
     # stage output dirs created upfront
     assert (tmp_path / "output" / "intervals").is_dir()

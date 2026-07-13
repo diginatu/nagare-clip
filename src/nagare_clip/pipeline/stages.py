@@ -8,16 +8,22 @@ orchestrator echoed, and own the per-stage LLM-report recorder lifecycle
 
 from __future__ import annotations
 
+import logging
 from pathlib import Path
 
+from nagare_clip.audio_silence.cuts_file import read_cuts
 from nagare_clip.audio_silence.run import run_audio_silence
 from nagare_clip.director.run import run_director
+from nagare_clip.gap_context.describe import GapFrames
+from nagare_clip.gap_context.run import run_gap_context
+from nagare_clip.gap_context.snapshot import frame_relpath, frame_times, select_gaps
 from nagare_clip.guided_edit.run import run_guided_edit
 from nagare_clip.intervals.run import run_intervals
 from nagare_clip.llm_report import recorder_from_config
 from nagare_clip.pipeline.external import (
     build_blender_cmd,
     build_silencedetect_cmd,
+    build_snapshot_cmd,
     build_transcription_cmd,
     run_command,
 )
@@ -31,6 +37,7 @@ STAGE_NAMES = [
     "transcription",
     "audio_silence",
     "sentence_split",
+    "gap_context",
     "summary",
     "text_filter",
     "plan",
@@ -128,6 +135,79 @@ def _sentence_split_run(ctx: PipelineContext) -> None:
 def _sentence_split_required(ctx: PipelineContext) -> list[Path]:
     d = ctx.stage_dir("sentence_split")
     return [d / f"{s}{ext}" for s in ctx.stems for ext in (".json", ".txt")]
+
+
+# --- gap_context ---------------------------------------------------------------
+
+
+def _extract_gap_frames(ctx: PipelineContext, src, gaps: list[tuple[float, float]]) -> list:
+    """Snapshot each gap via ffmpeg in the whisperx image; skip what fails."""
+    width = ctx.cfg["gap_context"]["frame_width"]
+    d = ctx.stage_dir("gap_context")
+    out: list[GapFrames] = []
+    for start, end in gaps:
+        frames: list[Path] = []
+        relpaths: list[str] = []
+        for t in frame_times(start, end):
+            rel = frame_relpath(src.stem, t)
+            host_path = d / rel
+            host_path.parent.mkdir(parents=True, exist_ok=True)
+            try:
+                run_command(
+                    build_snapshot_cmd(
+                        ctx.project_root,
+                        src.relative,
+                        t,
+                        f"/output/gap_context/{rel}",
+                        width,
+                    ),
+                    env_extra=_docker_env(ctx),
+                )
+            except Exception:  # noqa: BLE001 - a missing frame must never abort the run
+                logging.warning("gap_context: frame extraction failed at %.3fs for %s", t, src.stem)
+                continue
+            if not host_path.is_file():
+                logging.warning("gap_context: no frame written at %.3fs for %s", t, src.stem)
+                continue
+            frames.append(host_path)
+            relpaths.append(rel)
+        if not frames:
+            logging.warning(
+                "gap_context: no frames for gap %.1f-%.1f in %s; skipping", start, end, src.stem
+            )
+            continue
+        out.append(GapFrames(start=start, end=end, frames=frames, relpaths=relpaths))
+    return out
+
+
+def _gap_context_run(ctx: PipelineContext) -> None:
+    g = ctx.cfg["gap_context"]
+    rec = _recorder(ctx, "gap_context")
+    rec.clear()
+    try:
+        adir = ctx.stage_dir("audio_silence")
+        odir = ctx.stage_dir("gap_context")
+        for src in ctx.sources:
+            print(f"[gap_context] Silent-gap visual context: {src.stem}")
+            gap_frames = []
+            if g["enabled"]:
+                gaps = select_gaps(read_cuts(adir / f"{src.stem}_cuts.txt"), g["min_gap"])
+                gap_frames = _extract_gap_frames(ctx, src, gaps)
+            run_gap_context(
+                gap_frames,
+                odir / f"{src.stem}_gaps.json",
+                ctx.cfg,
+                stem=src.stem,
+                json_path=ctx.stage_dir("sentence_split") / f"{src.stem}.json",
+                recorder=rec,
+            )
+    finally:
+        rec.rebuild_index()
+
+
+def _gap_context_required(ctx: PipelineContext) -> list[Path]:
+    d = ctx.stage_dir("gap_context")
+    return [d / f"{s}_gaps.json" for s in ctx.stems]
 
 
 # --- summary -----------------------------------------------------------------
@@ -299,6 +379,7 @@ STAGES = [
     Stage("transcription", _transcription_run, _transcription_required),
     Stage("audio_silence", _audio_silence_run, _audio_silence_required),
     Stage("sentence_split", _sentence_split_run, _sentence_split_required),
+    Stage("gap_context", _gap_context_run, _gap_context_required),
     Stage("summary", _summary_run, _summary_required),
     Stage("text_filter", _text_filter_run, _text_filter_required),
     Stage("plan", _plan_run, _plan_required),
