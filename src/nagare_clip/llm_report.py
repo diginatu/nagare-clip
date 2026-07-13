@@ -32,7 +32,7 @@ VERIFY_FAIL = "verify-fail"
 DROPPED_ITEMS = "dropped-items"
 
 # Stage display/sort order for the index.
-STAGE_ORDER = ["text_filter", "summary", "plan", "director", "guided_edit"]
+STAGE_ORDER = ["text_filter", "gap_context", "summary", "plan", "director", "guided_edit"]
 
 
 @dataclass

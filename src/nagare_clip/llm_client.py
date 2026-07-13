@@ -84,7 +84,7 @@ def with_trace_meta(
     return out
 
 
-def call_llm(messages: list[dict[str, str]], cfg: dict[str, Any]) -> str:
+def call_llm(messages: list[dict[str, Any]], cfg: dict[str, Any]) -> str:
     """Send chat ``messages`` to the configured provider, return text content.
 
     Falls back to the local Ollama base URL when an Ollama provider is selected
