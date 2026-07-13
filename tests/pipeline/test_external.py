@@ -157,3 +157,20 @@ def test_run_command_env_extra(tmp_path):
         env_extra={"PIPE_TEST_VAR": "hello"},
     )
     assert marker.read_text() == "hello"
+
+
+def test_build_snapshot_cmd(tmp_path):
+    from nagare_clip.pipeline.external import build_snapshot_cmd
+
+    cmd = build_snapshot_cmd(
+        tmp_path, "talk1.mp4", 12.6, "/output/gap_context/frames/talk1/12.600.jpg", 960
+    )
+    assert cmd[:3] == ["docker", "compose", "-f"]
+    assert "--entrypoint" in cmd and cmd[cmd.index("--entrypoint") + 1] == "ffmpeg"
+    # input-side -ss (fast seek), before -i
+    assert cmd.index("-ss") < cmd.index("-i")
+    assert cmd[cmd.index("-ss") + 1] == "12.600"
+    assert cmd[cmd.index("-i") + 1] == "talk1.mp4"
+    assert cmd[cmd.index("-vf") + 1] == "scale=960:-2"
+    assert cmd[cmd.index("-frames:v") + 1] == "1"
+    assert cmd[-1] == "/output/gap_context/frames/talk1/12.600.jpg"

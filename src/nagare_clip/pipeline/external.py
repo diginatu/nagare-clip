@@ -80,6 +80,38 @@ def build_silencedetect_cmd(
     ]
 
 
+def build_snapshot_cmd(
+    project_root: Path,
+    relative: str,
+    time_s: float,
+    out_container_path: str,
+    width: int,
+) -> list[str]:
+    """One JPEG frame at *time_s*, via ffmpeg inside the whisperx image."""
+    return [
+        *_compose_prefix(project_root),
+        "--entrypoint",
+        "ffmpeg",
+        "whisperx",
+        "-hide_banner",
+        "-nostats",
+        "-loglevel",
+        "error",
+        "-y",
+        "-ss",
+        f"{time_s:.3f}",
+        "-i",
+        relative,
+        "-frames:v",
+        "1",
+        "-vf",
+        f"scale={width}:-2",
+        "-q:v",
+        "4",
+        out_container_path,
+    ]
+
+
 def build_blender_cmd(
     project_root: Path,
     source_paths: list[Path],
