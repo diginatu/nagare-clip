@@ -118,7 +118,12 @@ def test_describe_gap_skips_a_missing_frame_file(tmp_path):
 def test_describe_gap_returns_none_when_no_frame_is_readable(tmp_path):
     gf = GapFrames(start=1.0, end=5.0, frames=[tmp_path / "gone.jpg"], relpaths=["x.jpg"])
 
-    def fake_llm(messages, cfg):  # pragma: no cover - must not be called
-        raise AssertionError("LLM must not be called without frames")
+    call_count = [0]
 
-    assert describe_gap(gf, CFG, unit="u", call_llm=fake_llm) is None
+    def fake_llm(messages, cfg):
+        call_count[0] += 1
+        return "should not reach here"
+
+    result = describe_gap(gf, CFG, unit="u", call_llm=fake_llm)
+    assert result is None
+    assert call_count[0] == 0
