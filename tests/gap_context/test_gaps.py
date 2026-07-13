@@ -26,10 +26,10 @@ def test_duration():
 def test_gaps_from_dict_is_lenient():
     data = {
         "gaps": [
-            {"start": 1.0, "end": 2.0, "description": "ok"},          # frames optional
+            {"start": 1.0, "end": 2.0, "description": "ok"},  # frames optional
             {"start": "nope", "end": 2.0, "description": "bad start"},
-            {"start": 1.0, "end": 2.0},                                 # no description
-            {"start": 1.0, "end": 2.0, "description": ""},              # empty description
+            {"start": 1.0, "end": 2.0},  # no description
+            {"start": 1.0, "end": 2.0, "description": ""},  # empty description
             "not a dict",
         ]
     }
@@ -63,3 +63,52 @@ def test_load_gaps_reads_a_file(tmp_path):
         encoding="utf-8",
     )
     assert load_gaps(p) == [Gap(start=1.0, end=5.0, frames=[], description="d")]
+
+
+def test_gaps_from_dict_rejects_invalid_interval():
+    """Test that end <= start is rejected (not coerced)."""
+    data = {
+        "gaps": [
+            {"start": 5.0, "end": 5.0, "description": "equal"},
+            {"start": 10.0, "end": 5.0, "description": "reversed"},
+            {"start": 1.0, "end": 2.0, "description": "valid"},
+        ]
+    }
+    gaps = gaps_from_dict(data)
+    # Only the valid one should be kept
+    assert len(gaps) == 1
+    assert gaps[0].start == 1.0
+    assert gaps[0].end == 2.0
+
+
+def test_gaps_from_dict_rejects_bool_start_end():
+    """Test that bool start/end are rejected, not coerced to 1.0/0.0."""
+    data = {
+        "gaps": [
+            {"start": True, "end": 2.0, "description": "bool start"},
+            {"start": 1.0, "end": False, "description": "bool end"},
+            {"start": 1.0, "end": 2.0, "description": "valid"},
+        ]
+    }
+    gaps = gaps_from_dict(data)
+    # Only the valid one should be kept
+    assert len(gaps) == 1
+    assert gaps[0].start == 1.0
+    assert gaps[0].end == 2.0
+
+
+def test_gaps_from_dict_filters_non_string_frames():
+    """Test that non-string entries in frames list are filtered out."""
+    data = {
+        "gaps": [
+            {
+                "start": 1.0,
+                "end": 2.0,
+                "frames": ["valid.jpg", 123, None, "also_valid.png", True, "final.jpg"],
+                "description": "mixed frames",
+            }
+        ]
+    }
+    gaps = gaps_from_dict(data)
+    assert len(gaps) == 1
+    assert gaps[0].frames == ["valid.jpg", "also_valid.png", "final.jpg"]
