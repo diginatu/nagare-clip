@@ -50,25 +50,57 @@ stretches a word across the pause edge).
 rounding above) — this is both the frame's location under the stage dir and
 the string recorded in `{stem}_gaps.json`'s `frames` array.
 
-## Extraction (`pipeline/stages.py::_extract_gap_frames`, `pipeline/external.py::build_snapshot_cmd`)
+## Extraction (`pipeline/stages.py::_extract_gap_frames`, `pipeline/external.py::build_snapshot_batch_cmd`)
 
-One ffmpeg run **per frame** (not per gap) inside the whisperx Docker image —
-the same container the transcription and audio_silence stages use, so no host
-ffmpeg dependency is added. `build_snapshot_cmd()` seeks with `-ss` before
-`-i` (fast, keyframe-adjacent seek), grabs exactly one frame
-(`-frames:v 1`), scales to `gap_context.frame_width` px wide with the height
-auto-computed (`scale={width}:-2`), and writes a JPEG (`-q:v 4`) to
-`/output/gap_context/frames/{stem}/{t:.3f}.jpg` inside the container, which
-lands at `output/gap_context/frames/{stem}/{t:.3f}.jpg` on the host.
+**One `docker compose run` for the ENTIRE stage** — every frame of every gap
+of every source in the whole pipeline invocation, not one container per
+frame and not even one per source. This mirrors the transcription stage's
+"single Docker container for all source files" precedent.
 
-`_extract_gap_frames()` runs `frame_times()` per selected gap and, for each
-timestamp: runs the snapshot command, catching any exception (a failed
-extraction must never abort the whole run) and logging+skipping that frame if
-it raises or if the expected file doesn't exist afterward. A gap that ends up
-with zero readable frames is dropped entirely (logged) before it ever reaches
-`describe_gap`. The result is a list of `GapFrames` (start, end, the frames
-that survived as absolute host `Path`s, and their `frames/{stem}/...`
-relpaths in the same order).
+Why: a `docker compose run` pays ~0.82s of container + nvidia-runtime init
+(`docker-compose.yml` reserves a GPU) regardless of how little work it does
+inside; the actual ffmpeg snapshot is ~30ms. Measured on real media: 3
+frames as 3 separate containers took 2.47s; the same 3 frames batched into
+ONE container took 0.85s, producing byte-identical JPEGs. Under the old
+one-container-per-frame design, a 40-gap video (120 frames) burned ~98s in
+pure container startup before this change.
+
+`_extract_gap_frames(ctx, gaps_by_source)` takes **every** source's selected
+gaps at once (`gaps_by_source: list[tuple[SourceMedia, list[tuple[float,
+float]]]]`) and:
+
+1. Builds one `(relative, time_s, out_container_path)` job per `frame_times()`
+   timestamp across all sources/gaps, `mkdir`-ing every frame's parent
+   directory up front.
+2. If there is at least one job, issues **exactly one** `run_command()` call
+   — `build_snapshot_batch_cmd()` renders every job as its own `ffmpeg ...
+   || true` line in a shell script, run via `--entrypoint sh whisperx -c
+   "<script>"` inside the whisperx image. Each line keeps the same ffmpeg
+   flags as before (input-side `-ss` fast seek, `-frames:v 1`,
+   `scale={width}:-2`, `-q:v 4`, writing to
+   `/output/gap_context/frames/{stem}/{t:.3f}.jpg`), plus `-nostdin` since
+   many ffmpeg invocations now share one shell. **Zero jobs means zero
+   docker calls** — an empty batch never runs an empty/no-op container.
+   The `|| true` on each line means one bad seek can't take down the rest of
+   the batch; the whole `run_command()` call is still wrapped in a broad
+   `except Exception` (a missing/failed batch — docker gone, image gone —
+   must never abort the run; every gap in that case simply gets zero
+   frames).
+3. Regroups the single batch's results back into per-source, per-gap
+   `GapFrames`, checking `host_path.is_file()` for each job the same way the
+   old per-frame code did — a frame that never landed (bad seek, or the
+   whole batch call raised) is skipped, never fatal. A gap that ends up with
+   zero readable frames is dropped entirely (logged) before it ever reaches
+   `describe_gap`.
+
+The result is `dict[str, list[GapFrames]]` keyed by source stem; `frame_relpath`
+already namespaces every path by stem (`frames/{stem}/{t:.3f}.jpg`), so
+batching multiple sources' frames into one container run cannot collide them.
+`_gap_context_run()` computes `select_gaps()` for every source first, calls
+`_extract_gap_frames()` once, then loops sources calling `run_gap_context()`
+with `frames_by_stem.get(src.stem, [])` — unchanged from before except that
+the frame extraction itself now happens once, up front, instead of once per
+source inside the loop.
 
 ## Vision call (`describe.py`)
 

@@ -23,7 +23,7 @@ from nagare_clip.llm_report import recorder_from_config
 from nagare_clip.pipeline.external import (
     build_blender_cmd,
     build_silencedetect_cmd,
-    build_snapshot_cmd,
+    build_snapshot_batch_cmd,
     build_transcription_cmd,
     run_command,
 )
@@ -142,45 +142,70 @@ def _sentence_split_required(ctx: PipelineContext) -> list[Path]:
 
 
 def _extract_gap_frames(
-    ctx: PipelineContext, src: SourceMedia, gaps: list[tuple[float, float]]
-) -> list[GapFrames]:
-    """Snapshot each gap via ffmpeg in the whisperx image; skip what fails."""
+    ctx: PipelineContext,
+    gaps_by_source: list[tuple[SourceMedia, list[tuple[float, float]]]],
+) -> dict[str, list[GapFrames]]:
+    """Snapshot every gap of every source in ONE docker container run.
+
+    A `docker compose run` pays ~0.8s of container + nvidia-runtime init
+    regardless of how little work it does; the actual ffmpeg snapshot is
+    ~30ms. Running one container per FRAME (the original design) made
+    container startup dominate: measured 2.47s for 3 frames as 3 separate
+    containers vs. 0.85s for the same 3 frames in one container (byte-
+    identical JPEGs either way) -- a 40-gap video (120 frames) was burning
+    ~98s in pure container init. Batching the whole stage's extraction into
+    a single call mirrors the transcription stage's "single Docker
+    container for all source files" precedent.
+    """
     width = ctx.cfg["gap_context"]["frame_width"]
     d = ctx.stage_dir("gap_context")
-    out: list[GapFrames] = []
-    for start, end in gaps:
-        frames: list[Path] = []
-        relpaths: list[str] = []
-        for t in frame_times(start, end):
-            rel = frame_relpath(src.stem, t)
-            host_path = d / rel
-            host_path.parent.mkdir(parents=True, exist_ok=True)
-            try:
-                run_command(
-                    build_snapshot_cmd(
-                        ctx.project_root,
-                        src.relative,
-                        t,
-                        f"/output/gap_context/{rel}",
-                        width,
-                    ),
-                    env_extra=_docker_env(ctx),
-                )
-            except Exception:  # noqa: BLE001 - a missing frame must never abort the run
-                logging.warning("gap_context: frame extraction failed at %.3fs for %s", t, src.stem)
-                continue
-            if not host_path.is_file():
-                logging.warning("gap_context: no frame written at %.3fs for %s", t, src.stem)
-                continue
-            frames.append(host_path)
-            relpaths.append(rel)
-        if not frames:
-            logging.warning(
-                "gap_context: no frames for gap %.1f-%.1f in %s; skipping", start, end, src.stem
+
+    jobs: list[tuple[str, float, str]] = []
+    # Per stem: list of (start, end, [(t, rel, host_path), ...]) so the
+    # single batch result can be re-split back per source/gap afterward.
+    plan: dict[str, list[tuple[float, float, list[tuple[float, str, Path]]]]] = {}
+    for src, gaps in gaps_by_source:
+        entries: list[tuple[float, float, list[tuple[float, str, Path]]]] = []
+        for start, end in gaps:
+            frame_entries: list[tuple[float, str, Path]] = []
+            for t in frame_times(start, end):
+                rel = frame_relpath(src.stem, t)
+                host_path = d / rel
+                host_path.parent.mkdir(parents=True, exist_ok=True)
+                jobs.append((src.relative, t, f"/output/gap_context/{rel}"))
+                frame_entries.append((t, rel, host_path))
+            entries.append((start, end, frame_entries))
+        plan[src.stem] = entries
+
+    if jobs:
+        try:
+            run_command(
+                build_snapshot_batch_cmd(ctx.project_root, jobs, width),
+                env_extra=_docker_env(ctx),
             )
-            continue
-        out.append(GapFrames(start=start, end=end, frames=frames, relpaths=relpaths))
-    return out
+        except Exception:  # noqa: BLE001 - a failed batch must never abort the run
+            logging.warning("gap_context: batch frame extraction failed (%d job(s))", len(jobs))
+
+    result: dict[str, list[GapFrames]] = {}
+    for stem, entries in plan.items():
+        out: list[GapFrames] = []
+        for start, end, frame_entries in entries:
+            frames: list[Path] = []
+            relpaths: list[str] = []
+            for t, rel, host_path in frame_entries:
+                if not host_path.is_file():
+                    logging.warning("gap_context: no frame written at %.3fs for %s", t, stem)
+                    continue
+                frames.append(host_path)
+                relpaths.append(rel)
+            if not frames:
+                logging.warning(
+                    "gap_context: no frames for gap %.1f-%.1f in %s; skipping", start, end, stem
+                )
+                continue
+            out.append(GapFrames(start=start, end=end, frames=frames, relpaths=relpaths))
+        result[stem] = out
+    return result
 
 
 def _gap_context_run(ctx: PipelineContext) -> None:
@@ -190,14 +215,17 @@ def _gap_context_run(ctx: PipelineContext) -> None:
     try:
         adir = ctx.stage_dir("audio_silence")
         odir = ctx.stage_dir("gap_context")
+        frames_by_stem: dict[str, list[GapFrames]] = {}
+        if g["enabled"]:
+            gaps_by_source = [
+                (src, select_gaps(read_cuts(adir / f"{src.stem}_cuts.txt"), g["min_gap"]))
+                for src in ctx.sources
+            ]
+            frames_by_stem = _extract_gap_frames(ctx, gaps_by_source)
         for src in ctx.sources:
             print(f"[gap_context] Silent-gap visual context: {src.stem}")
-            gap_frames = []
-            if g["enabled"]:
-                gaps = select_gaps(read_cuts(adir / f"{src.stem}_cuts.txt"), g["min_gap"])
-                gap_frames = _extract_gap_frames(ctx, src, gaps)
             run_gap_context(
-                gap_frames,
+                frames_by_stem.get(src.stem, []),
                 odir / f"{src.stem}_gaps.json",
                 ctx.cfg,
                 stem=src.stem,

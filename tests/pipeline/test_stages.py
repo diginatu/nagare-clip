@@ -1,6 +1,7 @@
 """Tests for the real STAGES registry wiring."""
 
 import json
+import shlex
 import subprocess
 
 import pytest
@@ -270,8 +271,34 @@ def test_gap_context_required_outputs(gap_ctx):
     assert stage.required_outputs(gap_ctx) == [gap_ctx.stage_dir("gap_context") / "talk1_gaps.json"]
 
 
-def test_gap_context_extracts_a_frame_per_gap_time_and_runs_the_stage(gap_ctx, monkeypatch):
-    """Long cut spans -> one docker frame command per frame time; short ones ignored."""
+def _materialise_frames_from_script(output_dir, script):
+    """Write the files ffmpeg would have produced for a batch script.
+
+    Deliberately derives each output path from the SCRIPT TEXT itself
+    (parsing each `ffmpeg ... <out_path> || true` line), never from
+    `frame_relpath`/`frame_times` -- so this fake can never be
+    self-fulfilling. If `_extract_gap_frames` ever mis-assembled a host
+    path that doesn't correspond to what it told docker to write, the
+    resulting `GapFrames` just wouldn't find a file on disk.
+    """
+    written = []
+    for line in script.splitlines():
+        if not line.strip():
+            continue
+        tokens = shlex.split(line)
+        assert tokens[-2:] == ["||", "true"], line
+        container_path = tokens[-3]
+        rel = container_path.removeprefix("/output/")
+        p = output_dir / rel
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_bytes(b"jpeg")
+        written.append(container_path)
+    return written
+
+
+def test_gap_context_extracts_all_frames_in_a_single_docker_call(gap_ctx, monkeypatch):
+    """Long cut spans -> ONE docker container for the whole stage, not one
+    per frame (container startup dominates the real per-frame ffmpeg cost)."""
     import nagare_clip.pipeline.stages as stages_mod
 
     cuts = gap_ctx.stage_dir("audio_silence") / "talk1_cuts.txt"
@@ -282,11 +309,7 @@ def test_gap_context_extracts_a_frame_per_gap_time_and_runs_the_stage(gap_ctx, m
 
     def fake_run_command(cmd, **kwargs):
         commands.append(cmd)
-        # Materialise the file ffmpeg would have written (last arg = container path).
-        rel = cmd[-1].removeprefix("/output/")
-        p = gap_ctx.output_dir / rel
-        p.parent.mkdir(parents=True, exist_ok=True)
-        p.write_bytes(b"jpeg")
+        _materialise_frames_from_script(gap_ctx.output_dir, cmd[-1])
 
     captured = {}
 
@@ -303,8 +326,11 @@ def test_gap_context_extracts_a_frame_per_gap_time_and_runs_the_stage(gap_ctx, m
     stage = next(s for s in stages_mod.STAGES if s.name == "gap_context")
     stage.run(gap_ctx)
 
-    # Only the 10s gap qualifies (min_gap 3.0): 3 frames.
-    assert len(commands) == 3
+    # Exactly ONE docker invocation for the whole run, carrying all 3 jobs
+    # from the one qualifying (10s) gap.
+    assert len(commands) == 1
+    assert commands[0][-1].count("ffmpeg ") == 3
+
     gfs = captured["gap_frames"]
     assert len(gfs) == 1
     assert (gfs[0].start, gfs[0].end) == (10.0, 20.0)
@@ -342,7 +368,37 @@ def test_gap_context_disabled_runs_no_docker(gap_ctx, monkeypatch):
     assert json.loads(out.read_text(encoding="utf-8")) == {"gaps": []}
 
 
-def test_gap_context_skips_a_frame_ffmpeg_failed_to_write(gap_ctx, monkeypatch):
+def test_gap_context_enabled_but_zero_gaps_runs_no_docker(gap_ctx, monkeypatch):
+    """Enabled, but no source has a long-enough gap -> still zero docker
+    calls (must never run an empty/no-op container)."""
+    import nagare_clip.pipeline.stages as stages_mod
+
+    cuts = gap_ctx.stage_dir("audio_silence") / "talk1_cuts.txt"
+    cuts.parent.mkdir(parents=True, exist_ok=True)
+    cuts.write_text("1.000 - 2.000\n", encoding="utf-8")  # below min_gap (3.0s)
+
+    run_calls = []
+
+    def record_run_command(*a, **k):
+        run_calls.append((a, k))
+
+    def fake_run_gap_context(gap_frames, output, cfg, **kwargs):
+        output.parent.mkdir(parents=True, exist_ok=True)
+        output.write_text('{"gaps": []}\n', encoding="utf-8")
+
+    monkeypatch.setattr(stages_mod, "run_command", record_run_command)
+    monkeypatch.setattr(stages_mod, "run_gap_context", fake_run_gap_context)
+    gap_ctx.cfg["gap_context"]["enabled"] = True
+
+    stage = next(s for s in stages_mod.STAGES if s.name == "gap_context")
+    stage.run(gap_ctx)
+
+    assert run_calls == []
+
+
+def test_gap_context_batch_call_raising_drops_all_frames_without_aborting(gap_ctx, monkeypatch):
+    """If the ONE docker call itself raises (docker missing, image gone),
+    every gap simply ends up with no frames -- the pipeline must not abort."""
     import nagare_clip.pipeline.stages as stages_mod
 
     cuts = gap_ctx.stage_dir("audio_silence") / "talk1_cuts.txt"
@@ -367,3 +423,143 @@ def test_gap_context_skips_a_frame_ffmpeg_failed_to_write(gap_ctx, monkeypatch):
     stage.run(gap_ctx)  # must not raise
 
     assert captured["gap_frames"] == []  # gap with zero frames is skipped
+
+
+def test_gap_context_a_single_bad_line_does_not_drop_other_frames(gap_ctx, monkeypatch):
+    """`|| true` on each ffmpeg line means one failed seek inside the batch
+    must not take out the other frames/gaps sharing the same container."""
+    import nagare_clip.pipeline.stages as stages_mod
+
+    cuts = gap_ctx.stage_dir("audio_silence") / "talk1_cuts.txt"
+    cuts.parent.mkdir(parents=True, exist_ok=True)
+    cuts.write_text("10.000 - 20.000\n", encoding="utf-8")
+
+    def fake_run_command(cmd, **kwargs):
+        script = cmd[-1]
+        lines = [line for line in script.splitlines() if line.strip()]
+        # Skip writing the file for the FIRST job only (simulates a failed
+        # seek that `|| true` swallowed); the rest still land.
+        _materialise_frames_from_script(gap_ctx.output_dir, "\n".join(lines[1:]))
+
+    captured = {}
+
+    def fake_run_gap_context(gap_frames, output, cfg, **kwargs):
+        captured["gap_frames"] = gap_frames
+        output.parent.mkdir(parents=True, exist_ok=True)
+        output.write_text('{"gaps": []}\n', encoding="utf-8")
+
+    monkeypatch.setattr(stages_mod, "run_command", fake_run_command)
+    monkeypatch.setattr(stages_mod, "run_gap_context", fake_run_gap_context)
+    gap_ctx.cfg["gap_context"]["enabled"] = True
+
+    stage = next(s for s in stages_mod.STAGES if s.name == "gap_context")
+    stage.run(gap_ctx)
+
+    gfs = captured["gap_frames"]
+    assert len(gfs) == 1
+    # 3 candidate frame times, 1 missing -> 2 survive; the gap is not dropped.
+    assert len(gfs[0].frames) == 2
+
+
+def test_gap_context_two_sources_share_one_container_without_frame_collision(tmp_path, monkeypatch):
+    """Frames for source A and source B, batched in the SAME container call,
+    must come back correctly split by stem -- relpaths already namespace by
+    stem, but this pins the batching/regrouping logic too."""
+    import nagare_clip.pipeline.stages as stages_mod
+    from nagare_clip.pipeline.runner import PipelineContext
+    from nagare_clip.pipeline.sources import SourceMedia
+
+    sources = [
+        SourceMedia(abs_path=tmp_path / "talk1.mp4", stem="talk1", relative="talk1.mp4"),
+        SourceMedia(abs_path=tmp_path / "talk2.mp4", stem="talk2", relative="talk2.mp4"),
+    ]
+    ctx = PipelineContext(
+        cfg=get_effective_config(None, {}),
+        project_root=tmp_path,
+        config_path=None,
+        input_videos_dir=tmp_path / "in",
+        output_dir=tmp_path / "output",
+        sources=sources,
+        from_index=0,
+        to_index=len(st.STAGE_NAMES) - 1,
+    )
+    for stem, cuts_text in (
+        ("talk1", "10.000 - 20.000\n"),
+        ("talk2", "50.000 - 60.000\n"),
+    ):
+        cuts = ctx.stage_dir("audio_silence") / f"{stem}_cuts.txt"
+        cuts.parent.mkdir(parents=True, exist_ok=True)
+        cuts.write_text(cuts_text, encoding="utf-8")
+
+    commands = []
+
+    def fake_run_command(cmd, **kwargs):
+        commands.append(cmd)
+        _materialise_frames_from_script(ctx.output_dir, cmd[-1])
+
+    captured = {}
+
+    def fake_run_gap_context(gap_frames, output, cfg, **kwargs):
+        captured[kwargs["stem"]] = gap_frames
+        output.parent.mkdir(parents=True, exist_ok=True)
+        output.write_text('{"gaps": []}\n', encoding="utf-8")
+
+    monkeypatch.setattr(stages_mod, "run_command", fake_run_command)
+    monkeypatch.setattr(stages_mod, "run_gap_context", fake_run_gap_context)
+    ctx.cfg["gap_context"]["enabled"] = True
+
+    stage = next(s for s in stages_mod.STAGES if s.name == "gap_context")
+    stage.run(ctx)
+
+    # ONE container call carries both sources' jobs.
+    assert len(commands) == 1
+    assert commands[0][-1].count("ffmpeg ") == 6  # 3 frames x 2 sources
+
+    assert set(captured) == {"talk1", "talk2"}
+    talk1_gfs, talk2_gfs = captured["talk1"], captured["talk2"]
+    assert len(talk1_gfs) == 1 and len(talk2_gfs) == 1
+    assert (talk1_gfs[0].start, talk1_gfs[0].end) == (10.0, 20.0)
+    assert (talk2_gfs[0].start, talk2_gfs[0].end) == (50.0, 60.0)
+    assert all(r.startswith("frames/talk1/") for r in talk1_gfs[0].relpaths)
+    assert all(r.startswith("frames/talk2/") for r in talk2_gfs[0].relpaths)
+    assert len(talk1_gfs[0].frames) == 3
+    assert len(talk2_gfs[0].frames) == 3
+
+
+def test_extract_gap_frames_takes_all_sources_at_once(gap_ctx, monkeypatch):
+    """`_extract_gap_frames` itself: one call across ALL sources' gaps,
+    returning a dict keyed by stem."""
+    import nagare_clip.pipeline.stages as stages_mod
+
+    commands = []
+
+    def fake_run_command(cmd, **kwargs):
+        commands.append(cmd)
+        _materialise_frames_from_script(gap_ctx.output_dir, cmd[-1])
+
+    monkeypatch.setattr(stages_mod, "run_command", fake_run_command)
+
+    src = gap_ctx.sources[0]
+    result = stages_mod._extract_gap_frames(gap_ctx, [(src, [(10.0, 20.0)])])
+
+    assert len(commands) == 1
+    assert isinstance(result, dict)
+    assert list(result) == ["talk1"]
+    assert len(result["talk1"]) == 1
+    assert (result["talk1"][0].start, result["talk1"][0].end) == (10.0, 20.0)
+    assert len(result["talk1"][0].frames) == 3
+
+
+def test_extract_gap_frames_no_jobs_makes_zero_docker_calls(gap_ctx, monkeypatch):
+    """A source with an empty gap list contributes zero jobs -- no docker
+    call should be issued at all."""
+    import nagare_clip.pipeline.stages as stages_mod
+
+    run_calls = []
+    monkeypatch.setattr(stages_mod, "run_command", lambda *a, **k: run_calls.append((a, k)))
+
+    src = gap_ctx.sources[0]
+    result = stages_mod._extract_gap_frames(gap_ctx, [(src, [])])
+
+    assert run_calls == []
+    assert result == {"talk1": []}

@@ -159,18 +159,82 @@ def test_run_command_env_extra(tmp_path):
     assert marker.read_text() == "hello"
 
 
-def test_build_snapshot_cmd(tmp_path):
-    from nagare_clip.pipeline.external import build_snapshot_cmd
+def test_build_snapshot_batch_cmd_one_container_for_whole_batch():
+    """The whole stage's frame extraction is ONE docker command, regardless
+    of how many jobs it carries (container-startup overhead dominates over
+    per-frame ffmpeg work -- see docs/stages/gap_context.md)."""
+    from nagare_clip.pipeline.external import build_snapshot_batch_cmd
 
-    cmd = build_snapshot_cmd(
-        tmp_path, "talk1.mp4", 12.6, "/output/gap_context/frames/talk1/12.600.jpg", 960
-    )
+    jobs = [
+        ("talk1.mp4", 10.2, "/output/gap_context/frames/talk1/10.200.jpg"),
+        ("talk1.mp4", 15.0, "/output/gap_context/frames/talk1/15.000.jpg"),
+        ("talk2.mp4", 3.5, "/output/gap_context/frames/talk2/3.500.jpg"),
+    ]
+    cmd = build_snapshot_batch_cmd(Path("/proj"), jobs, 960)
     assert cmd[:3] == ["docker", "compose", "-f"]
-    assert "--entrypoint" in cmd and cmd[cmd.index("--entrypoint") + 1] == "ffmpeg"
+    assert "--entrypoint" in cmd and cmd[cmd.index("--entrypoint") + 1] == "sh"
+    assert cmd[-2] == "-c"
+    script = cmd[-1]
+    # One ffmpeg invocation per job, all in the single script.
+    assert script.count("ffmpeg ") == len(jobs)
+
+
+def test_build_snapshot_batch_cmd_preserves_ffmpeg_flags_per_job():
+    from nagare_clip.pipeline.external import build_snapshot_batch_cmd
+
+    jobs = [("talk1.mp4", 12.6, "/output/gap_context/frames/talk1/12.600.jpg")]
+    cmd = build_snapshot_batch_cmd(Path("/proj"), jobs, 960)
+    script = cmd[-1]
+    line = script.strip()
+    assert "-hide_banner" in line
+    assert "-nostats" in line
+    assert "-loglevel error" in line
+    assert "-nostdin" in line
     # input-side -ss (fast seek), before -i
-    assert cmd.index("-ss") < cmd.index("-i")
-    assert cmd[cmd.index("-ss") + 1] == "12.600"
-    assert cmd[cmd.index("-i") + 1] == "talk1.mp4"
-    assert cmd[cmd.index("-vf") + 1] == "scale=960:-2"
-    assert cmd[cmd.index("-frames:v") + 1] == "1"
-    assert cmd[-1] == "/output/gap_context/frames/talk1/12.600.jpg"
+    assert line.index("-ss") < line.index("-i")
+    assert "-ss 12.600" in line
+    assert "-i talk1.mp4" in line
+    assert "-frames:v 1" in line
+    assert "-vf scale=960:-2" in line
+    assert "-q:v 4" in line
+    assert "/output/gap_context/frames/talk1/12.600.jpg" in line
+
+
+def test_build_snapshot_batch_cmd_each_job_tolerates_failure():
+    """`|| true` per line: one bad seek must not kill the rest of the batch."""
+    from nagare_clip.pipeline.external import build_snapshot_batch_cmd
+
+    jobs = [
+        ("a.mp4", 1.0, "/output/gap_context/frames/a/1.000.jpg"),
+        ("b.mp4", 2.0, "/output/gap_context/frames/b/2.000.jpg"),
+    ]
+    cmd = build_snapshot_batch_cmd(Path("/proj"), jobs, 960)
+    script = cmd[-1]
+    lines = [line for line in script.splitlines() if line.strip()]
+    assert len(lines) == len(jobs)
+    for line in lines:
+        assert line.rstrip().endswith("|| true")
+
+
+def test_build_snapshot_batch_cmd_quotes_paths_with_spaces():
+    """Real media filenames have spaces (e.g. "2022-05-28 23.00.21.mp4") --
+    the relative input path and the output path must both be shell-quoted."""
+    import shlex
+
+    from nagare_clip.pipeline.external import build_snapshot_batch_cmd
+
+    relative = "2022-05-28 23.00.21.mp4"
+    out_path = "/output/gap_context/frames/2022-05-28 23.00.21/1.000.jpg"
+    jobs = [(relative, 1.0, out_path)]
+    cmd = build_snapshot_batch_cmd(Path("/proj"), jobs, 960)
+    script = cmd[-1].strip()
+    # shlex.split must recover the exact tokens -- proves proper quoting,
+    # not naive string interpolation that would split on the space.
+    tokens = shlex.split(script)
+    assert relative in tokens
+    assert out_path in tokens
+    # Un-shell-quoted, the raw string would be split by whitespace and the
+    # command would break; confirm the quoting is actually present in the
+    # source script text (not just recoverable by luck).
+    assert shlex.quote(relative) in script
+    assert shlex.quote(out_path) in script

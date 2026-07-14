@@ -9,7 +9,9 @@ without Docker or Blender installed.
 from __future__ import annotations
 
 import os
+import shlex
 import subprocess
+from collections.abc import Sequence
 from pathlib import Path
 
 JA_DEFAULT_ALIGN_MODEL = "vumichien/wav2vec2-large-xlsr-japanese"
@@ -80,35 +82,44 @@ def build_silencedetect_cmd(
     ]
 
 
-def build_snapshot_cmd(
+def build_snapshot_batch_cmd(
     project_root: Path,
-    relative: str,
-    time_s: float,
-    out_container_path: str,
+    jobs: Sequence[tuple[str, float, str]],
     width: int,
 ) -> list[str]:
-    """One JPEG frame at *time_s*, via ffmpeg inside the whisperx image."""
+    """Every gap-context frame for the whole run, via ONE whisperx container.
+
+    A `docker compose run` pays ~0.8s of container + nvidia-runtime init
+    regardless of how little work it does inside; the actual ffmpeg snapshot
+    is ~30ms. Running one container per frame (the original design) made
+    container startup the dominant cost -- measured 2.47s for 3 frames as 3
+    separate containers vs. 0.85s for the same 3 frames batched into one
+    (byte-identical JPEGs either way). This mirrors the transcription
+    stage's "single Docker container for all source files" precedent.
+
+    *jobs* is `(relative, time_s, out_container_path)` tuples; each becomes
+    one `ffmpeg` line in a shell script run via `sh -c` inside the whisperx
+    image. Flags match the previous per-frame command exactly (input-side
+    `-ss` for fast seek, `-frames:v 1`, `scale={width}:-2`, `-q:v 4`) so
+    output is byte-identical; `-nostdin` is added since many ffmpeg
+    invocations now share one shell. Each line ends in `|| true` so one bad
+    seek can't take down the rest of the batch. Paths are shell-quoted --
+    real media filenames contain spaces.
+    """
+    lines = [
+        "ffmpeg -hide_banner -nostats -loglevel error -nostdin -y "
+        f"-ss {time_s:.3f} -i {shlex.quote(relative)} -frames:v 1 "
+        f"-vf scale={width}:-2 -q:v 4 {shlex.quote(out_container_path)} || true"
+        for relative, time_s, out_container_path in jobs
+    ]
+    script = "\n".join(lines)
     return [
         *_compose_prefix(project_root),
         "--entrypoint",
-        "ffmpeg",
+        "sh",
         "whisperx",
-        "-hide_banner",
-        "-nostats",
-        "-loglevel",
-        "error",
-        "-y",
-        "-ss",
-        f"{time_s:.3f}",
-        "-i",
-        relative,
-        "-frames:v",
-        "1",
-        "-vf",
-        f"scale={width}:-2",
-        "-q:v",
-        "4",
-        out_container_path,
+        "-c",
+        script,
     ]
 
 

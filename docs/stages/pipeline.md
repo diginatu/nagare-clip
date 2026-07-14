@@ -25,14 +25,22 @@ runtime behavior.
   never the staged copy.
 - `external.py` — the only two subprocess boundaries in the whole pipeline:
   the whisperx Docker image (WhisperX transcription, ffmpeg `silencedetect`,
-  and the gap_context stage's per-frame ffmpeg snapshot) and headless Blender.
+  and the gap_context stage's frame snapshots) and headless Blender.
   `build_transcription_cmd()`, `build_silencedetect_cmd()`,
-  `build_snapshot_cmd()`, and `build_blender_cmd()` are pure functions
+  `build_snapshot_batch_cmd()`, and `build_blender_cmd()` are pure functions
   returning `list[str]` command lines (testable without Docker/Blender
   installed); `run_command()` actually runs one via `subprocess.run(...,
   check=True)`, optionally merging extra env vars and redirecting stderr to a
   file (used to capture `silencedetect`'s stderr for the audio_silence stage).
-  Every other stage runs in-process — no subprocess, no re-parsing `--config`.
+  `build_snapshot_batch_cmd()` renders every gap-context frame job (across
+  every gap of every source) as one `ffmpeg ... || true` line in a shell
+  script run inside a single `--entrypoint sh whisperx -c "<script>"`
+  container — container-startup overhead (~0.82s/run) dwarfs the ~30ms
+  ffmpeg cost per frame, so `pipeline/stages.py::_extract_gap_frames` issues
+  exactly one `run_command()` call for the whole stage instead of one per
+  frame (see [`docs/stages/gap_context.md`](gap_context.md) for the measured
+  numbers). Every other stage runs in-process — no subprocess, no
+  re-parsing `--config`.
 - `runner.py` — `Stage` (name, `run(ctx)` callable, optional
   `required_outputs(ctx)` callable) and `PipelineContext` (cfg, paths, resolved
   `SourceMedia` list, `from_index`/`to_index`) are the generic engine.
