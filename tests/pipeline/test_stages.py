@@ -144,6 +144,36 @@ def test_summary_adapter_reads_sentence_split_txts(tmp_path, monkeypatch):
     assert seen["out"] == out / "summary" / "summary.json"
 
 
+def test_director_adapter_passes_context_paths(tmp_path, monkeypatch):
+    seen = {}
+    monkeypatch.setattr(st, "recorder_from_config", lambda *a, **k: _NullRec())
+    monkeypatch.setattr(
+        st,
+        "run_director",
+        lambda edits, out, cfg, *, summary=None, plan=None, stem=None, json_path=None, gaps=None, recorder=None: (
+            seen.update(
+                edits=edits,
+                out=out,
+                summary=summary,
+                plan=plan,
+                stem=stem,
+                json_path=json_path,
+                gaps=gaps,
+            )
+        ),
+    )
+    by_name = {s.name: s for s in st.STAGES}
+    by_name["director"].run(_ctx(tmp_path, stems=("a",)))
+    out = tmp_path / "out"
+    assert seen["edits"] == out / "text_filter" / "a_edits.txt"
+    assert seen["out"] == out / "director" / "a_director.json"
+    assert seen["summary"] == out / "summary" / "summary.json"
+    assert seen["plan"] == out / "plan" / "plan.json"
+    assert seen["stem"] == "a"
+    assert seen["json_path"] == out / "sentence_split" / "a.json"
+    assert seen["gaps"] == out / "gap_context" / "a_gaps.json"
+
+
 def test_text_filter_adapter_passes_summary_json(tmp_path, monkeypatch):
     seen = []
     monkeypatch.setattr(st, "recorder_from_config", lambda *a, **k: _NullRec())
