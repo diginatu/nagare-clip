@@ -29,6 +29,36 @@ def test_disabled_writes_an_empty_gap_list(tmp_path):
     assert json.loads(out.read_text(encoding="utf-8")) == {"gaps": []}
 
 
+def test_disabled_ignores_a_nonempty_gap_frames_list_and_makes_zero_llm_calls(
+    tmp_path, monkeypatch
+):
+    """Regression: test_disabled_writes_an_empty_gap_list above only ever
+    passes gap_frames=[], so it never actually exercises the enabled==False
+    branch in run_gap_context -- a caller handed a non-empty GapFrames list
+    with enabled: false must still get {"gaps": []} and make ZERO LLM calls.
+
+    Uses a call COUNTER, not a fake that signals via raising: describe_gap's
+    broad ``except Exception`` would swallow a raise and this test would be
+    unable to fail no matter what the gate does.
+    """
+    import nagare_clip.gap_context.run as run_mod
+
+    calls: list[None] = []
+
+    def counting_llm(messages, cfg):
+        calls.append(None)
+        return "should never be called"
+
+    monkeypatch.setattr(run_mod, "_call_llm", counting_llm)
+    gf = GapFrames(
+        start=10.0, end=20.0, frames=_frames(tmp_path, "f.jpg"), relpaths=["frames/a/10.200.jpg"]
+    )
+    out = tmp_path / "a_gaps.json"
+    run_gap_context([gf], out, {"gap_context": {"enabled": False}}, stem="a")
+    assert json.loads(out.read_text(encoding="utf-8")) == {"gaps": []}
+    assert calls == [], f"expected zero LLM calls, got {len(calls)}"
+
+
 def test_writes_a_described_gap(tmp_path, monkeypatch):
     import nagare_clip.gap_context.run as run_mod
 
