@@ -456,3 +456,23 @@ def test_director_prompt_documents_gap_annotations():
     prompt = cfg["director"]["prompt"]
     assert "[silent gap" in prompt
     assert "keep" in prompt
+
+
+def test_director_prompt_gap_example_matches_the_real_formatter():
+    """The DIRECTOR_PROMPT's documented example line must be exactly what
+    gap_context.context.annotate_numbered_transcript renders for the
+    corresponding Gap -- pins the doc example to the real formatter so a
+    rendering change (indent, decimal places, wording) fails loudly here
+    instead of silently going stale in the prompt."""
+    from nagare_clip.gap_context.context import annotate_numbered_transcript
+    from nagare_clip.gap_context.gaps import Gap
+
+    cfg = get_effective_config(None, {})
+    prompt = cfg["director"]["prompt"]
+
+    gap = Gap(start=0.0, end=12.4, frames=[], description="a build runs and logs scroll past")
+    rendered = annotate_numbered_transcript("1: x", [(1, gap)])
+    annotation_line = rendered.split("\n")[1]
+
+    assert annotation_line == "    [silent gap 12.4s: a build runs and logs scroll past]"
+    assert annotation_line in prompt
