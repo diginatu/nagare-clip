@@ -9,20 +9,21 @@ Maintain and improve a multi-stage rough-cut pipeline:
 1. WhisperX transcription in Docker
 2. Audio-silence (jump-cut) detection — ffmpeg `silencedetect`, editable cut list
 3. LLM sentence re-segmentation — rewrites `{stem}.json`/`{stem}.txt` into one-sentence-per-line units (disabled by default)
-4. summary — a larger LLM segments every video into line-range parts + summaries (and lists per-video misspelling-prone keywords) and writes one all-videos summary (project-wide)
-5. Text editing checkpoint — copies `.txt` or runs LLM filter with `{{old->new}}` markers, optionally primed with the summary stage's summaries/keywords
-6. plan — a larger LLM gives coarse, cross-video rough directions per part (project-wide)
-7. director — a larger LLM proposes high-level edits (cut/speed/overlay/keep/edit) as a reviewable JSON op list (fed the summary/plan overview context)
-8. guided_edit — a small LLM applies the director's ops into `_edits.txt`, deterministically verified
-9. Patch application + keep-interval computation in Python (audio cuts unioned in)
-10. Blender VSE auto-layout in headless mode
+4. gap_context — a vision LLM snapshots+describes long silent gaps (audio_silence spans) so summary/director can see what the transcript can't (disabled by default)
+5. summary — a larger LLM segments every video into line-range parts + summaries (and lists per-video misspelling-prone keywords) and writes one all-videos summary (project-wide)
+6. Text editing checkpoint — copies `.txt` or runs LLM filter with `{{old->new}}` markers, optionally primed with the summary stage's summaries/keywords
+7. plan — a larger LLM gives coarse, cross-video rough directions per part (project-wide)
+8. director — a larger LLM proposes high-level edits (cut/speed/overlay/keep/edit) as a reviewable JSON op list (fed the summary/plan overview context)
+9. guided_edit — a small LLM applies the director's ops into `_edits.txt`, deterministically verified
+10. Patch application + keep-interval computation in Python (audio cuts unioned in)
+11. Blender VSE auto-layout in headless mode
 
 Final deliverable is a `.blend` project for human editing.
 
 > **Naming convention:** Stages are identified only by their **functional /
 > config-section name** — there are no stage numbers anywhere. The canonical
 > identifiers are: `transcription:`, `audio_silence:`, `sentence_split:`,
-> `summary:`, `text_filter:`, `plan:`, `director:`, `guided_edit:`,
+> `gap_context:`, `summary:`, `text_filter:`, `plan:`, `director:`, `guided_edit:`,
 > `intervals:`, `blender:`.
 > Package dirs (`src/nagare_clip/<name>/`), `output/<name>/` subdirs, and
 > `run_pipeline.sh --from-stage`/`--to-stage` all use these same names. A new
@@ -55,11 +56,20 @@ See [`docs/stages/sentence_split.md`](docs/stages/sentence_split.md) for the re-
 - **Inputs:** `{stem}.json` (word timings), `{stem}.txt` (plain text) from transcription; the audio_silence `{stem}_cuts.txt`, passed as `cuts_txt` (for force-split silences)
 - **Outputs:** re-segmented `{stem}.json` + `{stem}.txt` in `output/sentence_split/`
 
+### gap_context — Silent-Gap Visual Context
+
+A vision LLM (config `gap_context:`, disabled by default) runs once per video, between `sentence_split` and `summary`. Long silent spans (`gap_context.min_gap`, default 3.0s) from the audio_silence `{stem}_cuts.txt` are selected (`snapshot.select_gaps()`), snapshotted at up to 3 timestamps each — start+0.2s, midpoint, end-0.2s (`snapshot.frame_times()`) — via ffmpeg inside the whisperx Docker image (one container run per frame, `pipeline.external.build_snapshot_cmd()`), then described by one vision-LLM call per gap (`gap_context.describe.describe_gap()`): frames as base64 `image_url` parts, a plain-text (non-JSON) response, empty response = failure/retry. The LLM report records frame **paths**, never base64 payloads. Deleting a line from the human-editable `_cuts.txt` both keeps that span's audio (as for sentence_split's force-split) *and* removes it from gap-context snapshotting. Output `{stem}_gaps.json` (`{"gaps":[{start,end,frames,description}]}`, purely time-based) is a hand-editable intermediate; `gaps.gaps_from_dict`/`load_gaps` are lenient — a malformed entry is dropped, never raised. Disabled → `{"gaps": []}` no-op, no Docker calls.
+
+- **Inputs:** the audio_silence `{stem}_cuts.txt`; the source video file; optionally the sentence_split `{stem}.json`, passed as `json_path` (for the before/after neighbour lines given to the vision LLM)
+- **Outputs:** `output/gap_context/{stem}_gaps.json`; frames under `output/gap_context/frames/{stem}/`
+
+See [`docs/stages/gap_context.md`](docs/stages/gap_context.md) for gap selection, frame sampling (including the too-short-to-inset early return), the vision-call contract, the `{stem}_gaps.json` contract, and how `summary`/`director` anchor and render described gaps.
+
 ### summary — Project-Wide Summaries
 
-A larger LLM (config `summary:`, disabled by default) runs **once project-wide, between sentence_split and text_filter**. For each video it maps the numbered transcript into line-range **parts** with a one-sentence summary each, plus misspelling-prone keywords and a mandatory whole-video summary (`summarize.segment_video()`, `{"parts":[{"lines":[a,b],"summary":...}],"keywords":[...],"video_summary":"..."}` → `(parts, keywords, video_summary)`; a missing/non-string/empty `video_summary` is a hard parse failure that retries, same as a missing `parts` array), then reduces all parts into one all-videos summary (`generate_project_summary()`); `build_summary()` is the map-then-reduce entry point and also collects each video's summary into `ProjectSummary.video_summaries` (`{stem: video_summary}`). The reduce call's input is grouped per video — a `## <stem> — <video_summary>` header per video with its parts nested beneath, global 1-based part numbering preserved across the whole document (`_format_parts_doc()`). Each video's `segment_video()` response also carries `"keywords"` (misspelling-prone words, per video, coerced leniently — non-string/empty entries dropped, empty list on absence). Reuses `director_llm`'s transcript-formatting helpers and `llm_retry`; any failure degrades gracefully to empty parts/summary/keywords/video_summaries. `summary.json` (`{summary, parts:[{stem,lines,summary,start?,end?}], keywords:{stem:[...]}, video_summaries:{stem:"..."}}`) is human-reviewable and feeds `text_filter`/`plan`/`director`; `summary_from_dict` reads `video_summaries` leniently and stays backward-compatible with older files that lack it (absent → `{}`). Each part's optional `start`/`end` (seconds, via `timing.segment_times`) lets `plan` render per-part duration/gap; omitted when timing is unavailable. The orchestrator passes each source's sentence_split `{stem}.json` via `run_summary(..., json_paths=...)` to derive those times. Disabled → `{"summary":"","parts":[],"keywords":{},"video_summaries":{}}` no-op.
+A larger LLM (config `summary:`, disabled by default) runs **once project-wide, between sentence_split and text_filter**. For each video it maps the numbered transcript into line-range **parts** with a one-sentence summary each, plus misspelling-prone keywords and a mandatory whole-video summary (`summarize.segment_video()`, `{"parts":[{"lines":[a,b],"summary":...}],"keywords":[...],"video_summary":"..."}` → `(parts, keywords, video_summary)`; a missing/non-string/empty `video_summary` is a hard parse failure that retries, same as a missing `parts` array), then reduces all parts into one all-videos summary (`generate_project_summary()`); `build_summary()` is the map-then-reduce entry point and also collects each video's summary into `ProjectSummary.video_summaries` (`{stem: video_summary}`). The reduce call's input is grouped per video — a `## <stem> — <video_summary>` header per video with its parts nested beneath, global 1-based part numbering preserved across the whole document (`_format_parts_doc()`). Each video's `segment_video()` response also carries `"keywords"` (misspelling-prone words, per video, coerced leniently — non-string/empty entries dropped, empty list on absence). Reuses `director_llm`'s transcript-formatting helpers and `llm_retry`; any failure degrades gracefully to empty parts/summary/keywords/video_summaries. `summary.json` (`{summary, parts:[{stem,lines,summary,start?,end?}], keywords:{stem:[...]}, video_summaries:{stem:"..."}}`) is human-reviewable and feeds `text_filter`/`plan`/`director`; `summary_from_dict` reads `video_summaries` leniently and stays backward-compatible with older files that lack it (absent → `{}`). Each part's optional `start`/`end` (seconds, via `timing.segment_times`) lets `plan` render per-part duration/gap; omitted when timing is unavailable. The orchestrator passes each source's sentence_split `{stem}.json` via `run_summary(..., json_paths=...)` to derive those times. When `gap_context` produced described gaps for a video, `run_summary` anchors them to that video's transcript lines (`gap_context.context.anchor_gaps()`) and renders a `## Silent gaps (visual context)` block (`format_gap_block()`) appended to that video's `segment_video()` user content — an absent/empty gaps file (stage disabled, or no long gaps) leaves the prompt byte-identical to before this feature. Disabled → `{"summary":"","parts":[],"keywords":{},"video_summaries":{}}` no-op.
 
-- **Inputs:** every sentence_split `{stem}.txt`, passed as `txts` (stem derived from basename); optionally the sentence_split `{stem}.json` per source, passed as `json_paths` (for part `start`/`end` times)
+- **Inputs:** every sentence_split `{stem}.txt`, passed as `txts` (stem derived from basename); optionally the sentence_split `{stem}.json` per source, passed as `json_paths` (for part `start`/`end` times); optionally each source's gap_context `{stem}_gaps.json`, passed as `gaps_paths` (for the `## Silent gaps` block)
 - **Outputs:** `output/summary/summary.json`
 
 ### text_filter — Text Editing Checkpoint (mandatory)
@@ -88,9 +98,9 @@ A larger LLM (config `plan:`, disabled by default) runs once project-wide after 
 
 ### director — LLM High-Level Edit Operations (Pass A)
 
-A larger LLM (config `director:`, disabled by default) reads the numbered transcript and emits `{stem}_director.json`: `{"ops": [{type, lines:[a,b], factor?, text?, note}]}`, `type ∈ {cut, speed, overlay, keep, edit}`, lines 1-based. It **never re-outputs transcript text**, avoiding whole-file-editing's format-breakage/modification failure modes. Lines are annotated with duration + gap-to-next (e.g. `3: text [4.2s, gap 0.8s]`) from the video's WhisperX JSON, passed by the orchestrator as `json_path` (`format_numbered_transcript_timed`); falls back to the byte-identical untimed transcript if `json_path` is absent or its segment count mismatches; the default `director.prompt` documents that bracket notation (a test pins the documented example to `timing.format_dur_gap`'s output). `parse_director_response()`/`ops_from_dict()` drop malformed/out-of-range ops individually (logged). Retried (config `director.max_retries`, default 2) on connection error or hard parse failure only — a valid empty `{"ops": []}` is accepted without retry; each retry nudges temperature up via `llm_retry.cfg_for_attempt()`. All attempts failing → empty op list. When `summary`/`plan` are enabled, `director.context.build_director_context()` appends a cross-video overview (global summary + this video's parts + one-line sibling entries) to the system prompt; disabled/empty → prompt is byte-identical to before (regression-guarded). This video's `summary.json` `video_summaries` entry, when present, renders as a `Summary: <video_summary>` line under the `This video ("<stem>")` header; each sibling's one-liner also prefers its own video summary over its first part's summary (falling back to the latter when absent). Lives in `director/context.py`, not `director_llm.py`, so `summary` can import `director_llm` without a cycle.
+A larger LLM (config `director:`, disabled by default) reads the numbered transcript and emits `{stem}_director.json`: `{"ops": [{type, lines:[a,b], factor?, text?, note}]}`, `type ∈ {cut, speed, overlay, keep, edit}`, lines 1-based. It **never re-outputs transcript text**, avoiding whole-file-editing's format-breakage/modification failure modes. Lines are annotated with duration + gap-to-next (e.g. `3: text [4.2s, gap 0.8s]`) from the video's WhisperX JSON, passed by the orchestrator as `json_path` (`format_numbered_transcript_timed`); falls back to the byte-identical untimed transcript if `json_path` is absent or its segment count mismatches; the default `director.prompt` documents that bracket notation (a test pins the documented example to `timing.format_dur_gap`'s output). `parse_director_response()`/`ops_from_dict()` drop malformed/out-of-range ops individually (logged). Retried (config `director.max_retries`, default 2) on connection error or hard parse failure only — a valid empty `{"ops": []}` is accepted without retry; each retry nudges temperature up via `llm_retry.cfg_for_attempt()`. All attempts failing → empty op list. When `summary`/`plan` are enabled, `director.context.build_director_context()` appends a cross-video overview (global summary + this video's parts + one-line sibling entries) to the system prompt; disabled/empty → prompt is byte-identical to before (regression-guarded). This video's `summary.json` `video_summaries` entry, when present, renders as a `Summary: <video_summary>` line under the `This video ("<stem>")` header; each sibling's one-liner also prefers its own video summary over its first part's summary (falling back to the latter when absent). Lives in `director/context.py`, not `director_llm.py`, so `summary` can import `director_llm` without a cycle. When gap_context produced described gaps for this video, they are anchored to the timed transcript (`gap_context.context.anchor_gaps()`) and inserted as indented, un-numbered `    [silent gap N.Ns: description]` lines (`annotate_numbered_transcript()`) — the default `director.prompt` documents this rendering and instructs the director to emit a `keep` op spanning the annotated line and the next one (`[N, N+1]`) to rescue a gap worth watching, and never to reference an annotation line as an op line. Only applies when `seg_times` is also present (the annotation needs anchor times); an absent/empty `gaps` file leaves the prompt byte-identical to before this feature.
 
-- **Inputs:** `{stem}_edits.txt` (from text_filter); optionally the sentence_split `{stem}.json`, passed as `json_path` (for per-line `[dur, gap]` timing), `output/summary/summary.json`, `output/plan/plan.json`, and the source stem, passed as `stem`
+- **Inputs:** `{stem}_edits.txt` (from text_filter); optionally the sentence_split `{stem}.json`, passed as `json_path` (for per-line `[dur, gap]` timing), `output/summary/summary.json`, `output/plan/plan.json`, the source stem, passed as `stem`, and the gap_context `{stem}_gaps.json`, passed as `gaps`
 - **Outputs:** `{stem}_director.json`
 
 ### guided_edit — Apply Director Ops (Pass B2)
@@ -157,6 +167,12 @@ src/nagare_clip/          # Main Python package (src layout)
     nlp.py                    # GiNZA bunsetsu extraction (lazy import)
     llm.py                    # prompt + bunsetsu-range parse/validate + retry/degrade
     run.py                    # run_sentence_split() (copy-through when disabled)
+  gap_context/                # gap_context stage: silent-gap visual context (vision LLM)
+    snapshot.py                # pure: select_gaps(), frame_times(), frame_relpath()
+    gaps.py                    # Gap dataclass + {stem}_gaps.json contract (to/from dict, load_gaps)
+    describe.py                # one vision-LLM call per gap: base64 image parts in, plain-text description out
+    context.py                 # anchor_gaps(), format_gap_block(), annotate_numbered_transcript() (shared by summary/director)
+    run.py                     # run_gap_context() (writes {stem}_gaps.json; no-op when disabled)
   text_filter/                # text_filter stage modules (text editing checkpoint)
     run.py                    # run_text_filter() typed entry point
     llm_filter.py             # LLM API calls, {{old->new}} patch parsing, apply_patches_to_lines()
@@ -199,6 +215,7 @@ tests/
   pipeline/                   # pipeline orchestrator tests: cli/external/runner/sources/stages
   audio_silence/              # audio_silence (detect / cuts_file / run) unit tests
   sentence_split/             # sentence_split unit + run() tests
+  gap_context/                # gap_context (snapshot / gaps / describe / context / run) unit tests
   text_filter/                # text-editing checkpoint unit tests
   summary/                    # summary segment/build + run() tests
   plan/                       # plan generate/parse + run() tests
@@ -229,7 +246,7 @@ All tunable parameters are defined as typed **pydantic-settings models** in
 
 **Priority order (highest first):** CLI flags > YAML config file > model defaults.
 
-All LLM stages (`sentence_split`, `text_filter`, `summary`, `plan`, `director`, `guided_edit`) route through `nagare_clip.llm_client.call_llm` (LiteLLM). Each block selects its backend with a `provider` key (default `ollama_chat`); the model id sent to LiteLLM is `"<provider>/<model>"`. An empty `api_base` falls back to `http://localhost:11434` for an ollama provider, or is omitted for a cloud provider. `api_key` is forwarded when set (or use the provider's env var). `response_format: "json"` maps to a JSON-object request; `thinking` maps to LiteLLM `reasoning_effort` (best-effort per provider).
+All LLM stages (`sentence_split`, `gap_context`, `summary`, `text_filter`, `plan`, `director`, `guided_edit`) route through `nagare_clip.llm_client.call_llm` (LiteLLM). Each block selects its backend with a `provider` key (default `ollama_chat`); the model id sent to LiteLLM is `"<provider>/<model>"`. An empty `api_base` falls back to `http://localhost:11434` for an ollama provider, or is omitted for a cloud provider. `api_key` is forwarded when set (or use the provider's env var). `response_format: "json"` maps to a JSON-object request; `thinking` maps to LiteLLM `reasoning_effort` (best-effort per provider).
 
 Only `blender/blender_cli.py` still takes a `--config <path>` flag on its command line — it runs as a separate Blender subprocess, so the pipeline CLI (`nagare_clip.pipeline.cli`) passes its resolved `config_path` through explicitly. Every other stage receives the already-merged `cfg` dict in-process (no subprocess, no re-parsing of `--config`).
 
@@ -243,6 +260,7 @@ the [Documentation Policy](#documentation-policy)):
 
 - audio_silence → [`docs/stages/audio_silence.md`](docs/stages/audio_silence.md)
 - sentence_split (re-segmentation, windowing/carry-over, force-split) → [`docs/stages/sentence_split.md`](docs/stages/sentence_split.md)
+- gap_context (gap selection, frame sampling/extraction, vision-call contract, summary/director consumption) → [`docs/stages/gap_context.md`](docs/stages/gap_context.md)
 - text_filter (+ summary-stage filter context) → [`docs/stages/text_filter.md`](docs/stages/text_filter.md)
 - intervals (`<keep>`/`<speed>`/`<overlay>`/`<cut>` markers, margins, captions) → [`docs/stages/intervals.md`](docs/stages/intervals.md)
 - blender (VSE layout, text styling, retiming) → [`docs/stages/blender.md`](docs/stages/blender.md)

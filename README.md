@@ -9,15 +9,16 @@ The pipeline creates a rough-cut Blender project for human review and fine-tunin
 1. transcription: WhisperX in Docker -> transcript outputs (`json`, `srt`, `vtt`, etc.)
 2. audio_silence: Audio-silence (jump-cut) detection -> `_cuts.txt` editable cut list
 3. sentence_split (optional): LLM re-segments the transcript into one-sentence-per-line units -> `output/sentence_split/{stem}.json` + `{stem}.txt`; disabled by default (byte-identical copy-through)
-4. summary (optional, project-wide): a larger LLM segments every video into line-range parts + summaries, a whole-video summary, and misspelling-prone keywords, and writes one all-videos summary -> reviewable `output/summary/summary.json`; the per-video summary and keywords are used by text_filter/plan/director
-5. text_filter: Text editing checkpoint -> `_edits.txt` (copy of `.txt`, or LLM-corrected with `{{old->new}}` markers), optionally primed with summary-stage context
-6. plan (optional, project-wide): a larger LLM gives a coarse, cross-video rough direction per part -> reviewable `output/plan/plan.json`
-7. director (optional): a larger LLM proposes high-level edits -> reviewable `_director.json` op list (fed the summary/plan overview context)
-8. guided_edit (optional): a small LLM applies the director's ops into `_edits.txt` (deterministically verified)
-9. intervals: Patch application + keep intervals -> `*_intervals.json` keep ranges (audio cuts unioned in)
-10. blender: Blender headless -> `.blend` with VSE strips arranged back-to-back
+4. gap_context (optional): a vision LLM snapshots+describes long silent gaps (from `_cuts.txt`) so summary/director can see what the transcript can't -> reviewable `output/gap_context/{stem}_gaps.json` + JPEG frames; disabled by default (no-op)
+5. summary (optional, project-wide): a larger LLM segments every video into line-range parts + summaries, a whole-video summary, and misspelling-prone keywords, and writes one all-videos summary -> reviewable `output/summary/summary.json`; the per-video summary and keywords are used by text_filter/plan/director
+6. text_filter: Text editing checkpoint -> `_edits.txt` (copy of `.txt`, or LLM-corrected with `{{old->new}}` markers), optionally primed with summary-stage context
+7. plan (optional, project-wide): a larger LLM gives a coarse, cross-video rough direction per part -> reviewable `output/plan/plan.json`
+8. director (optional): a larger LLM proposes high-level edits -> reviewable `_director.json` op list (fed the summary/plan overview context, and gap_context's described gaps)
+9. guided_edit (optional): a small LLM applies the director's ops into `_edits.txt` (deterministically verified)
+10. intervals: Patch application + keep intervals -> `*_intervals.json` keep ranges (audio cuts unioned in)
+11. blender: Blender headless -> `.blend` with VSE strips arranged back-to-back
 
-Stages are referenced by name (`--from-stage <name>`); the summary/plan/director/guided_edit stages are no-ops unless enabled in config.
+Stages are referenced by name (`--from-stage <name>`); the gap_context/summary/plan/director/guided_edit stages are no-ops unless enabled in config.
 
 ## Human Editing Workflow
 
@@ -54,7 +55,7 @@ The `<cut>...</cut>` tag deletes the wrapped text. It is a shorthand for `{{wrap
 
 ### LLM report (`output/llm_report/`)
 
-Every LLM stage (`sentence_split`, `text_filter`, `summary`, `plan`, `director`, `guided_edit`)
+Every LLM stage (`sentence_split`, `gap_context`, `text_filter`, `summary`, `plan`, `director`, `guided_edit`)
 writes a per-call record under `output/llm_report/`: an `index.md` table
 (stage, unit, attempts, outcome, reason) linking to per-call detail files under
 `<stage>/<unit>.md` that hold the full prompt and raw response for every attempt,
@@ -194,11 +195,11 @@ Parameters resolve in this priority order (highest wins):
 2. Config file values
 3. Built-in defaults
 
-The config file covers all sections, each named after its stage: `general`, `transcription`, `audio_silence`, `sentence_split`, `text_filter`, `summary`, `plan`, `director`, `guided_edit`, `intervals`, `blender`, `pipeline`. See `config.example.yml` for the full list of keys and their defaults.
+The config file covers all sections, each named after its stage: `general`, `transcription`, `audio_silence`, `sentence_split`, `gap_context`, `text_filter`, `summary`, `plan`, `director`, `guided_edit`, `intervals`, `blender`, `pipeline`. See `config.example.yml` for the full list of keys and their defaults.
 
 ### Choosing an LLM provider
 
-Every LLM stage (`sentence_split`, `text_filter`, `summary`, `plan`, `director`, `guided_edit`) routes through a unified transport backed by the [LiteLLM](https://github.com/BerriAI/litellm) library, so you can point any stage at a local or cloud provider. On a stage's config block, set `provider:` to one of `ollama_chat` (default, local Ollama), `openai`, `gemini`, or `anthropic`, and set `model:` to that provider's model name — LiteLLM receives the combined `"<provider>/<model>"`. Supply credentials with `api_key:` (or the provider's standard environment variable, e.g. `OPENAI_API_KEY`, `GEMINI_API_KEY`, `ANTHROPIC_API_KEY`). Leave `api_base:` empty for cloud providers; for `ollama_chat` an empty `api_base` falls back to local Ollama (`http://localhost:11434`). Each stage chooses its provider independently, so you can mix (e.g. a cloud model for `director` and local Ollama for `guided_edit`).
+Every LLM stage (`sentence_split`, `gap_context`, `text_filter`, `summary`, `plan`, `director`, `guided_edit`) routes through a unified transport backed by the [LiteLLM](https://github.com/BerriAI/litellm) library, so you can point any stage at a local or cloud provider. On a stage's config block, set `provider:` to one of `ollama_chat` (default, local Ollama), `openai`, `gemini`, or `anthropic`, and set `model:` to that provider's model name — LiteLLM receives the combined `"<provider>/<model>"`. Supply credentials with `api_key:` (or the provider's standard environment variable, e.g. `OPENAI_API_KEY`, `GEMINI_API_KEY`, `ANTHROPIC_API_KEY`). Leave `api_base:` empty for cloud providers; for `ollama_chat` an empty `api_base` falls back to local Ollama (`http://localhost:11434`). Each stage chooses its provider independently, so you can mix (e.g. a cloud model for `director` and local Ollama for `guided_edit`).
 
 ```yaml
 director:
@@ -239,6 +240,23 @@ sentence_split:
 ```
 
 Outputs land in `output/sentence_split/{stem}.json` and `output/sentence_split/{stem}.txt`; all downstream stages (summary, text_filter, director, etc.) read from there.
+
+### gap_context: Silent-Gap Visual Context (optional)
+
+The `gap_context` stage runs once per video, between `sentence_split` and `summary`. It looks at the audio_silence `{stem}_cuts.txt` for spans at least `gap_context.min_gap` seconds long, snapshots up to 3 JPEG frames per span (start+0.2s, midpoint, end-0.2s) via ffmpeg inside the whisperx Docker image, and asks a **vision-capable** LLM to describe what's on screen during each gap in one or two plain-text sentences. Disabled by default (`gap_context.enabled: false`) — no Docker calls, and the `summary`/`director` stages render byte-identical to before this feature.
+
+```yaml
+gap_context:
+  enabled: true
+  provider: "ollama_chat"    # see "Choosing an LLM provider" above
+  model: "qwen2.5vl:7b"      # must be a vision-capable model
+  min_gap: 3.0                # seconds; only cut spans at least this long get snapshotted
+  frame_width: 960            # downscale width (px) of the extracted JPEGs
+```
+
+Output is a hand-editable intermediate, `output/gap_context/{stem}_gaps.json` (`{"gaps": [{start, end, frames, description}]}`), plus the extracted frames under `output/gap_context/frames/{stem}/`. Deleting a line from `output/audio_silence/{stem}_cuts.txt` both keeps that span's audio (as with sentence_split's force-split) *and* removes it from gap-context snapshotting; editing a gap's `description` directly changes what `summary`/`director` are told about it. `--from-stage gap_context --to-stage gap_context` re-runs just this stage against an already-edited `_cuts.txt` (reusing the transcription/audio_silence/sentence_split outputs already on disk) without redoing transcription.
+
+When enabled, `summary` appends a `## Silent gaps (visual context)` block (each gap anchored to the transcript line it follows) to its per-video prompt, and `director`'s numbered transcript gets an indented, un-numbered `[silent gap N.Ns: description]` line after the relevant line — the director's prompt explains that a `keep` op spanning that line and the next one (`[N, N+1]`) preserves the silence if the visual content is worth keeping.
 
 ### text_filter: Text Editing (LLM optional)
 
@@ -296,7 +314,7 @@ Options:
 - `--source FILE` — source video file (may be repeated for multiple sources); when omitted, all videos in `--input-videos-dir` are processed alphabetically.
 - `--config FILE` — path to a YAML config file; config values fill in between CLI overrides and built-in defaults.
 - `--language LANG` — ISO 639-1 language code passed to WhisperX (default: `ja`). Also settable via `transcription.language` in config.
-- `--from-stage NAME` — start from stage `NAME`, reusing earlier stage outputs. `NAME` is a stage name: `transcription`, `audio_silence`, `sentence_split`, `summary`, `text_filter`, `plan`, `director`, `guided_edit`, `intervals`, `blender`. Also settable via `pipeline.from_stage` in config.
+- `--from-stage NAME` — start from stage `NAME`, reusing earlier stage outputs. `NAME` is a stage name: `transcription`, `audio_silence`, `sentence_split`, `gap_context`, `summary`, `text_filter`, `plan`, `director`, `guided_edit`, `intervals`, `blender`. Also settable via `pipeline.from_stage` in config.
 - `--to-stage NAME` — stop **after** stage `NAME` (inclusive); later stages are skipped. Same stage names as `--from-stage`, and must not precede it. Defaults to `blender` (run to the end). Also settable via `pipeline.to_stage` in config. Combine with `--from-stage` to run a window of stages, e.g. `--from-stage summary --to-stage director`.
 - Defaults: input videos under `src_video/`, outputs under `output/`.
 - If `--source` contains `/`, it is treated as the exact path; otherwise it is resolved inside `--input-videos-dir`.
