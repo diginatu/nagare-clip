@@ -16,6 +16,8 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Any
 
+from nagare_clip.gap_context.context import anchor_gaps, annotate_numbered_transcript
+from nagare_clip.gap_context.gaps import Gap
 from nagare_clip.intervals.sync_json import (
     CUT_TAG_RE,
     KEEP_TAG_RE,
@@ -244,6 +246,7 @@ def generate_director_ops(
     recorder: Recorder = NULL_RECORDER,
     unit: str = "director",
     seg_times: list[tuple[float | None, float | None]] | None = None,
+    gaps: list[Gap] | None = None,
 ) -> list[DirectorOp]:
     """Run the director LLM over the transcript and return validated ops.
 
@@ -254,6 +257,13 @@ def generate_director_ops(
 
     ``overview_context`` (from the summary/plan stages) is appended to the system
     prompt when non-empty; an empty string leaves the prompt unchanged.
+
+    ``gaps`` (from the gap_context stage) are anchored to the timed transcript
+    and inserted as indented, un-numbered ``[silent gap …]`` lines so the
+    director can issue a ``keep`` op over the adjacent lines to rescue a gap
+    worth keeping. Only applies when ``seg_times`` is also present (the
+    annotation needs anchor times); an empty/absent ``gaps`` leaves the user
+    content byte-identical to before this feature existed.
     """
     clean_lines = clean_for_display(edit_lines)
     system_prompt = cfg.get("prompt", "")
@@ -261,6 +271,8 @@ def generate_director_ops(
         system_prompt = f"{system_prompt}\n\n{overview_context}"
     if seg_times is not None and len(seg_times) == len(clean_lines):
         user_content = format_numbered_transcript_timed(clean_lines, seg_times)
+        if gaps:
+            user_content = annotate_numbered_transcript(user_content, anchor_gaps(gaps, seg_times))
     else:
         user_content = format_numbered_transcript(clean_lines)
     messages = [

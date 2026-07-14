@@ -161,3 +161,62 @@ def test_missing_json_passes_none_seg_times(monkeypatch, tmp_path):
     )
 
     assert captured["seg_times"] is None
+
+
+def test_run_director_annotates_the_transcript_from_the_gaps_file(tmp_path, monkeypatch):
+    import nagare_clip.director.director_llm as dl
+
+    edits = tmp_path / "a_edits.txt"
+    edits.write_text("いち\nに\n", encoding="utf-8")
+    jsonp = tmp_path / "a.json"
+    jsonp.write_text(
+        json.dumps({"segments": [{"start": 0.0, "end": 10.0}, {"start": 20.0, "end": 25.0}]}),
+        encoding="utf-8",
+    )
+    gapsp = tmp_path / "a_gaps.json"
+    gapsp.write_text(
+        json.dumps(
+            {"gaps": [{"start": 10.0, "end": 20.0, "frames": [], "description": "デモが動く"}]}
+        ),
+        encoding="utf-8",
+    )
+
+    seen = {}
+
+    def fake_llm(messages, cfg):
+        seen["user"] = messages[1]["content"]
+        return json.dumps({"ops": []})
+
+    monkeypatch.setattr(dl, "_call_llm", fake_llm)
+    director_run.run_director(
+        edits,
+        tmp_path / "a_director.json",
+        {"director": {"enabled": True, "prompt": "P", "max_retries": 0}},
+        stem="a",
+        json_path=jsonp,
+        gaps=gapsp,
+    )
+    assert "[silent gap 10.0s: デモが動く]" in seen["user"]
+
+
+def test_run_director_without_a_gaps_file_is_unchanged(tmp_path, monkeypatch):
+    import nagare_clip.director.director_llm as dl
+
+    edits = tmp_path / "a_edits.txt"
+    edits.write_text("いち\nに\n", encoding="utf-8")
+
+    seen = {}
+
+    def fake_llm(messages, cfg):
+        seen["user"] = messages[1]["content"]
+        return json.dumps({"ops": []})
+
+    monkeypatch.setattr(dl, "_call_llm", fake_llm)
+    director_run.run_director(
+        edits,
+        tmp_path / "a_director.json",
+        {"director": {"enabled": True, "prompt": "P", "max_retries": 0}},
+        stem="a",
+        gaps=tmp_path / "missing_gaps.json",
+    )
+    assert seen["user"] == "1: いち\n2: に"

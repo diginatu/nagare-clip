@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import json
+
 import pytest
 
 from nagare_clip.director.director_llm import (
@@ -313,3 +315,40 @@ class TestTimedTranscript:
             seg_times=[(1.0, 3.0)],  # only 1 entry for 2 lines
         )
         assert captured["user"] == "1: あ\n2: い"
+
+
+def test_generate_director_ops_annotates_the_transcript_with_gaps():
+    from nagare_clip.gap_context.gaps import Gap
+
+    seen = {}
+
+    def fake_llm(messages, cfg):
+        seen["user"] = messages[1]["content"]
+        return json.dumps({"ops": []})
+
+    generate_director_ops(
+        ["いち", "に"],
+        {"prompt": "P", "max_retries": 0},
+        call_llm=fake_llm,
+        seg_times=[(0.0, 10.0), (20.0, 25.0)],
+        gaps=[Gap(start=10.0, end=20.0, frames=[], description="ビルドが走る")],
+    )
+    assert seen["user"] == (
+        "1: いち  [10.0s, gap 10.0s]\n    [silent gap 10.0s: ビルドが走る]\n2: に  [5.0s]"
+    )
+
+
+def test_generate_director_ops_transcript_is_byte_identical_without_gaps():
+    seen = {}
+
+    def fake_llm(messages, cfg):
+        seen["user"] = messages[1]["content"]
+        return json.dumps({"ops": []})
+
+    generate_director_ops(
+        ["いち", "に"],
+        {"prompt": "P", "max_retries": 0},
+        call_llm=fake_llm,
+        seg_times=[(0.0, 10.0), (20.0, 25.0)],
+    )
+    assert seen["user"] == "1: いち  [10.0s, gap 10.0s]\n2: に  [5.0s]"
