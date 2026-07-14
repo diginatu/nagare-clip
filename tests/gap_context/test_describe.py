@@ -40,7 +40,9 @@ def test_build_messages_has_system_prompt_and_image_parts(gf):
 
 
 def test_build_messages_includes_neighbour_lines_when_given(gf):
-    parts = build_messages(gf, CFG, before="ここでビルドします", after="できました")[0][1]["content"]
+    parts = build_messages(gf, CFG, before="ここでビルドします", after="できました")[0][1][
+        "content"
+    ]
     assert "ここでビルドします" in parts[0]["text"]
     assert "できました" in parts[0]["text"]
 

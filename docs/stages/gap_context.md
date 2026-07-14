@@ -74,12 +74,19 @@ relpaths in the same order).
 
 One LLM call per gap (`describe_gap()`), not per frame:
 
+- `build_messages(gf, cfg, before=, after=)` is the **single** place the
+  system+user message list is assembled, and `describe_gap` calls it directly
+  (it used to duplicate the construction inline, so `build_messages`'s own
+  tests never exercised production — fixed). It returns `(messages,
+  relpaths)`: the relpaths are the subset of `gf.relpaths` whose frame
+  actually made it into the user message (see below), which `describe_gap`
+  needs to record on the returned `Gap` and in the LLM report.
 - Each surviving frame is read from disk and base64-encoded into a
   `data:<mime>;base64,...` `image_url` content part (`_image_part()`); a frame
   that can no longer be read at this point (e.g. deleted between extraction
   and description) is dropped from that call, not fatal to the gap unless
-  every frame drops (`describe_gap` returns `None` if `_content_parts` yields
-  no images at all — logged, zero LLM calls made).
+  every frame drops (`describe_gap` returns `None` if `build_messages` yields
+  an empty user-content list — logged, zero LLM calls made).
 - The user message is one multimodal turn: a text header
   (`Silent gap: {start}s - {end}s ({duration}s long).`, frame count, and
   optional `Spoken line before/after the gap:` lines when the caller supplies
@@ -87,12 +94,22 @@ One LLM call per gap (`describe_gap()`), not per frame:
 - The system prompt is `gap_context.prompt` (default `GAP_CONTEXT_PROMPT` in
   `config.py`) — plain English, asks for one or two sentences of plain text,
   explicitly no JSON/markdown, and to say so plainly if nothing is happening.
+  Models do not always comply (a multi-line or markdown-bullet reply is
+  realistic), so the response is never trusted verbatim — see the whitespace
+  rule below.
 - The response is **plain text**, not JSON — there is no schema to fail
-  parsing. An empty/whitespace-only response counts as a failure and is
-  retried (`llm_report.UNPARSEABLE`), same retry ladder as every other LLM
-  stage (`llm_retry.retry_attempts`/`cfg_for_attempt`, config
+  parsing. `describe_gap` collapses it with `" ".join(response.split())`
+  (strips *and* folds every internal whitespace run, including newlines, to a
+  single space) before treating it as the description; an empty/whitespace-only
+  result after collapsing counts as a failure and is retried
+  (`llm_report.UNPARSEABLE`), same retry ladder as every other LLM stage
+  (`llm_retry.retry_attempts`/`cfg_for_attempt`, config
   `gap_context.max_retries`/`retry_temp_step`/`retry_temp_cap`). All attempts
-  failing drops the gap (logged), not fatal to the run.
+  failing drops the gap (logged), not fatal to the run. The collapse matters
+  beyond cosmetics: an un-collapsed multi-line reply could inject a line
+  starting with `N: ` into the director's numbered transcript once spliced in
+  by `annotate_numbered_transcript`, which would look like a real transcript
+  line to the director.
 - **The LLM report records frame PATHS, never base64.** `_report_messages()`
   flattens the recorded user message to the same header text plus a
   `Frames:\n- <relpath>` list — the base64 data-URI payloads never reach
@@ -111,8 +128,10 @@ only calls `_extract_gap_frames` when `gap_context.enabled` is true, and
 `run_gap_context` itself independently checks `gc_cfg.get("enabled", False)`
 before describing anything it's handed — so even a caller that passes a
 non-empty `gap_frames` list with `enabled: false` still gets `{"gaps": []}`
-and zero LLM calls (belt-and-braces; the disabled case itself is pinned by
-`tests/gap_context/test_run.py::test_disabled_writes_an_empty_gap_list`).
+and zero LLM calls (belt-and-braces; pinned by
+`tests/gap_context/test_run.py::test_disabled_ignores_a_nonempty_gap_frames_list_and_makes_zero_llm_calls`,
+which uses a call counter rather than a raising fake — `describe_gap`'s broad
+`except Exception` would otherwise swallow the raise).
 
 ## Output contract (`gaps.py`)
 
@@ -128,7 +147,14 @@ hand-edited file can never break the pipeline:
   entry is dropped.
 - `description` must be a non-empty (after `.strip()`) string, else dropped.
   This is the field a human is expected to hand-author/correct, so a blank
-  one is treated as "not really described yet."
+  one is treated as "not really described yet." A description that survives
+  is then **whitespace-collapsed** (`" ".join(description.split())`, same
+  rule `describe_gap` applies to the raw LLM response) — a hand-edit that adds
+  a line break or a markdown bullet inside the description is silently
+  normalized to one line rather than being allowed to inject a line into a
+  downstream numbered transcript that looks like a real `N: ...` transcript
+  line (`context.annotate_numbered_transcript`'s un-numbered-annotation
+  invariant depends on this).
 - `frames` is optional (defaults to `[]`) and any non-string entries in it are
   filtered out silently, rather than dropping the whole gap.
 
@@ -198,7 +224,11 @@ the rule the director is meant to act on: such gaps are dropped by default
 watching, the director should emit a `keep` op spanning the annotated line and
 the next one — **a `keep` over lines `[N, N+1]` preserves the silence between
 them** — with an explicit reminder that annotation lines are never valid `op`
-line references.
+line references. `tests/test_config.py::test_director_prompt_gap_example_matches_the_real_formatter`
+pins that documented line to `annotate_numbered_transcript`'s actual output
+for the equivalent `Gap`, not just to a substring match, so a rendering change
+(indent width, decimal places, wording) fails loudly instead of the prompt
+silently drifting from reality.
 
 ## Config (`GapContextConfig` in `config.py`)
 
