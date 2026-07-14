@@ -53,10 +53,10 @@ def _image_part(path: Path) -> dict[str, Any] | None:
     return {"type": "image_url", "image_url": {"url": f"data:{mime};base64,{encoded}"}}
 
 
-def _header_text(gf: GapFrames, before: str, after: str) -> str:
+def _header_text(start: float, end: float, frame_count: int, before: str, after: str) -> str:
     lines = [
-        f"Silent gap: {gf.start:.1f}s - {gf.end:.1f}s ({gf.duration:.1f}s long).",
-        f"{len(gf.frames)} frame(s) sampled in chronological order.",
+        f"Silent gap: {start:.1f}s - {end:.1f}s ({end - start:.1f}s long).",
+        f"{frame_count} frame(s) sampled in chronological order.",
     ]
     if before:
         lines.append(f"Spoken line before the gap: {before}")
@@ -80,23 +80,25 @@ def _content_parts(
             kept.append(gf.relpaths[i])
     if not images:
         return [], []
-    header = _header_text(
-        GapFrames(start=gf.start, end=gf.end, frames=gf.frames[: len(images)], relpaths=kept),
-        before,
-        after,
-    )
+    header = _header_text(gf.start, gf.end, len(images), before, after)
     return [{"type": "text", "text": header}, *images], kept
 
 
 def build_messages(
     gf: GapFrames, cfg: dict[str, Any], *, before: str = "", after: str = ""
-) -> list[dict[str, Any]]:
-    """System prompt + one multimodal user message (header text, then frames)."""
-    parts, _ = _content_parts(gf, before, after)
-    return [
+) -> tuple[list[dict[str, Any]], list[str]]:
+    """System prompt + one multimodal user message (header text, then frames).
+
+    Returns the messages *and* the relpaths of the frames that made it into
+    the user message (the caller needs those to record/return them; frames
+    that failed to read are dropped from both).
+    """
+    parts, relpaths = _content_parts(gf, before, after)
+    messages = [
         {"role": "system", "content": cfg.get("prompt", "")},
         {"role": "user", "content": parts},
     ]
+    return messages, relpaths
 
 
 def _report_messages(messages: list[dict[str, Any]], relpaths: list[str]) -> list[dict[str, str]]:
@@ -119,16 +121,12 @@ def describe_gap(
     recorder: Recorder = NULL_RECORDER,
 ) -> Gap | None:
     """Describe one gap. Returns ``None`` when it should be skipped."""
-    parts, relpaths = _content_parts(gf, before, after)
-    if not parts:
+    messages, relpaths = build_messages(gf, cfg, before=before, after=after)
+    if not messages[1]["content"]:
         logger.warning(
             "gap_context: no readable frame for gap %.1f-%.1f; skipping", gf.start, gf.end
         )
         return None
-    messages: list[dict[str, Any]] = [
-        {"role": "system", "content": cfg.get("prompt", "")},
-        {"role": "user", "content": parts},
-    ]
     report_messages = _report_messages(messages, relpaths)
 
     cfg = with_trace_meta(cfg, stage=recorder.stage, unit=unit)

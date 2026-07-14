@@ -26,7 +26,7 @@ CFG = {"prompt": "SYSTEM PROMPT", "max_retries": 2, "temperature": 0.2, "model":
 
 
 def test_build_messages_has_system_prompt_and_image_parts(gf):
-    messages = build_messages(gf, CFG)
+    messages, relpaths = build_messages(gf, CFG)
     assert messages[0] == {"role": "system", "content": "SYSTEM PROMPT"}
     parts = messages[1]["content"]
     assert parts[0]["type"] == "text"
@@ -36,18 +36,53 @@ def test_build_messages_has_system_prompt_and_image_parts(gf):
     assert len(images) == 2
     expected = base64.b64encode(b"\xff\xd8\xff-fake-jpeg").decode()
     assert images[0]["image_url"]["url"] == f"data:image/jpeg;base64,{expected}"
+    assert relpaths == ["frames/a/10.200.jpg", "frames/a/15.000.jpg"]
 
 
 def test_build_messages_includes_neighbour_lines_when_given(gf):
-    parts = build_messages(gf, CFG, before="ここでビルドします", after="できました")[1]["content"]
+    parts = build_messages(gf, CFG, before="ここでビルドします", after="できました")[0][1]["content"]
     assert "ここでビルドします" in parts[0]["text"]
     assert "できました" in parts[0]["text"]
 
 
 def test_build_messages_omits_neighbour_lines_when_absent(gf):
-    text = build_messages(gf, CFG)[1]["content"][0]["text"]
+    text = build_messages(gf, CFG)[0][1]["content"][0]["text"]
     assert "before" not in text.lower()
     assert "after" not in text.lower()
+
+
+def test_describe_gap_builds_its_messages_via_build_messages(gf, monkeypatch):
+    """describe_gap must construct its LLM messages by calling build_messages
+    -- not a separately-maintained inline duplicate -- so build_messages'
+    tests actually exercise the production path (previously they didn't:
+    describe_gap rebuilt the message list inline, so build_messages was only
+    ever called by tests)."""
+    import nagare_clip.gap_context.describe as describe_mod
+
+    calls = []
+
+    def fake_build_messages(gf_arg, cfg, *, before="", after=""):
+        calls.append((gf_arg, cfg, before, after))
+        return (
+            [
+                {"role": "system", "content": "SENTINEL"},
+                {"role": "user", "content": [{"type": "text", "text": "x"}]},
+            ],
+            ["sentinel.jpg"],
+        )
+
+    monkeypatch.setattr(describe_mod, "build_messages", fake_build_messages)
+
+    seen = {}
+
+    def fake_llm(messages, cfg):
+        seen["messages"] = messages
+        return "d"
+
+    gap = describe_mod.describe_gap(gf, CFG, unit="a_gap01", call_llm=fake_llm)
+    assert calls, "describe_gap did not call build_messages"
+    assert seen["messages"][0] == {"role": "system", "content": "SENTINEL"}
+    assert gap is not None and gap.frames == ["sentinel.jpg"]
 
 
 def test_describe_gap_returns_a_described_gap(gf):
