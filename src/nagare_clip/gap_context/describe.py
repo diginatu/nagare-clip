@@ -156,7 +156,7 @@ def describe_gap(
                 cfg=attempt_cfg,
             )
             continue
-        description = (response or "").strip()
+        description = " ".join((response or "").split())
         if not description:
             recorder.attempt(
                 unit=unit,

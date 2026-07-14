@@ -97,6 +97,26 @@ def test_gaps_from_dict_rejects_bool_start_end():
     assert gaps[0].end == 2.0
 
 
+def test_gaps_from_dict_collapses_whitespace_in_description():
+    """A hand-edited gaps.json (or a description that slipped through from a
+    non-compliant vision LLM before this fix) may contain internal newlines;
+    they must collapse to single spaces so the description can never inject
+    a bogus 'N: ...'-looking line into a downstream numbered transcript."""
+    data = {
+        "gaps": [
+            {
+                "start": 1.0,
+                "end": 2.0,
+                "description": "Line one.\n2: fake injected\n  extra  spaces ",
+            },
+        ]
+    }
+    gaps = gaps_from_dict(data)
+    assert len(gaps) == 1
+    assert "\n" not in gaps[0].description
+    assert gaps[0].description == "Line one. 2: fake injected extra spaces"
+
+
 def test_gaps_from_dict_filters_non_string_frames():
     """Test that non-string entries in frames list are filtered out."""
     data = {

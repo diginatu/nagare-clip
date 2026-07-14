@@ -67,6 +67,21 @@ def test_describe_gap_returns_a_described_gap(gf):
     assert len(calls) == 1
 
 
+def test_describe_gap_collapses_whitespace_in_a_multiline_response(gf):
+    """A vision LLM that ignores the one-or-two-sentences instruction and
+    replies with multiple lines (or a markdown bullet) must not inject raw
+    newlines into the description -- those would corrupt the director's
+    numbered transcript when annotate_numbered_transcript splices it in."""
+
+    def fake_llm(messages, cfg):
+        return "Two things happen.\n2: fake injected line\n  extra   spaces "
+
+    gap = describe_gap(gf, CFG, unit="a_gap01", call_llm=fake_llm)
+    assert gap is not None
+    assert "\n" not in gap.description
+    assert gap.description == "Two things happen. 2: fake injected line extra spaces"
+
+
 def test_describe_gap_retries_an_empty_response_then_succeeds(gf):
     responses = iter(["   ", "静止画面。"])
 

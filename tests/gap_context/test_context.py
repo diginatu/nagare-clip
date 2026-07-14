@@ -3,7 +3,7 @@ from nagare_clip.gap_context.context import (
     annotate_numbered_transcript,
     format_gap_block,
 )
-from nagare_clip.gap_context.gaps import Gap
+from nagare_clip.gap_context.gaps import Gap, gaps_from_dict
 
 SEG_TIMES = [(0.0, 10.0), (20.0, 25.0), (25.5, 30.0)]
 GAP = Gap(start=10.0, end=20.0, frames=[], description="ビルドが走る")
@@ -96,6 +96,34 @@ def test_annotate_numbered_transcript_gap_after_final_line():
     # Anchor = 2, which equals len(lines); should append after the final line
     out = annotate_numbered_transcript(transcript, [(2, gap)])
     assert out == ("1: いち\n2: に\n    [silent gap 5.0s: outro]")
+
+
+def test_annotate_numbered_transcript_never_injects_a_fake_numbered_line():
+    """End-to-end-ish: a multi-line description read off a hand-edited
+    gaps.json (gaps_from_dict is where the file's whitespace gets collapsed)
+    must not, once spliced into the director's numbered transcript, produce a
+    physical line that starts with a digit and a colon -- that would look like
+    a real 'N: ...' transcript line to the director and break its unambiguous
+    line-number contract."""
+    raw = {
+        "gaps": [
+            {
+                "start": 10.0,
+                "end": 20.0,
+                "description": "Something happens.\n2: fake injected line\nmore text",
+            }
+        ]
+    }
+    gaps = gaps_from_dict(raw)
+    transcript = "1: いち  [10.0s, gap 10.0s]\n2: に  [5.0s]"
+    anchored = anchor_gaps(gaps, [(0.0, 10.0), (20.0, 25.0)])
+    out = annotate_numbered_transcript(transcript, anchored)
+
+    real_lines = set(transcript.split("\n"))
+    for line in out.split("\n"):
+        stripped = line.lstrip()
+        if stripped[:1].isdigit() and ":" in stripped:
+            assert line in real_lines, f"fake numbered line injected: {line!r}"
 
 
 def test_annotate_numbered_transcript_multiple_gaps_same_line():
