@@ -39,6 +39,7 @@ def filter_transcript(
     *,
     call_llm=None,
     recorder: Recorder = NULL_RECORDER,
+    stem: str = "",
 ) -> list[str]:
     """Send transcript lines to LLM in batches, return lines with {{old->new}} markers.
 
@@ -57,7 +58,16 @@ def filter_transcript(
 
     stats: dict[int, dict[str, int]] = defaultdict(lambda: {"total": 0, "succeeded": 0})
     for batch in batches:
-        _process_batch(batch, result, cfg, batch_size, stats, call_llm=call_llm, recorder=recorder)
+        _process_batch(
+            batch,
+            result,
+            cfg,
+            batch_size,
+            stats,
+            call_llm=call_llm,
+            recorder=recorder,
+            stem=stem,
+        )
 
     _log_stats(stats, batch_size)
     return result
@@ -72,6 +82,7 @@ def _process_batch(
     *,
     call_llm=None,
     recorder: Recorder = NULL_RECORDER,
+    stem: str = "",
 ) -> None:
     """Run one LLM call for ``batch``; on any line missing from the parse
     result, recursively retry the failed lines with a halved batch size
@@ -80,7 +91,14 @@ def _process_batch(
         call_llm = _call_llm
     a = batch[0][0] + 1
     b = batch[-1][0] + 1
-    unit = f"lines {a}-{b} (size {current_size})"
+    # Stem prefix keeps multi-video runs from colliding on the same report
+    # file (each video restarts its line numbering at 1).
+    unit = (
+        f"{stem} lines {a}-{b} (size {current_size})"
+        if stem
+        else (f"lines {a}-{b} (size {current_size})")
+    )
+    recorder.begin(unit)
     cfg = with_trace_meta(cfg, stage=recorder.stage, unit=unit)
     messages = [
         {"role": "system", "content": cfg.get("prompt", "")},
@@ -162,6 +180,7 @@ def _process_batch(
             stats,
             call_llm=call_llm,
             recorder=recorder,
+            stem=stem,
         )
 
 

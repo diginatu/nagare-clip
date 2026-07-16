@@ -423,3 +423,36 @@ class TestFilterRecorder:
         text = files[0].read_text(encoding="utf-8")
         _, fm, _ = text.split("---", 2)
         assert _yaml.safe_load(fm)["outcome"] == "ok"
+
+    def test_units_are_stem_prefixed(self, tmp_path):
+        """Without a stem prefix, two videos' identical line ranges map to the
+        same report file (lines_1-1_size_4.md) and silently overwrite each
+        other in a multi-video run."""
+        rec = Recorder("text_filter", tmp_path, enabled=True)
+
+        def fake(_messages, _cfg):
+            return "1: alpha"
+
+        cfg = {"batch_size": 4, "retry_on_invalid": False, "model": "m"}
+        filter_transcript(["alpha"], cfg, call_llm=fake, recorder=rec, stem="video_a")
+        filter_transcript(["alpha"], cfg, call_llm=fake, recorder=rec, stem="video_b")
+        names = sorted(p.name for p in (tmp_path / "text_filter").glob("*.md"))
+        assert names == [
+            "video_a_lines_1-1_size_4.md",
+            "video_b_lines_1-1_size_4.md",
+        ]
+
+    def test_no_stem_keeps_the_old_unit_name(self, tmp_path):
+        rec = Recorder("text_filter", tmp_path, enabled=True)
+
+        def fake(_messages, _cfg):
+            return "1: alpha"
+
+        filter_transcript(
+            ["alpha"],
+            {"batch_size": 4, "retry_on_invalid": False, "model": "m"},
+            call_llm=fake,
+            recorder=rec,
+        )
+        names = [p.name for p in (tmp_path / "text_filter").glob("*.md")]
+        assert names == ["lines_1-1_size_4.md"]

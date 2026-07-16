@@ -47,6 +47,7 @@ def _run(tmp_path, s2_config, summary_data=None, lines=None):
 
     def mock_filter(lines, cfg, **kwargs):
         captured.update(cfg)
+        captured["__kwargs__"] = kwargs
         return lines
 
     config = {
@@ -61,6 +62,11 @@ def _run(tmp_path, s2_config, summary_data=None, lines=None):
 
 
 class TestSummaryContext:
+    def test_stem_passed_to_filter_transcript(self, tmp_path):
+        # The report units are stem-prefixed so multi-video runs don't collide.
+        captured = _run(tmp_path, _s2_config())
+        assert captured["__kwargs__"]["stem"] == "test"
+
     def test_constant_keywords_injected_without_summary_json(self, tmp_path):
         cfg = _run(tmp_path, _s2_config(constant_keywords=["TestWord"]))
         assert "TestWord" in cfg.get("prompt", "")

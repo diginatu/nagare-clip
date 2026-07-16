@@ -70,7 +70,7 @@ def run_text_filter(
                 len(keywords),
             )
 
-        result_lines = filter_transcript(lines, filter_cfg, recorder=recorder)
+        result_lines = filter_transcript(lines, filter_cfg, recorder=recorder, stem=txt.stem)
 
         changes = sum(1 for o, c in zip(lines, result_lines) if o != c)
         logging.info("text_filter: %d/%d lines modified by AI", changes, len(lines))
