@@ -37,6 +37,7 @@ from nagare_clip.intervals.sync_json import (
     KEEP_TAG_RE,
     OVERLAY_TAG_RE,
     SPEED_TAG_RE,
+    sync_text_to_json,
 )
 from nagare_clip.text_filter.llm_filter import PATCH_RE, apply_patches_to_lines
 
@@ -231,6 +232,19 @@ def check_edits(edit_lines: list[str], json_data: dict[str, Any]) -> list[Proble
             cause = _diagnose_decomposition(cleaned.strip(), original)
             if cause is not None:
                 problems.append(Problem(lineno, cause))
+
+    # Parity guard: even when every itemised check passes, run the real
+    # intervals-stage sync — it is the single source of truth (its <cut>
+    # expansion is stateful across lines, which the per-line checks above
+    # can only approximate). A rejection here becomes a Problem instead of
+    # a pipeline crash discovered stages later.
+    if not problems:
+        try:
+            sync_text_to_json(json_data, edit_lines)
+        except ValueError as exc:
+            m = re.search(r"Segment (\d+)", str(exc))
+            lineno = int(m.group(1)) + 1 if m else None
+            problems.append(Problem(lineno, f"intervals-stage sync rejects this file: {exc}"))
 
     problems.sort(key=lambda p: (p.line is None, p.line or 0))
     return problems

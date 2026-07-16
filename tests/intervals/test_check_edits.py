@@ -11,6 +11,7 @@ from __future__ import annotations
 import pytest
 
 from nagare_clip.intervals.check_edits import check_edits, main
+from nagare_clip.intervals.sync_json import sync_text_to_json
 
 
 def _seg(text: str) -> dict:
@@ -34,6 +35,43 @@ def _messages(problems):
 
 def _on_line(problems, line):
     return [p for p in problems if p.line == line]
+
+
+class TestSyncParityGuard:
+    """check_edits must never bless a file that ``sync_text_to_json`` rejects.
+
+    Historical failure: a ``<cut>`` span covering a line whose text_filter
+    output left a trailing space after a ``{{old->}}`` patch passed every
+    per-line check, but the intervals stage raised ``ValueError``. The guard
+    runs the real sync on an otherwise-clean file and reports its rejection
+    as a Problem instead of letting the pipeline crash later.
+    """
+
+    def _parity(self, lines: list[str], json_data: dict) -> None:
+        problems = check_edits(lines, json_data)
+        try:
+            sync_text_to_json(json_data, lines)
+            sync_ok = True
+        except ValueError:
+            sync_ok = False
+        assert bool(problems) == (not sync_ok), (
+            f"checker/sync disagree: problems={problems!r} sync_ok={sync_ok}"
+        )
+
+    def test_cut_span_with_keep_overlap_and_trailing_space(self):
+        # The exact real-world pattern: guided_edit's cut opens mid-file,
+        # closes on a line also wrapped in <keep>, and an intermediate line
+        # carries a trailing space after a deletion patch.
+        self._parity(
+            ["<cut>あいう", "かき{{く->}} ", "<keep>けこさ</cut></keep>"],
+            _json("あいう", "かきく", "けこさ"),
+        )
+
+    def test_cross_line_cut_with_inner_patches(self):
+        self._parity(
+            ["あ<cut>いう", "{{かき->}}く", "け</cut>こ"],
+            _json("あいう", "かきく", "けこ"),
+        )
 
 
 class TestCleanFile:
