@@ -85,6 +85,7 @@ def split_window(
     if num == 1:
         return [(0, 0)]
     messages = build_messages(bunsetsu, cfg.get("prompt", ""))
+    recorder.begin(unit)
     cfg = with_trace_meta(cfg, stage=recorder.stage, unit=unit)
     attempts = retry_attempts(cfg)
     for attempt in range(attempts):

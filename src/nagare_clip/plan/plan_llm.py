@@ -135,6 +135,7 @@ def generate_plan(
         {"role": "system", "content": cfg.get("prompt", "")},
         {"role": "user", "content": _format_parts_for_plan(project_summary)},
     ]
+    recorder.begin(unit)
     cfg = with_trace_meta(cfg, stage=recorder.stage, unit=unit)
     attempts = retry_attempts(cfg)
     for attempt in range(attempts):

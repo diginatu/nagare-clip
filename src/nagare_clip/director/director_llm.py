@@ -279,6 +279,7 @@ def generate_director_ops(
         {"role": "system", "content": system_prompt},
         {"role": "user", "content": user_content},
     ]
+    recorder.begin(unit)
     cfg = with_trace_meta(cfg, stage=recorder.stage, unit=unit)
     attempts = retry_attempts(cfg)
     for attempt in range(attempts):

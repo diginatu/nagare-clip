@@ -139,6 +139,7 @@ def segment_video(
         {"role": "system", "content": cfg.get("prompt", "")},
         {"role": "user", "content": user_content},
     ]
+    recorder.begin(stem)
     cfg = with_trace_meta(cfg, stage=recorder.stage, unit=stem)
     attempts = retry_attempts(cfg)
     for attempt in range(attempts):
@@ -251,6 +252,7 @@ def generate_project_summary(
         {"role": "system", "content": cfg.get("overall_prompt", "")},
         {"role": "user", "content": _format_parts_doc(parts, video_summaries or {})},
     ]
+    recorder.begin("overall")
     cfg = with_trace_meta(cfg, stage=recorder.stage, unit="overall")
     attempts = retry_attempts(cfg)
     for attempt in range(attempts):

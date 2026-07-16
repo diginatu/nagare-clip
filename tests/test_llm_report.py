@@ -66,6 +66,45 @@ class TestUnitFile:
         assert "temperature 0.1" in body and "temperature 0.3" in body
         assert "no ops" in body  # per-attempt reason rendered
 
+    def test_duration_measured_from_begin_not_first_attempt(self, tmp_path, monkeypatch):
+        """Stages record an attempt only AFTER the LLM call returns, so a
+        start time taken at first-attempt time misses the whole call and
+        every report says duration_ms: 0. begin(unit) marks the real start."""
+        import nagare_clip.llm_report as mod
+
+        real_datetime = mod.datetime
+        clock = {"now": real_datetime(2026, 1, 1, 12, 0, 0)}
+
+        class FakeDateTime:
+            @staticmethod
+            def now():
+                return clock["now"]
+
+        monkeypatch.setattr(mod, "datetime", FakeDateTime)
+
+        rec = Recorder("director", tmp_path, enabled=True)
+        rec.begin("my_video")
+        # ... the LLM call takes 3 seconds ...
+        clock["now"] = real_datetime(2026, 1, 1, 12, 0, 3)
+        rec.attempt(
+            unit="my_video",
+            attempt=0,
+            total=1,
+            messages=[],
+            response="ok",
+            outcome=OK,
+            cfg={"model": "m"},
+        )
+        rec.flush_unit("my_video", outcome=OK)
+
+        fm = _front_matter(tmp_path / "director" / "my_video.md")
+        assert fm["duration_ms"] == 3000
+        assert fm["started_at"] == "2026-01-01T12:00:00"
+
+    def test_begin_on_disabled_recorder_is_a_noop(self, tmp_path):
+        NULL_RECORDER.begin("anything")  # must not raise or accumulate state
+        assert NULL_RECORDER._started == {}
+
     def test_thinking_defaults_to_false_when_omitted(self, tmp_path):
         rec = Recorder("director", tmp_path, enabled=True)
         rec.attempt(

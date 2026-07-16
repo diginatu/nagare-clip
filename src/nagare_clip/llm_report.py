@@ -81,6 +81,17 @@ class Recorder:
         except OSError as e:
             logger.warning("llm_report: could not clear %s: %s", self._stage_dir, e)
 
+    def begin(self, unit: str) -> None:
+        """Mark the unit's real start, BEFORE its first LLM call.
+
+        Stages record an attempt only after the call returns, so without this
+        the start time defaults to first-attempt time and ``duration_ms``
+        misses the calls entirely (every report said 0).
+        """
+        if not self.enabled:
+            return
+        self._started.setdefault(unit, datetime.now())
+
     def attempt(
         self,
         *,
