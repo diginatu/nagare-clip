@@ -200,3 +200,94 @@ def test_neighbour_lines_degrades_on_malformed_segments(tmp_path, monkeypatch):
     # Should still extract the valid neighbors
     assert "直前の文" in seen["text"]
     assert "直後の文" in seen["text"]
+
+
+def _run_with_context_lines(tmp_path, monkeypatch, stem, context_lines):
+    """Run one gap over a 6-segment fixture and return the LLM's header text."""
+    import nagare_clip.gap_context.run as run_mod
+
+    seen = {}
+
+    def fake(messages, cfg):
+        seen["text"] = messages[1]["content"][0]["text"]
+        return "d"
+
+    monkeypatch.setattr(run_mod, "_call_llm", fake)
+    jp = tmp_path / f"{stem}.json"
+    jp.write_text(
+        json.dumps(
+            {
+                "segments": [
+                    {"start": 0.0, "end": 5.0, "text": "前3"},
+                    {"start": 5.0, "end": 8.0, "text": "前2"},
+                    {"start": 8.0, "end": 10.0, "text": "前1"},
+                    {"start": 20.0, "end": 22.0, "text": "後1"},
+                    {"start": 22.0, "end": 25.0, "text": "後2"},
+                    {"start": 25.0, "end": 30.0, "text": "後3"},
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+    cfg = {"gap_context": {**BASE_CFG["gap_context"], "context_lines": context_lines}}
+    gf = GapFrames(start=10.0, end=20.0, frames=_frames(tmp_path, "f.jpg"), relpaths=["f.jpg"])
+    run_gap_context([gf], tmp_path / f"{stem}_gaps.json", cfg, stem=stem, json_path=jp)
+    return seen["text"]
+
+
+def test_context_lines_collects_that_many_neighbours_on_each_side(tmp_path, monkeypatch):
+    text = _run_with_context_lines(tmp_path, monkeypatch, "n2", 2)
+    assert "前2" in text and "前1" in text
+    assert "後1" in text and "後2" in text
+    # The third line out on each side is beyond context_lines: 2
+    assert "前3" not in text
+    assert "後3" not in text
+
+
+def test_context_lines_keeps_the_neighbours_in_chronological_order(tmp_path, monkeypatch):
+    text = _run_with_context_lines(tmp_path, monkeypatch, "n3", 3)
+    assert text.index("前3") < text.index("前2") < text.index("前1")
+    assert text.index("後1") < text.index("後2") < text.index("後3")
+
+
+def test_context_lines_beyond_the_available_segments_is_not_an_error(tmp_path, monkeypatch):
+    text = _run_with_context_lines(tmp_path, monkeypatch, "n9", 9)
+    assert "前3" in text and "後3" in text
+
+
+def test_context_lines_zero_omits_the_neighbour_lines_entirely(tmp_path, monkeypatch):
+    text = _run_with_context_lines(tmp_path, monkeypatch, "n0", 0)
+    for t in ("前1", "前2", "前3", "後1", "後2", "後3"):
+        assert t not in text
+
+
+def test_context_lines_defaults_to_one_when_absent_from_cfg(tmp_path, monkeypatch):
+    """An older/hand-written cfg without the key keeps the previous behaviour."""
+    import nagare_clip.gap_context.run as run_mod
+
+    seen = {}
+
+    def fake(messages, cfg):
+        seen["text"] = messages[1]["content"][0]["text"]
+        return "d"
+
+    monkeypatch.setattr(run_mod, "_call_llm", fake)
+    jp = tmp_path / "d.json"
+    jp.write_text(
+        json.dumps(
+            {
+                "segments": [
+                    {"start": 5.0, "end": 8.0, "text": "前2"},
+                    {"start": 8.0, "end": 10.0, "text": "前1"},
+                    {"start": 20.0, "end": 22.0, "text": "後1"},
+                    {"start": 22.0, "end": 25.0, "text": "後2"},
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+    gf = GapFrames(start=10.0, end=20.0, frames=_frames(tmp_path, "f.jpg"), relpaths=["f.jpg"])
+    assert "context_lines" not in BASE_CFG["gap_context"]
+    run_gap_context([gf], tmp_path / "d_gaps.json", BASE_CFG, stem="d", json_path=jp)
+    assert "前1" in seen["text"] and "後1" in seen["text"]
+    assert "前2" not in seen["text"] and "後2" not in seen["text"]

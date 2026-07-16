@@ -67,20 +67,30 @@ def _image_part(path: Path) -> dict[str, Any] | None:
     return {"type": "image_url", "image_url": {"url": f"data:{mime};base64,{encoded}"}}
 
 
-def _header_text(start: float, end: float, frame_count: int, before: str, after: str) -> str:
+def _neighbour_text(side: str, lines: list[str]) -> str:
+    """One line renders as a sentence; several as a chronological bullet list."""
+    if len(lines) == 1:
+        return f"Spoken line {side} the gap: {lines[0]}"
+    bullets = "\n".join(f"- {line}" for line in lines)
+    return f"Spoken lines {side} the gap:\n{bullets}"
+
+
+def _header_text(
+    start: float, end: float, frame_count: int, before: list[str], after: list[str]
+) -> str:
     lines = [
         f"Silent gap: {start:.1f}s - {end:.1f}s ({end - start:.1f}s long).",
         f"{frame_count} frame(s) sampled in chronological order.",
     ]
     if before:
-        lines.append(f"Spoken line before the gap: {before}")
+        lines.append(_neighbour_text("before", before))
     if after:
-        lines.append(f"Spoken line after the gap: {after}")
+        lines.append(_neighbour_text("after", after))
     return "\n".join(lines)
 
 
 def _content_parts(
-    gf: GapFrames, before: str, after: str
+    gf: GapFrames, before: list[str], after: list[str]
 ) -> tuple[list[dict[str, Any]], list[str]]:
     """User content parts + the relpaths of the frames that made it in."""
     images: list[dict[str, Any]] = []
@@ -99,15 +109,22 @@ def _content_parts(
 
 
 def build_messages(
-    gf: GapFrames, cfg: dict[str, Any], *, before: str = "", after: str = ""
+    gf: GapFrames,
+    cfg: dict[str, Any],
+    *,
+    before: list[str] | None = None,
+    after: list[str] | None = None,
 ) -> tuple[list[dict[str, Any]], list[str]]:
     """System prompt + one multimodal user message (header text, then frames).
+
+    *before* / *after* are the neighbouring spoken lines in chronological
+    order (``gap_context.context_lines`` of them per side, at most).
 
     Returns the messages *and* the relpaths of the frames that made it into
     the user message (the caller needs those to record/return them; frames
     that failed to read are dropped from both).
     """
-    parts, relpaths = _content_parts(gf, before, after)
+    parts, relpaths = _content_parts(gf, before or [], after or [])
     messages = [
         {"role": "system", "content": cfg.get("prompt", "")},
         {"role": "user", "content": parts},
@@ -129,8 +146,8 @@ def describe_gap(
     cfg: dict[str, Any],
     *,
     unit: str,
-    before: str = "",
-    after: str = "",
+    before: list[str] | None = None,
+    after: list[str] | None = None,
     call_llm: CallLLM = _call_llm,
     recorder: Recorder = NULL_RECORDER,
 ) -> Gap | None:

@@ -21,18 +21,27 @@ from nagare_clip.llm_report import NULL_RECORDER, Recorder
 from nagare_clip.timing import segment_times
 
 
-def _neighbour_lines(gf: GapFrames, segments: list[dict[str, Any]], seg_times) -> tuple[str, str]:
-    """Text of the last line ending at/before the gap and the first starting at/after it."""
-    before = after = ""
+def _neighbour_lines(
+    gf: GapFrames, segments: list[dict[str, Any]], seg_times, count: int
+) -> tuple[list[str], list[str]]:
+    """Up to *count* lines ending at/before the gap and starting at/after it.
+
+    Both lists are in transcript order, so the line nearest the gap is last in
+    *before* and first in *after*.
+    """
+    before: list[str] = []
+    after: list[str] = []
+    if count <= 0:
+        return before, after
     for (start, end), seg in zip(seg_times, segments, strict=False):
         text = seg.get("text", "") if isinstance(seg, dict) else ""
-        if not isinstance(text, str):
+        if not isinstance(text, str) or not text.strip():
             continue
         if end is not None and end <= gf.start + 0.01:
-            before = text.strip()
-        if after == "" and start is not None and start >= gf.end - 0.01:
-            after = text.strip()
-    return before, after
+            before.append(text.strip())
+        elif len(after) < count and start is not None and start >= gf.end - 0.01:
+            after.append(text.strip())
+    return before[-count:], after
 
 
 def run_gap_context(
@@ -59,11 +68,13 @@ def run_gap_context(
                 seg_times = segment_times(data)
             except (ValueError, OSError):
                 logging.warning("gap_context: could not read --json %s", json_path)
+        context_lines = gc_cfg.get("context_lines", 1)
         logging.info("gap_context: describing %d gap(s) for %s", len(gap_frames), stem)
         for i, gf in enumerate(gap_frames):
-            before, after = ("", "")
+            before: list[str] = []
+            after: list[str] = []
             if segments and seg_times:
-                before, after = _neighbour_lines(gf, segments, seg_times)
+                before, after = _neighbour_lines(gf, segments, seg_times, context_lines)
             gap = describe_gap(
                 gf,
                 gc_cfg,

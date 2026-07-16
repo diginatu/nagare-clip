@@ -271,6 +271,24 @@ class TestGetEffectiveConfig:
         with pytest.raises(ValidationError):
             get_effective_config(cfg_file)
 
+    def test_gap_context_context_lines_default_is_one(self):
+        cfg = get_effective_config(None)
+        assert cfg["gap_context"]["context_lines"] == 1
+
+    def test_gap_context_context_lines_override(self, tmp_path: Path):
+        cfg_file = tmp_path / "cfg.yml"
+        cfg_file.write_text(yaml.dump({"gap_context": {"context_lines": 4}}))
+        cfg = get_effective_config(cfg_file)
+        assert cfg["gap_context"]["context_lines"] == 4
+        # Independent of guided_edit's same-named knob
+        assert cfg["guided_edit"]["context_lines"] == 1
+
+    def test_gap_context_context_lines_rejects_a_negative(self, tmp_path: Path):
+        cfg_file = tmp_path / "cfg.yml"
+        cfg_file.write_text(yaml.dump({"gap_context": {"context_lines": -1}}))
+        with pytest.raises(ValidationError):
+            get_effective_config(cfg_file)
+
 
 def test_blender_style_allows_extra_keys(tmp_path):
     """caption_style / speed_mark are open-ended Blender TextStrip pass-throughs:

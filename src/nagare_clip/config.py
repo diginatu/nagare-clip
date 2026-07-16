@@ -582,6 +582,11 @@ class GapContextConfig(BaseModel):
     frame_width: int = Field(
         960, description="Downscale width (px) of the extracted JPEG frames; height is auto"
     )
+    context_lines: int = Field(
+        1,
+        ge=0,
+        description="Transcript lines given to the vision LLM on each side of the gap (0 = none)",
+    )
     prompt: str = _commented(
         GAP_CONTEXT_PROMPT, sample='"..."', description="System prompt (has a sensible default)"
     )

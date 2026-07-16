@@ -40,11 +40,26 @@ def test_build_messages_has_system_prompt_and_image_parts(gf):
 
 
 def test_build_messages_includes_neighbour_lines_when_given(gf):
-    parts = build_messages(gf, CFG, before="ここでビルドします", after="できました")[0][1][
+    parts = build_messages(gf, CFG, before=["ここでビルドします"], after=["できました"])[0][1][
         "content"
     ]
     assert "ここでビルドします" in parts[0]["text"]
     assert "できました" in parts[0]["text"]
+
+
+def test_build_messages_renders_a_single_neighbour_line_in_the_singular(gf):
+    """One line per side keeps the pre-context_lines wording byte-identical."""
+    text = build_messages(gf, CFG, before=["直前"], after=["直後"])[0][1]["content"][0]["text"]
+    assert "Spoken line before the gap: 直前" in text
+    assert "Spoken line after the gap: 直後" in text
+
+
+def test_build_messages_renders_multiple_neighbour_lines_as_a_chronological_list(gf):
+    text = build_messages(gf, CFG, before=["古い", "直前"], after=["直後", "新しい"])[0][1][
+        "content"
+    ][0]["text"]
+    assert "Spoken lines before the gap:\n- 古い\n- 直前" in text
+    assert "Spoken lines after the gap:\n- 直後\n- 新しい" in text
 
 
 def test_build_messages_omits_neighbour_lines_when_absent(gf):

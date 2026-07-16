@@ -120,9 +120,23 @@ One LLM call per gap (`describe_gap()`), not per frame:
   every frame drops (`describe_gap` returns `None` if `build_messages` yields
   an empty user-content list — logged, zero LLM calls made).
 - The user message is one multimodal turn: a text header
-  (`Silent gap: {start}s - {end}s ({duration}s long).`, frame count, and
-  optional `Spoken line before/after the gap:` lines when the caller supplies
+  (`Silent gap: {start}s - {end}s ({duration}s long).`, frame count, and the
+  optional neighbour-line block described below when the caller supplies
   neighbour text) followed by the image parts, in chronological order.
+- `before`/`after` are **lists** of neighbour lines in transcript order.
+  `_neighbour_text()` renders one line per side as the singular
+  `Spoken line before the gap: <text>` — byte-identical to the wording from
+  before `context_lines` existed, which is what the default `context_lines: 1`
+  emits — and several as a plural chronological bullet list:
+
+  ```
+  Spoken lines before the gap:
+  - 前2
+  - 前1
+  ```
+
+  An empty list omits that side's block entirely (`context_lines: 0` omits
+  both).
 - The system prompt is `gap_context.prompt` (default `GAP_CONTEXT_PROMPT` in
   `config.py`) — plain English, asks for one or two sentences of plain text,
   explicitly no JSON/markdown, and to say so plainly if nothing is happening.
@@ -157,11 +171,17 @@ One LLM call per gap (`describe_gap()`), not per frame:
   pins this).
 
 `run_gap_context()` (`run.py`) is the per-video entry point: for each
-`GapFrames` it looks up the last WhisperX segment ending at/before the gap and
-the first one starting at/after it (`_neighbour_lines()` — tolerant of
-missing/`None` `start`/`end`, non-dict segments, and non-string `text`) and
-passes their text to `describe_gap()` as `before`/`after`, when the
-sentence_split `{stem}.json` (`json_path`) is available. Disabled →
+`GapFrames` it looks up the last `gap_context.context_lines` WhisperX segments
+ending at/before the gap and the first `context_lines` starting at/after it
+(`_neighbour_lines()` — tolerant of missing/`None` `start`/`end`, non-dict
+segments, non-string/blank `text`, and a `context_lines` larger than the number
+of segments actually there) and passes their text to `describe_gap()` as
+`before`/`after`, when the sentence_split `{stem}.json` (`json_path`) is
+available. `context_lines` defaults to **1** (the pre-existing behaviour: one
+line per side); `0` skips neighbour lookup entirely. Raising it costs prompt
+tokens on every gap of every video, so it is a knob, not a default. Note the
+same-named `guided_edit.context_lines` is an unrelated knob for a different
+stage. Disabled →
 `{"gaps": []}` with no Docker calls: the pipeline adapter (`_gap_context_run`)
 only calls `_extract_gap_frames` when `gap_context.enabled` is true, and
 `run_gap_context` itself independently checks `gc_cfg.get("enabled", False)`
