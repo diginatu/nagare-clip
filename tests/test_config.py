@@ -356,6 +356,9 @@ def test_prompt_documents_duration_and_gap_bracket(stage):
     lowered = prompt.lower()
     assert "duration" in lowered
     assert "gap" in lowered
+    # A negligible gap is omitted from the bracket; the prompt must say so
+    # rather than implying only the last line/part lacks a gap.
+    assert "negligible" in lowered
 
 
 def test_guided_edit_defaults_present():
@@ -447,6 +450,15 @@ def test_gap_context_defaults():
 def test_gap_context_rejects_unknown_key():
     with pytest.raises(ValidationError):
         get_effective_config(None, {"gap_context": {"nonesuch": 1}})
+
+
+def test_gap_context_prompt_documents_the_markers_describe_parses():
+    # describe.describe_gap parses a leading STATIC:/ACTION: marker off the
+    # vision reply; the default prompt must instruct the model to emit them.
+    cfg = get_effective_config(None, {})
+    prompt = cfg["gap_context"]["prompt"]
+    assert "STATIC:" in prompt
+    assert "ACTION:" in prompt
 
 
 def test_director_prompt_documents_gap_annotations():

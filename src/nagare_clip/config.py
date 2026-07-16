@@ -118,8 +118,8 @@ PLAN_PROMPT = (
     "Timing: a part may carry a bracket after its line range — "
     "[4.2s, gap 0.8s] means the part has a duration of 4.2 seconds and is "
     "followed by a 0.8-second silent gap before the next part of the same "
-    "video. The last "
-    "part of a video has no gap ([4.2s]); a part with unknown timing has no "
+    "video. A negligible gap, and the last part of a video, show no gap "
+    "([4.2s]); a part with unknown timing has no "
     "bracket. Use these numbers to judge pacing: long parts are candidates "
     "for shortening or speeding up, and long gaps mean dead air.\n"
     "\n"
@@ -148,7 +148,8 @@ DIRECTOR_PROMPT = (
     "\n"
     "Timing: a line may carry a bracket after its text — [4.2s, gap 0.8s] "
     "means the line lasts 4.2 seconds and is followed by a 0.8-second silent "
-    "gap before the next line. The last line has no gap ([4.2s]); a line with "
+    "gap before the next line. A negligible gap, and the last line, show no "
+    "gap ([4.2s]); a line with "
     "unknown timing has no bracket. Use these numbers to judge pacing: long "
     "durations are candidates for cutting or speeding up, and long gaps are "
     'dead air (already dropped by default unless you "keep" them).\n'
@@ -181,6 +182,10 @@ DIRECTOR_PROMPT = (
     "\n"
     "Rules:\n"
     '- "lines" must be within the transcript range.\n'
+    '- A "cut" range must not overlap any other op\'s range: cutting deletes '
+    "the span, so never include a line you also keep/speed/overlay in a cut "
+    "(e.g. to cut lines 12-18 but keep line 18, emit cut [12, 17]). "
+    "Overlapping ops are clipped and the cut loses the shared lines.\n"
     '- Use "note" to describe in natural language precisely WHERE in the '
     "line(s) the edit starts and ends, so a downstream editor can place "
     "it exactly.\n"
@@ -219,10 +224,13 @@ GAP_CONTEXT_PROMPT = (
     "appearing), or is the screen essentially static/dead air?\n"
     "\n"
     "Rules:\n"
-    "- Answer in ONE or TWO short sentences of plain text. No JSON, no "
-    "markdown, no preamble.\n"
-    "- If nothing meaningful happens, say so plainly (e.g. 'Static screen, "
-    "no visible activity.').\n"
+    "- Start your answer with exactly 'ACTION: ' if something meaningful "
+    "happens on screen, or 'STATIC: ' if the screen is essentially "
+    "static/dead air.\n"
+    "- After the marker, answer in ONE or TWO short sentences of plain text. "
+    "No JSON, no markdown, no preamble.\n"
+    "- If nothing meaningful happens, keep it minimal (e.g. 'STATIC: no "
+    "visible activity.').\n"
     "- Describe only what you can see; do not speculate about the audio."
 )
 
