@@ -13,10 +13,31 @@ def test_round_trip():
                 "end": 22.5,
                 "frames": ["frames/a/10.200.jpg"],
                 "description": "ビルドが走る",
+                "static": False,
             }
         ]
     }
     assert gaps_from_dict(data) == gaps
+
+
+def test_static_round_trip():
+    gaps = [Gap(start=1.0, end=5.0, description="static scene", static=True)]
+    data = gaps_to_dict(gaps)
+    assert data["gaps"][0]["static"] is True
+    assert gaps_from_dict(data) == gaps
+
+
+def test_static_reads_leniently():
+    # Absent (pre-static files) or non-boolean → False; only JSON true counts.
+    def one(extra):
+        return gaps_from_dict({"gaps": [{"start": 1.0, "end": 2.0, "description": "d", **extra}]})[
+            0
+        ]
+
+    assert one({}).static is False
+    assert one({"static": "yes"}).static is False
+    assert one({"static": 1}).static is False
+    assert one({"static": True}).static is True
 
 
 def test_duration():

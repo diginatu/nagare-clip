@@ -76,6 +76,7 @@ def test_writes_a_described_gap(tmp_path, monkeypatch):
                 "end": 20.0,
                 "frames": ["frames/a/10.200.jpg"],
                 "description": "画面でビルドが走っている",
+                "static": False,
             }
         ]
     }

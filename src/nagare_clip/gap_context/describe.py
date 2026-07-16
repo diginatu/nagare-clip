@@ -11,6 +11,7 @@ from __future__ import annotations
 import base64
 import logging
 import mimetypes
+import re
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -25,6 +26,19 @@ from nagare_clip.llm_retry import cfg_for_attempt, retry_attempts
 logger = logging.getLogger(__name__)
 
 CallLLM = Callable[[list[dict[str, Any]], dict[str, Any]], str]
+
+# Leading STATIC:/ACTION: marker the default prompt asks the vision LLM to
+# emit (case-insensitive; full-width colon tolerated). A missing marker is
+# treated as ACTION — only an explicit STATIC excludes the gap downstream.
+_MARKER_RE = re.compile(r"^(static|action)\s*[:：]\s*", re.IGNORECASE)
+
+
+def _parse_marker(text: str) -> tuple[str, bool]:
+    """Strip the STATIC:/ACTION: marker; returns (description, static)."""
+    m = _MARKER_RE.match(text)
+    if m is None:
+        return text, False
+    return text[m.end() :], m.group(1).lower() == "static"
 
 
 @dataclass
@@ -129,6 +143,7 @@ def describe_gap(
         return None
     report_messages = _report_messages(messages, relpaths)
 
+    recorder.begin(unit)
     cfg = with_trace_meta(cfg, stage=recorder.stage, unit=unit)
     attempts = retry_attempts(cfg)
     for attempt in range(attempts):
@@ -154,7 +169,7 @@ def describe_gap(
                 cfg=attempt_cfg,
             )
             continue
-        description = " ".join((response or "").split())
+        description, static = _parse_marker(" ".join((response or "").split()))
         if not description:
             recorder.attempt(
                 unit=unit,
@@ -183,7 +198,9 @@ def describe_gap(
             cfg=attempt_cfg,
         )
         recorder.flush_unit(unit, outcome=OK)
-        return Gap(start=gf.start, end=gf.end, frames=relpaths, description=description)
+        return Gap(
+            start=gf.start, end=gf.end, frames=relpaths, description=description, static=static
+        )
 
     recorder.flush_unit(unit, outcome=LLM_ERROR, reason=f"all {attempts} attempt(s) failed")
     logger.warning("gap_context: all %d attempt(s) failed for %s; gap dropped", attempts, unit)

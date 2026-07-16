@@ -23,6 +23,10 @@ class Gap:
     end: float
     frames: list[str] = field(default_factory=list)  # relative to the stage dir
     description: str = ""
+    # True = the vision LLM saw no meaningful on-screen change; such gaps are
+    # excluded from the summary/director prompts (flip to false by hand in
+    # {stem}_gaps.json to force one back in).
+    static: bool = False
 
     @property
     def duration(self) -> float:
@@ -37,6 +41,7 @@ def gaps_to_dict(gaps: list[Gap]) -> dict[str, Any]:
                 "end": g.end,
                 "frames": list(g.frames),
                 "description": g.description,
+                "static": g.static,
             }
             for g in gaps
         ]
@@ -69,7 +74,11 @@ def gaps_from_dict(data: Any) -> list[Gap]:
         frames = raw.get("frames")
         frames = [f for f in frames if isinstance(f, str)] if isinstance(frames, list) else []
         clean_description = " ".join(description.split())
-        out.append(Gap(start=start, end=end, frames=frames, description=clean_description))
+        # Lenient: absent (pre-static files) or any non-boolean → False.
+        static = raw.get("static") is True
+        out.append(
+            Gap(start=start, end=end, frames=frames, description=clean_description, static=static)
+        )
     return out
 
 

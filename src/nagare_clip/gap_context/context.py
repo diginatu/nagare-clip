@@ -16,9 +16,15 @@ _INDENT = "    "
 def anchor_gaps(
     gaps: list[Gap], seg_times: list[tuple[float | None, float | None]]
 ) -> list[tuple[int, Gap]]:
-    """Attach each gap to the 1-based line it follows (``0`` = before line 1)."""
+    """Attach each gap to the 1-based line it follows (``0`` = before line 1).
+
+    Static gaps (no meaningful on-screen change) are skipped entirely — they
+    carry no editorial signal, so neither consumer renders them.
+    """
     out: list[tuple[int, Gap]] = []
     for gap in gaps:
+        if gap.static:
+            continue
         anchor = 0
         for i, (_start, end) in enumerate(seg_times):
             if end is not None and end <= gap.start + _EPS:

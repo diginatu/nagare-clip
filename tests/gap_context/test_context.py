@@ -22,6 +22,18 @@ def test_anchor_gaps_with_no_segment_times():
     assert anchor_gaps([GAP], []) == [(0, GAP)]
 
 
+def test_anchor_gaps_skips_static_gaps():
+    # Static gaps carry no editorial signal (dead air is dropped by default
+    # anyway); they must not reach the summary/director prompts. A human can
+    # flip "static": false in {stem}_gaps.json to force one back in.
+    gaps = [
+        Gap(start=1.0, end=5.0, description="action"),
+        Gap(start=6.0, end=9.0, description="dead air", static=True),
+    ]
+    anchored = anchor_gaps(gaps, [(0.0, 0.5)])
+    assert [g.description for _, g in anchored] == ["action"]
+
+
 def test_anchor_gaps_empty():
     assert anchor_gaps([], SEG_TIMES) == []
 

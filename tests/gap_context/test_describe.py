@@ -119,6 +119,72 @@ def test_describe_gap_collapses_whitespace_in_a_multiline_response(gf):
     assert gap.description == "Two things happen. 2: fake injected line extra spaces"
 
 
+def test_describe_gap_duration_spans_the_llm_call(gf, tmp_path, monkeypatch):
+    # The recorded duration_ms must cover the LLM call itself, not just the
+    # post-call bookkeeping (which made every report say duration_ms: 0).
+    import nagare_clip.llm_report as report_mod
+
+    real_dt = report_mod.datetime
+    clock = {"now": real_dt(2026, 1, 1, 12, 0, 0)}
+
+    class FakeDateTime:
+        @staticmethod
+        def now():
+            return clock["now"]
+
+    monkeypatch.setattr(report_mod, "datetime", FakeDateTime)
+    rec = Recorder("gap_context", tmp_path, enabled=True)
+
+    def slow_llm(messages, cfg):
+        clock["now"] = real_dt(2026, 1, 1, 12, 0, 2)
+        return "ACTION: water flows."
+
+    describe_gap(gf, CFG, unit="a_gap01", call_llm=slow_llm, recorder=rec)
+    text = (tmp_path / "gap_context" / "a_gap01.md").read_text(encoding="utf-8")
+    assert "duration_ms: 2000" in text
+
+
+def test_describe_gap_parses_static_marker(gf):
+    def fake_llm(messages, cfg):
+        return "STATIC: Static screen, no visible activity."
+
+    gap = describe_gap(gf, CFG, unit="a_gap01", call_llm=fake_llm)
+    assert gap is not None
+    assert gap.static is True
+    assert gap.description == "Static screen, no visible activity."
+
+
+def test_describe_gap_parses_action_marker(gf):
+    def fake_llm(messages, cfg):
+        return "action: Water pours into the tank."
+
+    gap = describe_gap(gf, CFG, unit="a_gap01", call_llm=fake_llm)
+    assert gap is not None
+    assert gap.static is False
+    assert gap.description == "Water pours into the tank."
+
+
+def test_describe_gap_without_marker_defaults_to_action(gf):
+    def fake_llm(messages, cfg):
+        return "A hand adjusts the tube."
+
+    gap = describe_gap(gf, CFG, unit="a_gap01", call_llm=fake_llm)
+    assert gap is not None
+    assert gap.static is False
+    assert gap.description == "A hand adjusts the tube."
+
+
+def test_describe_gap_marker_only_reply_counts_as_empty(gf):
+    responses = iter(["STATIC:", "STATIC: still frame."])
+
+    def fake_llm(messages, cfg):
+        return next(responses)
+
+    gap = describe_gap(gf, CFG, unit="a_gap01", call_llm=fake_llm)
+    assert gap is not None
+    assert gap.static is True and gap.description == "still frame."
+
+
 def test_describe_gap_retries_an_empty_response_then_succeeds(gf):
     responses = iter(["   ", "静止画面。"])
 
