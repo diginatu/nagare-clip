@@ -130,10 +130,17 @@ One LLM call per gap (`describe_gap()`), not per frame:
   realistic), so the response is never trusted verbatim — see the whitespace
   rule below.
 - The response is **plain text**, not JSON — there is no schema to fail
-  parsing. `describe_gap` collapses it with `" ".join(response.split())`
+  parsing. The default prompt asks the model to start the reply with
+  `ACTION: ` (something meaningful happens) or `STATIC: ` (essentially dead
+  air); `describe_gap` strips that leading marker (case-insensitive,
+  full-width colon tolerated, `_MARKER_RE`) into the `Gap.static` boolean — a
+  missing marker is treated as ACTION, so only an explicit STATIC excludes the
+  gap downstream. `describe_gap` collapses the reply with
+  `" ".join(response.split())`
   (strips *and* folds every internal whitespace run, including newlines, to a
   single space) before treating it as the description; an empty/whitespace-only
-  result after collapsing counts as a failure and is retried
+  result after collapsing (including a bare `STATIC:` with nothing after it)
+  counts as a failure and is retried
   (`llm_report.UNPARSEABLE`), same retry ladder as every other LLM stage
   (`llm_retry.retry_attempts`/`cfg_for_attempt`, config
   `gap_context.max_retries`/`retry_temp_step`/`retry_temp_cap`). All attempts
@@ -167,7 +174,7 @@ which uses a call counter rather than a raising fake — `describe_gap`'s broad
 
 ## Output contract (`gaps.py`)
 
-`{stem}_gaps.json`: `{"gaps": [{"start", "end", "frames": [...], "description"}]}` —
+`{stem}_gaps.json`: `{"gaps": [{"start", "end", "frames": [...], "description", "static"}]}` —
 purely time-based, no line numbers baked in (consumers anchor to line numbers
 themselves, since the transcript can change between stages). `gaps_to_dict`/
 `gaps_from_dict` round-trip it; reading is lenient by design so a
@@ -189,6 +196,10 @@ hand-edited file can never break the pipeline:
   invariant depends on this).
 - `frames` is optional (defaults to `[]`) and any non-string entries in it are
   filtered out silently, rather than dropping the whole gap.
+- `static` reads leniently: only JSON `true` counts; absent (pre-static
+  files) or any non-boolean value → `false`. This is the second field a human
+  is expected to hand-edit — flipping `"static": false` forces a gap the
+  vision LLM judged static back into the summary/director prompts.
 
 `load_gaps(path)` wraps `gaps_from_dict` with file I/O: a missing path (or
 `None`), unreadable file, or invalid JSON all degrade to `[]` (logged), never
@@ -202,7 +213,11 @@ is exactly one anchoring rule and one annotation format.
 
 **Anchoring (`anchor_gaps`)** attaches each `Gap` to the 1-based transcript
 line it immediately follows, given that video's `seg_times` (from
-`timing.segment_times`):
+`timing.segment_times`). Gaps with `static: true` are **skipped entirely
+here** — anchoring is the single entry point both consumers share, so one
+filter keeps "camera pointed at nothing changing" scenes out of both the
+summary block and the director annotation (in a real tripod-footage run,
+roughly three quarters of described gaps were static noise). Details:
 
 - For each gap, scan every line's `(start, end)`; whenever a line's `end` is
   not `None` and `end <= gap.start + _EPS` (`_EPS = 0.01`), advance the anchor
@@ -285,3 +300,5 @@ sensible default, `GAP_CONTEXT_PROMPT`, documented rather than repeated in
 | `gap_context.enabled: false` | `{stem}_gaps.json` is `{"gaps": []}`; no Docker calls at all |
 | `{stem}_gaps.json` absent, empty, or unreadable | `load_gaps` returns `[]`; both consumers render byte-identical to before this feature |
 | A hand-edited gaps entry is malformed (bad start/end, blank description, non-string frames) | That entry is dropped (logged); the rest of the file still loads |
+| The vision LLM marks a gap `STATIC:` (or a hand-edit sets `"static": true`) | The gap stays in `{stem}_gaps.json` but `anchor_gaps` skips it — invisible to summary/director |
+| The vision LLM omits the ACTION:/STATIC: marker | Treated as ACTION (`static: false`); the description is used as-is |
