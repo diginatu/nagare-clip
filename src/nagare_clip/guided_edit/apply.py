@@ -80,6 +80,25 @@ def occupied_lines(lines: list[str], op_type: str) -> set[int]:
     return occ
 
 
+def blocked_lines(lines: list[str], op_type: str) -> set[int]:
+    """1-based line numbers an op of *op_type* may not touch.
+
+    Same-type overlap would nest/interleave tags (rejected downstream).
+    ``<cut>`` is destructive on top of that: the intervals stage deletes
+    whatever it wraps, silently swallowing any other tag caught inside — so a
+    cut op is blocked by lines under ANY existing tag, and every op is blocked
+    by lines under an existing ``<cut>`` span.
+    """
+    if op_type == "cut":
+        types = ("cut", "keep", "speed", "overlay")
+    else:
+        types = (op_type, "cut")
+    blocked: set[int] = set()
+    for t in types:
+        blocked |= occupied_lines(lines, t)
+    return blocked
+
+
 def clip_range(a: int, b: int, occupied: set[int]) -> tuple[int, int] | None:
     """Largest contiguous run of free lines within ``[a, b]`` (ties → earliest),
     or ``None`` if every line is occupied."""
@@ -220,17 +239,22 @@ def apply_ops(
     """
     lines = list(edit_lines)
     unapplied: list[Unapplied] = []
+    recorder.begin(unit)
     cfg = with_trace_meta(cfg, stage=recorder.stage, unit=unit)
     attempts = retry_attempts(cfg)
-    for i, op in enumerate(ops):
+    # Apply cut ops after everything else: <cut> deletes whatever it wraps, so
+    # protective/annotation tags (keep/speed/overlay) must land first and the
+    # cut then clips around them (the director may emit overlapping ops).
+    ordered = sorted(enumerate(ops), key=lambda t: (t[1].type == "cut", t[0]))
+    for i, op in ordered:
         section = f"op {i}: {op.type} [{op.lines[0]}-{op.lines[1]}]"
         if op.type != "edit":
             # Span ops are a pure line-range wrap — no LLM judgement needed.
-            # Clip the range to lines not already inside a same-type span so the
-            # tags stay disjoint (same-type nesting is rejected downstream).
-            clipped = clip_range(op.lines[0], op.lines[1], occupied_lines(lines, op.type))
+            # Clip the range to lines it may touch (see blocked_lines) so the
+            # tags stay disjoint where the downstream extractors require it.
+            clipped = clip_range(op.lines[0], op.lines[1], blocked_lines(lines, op.type))
             if clipped is None:
-                reason = f"{op.type} op fully overlaps an existing <{op.type}> span"
+                reason = f"{op.type} op fully overlaps existing span(s)"
                 recorder.attempt(
                     unit=unit,
                     attempt=0,
@@ -247,7 +271,7 @@ def apply_ops(
             eff_op = op if clipped == tuple(op.lines) else replace(op, lines=clipped)
             if eff_op is not op:
                 logger.warning(
-                    "guided_edit: op %s clipped from %s to %s (same-type overlap)",
+                    "guided_edit: op %s clipped from %s to %s (span overlap)",
                     op.type,
                     tuple(op.lines),
                     clipped,

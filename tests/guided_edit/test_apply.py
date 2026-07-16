@@ -159,6 +159,41 @@ class TestSpanDeterministic:
         assert unapplied == []
 
 
+class TestCutExclusive:
+    """`<cut>` is destructive: the intervals stage deletes whatever it wraps,
+    silently swallowing any other tag caught inside. Cut ops are therefore
+    applied after all other span ops and clip against lines occupied by ANY
+    tag type; conversely non-cut ops clip against existing `<cut>` spans."""
+
+    def test_cut_clips_around_later_keep_op(self):
+        # The real-world failure: the director emitted cut[1-3] AND keep[3-3]
+        # ("keep only the conclusion at 3"). The keep must win: it is applied
+        # first and the cut clips to [1-2].
+        lines = ["L1", "L2", "L3"]
+        ops = [_op("cut", 1, 3), _op("keep", 3, 3)]
+        out, unapplied = apply_ops(lines, ops, CFG, call_llm=_no_llm)
+        assert out == ["<cut>L1", "L2</cut>", "<keep>L3</keep>"]
+        assert unapplied == []
+
+    def test_cut_clips_around_existing_speed_span(self):
+        lines = ['<speed factor="2.0">L1', "L2</speed>", "L3"]
+        out, unapplied = apply_ops(lines, [_op("cut", 1, 3)], CFG, call_llm=_no_llm)
+        assert out == ['<speed factor="2.0">L1', "L2</speed>", "<cut>L3</cut>"]
+        assert unapplied == []
+
+    def test_cut_fully_inside_keep_dropped(self):
+        lines = ["<keep>L1", "L2</keep>"]
+        out, unapplied = apply_ops(lines, [_op("cut", 1, 2)], CFG, call_llm=_no_llm)
+        assert out == lines
+        assert [u[0].type for u in unapplied] == ["cut"]
+
+    def test_non_cut_op_clips_around_existing_cut(self):
+        lines = ["<cut>L1</cut>", "L2"]
+        out, unapplied = apply_ops(lines, [_op("keep", 1, 2)], CFG, call_llm=_no_llm)
+        assert out == ["<cut>L1</cut>", "<keep>L2</keep>"]
+        assert unapplied == []
+
+
 class TestApply:
     """edit ops are the only LLM-driven path; span ops are covered above."""
 
