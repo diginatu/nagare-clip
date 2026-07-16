@@ -53,6 +53,23 @@ class TestExpandCutTags:
     def test_lines_without_cut_untouched(self):
         assert _expand_cut_tags(["あ{{い->う}}え", "かき"]) == ["あ{{い->う}}え", "かき"]
 
+    def test_line_edge_whitespace_stays_outside_patch(self):
+        # A trailing space left by the text_filter LLM after a resolved patch
+        # must not be folded into the deletion patch's old side: the old side
+        # would no longer match the (stripped) original segment text.
+        lines = ["<cut>あい", "こう取って{{いてもらいます->}} ", "うえ</cut>"]
+        assert _expand_cut_tags(lines) == [
+            "{{あい->}}",
+            "{{こう取っていてもらいます->}} ",
+            "{{うえ->}}",
+        ]
+
+    def test_leading_whitespace_stays_outside_patch(self):
+        assert _expand_cut_tags(["<cut> あい</cut>"]) == [" {{あい->}}"]
+
+    def test_whitespace_only_wrapped_text_emits_no_patch(self):
+        assert _expand_cut_tags(["<cut> </cut>"]) == [" "]
+
 
 class TestCutSyncRemovesWords:
     def test_whole_segment_cut_removes_all_words(self):
@@ -102,3 +119,19 @@ class TestCutSyncRemovesWords:
         assert segs[1]["words"] == []
         assert [x["word"] for x in segs[2]["words"]] == ["こ"]
         assert [x["word"] for x in result["word_segments"]] == ["あ", "こ"]
+
+    def test_cut_over_line_with_trailing_space_after_patch(self):
+        # Regression: a cut span covering a line whose text_filter output left
+        # a trailing space after a {{old->}} patch used to fold that space
+        # into the new deletion patch, failing decomposition (ValueError).
+        s1 = [_make_word("あ", 0.0, 0.3), _make_word("い", 0.3, 0.6)]
+        s2 = [_make_word("う", 1.0, 1.3), _make_word("え", 1.3, 1.6)]
+        json_data = {
+            "segments": [_make_segment("あい", s1), _make_segment("うえ", s2)],
+            "word_segments": s1 + s2,
+        }
+        result = sync_text_to_json(json_data, ["<cut>あ{{い->}} ", "うえ</cut>"])
+        segs = result["segments"]
+        assert segs[0]["words"] == []
+        assert segs[1]["words"] == []
+        assert result["word_segments"] == []

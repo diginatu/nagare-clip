@@ -158,8 +158,16 @@ def _expand_cut_tags(edit_lines: list[str]) -> list[str]:
             elif part:
                 if cut_open:
                     original = PATCH_RE.sub(r"\1", part)
-                    if original:
-                        out.append("{{" + original + "->}}")
+                    # Keep edge whitespace outside the patch: the old side of
+                    # {{old->}} must match the original segment text, which is
+                    # compared stripped at the line level.
+                    core = original.strip()
+                    if core:
+                        lead = original[: len(original) - len(original.lstrip())]
+                        trail = original[len(original.rstrip()) :]
+                        out.append(lead + "{{" + core + "->}}" + trail)
+                    else:
+                        out.append(original)
                 else:
                     out.append(part)
         result.append("".join(out))
