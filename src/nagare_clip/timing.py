@@ -29,12 +29,11 @@ def format_dur_gap(dur: float | None, gap: float | None) -> str:
 
     - ``dur is None`` -> ``""`` (no bracket at all).
     - ``gap is None`` -> ``"[4.2s]"``.
-    - negative ``gap`` is clamped to ``0.0``.
+    - a negligible gap (would render as ``0.0s``, incl. negative) is omitted
+      the same way — "gap 0.0s" on every contiguous line/part is pure noise.
     """
     if dur is None:
         return ""
-    if gap is None:
+    if gap is None or f"{max(gap, 0.0):.1f}" == "0.0":
         return f"[{dur:.1f}s]"
-    if gap < 0:
-        gap = 0.0
     return f"[{dur:.1f}s, gap {gap:.1f}s]"

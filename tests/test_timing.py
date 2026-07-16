@@ -33,5 +33,14 @@ class TestFormatDurGap:
     def test_dur_and_gap(self):
         assert format_dur_gap(4.24, 0.81) == "[4.2s, gap 0.8s]"
 
-    def test_negative_gap_clamped_to_zero(self):
-        assert format_dur_gap(4.2, -0.5) == "[4.2s, gap 0.0s]"
+    def test_negligible_gap_omitted(self):
+        # "gap 0.0s" is pure noise (contiguous lines/parts): a gap that would
+        # render as 0.0s is omitted, same as no gap at all.
+        assert format_dur_gap(4.2, 0.0) == "[4.2s]"
+        assert format_dur_gap(4.2, 0.04) == "[4.2s]"
+
+    def test_small_but_visible_gap_still_shown(self):
+        assert format_dur_gap(4.2, 0.1) == "[4.2s, gap 0.1s]"
+
+    def test_negative_gap_omitted(self):
+        assert format_dur_gap(4.2, -0.5) == "[4.2s]"
