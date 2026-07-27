@@ -196,8 +196,19 @@ the director/summary stages never see.
   drags the gap's overall score down even when mid-vs-last looks nearly
   identical (camera settled back to the same framing). The prefilter can
   still miss action that happens strictly *between* two adjacent sampled
-  frames without ever showing at a sample point, but that residual risk
-  is far narrower than the original endpoints-only comparison.
+  frames without ever showing at a sample point. Note that the
+  consecutive-pair min does **not** strictly dominate the old
+  endpoints-only comparison: the two miss different things. Endpoints-only
+  catches slow continuous drift (a gradual pan moves the endpoints apart)
+  but misses pan-away-and-return; the consecutive-pair min is the reverse,
+  since each adjacent step of a gradual pan looks similar. The calibration
+  below measures this directly — the action-gap maximum *rose* from 0.9416
+  (endpoints-only) to 0.9445 (consecutive-pair min), i.e. at least one
+  action gap became easier to misclassify as static under the new metric.
+  Taking the min over all three pairs (including first-vs-last) would
+  dominate both schemes at the cost of one more comparison per gap; it was
+  deliberately not adopted, and the `static_ssim` margin absorbs the
+  difference.
 - **Calibration note (re-derived for the three-frame/min-of-pairs metric):**
   measured against the same water_pump_3 corpus's real `_gaps.json`
   static/action verdicts (handheld phone-camera footage), 108 consecutive-
