@@ -154,3 +154,28 @@ def enforce_min_keep_duration(
 
     merged = merge_intervals(expanded)
     return [{"start": round(start, 3), "end": round(end, 3)} for start, end in merged]
+
+
+def merge_close_intervals(keep_intervals: list[dict], min_cut: float) -> list[dict]:
+    """Absorb gaps between adjacent keep intervals shorter than *min_cut*.
+
+    Every other post-processor here constrains the intervals; this one
+    constrains the gaps between them.  Keep/caption margins eat into an
+    exclude gap from both sides, so a cut can survive as a millisecond
+    sliver — a visible jump cut that saves no runtime.  A gap exactly at
+    the threshold survives; absorption is transitive, so a chain of
+    slivers collapses into one interval.
+
+    Input must be sorted and disjoint (the earlier passes guarantee it).
+    ``min_cut <= 0`` disables the pass, returning the input unchanged.
+    """
+    if min_cut <= 0.0 or not keep_intervals:
+        return keep_intervals
+
+    merged = [dict(keep_intervals[0])]
+    for iv in keep_intervals[1:]:
+        if float(iv["start"]) - float(merged[-1]["end"]) < min_cut:
+            merged[-1]["end"] = max(float(merged[-1]["end"]), float(iv["end"]))
+        else:
+            merged.append(dict(iv))
+    return merged

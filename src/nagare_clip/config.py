@@ -629,6 +629,14 @@ class IntervalsConfig(BaseModel):
     min_keep: float = Field(1.0, description="Minimum keep interval length in seconds")
     keep_pre_margin: float = Field(1.0, description="Seconds to extend keep intervals before start")
     keep_post_margin: float = Field(1.0, description="Seconds to extend keep intervals after end")
+    min_cut: float = Field(
+        0.4,
+        description=(
+            "Merge adjacent keep intervals separated by less than this (seconds); "
+            "absorbs cuts too short to be worth the jump, which margin arithmetic "
+            "otherwise leaves behind as slivers. 0 disables"
+        ),
+    )
     caption: CaptionConfig = Field(default_factory=CaptionConfig)
     bunsetu: BunsetuConfig = Field(default_factory=BunsetuConfig)
 

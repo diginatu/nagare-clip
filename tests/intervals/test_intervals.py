@@ -6,6 +6,7 @@ from nagare_clip.intervals.intervals import (
     apply_margins,
     enforce_min_keep_duration,
     ensure_keep_covers_captions,
+    merge_close_intervals,
 )
 
 # apply_margins
@@ -115,3 +116,69 @@ def test_apply_margins_real_intervals_merge_with_larger_padding():
 
     assert len(result) == 1
     assert result[0] == pytest.approx({"start": 3.903, "end": 109.502})
+
+
+# merge_close_intervals
+
+
+def test_merge_close_intervals_absorbs_sub_threshold_gap():
+    intervals = [{"start": 0.0, "end": 5.0}, {"start": 5.05, "end": 10.0}]
+
+    result = merge_close_intervals(intervals, 0.4)
+
+    assert result == [{"start": 0.0, "end": 10.0}]
+
+
+def test_merge_close_intervals_keeps_gap_exactly_at_threshold():
+    # 5.5 - 5.0 is exactly 0.5 in binary floating point, so this really does sit
+    # on the boundary (0.4 would not: 5.4 - 5.0 == 0.40000000000000036).
+    intervals = [{"start": 0.0, "end": 5.0}, {"start": 5.5, "end": 10.0}]
+
+    result = merge_close_intervals(intervals, 0.5)
+
+    assert result == intervals
+
+
+def test_merge_close_intervals_keeps_gap_above_threshold():
+    intervals = [{"start": 0.0, "end": 5.0}, {"start": 6.0, "end": 10.0}]
+
+    result = merge_close_intervals(intervals, 0.4)
+
+    assert result == intervals
+
+
+def test_merge_close_intervals_absorbs_chain_of_slivers():
+    intervals = [
+        {"start": 0.0, "end": 1.0},
+        {"start": 1.001, "end": 2.0},
+        {"start": 2.01, "end": 3.0},
+        {"start": 4.0, "end": 5.0},
+    ]
+
+    result = merge_close_intervals(intervals, 0.4)
+
+    assert result == [{"start": 0.0, "end": 3.0}, {"start": 4.0, "end": 5.0}]
+
+
+def test_merge_close_intervals_zero_disables():
+    intervals = [{"start": 0.0, "end": 5.0}, {"start": 5.001, "end": 10.0}]
+
+    assert merge_close_intervals(intervals, 0.0) == intervals
+
+
+def test_merge_close_intervals_empty_input():
+    assert merge_close_intervals([], 0.4) == []
+
+
+def test_merge_close_intervals_single_interval():
+    intervals = [{"start": 0.0, "end": 5.0}]
+
+    assert merge_close_intervals(intervals, 0.4) == intervals
+
+
+def test_merge_close_intervals_does_not_mutate_input():
+    intervals = [{"start": 0.0, "end": 5.0}, {"start": 5.05, "end": 10.0}]
+
+    merge_close_intervals(intervals, 0.4)
+
+    assert intervals == [{"start": 0.0, "end": 5.0}, {"start": 5.05, "end": 10.0}]
