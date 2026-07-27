@@ -239,3 +239,64 @@ class TestIndex:
         assert (tmp_path / "director" / "vid_b.md").exists()
         index = (tmp_path / "index.md").read_text(encoding="utf-8")
         assert "vid_a" in index and "vid_b" in index
+
+
+class TestDeterministicRecords:
+    def test_deterministic_attempt_renders_without_temperature_or_attempt_count(self, tmp_path):
+        from nagare_clip.llm_report import OK, Recorder
+
+        rec = Recorder("guided_edit", tmp_path)
+        rec.attempt(
+            unit="u",
+            attempt=0,
+            total=1,
+            messages=[],
+            response="<keep>x</keep>",
+            outcome=OK,
+            deterministic=True,
+        )
+        rec.flush_unit("u", outcome=OK)
+        text = (tmp_path / "guided_edit" / "u.md").read_text(encoding="utf-8")
+        assert "deterministic — ok" in text
+        assert "temperature" not in text
+        assert "Attempt" not in text
+
+    def test_llm_attempt_still_renders_attempt_header(self, tmp_path):
+        from nagare_clip.llm_report import OK, Recorder
+
+        rec = Recorder("guided_edit", tmp_path)
+        rec.attempt(
+            unit="u",
+            attempt=0,
+            total=2,
+            messages=[{"role": "user", "content": "hi"}],
+            response="ok",
+            outcome=OK,
+            cfg={"temperature": 0.4, "model": "m1"},
+        )
+        rec.flush_unit("u", outcome=OK)
+        text = (tmp_path / "guided_edit" / "u.md").read_text(encoding="utf-8")
+        assert "Attempt 1/2 — temperature 0.4 — ok" in text
+        assert "model: m1" in text
+
+    def test_front_matter_model_prefers_real_llm_attempt(self, tmp_path):
+        """A unit whose LAST record is deterministic must still report the
+        model of the LLM attempt that actually ran."""
+        from nagare_clip.llm_report import OK, Recorder
+
+        rec = Recorder("guided_edit", tmp_path)
+        rec.attempt(
+            unit="u",
+            attempt=0,
+            total=1,
+            messages=[],
+            response="r",
+            outcome=OK,
+            cfg={"temperature": 0.1, "model": "m1"},
+        )
+        rec.attempt(
+            unit="u", attempt=0, total=1, messages=[], response="r2", outcome=OK, deterministic=True
+        )
+        rec.flush_unit("u", outcome=OK)
+        text = (tmp_path / "guided_edit" / "u.md").read_text(encoding="utf-8")
+        assert "model: m1" in text

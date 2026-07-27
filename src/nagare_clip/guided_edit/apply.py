@@ -262,7 +262,8 @@ def apply_ops(
                     messages=[],
                     outcome=VERIFY_FAIL,
                     reason=reason,
-                    cfg=cfg,
+                    cfg=None,
+                    deterministic=True,
                     section=section,
                 )
                 logger.warning("guided_edit: op %s dropped: %s", op.type, reason)
@@ -286,7 +287,8 @@ def apply_ops(
                 response="\n".join(candidate[eff_op.lines[0] - 1 : eff_op.lines[1]]),
                 outcome=OK if reason is None else VERIFY_FAIL,
                 reason="" if reason is None else reason,
-                cfg=cfg,
+                cfg=None,
+                deterministic=True,
                 section=section,
             )
             if reason is None:
