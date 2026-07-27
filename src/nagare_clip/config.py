@@ -599,7 +599,7 @@ class GapContextConfig(BaseModel):
         960, description="Downscale width (px) of the extracted JPEG frames; height is auto"
     )
     static_ssim: float = Field(
-        0.99,
+        0.95,
         ge=0.0,
         le=1.0,
         description=(

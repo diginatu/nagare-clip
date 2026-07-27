@@ -164,6 +164,7 @@ def _extract_gap_frames(
     container for all source files" precedent.
     """
     width = ctx.cfg["gap_context"]["frame_width"]
+    ssim_threshold = float(ctx.cfg["gap_context"].get("static_ssim", 0.0))
     d = ctx.stage_dir("gap_context")
 
     jobs: list[tuple[str, float, str]] = []
@@ -182,7 +183,7 @@ def _extract_gap_frames(
                 jobs.append((src.relative, t, f"/output/gap_context/{rel}"))
                 frame_entries.append((t, rel, host_path))
             ssim_host: Path | None = None
-            if len(frame_entries) >= 2:
+            if ssim_threshold > 0.0 and len(frame_entries) >= 2:
                 ssim_rel = ssim_relpath(src.stem, start, end)
                 ssim_host = d / ssim_rel
                 ssim_jobs.append(

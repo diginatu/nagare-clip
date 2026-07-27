@@ -119,7 +119,16 @@ call entirely — **in the same batch container** as frame extraction, per the
 - `_extract_gap_frames` plans one SSIM job per gap that has **at least 2**
   extracted frame entries (a gap that collapsed to a single frame — see
   `frame_times`'s short-span case — has no "first vs. last" pair to compare,
-  so no job is planned and `GapFrames.ssim` stays `None`). The job is
+  so no job is planned and `GapFrames.ssim` stays `None`) **and only when
+  `gap_context.static_ssim` is above `0`** — `_extract_gap_frames` reads its
+  own `ssim_threshold = float(ctx.cfg["gap_context"].get("static_ssim",
+  0.0))` (same `.get`-with-default pattern as `frame_width`/`min_gap`) and
+  gates planning on `ssim_threshold > 0.0`, so `static_ssim: 0` genuinely
+  disables the prefilter end-to-end: no ssim job, no extra ffmpeg line in
+  the batch script, no stats file ever written. (Previously only
+  `run_gap_context`'s consumption-side threshold check gated the *result*,
+  so the ffmpeg comparison and stats-file write still happened even at
+  `static_ssim: 0` — fixed in the Task 9 review round.) The job is
   `(first_frame_container_path, last_frame_container_path,
   stats_container_path)`, appended to `ssim_jobs` and passed to
   `build_snapshot_batch_cmd(..., ssim_jobs=...)`.
@@ -162,9 +171,13 @@ call entirely — **in the same batch container** as frame extraction, per the
   regardless of narrative content, so sampled `static: true` gaps scored as
   low as 0.72 and sampled `static: false` gaps scored as high as 0.94 on the
   dominant source. A second source in the same corpus (steadier shots)
-  showed a much cleaner split (static ≥0.96, action ≤0.90). Given that
-  mixed picture, the default was kept at the conservative `0.99` rather than
-  lowered — see the Task 9 report for the full measured numbers.
+  showed a much cleaner split (static ≥0.96, action ≤0.90). The measured max
+  across BOTH sampled sources was action=0.9416, static=0.9763 — no true
+  action gap in either source scored above 0.95, so the default is
+  **`0.95`**: safely above the 0.9416 action max (margin ~0.008) while still
+  catching the steadier source's static gaps (all ≥0.96) and any
+  higher-scoring static gap on the dominant source. See the Task 9 report
+  for the full measured numbers.
 
 ## Vision call (`describe.py`)
 
@@ -370,7 +383,7 @@ silently drifting from reality.
 Stage-specific: `min_gap` (seconds, default 3.0 — same default as
 `sentence_split.force_split_min_silence`, though the two are independent
 knobs over the same `_cuts.txt`), `frame_width` (px, default 960, passed
-straight to ffmpeg's `scale` filter), and `static_ssim` (default `0.99`, `0`
+straight to ffmpeg's `scale` filter), and `static_ssim` (default `0.95`, `0`
 disables — the pixel-static prefilter threshold; see the section above).
 `prompt` is `_commented` (has a
 sensible default, `GAP_CONTEXT_PROMPT`, documented rather than repeated in
@@ -388,6 +401,6 @@ sensible default, `GAP_CONTEXT_PROMPT`, documented rather than repeated in
 | A hand-edited gaps entry is malformed (bad start/end, blank description, non-string frames) | That entry is dropped (logged); the rest of the file still loads |
 | The vision LLM marks a gap `STATIC:` (or a hand-edit sets `"static": true`) | The gap stays in `{stem}_gaps.json` but `anchor_gaps` skips it — invisible to summary/director |
 | The vision LLM omits the ACTION:/STATIC: marker | Treated as ACTION (`static: false`); the description is used as-is |
-| A gap's first/last frame SSIM is >= `static_ssim` (default 0.99) | Written as `static: true` with a `(prefilter...)` description; no vision call is made |
+| A gap's first/last frame SSIM is >= `static_ssim` (default 0.95) | Written as `static: true` with a `(prefilter...)` description; no vision call is made |
 | The SSIM comparison fails or its stats file is missing/unparseable | `GapFrames.ssim` stays `None`; the prefilter is simply disabled for that gap (normal vision call proceeds) |
-| `static_ssim: 0` | The prefilter is disabled entirely; every gap goes through the normal vision call |
+| `static_ssim: 0` | The prefilter is disabled entirely: `_extract_gap_frames` doesn't plan the SSIM job at all (no extra ffmpeg line, no stats file), and every gap goes through the normal vision call |
