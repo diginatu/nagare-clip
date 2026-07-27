@@ -5,9 +5,13 @@ No I/O, no Docker — the pipeline adapter runs ffmpeg with what these return.
 
 from __future__ import annotations
 
+import re
+
 # Keep frames off the exact boundary: the previous/next word may still be
 # on screen (and WhisperX often stretches a word across the pause edge).
 _INSET = 0.2
+
+_SSIM_ALL_RE = re.compile(r"\bAll:([0-9.]+)")
 
 
 def select_gaps(ranges: list[tuple[float, float]], min_gap: float) -> list[tuple[float, float]]:
@@ -38,3 +42,19 @@ def frame_times(start: float, end: float) -> list[float]:
 def frame_relpath(stem: str, t: float) -> str:
     """Frame path relative to the gap_context stage dir."""
     return f"frames/{stem}/{t:.3f}.jpg"
+
+
+def ssim_relpath(stem: str, start: float, end: float) -> str:
+    """SSIM stats-file path (relative to the gap_context stage dir) for a gap."""
+    return f"frames/{stem}/ssim_{start:.3f}-{end:.3f}.txt"
+
+
+def parse_ssim_stats(text: str) -> float | None:
+    """The ``All:`` score from an ffmpeg ``ssim=stats_file=`` output line."""
+    m = _SSIM_ALL_RE.search(text)
+    if not m:
+        return None
+    try:
+        return float(m.group(1))
+    except ValueError:
+        return None

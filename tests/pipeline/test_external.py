@@ -238,3 +238,33 @@ def test_build_snapshot_batch_cmd_quotes_paths_with_spaces():
     # source script text (not just recoverable by luck).
     assert shlex.quote(relative) in script
     assert shlex.quote(out_path) in script
+
+
+def test_build_snapshot_batch_cmd_appends_ssim_jobs_after_extraction():
+    from nagare_clip.pipeline.external import build_snapshot_batch_cmd
+
+    jobs = [("in.mp4", 1.0, "/output/gap_context/frames/v/1.000.jpg")]
+    ssim_jobs = [
+        (
+            "/output/gap_context/frames/v/1.000.jpg",
+            "/output/gap_context/frames/v/9.000.jpg",
+            "/output/gap_context/frames/v/ssim_0.800-9.200.txt",
+        )
+    ]
+    cmd = build_snapshot_batch_cmd(Path("/proj"), jobs, 960, ssim_jobs=ssim_jobs)
+    script = cmd[-1]
+    lines = script.split("\n")
+    assert len(lines) == 2
+    assert "-frames:v 1" in lines[0]  # extraction first
+    assert "ssim=stats_file=" in lines[1]  # comparison after
+    assert lines[1].endswith("|| true")
+    assert "-f null" in lines[1]
+
+
+def test_build_snapshot_batch_cmd_no_ssim_jobs_is_byte_identical():
+    from nagare_clip.pipeline.external import build_snapshot_batch_cmd
+
+    jobs = [("in.mp4", 1.0, "/out/f.jpg")]
+    assert build_snapshot_batch_cmd(Path("/p"), jobs, 960) == build_snapshot_batch_cmd(
+        Path("/p"), jobs, 960, ssim_jobs=()
+    )

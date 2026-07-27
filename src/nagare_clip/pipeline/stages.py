@@ -16,7 +16,13 @@ from nagare_clip.audio_silence.run import run_audio_silence
 from nagare_clip.director.run import run_director
 from nagare_clip.gap_context.describe import GapFrames
 from nagare_clip.gap_context.run import run_gap_context
-from nagare_clip.gap_context.snapshot import frame_relpath, frame_times, select_gaps
+from nagare_clip.gap_context.snapshot import (
+    frame_relpath,
+    frame_times,
+    parse_ssim_stats,
+    select_gaps,
+    ssim_relpath,
+)
 from nagare_clip.guided_edit.run import run_guided_edit
 from nagare_clip.intervals.run import run_intervals
 from nagare_clip.llm_report import recorder_from_config
@@ -158,14 +164,16 @@ def _extract_gap_frames(
     container for all source files" precedent.
     """
     width = ctx.cfg["gap_context"]["frame_width"]
+    ssim_threshold = float(ctx.cfg["gap_context"].get("static_ssim", 0.0))
     d = ctx.stage_dir("gap_context")
 
     jobs: list[tuple[str, float, str]] = []
-    # Per stem: list of (start, end, [(t, rel, host_path), ...]) so the
-    # single batch result can be re-split back per source/gap afterward.
-    plan: dict[str, list[tuple[float, float, list[tuple[float, str, Path]]]]] = {}
+    ssim_jobs: list[tuple[str, str, str]] = []
+    # Per stem: list of (start, end, [(t, rel, host_path), ...], ssim_host) so
+    # the single batch result can be re-split back per source/gap afterward.
+    plan: dict[str, list[tuple[float, float, list[tuple[float, str, Path]], Path | None]]] = {}
     for src, gaps in gaps_by_source:
-        entries: list[tuple[float, float, list[tuple[float, str, Path]]]] = []
+        entries: list[tuple[float, float, list[tuple[float, str, Path]], Path | None]] = []
         for start, end in gaps:
             frame_entries: list[tuple[float, str, Path]] = []
             for t in frame_times(start, end):
@@ -174,13 +182,24 @@ def _extract_gap_frames(
                 host_path.parent.mkdir(parents=True, exist_ok=True)
                 jobs.append((src.relative, t, f"/output/gap_context/{rel}"))
                 frame_entries.append((t, rel, host_path))
-            entries.append((start, end, frame_entries))
+            ssim_host: Path | None = None
+            if ssim_threshold > 0.0 and len(frame_entries) >= 2:
+                ssim_rel = ssim_relpath(src.stem, start, end)
+                ssim_host = d / ssim_rel
+                ssim_jobs.append(
+                    (
+                        f"/output/gap_context/{frame_entries[0][1]}",
+                        f"/output/gap_context/{frame_entries[-1][1]}",
+                        f"/output/gap_context/{ssim_rel}",
+                    )
+                )
+            entries.append((start, end, frame_entries, ssim_host))
         plan[src.stem] = entries
 
     if jobs:
         try:
             run_command(
-                build_snapshot_batch_cmd(ctx.project_root, jobs, width),
+                build_snapshot_batch_cmd(ctx.project_root, jobs, width, ssim_jobs=ssim_jobs),
                 env_extra=_docker_env(ctx),
             )
         except Exception:  # noqa: BLE001 - a failed batch must never abort the run
@@ -189,7 +208,7 @@ def _extract_gap_frames(
     result: dict[str, list[GapFrames]] = {}
     for stem, entries in plan.items():
         out: list[GapFrames] = []
-        for start, end, frame_entries in entries:
+        for start, end, frame_entries, ssim_host in entries:
             frames: list[Path] = []
             relpaths: list[str] = []
             for t, rel, host_path in frame_entries:
@@ -203,7 +222,10 @@ def _extract_gap_frames(
                     "gap_context: no frames for gap %.1f-%.1f in %s; skipping", start, end, stem
                 )
                 continue
-            out.append(GapFrames(start=start, end=end, frames=frames, relpaths=relpaths))
+            ssim: float | None = None
+            if ssim_host is not None and ssim_host.is_file():
+                ssim = parse_ssim_stats(ssim_host.read_text(encoding="utf-8"))
+            out.append(GapFrames(start=start, end=end, frames=frames, relpaths=relpaths, ssim=ssim))
         result[stem] = out
     return result
 

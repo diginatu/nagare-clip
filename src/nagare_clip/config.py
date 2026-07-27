@@ -598,6 +598,15 @@ class GapContextConfig(BaseModel):
     frame_width: int = Field(
         960, description="Downscale width (px) of the extracted JPEG frames; height is auto"
     )
+    static_ssim: float = Field(
+        0.95,
+        ge=0.0,
+        le=1.0,
+        description=(
+            "Skip the vision call when the gap's first/last frame SSIM is at least this "
+            "(pixel-static prefilter; the gap is recorded as static). 0 disables"
+        ),
+    )
     context_lines: int = Field(
         1,
         ge=0,

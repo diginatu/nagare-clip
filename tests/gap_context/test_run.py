@@ -291,3 +291,44 @@ def test_context_lines_defaults_to_one_when_absent_from_cfg(tmp_path, monkeypatc
     run_gap_context([gf], tmp_path / "d_gaps.json", BASE_CFG, stem="d", json_path=jp)
     assert "前1" in seen["text"] and "後1" in seen["text"]
     assert "前2" not in seen["text"] and "後2" not in seen["text"]
+
+
+def test_static_ssim_prefilter_skips_vision_call(tmp_path, monkeypatch):
+    """A gap whose frames scored >= static_ssim is written as static:true
+    without any LLM call; a below-threshold gap still calls the LLM."""
+    import nagare_clip.gap_context.run as run_mod
+
+    calls: list[None] = []
+
+    def counting_llm(messages, cfg):
+        calls.append(None)
+        return "ACTION: something is happening on screen"
+
+    monkeypatch.setattr(run_mod, "_call_llm", counting_llm)
+
+    static_gf = GapFrames(
+        start=10.0,
+        end=20.0,
+        frames=_frames(tmp_path, "static_first.jpg", "static_last.jpg"),
+        relpaths=["frames/a/10.200.jpg", "frames/a/19.800.jpg"],
+        ssim=0.999,
+    )
+    action_gf = GapFrames(
+        start=30.0,
+        end=40.0,
+        frames=_frames(tmp_path, "action_first.jpg", "action_last.jpg"),
+        relpaths=["frames/a/30.200.jpg", "frames/a/39.800.jpg"],
+        ssim=0.5,
+    )
+    cfg = {"gap_context": {**BASE_CFG["gap_context"], "static_ssim": 0.99}}
+    out = tmp_path / "a_gaps.json"
+    run_gap_context([static_gf, action_gf], out, cfg, stem="a")
+
+    assert len(calls) == 1, f"expected exactly one LLM call, got {len(calls)}"
+    data = json.loads(out.read_text(encoding="utf-8"))
+    assert len(data["gaps"]) == 2
+    prefiltered = next(g for g in data["gaps"] if g["start"] == 10.0)
+    described = next(g for g in data["gaps"] if g["start"] == 30.0)
+    assert prefiltered["static"] is True
+    assert "prefilter" in prefiltered["description"]
+    assert described["static"] is False
