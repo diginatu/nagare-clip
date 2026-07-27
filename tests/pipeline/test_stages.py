@@ -294,6 +294,10 @@ def _materialise_frames_from_script(output_dir, script):
     for line in script.splitlines():
         if not line.strip():
             continue
+        if "-filter_complex" in line:
+            # SSIM comparison line (Task 9), not a frame-extraction job --
+            # this fake only materialises extracted frames.
+            continue
         tokens = shlex.split(line)
         assert tokens[-2:] == ["||", "true"], line
         container_path = tokens[-3]
@@ -335,10 +339,11 @@ def test_gap_context_extracts_all_frames_in_a_single_docker_call(gap_ctx, monkey
     stage = next(s for s in stages_mod.STAGES if s.name == "gap_context")
     stage.run(gap_ctx)
 
-    # Exactly ONE docker invocation for the whole run, carrying all 3 jobs
-    # from the one qualifying (10s) gap.
+    # Exactly ONE docker invocation for the whole run, carrying all 3
+    # extraction jobs from the one qualifying (10s) gap, plus 1 SSIM
+    # comparison job (Task 9's static prefilter).
     assert len(commands) == 1
-    assert commands[0][-1].count("ffmpeg ") == 3
+    assert commands[0][-1].count("ffmpeg ") == 4
 
     gfs = captured["gap_frames"]
     assert len(gfs) == 1
@@ -522,7 +527,8 @@ def test_gap_context_two_sources_share_one_container_without_frame_collision(tmp
 
     # ONE container call carries both sources' jobs.
     assert len(commands) == 1
-    assert commands[0][-1].count("ffmpeg ") == 6  # 3 frames x 2 sources
+    # 3 frames x 2 sources (extraction) + 1 SSIM comparison per source.
+    assert commands[0][-1].count("ffmpeg ") == 8
 
     assert set(captured) == {"talk1", "talk2"}
     talk1_gfs, talk2_gfs = captured["talk1"], captured["talk2"]

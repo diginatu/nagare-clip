@@ -102,6 +102,70 @@ with `frames_by_stem.get(src.stem, [])` — unchanged from before except that
 the frame extraction itself now happens once, up front, instead of once per
 source inside the loop.
 
+## Pixel-static prefilter (`static_ssim`)
+
+A real production run showed 23/54 vision calls returning `STATIC:` — nearly
+40% of the stage's LLM cost spent describing scenes where nothing visually
+changes. Since the frames already exist on disk by the time `describe_gap`
+would be called, one cheap ffmpeg SSIM comparison per gap (first frame vs.
+last frame) can catch the pixel-static subset of those and skip the vision
+call entirely — **in the same batch container** as frame extraction, per the
+"one `docker compose run` for the whole stage" invariant above.
+
+- `snapshot.ssim_relpath(stem, start, end)` names the stats-file path
+  (`frames/{stem}/ssim_{start:.3f}-{end:.3f}.txt`, relative to the stage dir,
+  mirroring `frame_relpath`'s `{stem}` namespacing so two sources' stats files
+  can never collide).
+- `_extract_gap_frames` plans one SSIM job per gap that has **at least 2**
+  extracted frame entries (a gap that collapsed to a single frame — see
+  `frame_times`'s short-span case — has no "first vs. last" pair to compare,
+  so no job is planned and `GapFrames.ssim` stays `None`). The job is
+  `(first_frame_container_path, last_frame_container_path,
+  stats_container_path)`, appended to `ssim_jobs` and passed to
+  `build_snapshot_batch_cmd(..., ssim_jobs=...)`.
+- `build_snapshot_batch_cmd` appends one `ffmpeg ... -filter_complex
+  ssim=stats_file=<path> -f null - || true` line **after all extraction
+  lines** for the whole batch — ordering matters, since a comparison line
+  needs both its frames to already exist on disk. `ssim_jobs=()` (the
+  default) leaves the command byte-identical to before this feature
+  (regression-guarded in `tests/pipeline/test_external.py`).
+- Back on the host, `_extract_gap_frames`'s result loop reads the stats file
+  (`ssim_host.is_file()`) and parses it with `snapshot.parse_ssim_stats`,
+  which extracts the `All:` score from ffmpeg's `ssim` filter stats-file
+  line (`n:1 Y:... U:... V:... All:0.996132 (24.12)`). A missing or
+  unparseable stats file (failed comparison, `|| true` swallowed it) simply
+  leaves `GapFrames.ssim = None` — the prefilter is disabled for that gap,
+  never an exception.
+- `run_gap_context` hoists `threshold = float(gc_cfg.get("static_ssim",
+  0.0))` once per source, then for each gap: if `threshold > 0.0 and
+  gf.ssim is not None and gf.ssim >= threshold`, the gap is written straight
+  to `{stem}_gaps.json` as `static: true` with a description containing
+  `"prefilter"` (e.g. `"static (prefilter: frames nearly identical, ssim
+  0.996)"`) — **no vision call is made**. The report still gets a unit
+  (`recorder.begin()` + `recorder.flush_unit(..., outcome=OK, reason="static
+  prefilter (ssim 0.9961)")` with zero attempts recorded), so a skipped gap
+  is visible in the LLM report/index rather than silently absent.
+  `static_ssim: 0` (or omitted from an old config) disables the prefilter
+  entirely — `threshold > 0.0` is false, so every gap falls through to the
+  normal `describe_gap` call, byte-identical to before this feature.
+- Pixel-static (SSIM-measured) is a **subset** of the vision LLM's semantic
+  `STATIC:` judgment (a scene can visually hold still while something
+  narratively "happens" off-camera, or vice versa) — below-threshold gaps
+  still go through the normal ACTION:/STATIC: marker path unchanged. Hand-
+  flipping `"static": false` in `{stem}_gaps.json` forces a prefiltered gap
+  back into the summary/director prompts exactly as it does for an
+  LLM-judged static gap.
+- **Calibration note:** measured against the water_pump_3 corpus's real
+  `_gaps.json` static/action verdicts (handheld phone-camera footage), the
+  first-vs-last-frame SSIM does not cleanly separate the two classes on most
+  of that footage — camera micro-motion over a 10-30s gap depresses SSIM
+  regardless of narrative content, so sampled `static: true` gaps scored as
+  low as 0.72 and sampled `static: false` gaps scored as high as 0.94 on the
+  dominant source. A second source in the same corpus (steadier shots)
+  showed a much cleaner split (static ≥0.96, action ≤0.90). Given that
+  mixed picture, the default was kept at the conservative `0.99` rather than
+  lowered — see the Task 9 report for the full measured numbers.
+
 ## Vision call (`describe.py`)
 
 One LLM call per gap (`describe_gap()`), not per frame:
@@ -305,8 +369,10 @@ silently drifting from reality.
 `retry_temp_cap` follow the same shape as every other LLM stage block.
 Stage-specific: `min_gap` (seconds, default 3.0 — same default as
 `sentence_split.force_split_min_silence`, though the two are independent
-knobs over the same `_cuts.txt`) and `frame_width` (px, default 960, passed
-straight to ffmpeg's `scale` filter). `prompt` is `_commented` (has a
+knobs over the same `_cuts.txt`), `frame_width` (px, default 960, passed
+straight to ffmpeg's `scale` filter), and `static_ssim` (default `0.99`, `0`
+disables — the pixel-static prefilter threshold; see the section above).
+`prompt` is `_commented` (has a
 sensible default, `GAP_CONTEXT_PROMPT`, documented rather than repeated in
 `config.example.yml`).
 
@@ -322,3 +388,6 @@ sensible default, `GAP_CONTEXT_PROMPT`, documented rather than repeated in
 | A hand-edited gaps entry is malformed (bad start/end, blank description, non-string frames) | That entry is dropped (logged); the rest of the file still loads |
 | The vision LLM marks a gap `STATIC:` (or a hand-edit sets `"static": true`) | The gap stays in `{stem}_gaps.json` but `anchor_gaps` skips it — invisible to summary/director |
 | The vision LLM omits the ACTION:/STATIC: marker | Treated as ACTION (`static: false`); the description is used as-is |
+| A gap's first/last frame SSIM is >= `static_ssim` (default 0.99) | Written as `static: true` with a `(prefilter...)` description; no vision call is made |
+| The SSIM comparison fails or its stats file is missing/unparseable | `GapFrames.ssim` stays `None`; the prefilter is simply disabled for that gap (normal vision call proceeds) |
+| `static_ssim: 0` | The prefilter is disabled entirely; every gap goes through the normal vision call |

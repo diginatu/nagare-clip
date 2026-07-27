@@ -17,7 +17,7 @@ from typing import Any
 from nagare_clip.gap_context.describe import GapFrames, describe_gap
 from nagare_clip.gap_context.gaps import Gap, gaps_to_dict
 from nagare_clip.llm_client import call_llm as _call_llm
-from nagare_clip.llm_report import NULL_RECORDER, Recorder
+from nagare_clip.llm_report import NULL_RECORDER, OK, Recorder
 from nagare_clip.timing import segment_times
 
 
@@ -69,8 +69,27 @@ def run_gap_context(
             except (ValueError, OSError):
                 logging.warning("gap_context: could not read --json %s", json_path)
         context_lines = gc_cfg.get("context_lines", 1)
+        threshold = float(gc_cfg.get("static_ssim", 0.0))
         logging.info("gap_context: describing %d gap(s) for %s", len(gap_frames), stem)
         for i, gf in enumerate(gap_frames):
+            if threshold > 0.0 and gf.ssim is not None and gf.ssim >= threshold:
+                unit = f"{stem}_gap{i + 1:02d}"
+                recorder.begin(unit)
+                recorder.flush_unit(
+                    unit, outcome=OK, reason=f"static prefilter (ssim {gf.ssim:.4f})"
+                )
+                gaps.append(
+                    Gap(
+                        start=gf.start,
+                        end=gf.end,
+                        frames=gf.relpaths,
+                        description=(
+                            f"static (prefilter: frames nearly identical, ssim {gf.ssim:.3f})"
+                        ),
+                        static=True,
+                    )
+                )
+                continue
             before: list[str] = []
             after: list[str] = []
             if segments and seg_times:

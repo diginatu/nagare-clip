@@ -30,3 +30,23 @@ def test_frame_times_dedupes_on_a_short_span():
 
 def test_frame_relpath_is_stable_and_stem_scoped():
     assert frame_relpath("talk1", 12.6) == "frames/talk1/12.600.jpg"
+
+
+class TestSsimHelpers:
+    def test_ssim_relpath(self):
+        from nagare_clip.gap_context.snapshot import ssim_relpath
+
+        assert ssim_relpath("v", 108.4, 119.25) == "frames/v/ssim_108.400-119.250.txt"
+
+    def test_parse_ssim_stats_reads_all_score(self):
+        from nagare_clip.gap_context.snapshot import parse_ssim_stats
+
+        line = "n:1 Y:0.994828 U:0.998750 V:0.998691 All:0.996132 (24.123456)\n"
+        assert parse_ssim_stats(line) == 0.996132
+
+    def test_parse_ssim_stats_garbage_is_none(self):
+        from nagare_clip.gap_context.snapshot import parse_ssim_stats
+
+        assert parse_ssim_stats("") is None
+        assert parse_ssim_stats("no scores here") is None
+        assert parse_ssim_stats("All:notanumber") is None

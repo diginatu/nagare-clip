@@ -86,6 +86,7 @@ def build_snapshot_batch_cmd(
     project_root: Path,
     jobs: Sequence[tuple[str, float, str]],
     width: int,
+    ssim_jobs: Sequence[tuple[str, str, str]] = (),
 ) -> list[str]:
     """Every gap-context frame for the whole run, via ONE whisperx container.
 
@@ -105,12 +106,24 @@ def build_snapshot_batch_cmd(
     invocations now share one shell. Each line ends in `|| true` so one bad
     seek can't take down the rest of the batch. Paths are shell-quoted --
     real media filenames contain spaces.
+
+    *ssim_jobs* appends one first-vs-last frame SSIM comparison per gap
+    after all extraction lines -- same container, ~10ms each; the stats
+    file is parsed host-side to prefilter pixel-static gaps. A failed
+    comparison (`|| true`, no stats file) simply disables the prefilter
+    for that gap.
     """
     lines = [
         "ffmpeg -hide_banner -nostats -loglevel error -nostdin -y "
         f"-ss {time_s:.3f} -i {shlex.quote(relative)} -frames:v 1 "
         f"-vf scale={width}:-2 -q:v 4 {shlex.quote(out_container_path)} || true"
         for relative, time_s, out_container_path in jobs
+    ]
+    lines += [
+        "ffmpeg -hide_banner -nostats -loglevel error -nostdin "
+        f"-i {shlex.quote(first)} -i {shlex.quote(last)} "
+        f"-filter_complex {shlex.quote(f'ssim=stats_file={stats_out}')} -f null - || true"
+        for first, last, stats_out in ssim_jobs
     ]
     script = "\n".join(lines)
     return [
