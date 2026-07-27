@@ -7,6 +7,8 @@ import os
 
 import bpy
 
+from nagare_clip.blender.frames import clamp_frames
+
 # Text-strip channels (higher channel renders on top in Blender VSE).
 # The speed-mark badge sits on the LOWEST text channel so captions and
 # overlays render over it when they overlap — the badge is the least
@@ -270,12 +272,14 @@ def place_strips(
             src_end_frame,
         )
 
-        bounded_start = min(src_start_frame, full_duration - 1)
-        bounded_end = min(max(src_end_frame, bounded_start + 1), full_duration)
+        bounded_start, bounded_end, negligible = clamp_frames(
+            src_start_frame, src_end_frame, full_duration
+        )
         keep_frame_count = bounded_end - bounded_start
 
         if bounded_start != src_start_frame or bounded_end != src_end_frame:
-            logging.warning(
+            log = logging.debug if negligible else logging.warning
+            log(
                 "%sStrip %d: interval clamped to clip duration (%d frames). "
                 "Requested frames %d-%d, applied %d-%d",
                 src_tag,
