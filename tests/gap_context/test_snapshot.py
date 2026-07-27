@@ -36,7 +36,10 @@ class TestSsimHelpers:
     def test_ssim_relpath(self):
         from nagare_clip.gap_context.snapshot import ssim_relpath
 
-        assert ssim_relpath("v", 108.4, 119.25) == "frames/v/ssim_108.400-119.250.txt"
+        # A fourth (pair-index) arg disambiguates multiple consecutive-frame
+        # SSIM comparisons within the same gap.
+        assert ssim_relpath("v", 108.4, 119.25, 0) == "frames/v/ssim_108.400-119.250_0.txt"
+        assert ssim_relpath("v", 108.4, 119.25, 1) == "frames/v/ssim_108.400-119.250_1.txt"
 
     def test_parse_ssim_stats_reads_all_score(self):
         from nagare_clip.gap_context.snapshot import parse_ssim_stats

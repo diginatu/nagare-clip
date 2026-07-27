@@ -340,10 +340,11 @@ def test_gap_context_extracts_all_frames_in_a_single_docker_call(gap_ctx, monkey
     stage.run(gap_ctx)
 
     # Exactly ONE docker invocation for the whole run, carrying all 3
-    # extraction jobs from the one qualifying (10s) gap, plus 1 SSIM
-    # comparison job (Task 9's static prefilter).
+    # extraction jobs from the one qualifying (10s) gap, plus 2 consecutive-
+    # pair SSIM comparison jobs (3 frames -> 2 pairs; three-frame comparison
+    # follow-up to Task 9's static prefilter).
     assert len(commands) == 1
-    assert commands[0][-1].count("ffmpeg ") == 4
+    assert commands[0][-1].count("ffmpeg ") == 5
 
     gfs = captured["gap_frames"]
     assert len(gfs) == 1
@@ -527,8 +528,9 @@ def test_gap_context_two_sources_share_one_container_without_frame_collision(tmp
 
     # ONE container call carries both sources' jobs.
     assert len(commands) == 1
-    # 3 frames x 2 sources (extraction) + 1 SSIM comparison per source.
-    assert commands[0][-1].count("ffmpeg ") == 8
+    # 3 frames x 2 sources (extraction) + 2 consecutive-pair SSIM
+    # comparisons per source.
+    assert commands[0][-1].count("ffmpeg ") == 10
 
     assert set(captured) == {"talk1", "talk2"}
     talk1_gfs, talk2_gfs = captured["talk1"], captured["talk2"]
@@ -609,17 +611,43 @@ def test_extract_gap_frames_static_ssim_zero_disables_ssim_planning(gap_ctx, mon
     assert result["talk1"][0].ssim is None
 
 
+def _stats_line(score: float) -> str:
+    return f"n:1 Y:0.994828 U:0.998750 V:0.998691 All:{score:.6f} (24.123456)\n"
+
+
+def _write_ssim_stats_for_pairs(gap_ctx, script: str, scores: list[float | None]) -> list[str]:
+    """Materialise stats files for each `-filter_complex` (SSIM) line in
+    *script*, in order, using *scores* (``None`` skips writing that file --
+    simulates a failed/missing comparison). Returns the ssim lines in order."""
+    ssim_lines = [line for line in script.splitlines() if "-filter_complex" in line]
+    assert len(ssim_lines) == len(scores), (len(ssim_lines), len(scores))
+    for line, score in zip(ssim_lines, scores, strict=True):
+        if score is None:
+            continue
+        tokens = shlex.split(line)
+        stats_arg = next(t for t in tokens if t.startswith("ssim=stats_file="))
+        stats_container_path = stats_arg.removeprefix("ssim=stats_file=")
+        rel = stats_container_path.removeprefix("/output/gap_context/")
+        stats_host = gap_ctx.stage_dir("gap_context") / rel
+        stats_host.parent.mkdir(parents=True, exist_ok=True)
+        stats_host.write_text(_stats_line(score), encoding="utf-8")
+    return ssim_lines
+
+
 def test_extract_gap_frames_reads_back_ssim_stats(gap_ctx, monkeypatch):
     """Finding 3: genuine integration coverage of the SSIM planning/readback
-    path -- a fake stats file with realistic ffmpeg ssim-filter output
-    content is materialised at the EXACT container path the batch script
+    path -- fake stats files with realistic ffmpeg ssim-filter output content
+    are materialised at the EXACT container paths the batch script
     requested (derived from the script text, mirroring
     `_materialise_frames_from_script`'s no-self-fulfilling-prophecy
-    discipline), then `_extract_gap_frames` must parse it into
-    `GapFrames.ssim`. This also pins the first/last frame pairing: the gap
-    (10.0-20.0) yields frame times [10.200, 15.000, 19.800], so the ssim
-    job must compare the FIRST (10.200) and LAST (19.800) frames, not e.g.
-    first and second."""
+    discipline), then `_extract_gap_frames` must parse them into
+    `GapFrames.ssim`.
+
+    This also pins the CONSECUTIVE-pair comparison (the three-frame
+    follow-up fix): the gap (10.0-20.0) yields frame times
+    [10.200, 15.000, 19.800], so the two ssim jobs must be
+    (first, mid) and (mid, last) -- never (first, last) directly, which
+    is the bug this change fixes."""
     import nagare_clip.pipeline.stages as stages_mod
 
     commands = []
@@ -628,19 +656,7 @@ def test_extract_gap_frames_reads_back_ssim_stats(gap_ctx, monkeypatch):
         commands.append(cmd)
         script = cmd[-1]
         _materialise_frames_from_script(gap_ctx.output_dir, script)
-        for line in script.splitlines():
-            if "-filter_complex" not in line:
-                continue
-            tokens = shlex.split(line)
-            stats_arg = next(t for t in tokens if t.startswith("ssim=stats_file="))
-            stats_container_path = stats_arg.removeprefix("ssim=stats_file=")
-            rel = stats_container_path.removeprefix("/output/gap_context/")
-            stats_host = gap_ctx.stage_dir("gap_context") / rel
-            stats_host.parent.mkdir(parents=True, exist_ok=True)
-            stats_host.write_text(
-                "n:1 Y:0.994828 U:0.998750 V:0.998691 All:0.996132 (24.123456)\n",
-                encoding="utf-8",
-            )
+        _write_ssim_stats_for_pairs(gap_ctx, script, [0.998, 0.996132])
 
     monkeypatch.setattr(stages_mod, "run_command", fake_run_command)
 
@@ -648,9 +664,162 @@ def test_extract_gap_frames_reads_back_ssim_stats(gap_ctx, monkeypatch):
     result = stages_mod._extract_gap_frames(gap_ctx, [(src, [(10.0, 20.0)])])
 
     script = commands[0][-1]
-    ssim_line = next(line for line in script.splitlines() if "-filter_complex" in line)
-    assert "frames/talk1/10.200.jpg" in ssim_line  # first frame
-    assert "frames/talk1/19.800.jpg" in ssim_line  # last frame
-    assert "ssim_10.000-20.000.txt" in ssim_line
+    ssim_lines = [line for line in script.splitlines() if "-filter_complex" in line]
+    assert len(ssim_lines) == 2
+    assert "frames/talk1/10.200.jpg" in ssim_lines[0]  # first
+    assert "frames/talk1/15.000.jpg" in ssim_lines[0]  # mid
+    assert "frames/talk1/10.200.jpg" not in ssim_lines[1]
+    assert "frames/talk1/15.000.jpg" in ssim_lines[1]  # mid
+    assert "frames/talk1/19.800.jpg" in ssim_lines[1]  # last
+    # Never a direct first-vs-last comparison anywhere in the script.
+    assert not any(
+        "10.200.jpg" in line and "19.800.jpg" in line and "-filter_complex" in line
+        for line in script.splitlines()
+    )
 
-    assert result["talk1"][0].ssim == pytest.approx(0.996132)
+    assert result["talk1"][0].ssim == pytest.approx(0.996132)  # min(0.998, 0.996132)
+
+
+def test_extract_gap_frames_ssim_pan_away_and_return_scores_low(gap_ctx, monkeypatch):
+    """The bug being fixed: a camera that pans away and returns to the same
+    framing scores high on first-vs-last but should NOT be judged static,
+    because the middle frame (already extracted, already paid for) shows
+    real on-screen action. With min-of-consecutive-pairs, a low first-vs-mid
+    score drags the whole gap's ssim below any static threshold even though
+    mid-vs-last looks nearly identical (camera settled back)."""
+    import nagare_clip.pipeline.stages as stages_mod
+
+    commands = []
+
+    def fake_run_command(cmd, **kwargs):
+        commands.append(cmd)
+        script = cmd[-1]
+        _materialise_frames_from_script(gap_ctx.output_dir, script)
+        # first-vs-mid: camera mid-pan, very different (low). mid-vs-last:
+        # camera has returned, nearly identical (high). A first-vs-last-only
+        # comparison would likely have scored high here (both ends similar).
+        _write_ssim_stats_for_pairs(gap_ctx, script, [0.40, 0.985])
+
+    monkeypatch.setattr(stages_mod, "run_command", fake_run_command)
+
+    src = gap_ctx.sources[0]
+    result = stages_mod._extract_gap_frames(gap_ctx, [(src, [(10.0, 20.0)])])
+
+    assert result["talk1"][0].ssim == pytest.approx(0.40)
+    # Well below any sane static threshold -- gap must NOT be prefiltered.
+    assert result["talk1"][0].ssim < 0.95
+
+
+def test_extract_gap_frames_two_frame_gap_ssim_matches_single_pair(gap_ctx, monkeypatch):
+    """A gap that collapses to exactly 2 extracted frames has only one
+    consecutive pair, so behaves identically to the old first-vs-last
+    comparison (there IS no middle frame to ignore)."""
+    import nagare_clip.pipeline.stages as stages_mod
+    from nagare_clip.gap_context.snapshot import frame_times
+
+    # This span yields exactly 2 frame times (verified below), not 3.
+    start, end = 10.0, 10.401
+    assert len(frame_times(start, end)) == 2
+
+    commands = []
+
+    def fake_run_command(cmd, **kwargs):
+        commands.append(cmd)
+        script = cmd[-1]
+        _materialise_frames_from_script(gap_ctx.output_dir, script)
+        _write_ssim_stats_for_pairs(gap_ctx, script, [0.87])
+
+    monkeypatch.setattr(stages_mod, "run_command", fake_run_command)
+
+    src = gap_ctx.sources[0]
+    result = stages_mod._extract_gap_frames(gap_ctx, [(src, [(start, end)])])
+
+    assert result["talk1"][0].ssim == pytest.approx(0.87)
+
+
+def test_extract_gap_frames_one_frame_gap_ssim_stays_none(gap_ctx, monkeypatch):
+    """A gap so short it collapses to a single (midpoint-only) frame has no
+    pair to compare -- no ssim job planned, `GapFrames.ssim` stays `None`,
+    same as today."""
+    import nagare_clip.pipeline.stages as stages_mod
+    from nagare_clip.gap_context.snapshot import frame_times
+
+    start, end = 10.0, 10.4
+    assert len(frame_times(start, end)) == 1
+
+    commands = []
+
+    def fake_run_command(cmd, **kwargs):
+        commands.append(cmd)
+        script = cmd[-1]
+        _materialise_frames_from_script(gap_ctx.output_dir, script)
+
+    monkeypatch.setattr(stages_mod, "run_command", fake_run_command)
+
+    src = gap_ctx.sources[0]
+    result = stages_mod._extract_gap_frames(gap_ctx, [(src, [(start, end)])])
+
+    script = commands[0][-1]
+    assert "-filter_complex" not in script
+    assert result["talk1"][0].ssim is None
+
+
+def test_extract_gap_frames_partial_stats_missing_degrades_to_min_of_survivors(
+    gap_ctx, monkeypatch
+):
+    """One of the two consecutive-pair stats files fails to materialise
+    (simulating a failed ffmpeg comparison, `|| true` swallowed it) -- the
+    surviving pair's score is still used (min of what parsed), never an
+    exception, never silently dropping to None while a real score exists."""
+    import nagare_clip.pipeline.stages as stages_mod
+
+    commands = []
+
+    def fake_run_command(cmd, **kwargs):
+        commands.append(cmd)
+        script = cmd[-1]
+        _materialise_frames_from_script(gap_ctx.output_dir, script)
+        # Only the SECOND pair's stats file gets written; the first is
+        # missing entirely (score=None means "don't write it").
+        _write_ssim_stats_for_pairs(gap_ctx, script, [None, 0.72])
+
+    monkeypatch.setattr(stages_mod, "run_command", fake_run_command)
+
+    src = gap_ctx.sources[0]
+    result = stages_mod._extract_gap_frames(gap_ctx, [(src, [(10.0, 20.0)])])
+
+    assert result["talk1"][0].ssim == pytest.approx(0.72)
+
+
+def test_extract_gap_frames_unparseable_stats_content_excluded_from_min(gap_ctx, monkeypatch):
+    """A stats file that DOES exist but whose content ffmpeg didn't finish
+    writing cleanly (unparseable, `parse_ssim_stats` -> None) must be
+    excluded from the min just like a missing file -- not treated as a
+    0.0/None score that would wrongly win the min() or blow up the
+    computation."""
+    import nagare_clip.pipeline.stages as stages_mod
+
+    commands = []
+
+    def fake_run_command(cmd, **kwargs):
+        commands.append(cmd)
+        script = cmd[-1]
+        _materialise_frames_from_script(gap_ctx.output_dir, script)
+        ssim_lines = [line for line in script.splitlines() if "-filter_complex" in line]
+        assert len(ssim_lines) == 2
+        for line, content in zip(
+            ssim_lines, ["garbage, no All: score here\n", _stats_line(0.81)], strict=True
+        ):
+            tokens = shlex.split(line)
+            stats_arg = next(t for t in tokens if t.startswith("ssim=stats_file="))
+            rel = stats_arg.removeprefix("ssim=stats_file=").removeprefix("/output/gap_context/")
+            stats_host = gap_ctx.stage_dir("gap_context") / rel
+            stats_host.parent.mkdir(parents=True, exist_ok=True)
+            stats_host.write_text(content, encoding="utf-8")
+
+    monkeypatch.setattr(stages_mod, "run_command", fake_run_command)
+
+    src = gap_ctx.sources[0]
+    result = stages_mod._extract_gap_frames(gap_ctx, [(src, [(10.0, 20.0)])])
+
+    assert result["talk1"][0].ssim == pytest.approx(0.81)
