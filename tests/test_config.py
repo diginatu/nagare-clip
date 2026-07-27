@@ -506,3 +506,19 @@ def test_director_prompt_gap_example_matches_the_real_formatter():
 
     assert annotation_line == "    [silent gap 12.4s: a build runs and logs scroll past]"
     assert annotation_line in prompt
+
+
+def test_text_filter_prompt_repeated_phrase_example_is_valid_patch_syntax():
+    """Real-run failure mode: told to de-duplicate repeated phrases but shown
+    no marker example, the filter LLM rewrites the line bare and the safety
+    check drops it.  The default prompt must state the rule AND show a worked
+    marker example — and the example must round-trip through the real patch
+    applier."""
+    from nagare_clip.text_filter.llm_filter import apply_patches_to_lines
+
+    cfg = get_effective_config(None, {})
+    prompt = cfg["text_filter"]["prompt"]
+    assert "repeated" in prompt
+    assert "映ってる映ってるね" in prompt  # example input line
+    assert "{{映ってる->}}映ってるね" in prompt  # example output line
+    assert apply_patches_to_lines(["{{映ってる->}}映ってるね"]) == ["映ってるね"]

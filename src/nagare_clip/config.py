@@ -57,17 +57,22 @@ TEXT_FILTER_PROMPT = (
     "- Copy each line fully with its number.\n"
     "- Wrap ONLY the erroneous part: {{error->fix}} or {{delete->}}.\n"
     "- Keep all surrounding text unchanged.\n"
+    "- If a phrase is repeated, keep the later occurrence and delete the "
+    "earlier one with a {{...->}} marker — never rewrite the line without "
+    "markers.\n"
     "\n"
     "Example:\n"
     "Input:\n"
     "1: えーとそれは急はいい天気ですね\n"
     "2: 正しい文です\n"
     "3: (雑音)\n"
+    "4: 映ってる映ってるね\n"
     "\n"
     "Output:\n"
     "1: {{えーと->}}それは{{急は->今日は}}いい天気ですね\n"
     "2: 正しい文です\n"
-    "3: {{(雑音)->}}"
+    "3: {{(雑音)->}}\n"
+    "4: {{映ってる->}}映ってるね"
 )
 
 SUMMARY_PROMPT = (
