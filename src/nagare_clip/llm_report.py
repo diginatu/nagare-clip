@@ -48,6 +48,7 @@ class _Attempt:
     outcome: str
     reason: str
     section: str
+    deterministic: bool = False
 
 
 def _slug(unit: str) -> str:
@@ -105,6 +106,7 @@ class Recorder:
         reason: str = "",
         cfg: dict[str, Any] | None = None,
         section: str = "",
+        deterministic: bool = False,
     ) -> None:
         if not self.enabled:
             return
@@ -125,6 +127,7 @@ class Recorder:
                 outcome=outcome,
                 reason=reason,
                 section=section,
+                deterministic=deterministic,
             )
         )
 
@@ -135,8 +138,8 @@ class Recorder:
         attempts = self._buffers.pop(unit, [])
         started = self._started.pop(unit, datetime.now())
         duration_ms = int((datetime.now() - started).total_seconds() * 1000)
-        model = attempts[-1].model if attempts else ""
-        thinking = attempts[-1].thinking if attempts else False
+        model = next((a.model for a in reversed(attempts) if a.model), "")
+        thinking = next((a.thinking for a in reversed(attempts) if a.model), False)
         try:
             self._stage_dir.mkdir(parents=True, exist_ok=True)
             (self._stage_dir / f"{_slug(unit)}.md").write_text(
@@ -196,9 +199,12 @@ def _render_unit(
         head = "## "
         if att.section:
             head += f"[{att.section}] "
-        head += f"Attempt {att.attempt + 1}/{att.total}"
-        if att.temperature is not None:
-            head += f" — temperature {att.temperature}"
+        if att.deterministic:
+            head += "deterministic"
+        else:
+            head += f"Attempt {att.attempt + 1}/{att.total}"
+            if att.temperature is not None:
+                head += f" — temperature {att.temperature}"
         head += f" — {att.outcome}"
         out.append(head)
         out.append("")
