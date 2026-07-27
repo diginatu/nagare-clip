@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import logging
 
-
 _NOISE_SNIPPETS = ("Proxy Server is not installed",)
 
 # LiteLLM logs one multi-line INFO banner per completion() call plus a

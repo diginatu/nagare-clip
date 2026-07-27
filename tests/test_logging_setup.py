@@ -166,9 +166,13 @@ class TestLiteLLMNoiseSuppression:
         setup_logging("INFO")
         lg = logging.getLogger("LiteLLM")
         noisy = logging.LogRecord(
-            "LiteLLM", logging.WARNING, __file__, 1,
+            "LiteLLM",
+            logging.WARNING,
+            __file__,
+            1,
             "Proxy Server is not installed. Skipping OpenTelemetry initialization.",
-            None, None,
+            None,
+            None,
         )
         useful = logging.LogRecord(
             "LiteLLM", logging.WARNING, __file__, 1, "rate limited, retrying", None, None
