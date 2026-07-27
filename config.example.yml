@@ -179,6 +179,7 @@ intervals:
   min_keep: 1.0   # Minimum keep interval length in seconds
   keep_pre_margin: 1.0   # Seconds to extend keep intervals before start
   keep_post_margin: 1.0   # Seconds to extend keep intervals after end
+  min_cut: 0.4   # Merge adjacent keep intervals separated by less than this (seconds); absorbs cuts too short to be worth the jump, which margin arithmetic otherwise leaves behind as slivers. 0 disables
   caption:
     max_bunsetu: 12   # Maximum bunsetsu units per caption chunk
     max_duration: 4.0   # Maximum seconds per caption chunk

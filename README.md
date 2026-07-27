@@ -378,6 +378,14 @@ flags and override the config file:
   --keep-post-margin 1.0
 ```
 
+`intervals.min_cut` (default 0.4s) merges two adjacent keep intervals when the
+cut between them is shorter than that — a cut that brief jumps the picture
+without saving meaningful runtime, and the keep/caption margins expanding from
+both sides routinely leave such slivers behind. Raising `audio_silence.min_silence`
+is *not* the equivalent knob: that changes which silences are detected at all, so
+it also keeps the long pauses. Set `min_cut: 0` to make every detected cut, as
+before.
+
 The remaining intervals knobs (`silence_threshold`, `min_keep`,
 `caption.max_bunsetu`, `caption.min_bunsetu`, `caption.max_duration`,
 `caption.min_duration`, `caption.silence_flush`, …) no longer have dedicated

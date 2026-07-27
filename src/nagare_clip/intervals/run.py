@@ -16,6 +16,7 @@ from nagare_clip.intervals.intervals import (
     enforce_min_keep_duration,
     ensure_keep_covers_captions,
     invert_intervals,
+    merge_close_intervals,
     merge_intervals,
     subtract_intervals,
 )
@@ -191,6 +192,16 @@ def run_intervals(
         duration_sec,
     )
     logging.info("After min_keep enforcement: %d interval(s)", len(keep_intervals_dicts))
+
+    # Runs last: every earlier pass only expands intervals, so this is the one
+    # position where the gap being measured is the final gap.
+    if ivl["min_cut"] > 0.0:
+        keep_intervals_dicts = merge_close_intervals(keep_intervals_dicts, ivl["min_cut"])
+        logging.info(
+            "After min_cut merge (gaps < %.2fs absorbed): %d interval(s)",
+            ivl["min_cut"],
+            len(keep_intervals_dicts),
+        )
 
     output_data = {
         "source_file": infer_source_file(whisperx_data, json_path),
