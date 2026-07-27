@@ -135,3 +135,57 @@ def test_empty_log_file_string_treated_as_no_file():
     assert root.level == logging.WARNING
     file_handlers = [h for h in _our_handlers(root) if isinstance(h, logging.FileHandler)]
     assert len(file_handlers) == 0
+
+
+class TestLiteLLMNoiseSuppression:
+    def test_litellm_loggers_capped_at_warning_on_info_root(self):
+        import logging
+
+        from nagare_clip.logging_setup import setup_logging
+
+        setup_logging("INFO")
+        for name in ("LiteLLM", "LiteLLM Router", "LiteLLM Proxy", "httpx"):
+            assert logging.getLogger(name).level == logging.WARNING
+
+    def test_debug_root_leaves_litellm_verbose(self):
+        import logging
+
+        from nagare_clip.logging_setup import setup_logging
+
+        # reset any level set by a previous test in this process
+        for name in ("LiteLLM", "LiteLLM Router", "LiteLLM Proxy", "httpx"):
+            logging.getLogger(name).setLevel(logging.NOTSET)
+        setup_logging("DEBUG")
+        assert logging.getLogger("LiteLLM").level == logging.NOTSET
+
+    def test_proxy_not_installed_record_is_filtered(self):
+        import logging
+
+        from nagare_clip.logging_setup import setup_logging
+
+        setup_logging("INFO")
+        lg = logging.getLogger("LiteLLM")
+        noisy = logging.LogRecord(
+            "LiteLLM", logging.WARNING, __file__, 1,
+            "Proxy Server is not installed. Skipping OpenTelemetry initialization.",
+            None, None,
+        )
+        useful = logging.LogRecord(
+            "LiteLLM", logging.WARNING, __file__, 1, "rate limited, retrying", None, None
+        )
+        assert lg.filter(noisy) is False
+        # In Python 3.12+, Filterer.filter() returns the LogRecord if filters pass
+        result = lg.filter(useful)
+        assert result is not False
+
+    def test_filter_not_stacked_on_repeated_setup(self):
+        import logging
+
+        from nagare_clip.logging_setup import setup_logging
+
+        setup_logging("INFO")
+        setup_logging("INFO")
+        lg = logging.getLogger("LiteLLM")
+        from nagare_clip.logging_setup import _DropLiteLLMNoise
+
+        assert sum(isinstance(f, _DropLiteLLMNoise) for f in lg.filters) == 1
