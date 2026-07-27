@@ -125,7 +125,12 @@ PLAN_PROMPT = (
     "followed by a 0.8-second silent gap before the next part of the same "
     "video. A negligible gap, and the last part of a video, show no gap "
     "([4.2s]); a part with unknown timing has no "
-    "bracket. Use these numbers to judge pacing: long parts are candidates "
+    "bracket. "
+    "A part containing long internal silences splits its duration — "
+    "[13.0s speech, 62.9s silence] means only 13.0 seconds are spoken; the "
+    'silent seconds are dropped by default ("keep" preserves them). Judge '
+    "pacing from the speech figure. "
+    "Use these numbers to judge pacing: long parts are candidates "
     "for shortening or speeding up, and long gaps mean dead air.\n"
     "\n"
     'By default, non-speech stretches are dropped. "keep" preserves ALL '

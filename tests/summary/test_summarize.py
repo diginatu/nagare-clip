@@ -463,6 +463,48 @@ class TestPartTimes:
         assert ps.parts[0].start is None and ps.parts[0].end is None
 
 
+class TestPartSilence:
+    def test_build_summary_attaches_part_silence(self):
+        resp = '{"parts": [{"lines": [1, 2], "summary": "intro"}], "video_summary": "v"}'
+        overall = '{"summary": "S"}'
+        seg_times = {"v": [(0.0, 10.0), (10.0, 20.0)]}
+        project = build_summary(
+            [("v", ["あ", "い"])],
+            {"prompt": "p", "overall_prompt": "o"},
+            call_llm=_seq_llm([resp, overall]),
+            seg_times_by_stem=seg_times,
+            cuts_by_stem={"v": [(5.0, 15.0)]},
+        )
+        assert project.parts[0].silence == 10.0
+
+    def test_summary_dict_round_trips_silence(self):
+        from nagare_clip.summary.summarize import (
+            PartSummary,
+            ProjectSummary,
+            summary_from_dict,
+            summary_to_dict,
+        )
+
+        ps = ProjectSummary(
+            summary="s",
+            parts=[
+                PartSummary(stem="v", lines=(1, 2), summary="p", start=0.0, end=20.0, silence=10.0)
+            ],
+        )
+        d = summary_to_dict(ps)
+        assert d["parts"][0]["silence"] == 10.0
+        back = summary_from_dict(d)
+        assert back.parts[0].silence == 10.0
+
+    def test_from_dict_without_silence_is_none(self):
+        from nagare_clip.summary.summarize import summary_from_dict
+
+        back = summary_from_dict(
+            {"summary": "s", "parts": [{"stem": "v", "lines": [1, 2], "summary": "p"}]}
+        )
+        assert back.parts[0].silence is None
+
+
 def test_segment_video_appends_the_gap_block_to_the_user_prompt():
     seen = {}
 

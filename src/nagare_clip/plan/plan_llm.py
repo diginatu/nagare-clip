@@ -59,13 +59,15 @@ def _format_parts_for_plan(project_summary: ProjectSummary) -> str:
             vs = video_summaries.get(p.stem, "")
             if vs:
                 lines.append(f'Video "{p.stem}": {vs}')
-        dur = p.end - p.start if p.start is not None and p.end is not None else None
+        raw = p.end - p.start if p.start is not None and p.end is not None else None
+        sil = p.silence if isinstance(p.silence, (int, float)) and p.silence > 0 else None
+        dur = max(raw - sil, 0.0) if raw is not None and sil else raw
         gap: float | None = None
         if i + 1 < len(parts):
             nxt = parts[i + 1]
             if nxt.stem == p.stem and p.end is not None and nxt.start is not None:
                 gap = nxt.start - p.end
-        bracket = format_dur_gap(dur, gap)
+        bracket = format_dur_gap(dur, gap, sil)
         prefix = f"{i + 1}: {p.stem} [{p.lines[0]}-{p.lines[1]}]"
         head = f"{prefix} {bracket}" if bracket else prefix
         lines.append(f"{head} — {p.summary}")

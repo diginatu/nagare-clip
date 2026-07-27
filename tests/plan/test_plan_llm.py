@@ -207,6 +207,38 @@ def test_format_byte_identical_when_no_video_summaries():
     assert 'Video "' not in without
 
 
+def test_format_parts_renders_speech_silence_bracket():
+    from nagare_clip.plan.plan_llm import _format_parts_for_plan
+    from nagare_clip.summary.summarize import PartSummary, ProjectSummary
+
+    ps = ProjectSummary(
+        summary="",
+        parts=[
+            PartSummary(
+                stem="v",
+                lines=(1, 5),
+                summary="long part",
+                start=0.0,
+                end=75.8,
+                silence=62.9,
+            )
+        ],
+    )
+    out = _format_parts_for_plan(ps)
+    assert "[12.9s speech, 62.9s silence]" in out
+
+
+def test_format_parts_without_silence_unchanged():
+    from nagare_clip.plan.plan_llm import _format_parts_for_plan
+    from nagare_clip.summary.summarize import PartSummary, ProjectSummary
+
+    ps = ProjectSummary(
+        summary="",
+        parts=[PartSummary(stem="v", lines=(1, 5), summary="p", start=0.0, end=4.2)],
+    )
+    assert "[4.2s]" in _format_parts_for_plan(ps)
+
+
 class TestPlanRecorder:
     def test_records_ok(self, tmp_path):
         rec = Recorder("plan", tmp_path, enabled=True)
