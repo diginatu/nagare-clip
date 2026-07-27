@@ -332,6 +332,7 @@ def _director_run(ctx: PipelineContext) -> None:
                 stem=src.stem,
                 json_path=ctx.stage_dir("sentence_split") / f"{src.stem}.json",
                 gaps=ctx.stage_dir("gap_context") / f"{src.stem}_gaps.json",
+                cuts_txt=ctx.stage_dir("audio_silence") / f"{src.stem}_cuts.txt",
                 recorder=rec,
             )
     finally:

@@ -155,7 +155,13 @@ DIRECTOR_PROMPT = (
     "means the line lasts 4.2 seconds and is followed by a 0.8-second silent "
     "gap before the next line. A negligible gap, and the last line, show no "
     "gap ([4.2s]); a line with "
-    "unknown timing has no bracket. Use these numbers to judge pacing: long "
+    "unknown timing has no bracket. "
+    "A line containing long internal silences splits its duration — "
+    "[13.0s speech, 62.9s silence] means only 13.0 seconds are spoken; the "
+    '62.9 silent seconds are dropped by default (a "keep" over the line '
+    "preserves them). Judge pacing from the speech figure, never from "
+    "speech+silence. "
+    "Use these numbers to judge pacing: long "
     "durations are candidates for cutting or speeding up, and long gaps are "
     'dead air (already dropped by default unless you "keep" them).\n'
     "\n"

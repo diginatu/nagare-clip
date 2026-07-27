@@ -11,6 +11,7 @@ import json
 import logging
 from pathlib import Path
 
+from nagare_clip.audio_silence.cuts_file import read_cuts
 from nagare_clip.director import director_llm as director_llm_mod
 from nagare_clip.director.context import build_director_context
 from nagare_clip.director.director_llm import generate_director_ops, ops_to_dict
@@ -18,7 +19,7 @@ from nagare_clip.gap_context.gaps import load_gaps
 from nagare_clip.llm_report import NULL_RECORDER, Recorder
 from nagare_clip.plan.plan_llm import plan_from_dict
 from nagare_clip.summary.summarize import ProjectSummary, summary_from_dict
-from nagare_clip.timing import segment_times
+from nagare_clip.timing import segment_silences, segment_times
 
 
 def _build_overview_context(summary: Path | None, plan: Path | None, stem: str | None) -> str:
@@ -45,6 +46,7 @@ def run_director(
     stem: str | None = None,
     json_path: Path | None = None,
     gaps: Path | None = None,
+    cuts_txt: Path | None = None,
     recorder: Recorder = NULL_RECORDER,
 ) -> None:
     director_cfg = cfg["director"]
@@ -62,6 +64,9 @@ def run_director(
                 seg_times = segment_times(json.loads(json_path.read_text(encoding="utf-8")))
             except (ValueError, OSError):
                 logging.warning("director: could not read --json %s", json_path)
+        silences = None
+        if seg_times and cuts_txt and Path(cuts_txt).is_file():
+            silences = segment_silences(seg_times, read_cuts(Path(cuts_txt)))
         gap_list = load_gaps(gaps)
         logging.info("director: analysing %d line(s) with LLM", len(edit_lines))
         ops = generate_director_ops(
@@ -73,6 +78,7 @@ def run_director(
             unit=unit,
             seg_times=seg_times,
             gaps=gap_list,
+            silences=silences,
         )
         logging.info("director: %d operation(s)", len(ops))
 

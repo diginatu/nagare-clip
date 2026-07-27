@@ -198,23 +198,31 @@ def format_numbered_transcript(clean_lines: list[str]) -> str:
 def format_numbered_transcript_timed(
     clean_lines: list[str],
     seg_times: list[tuple[float | None, float | None]],
+    silences: list[float] | None = None,
 ) -> str:
     """``N: text  [dur, gap]`` (1-based), gap = time to the next line.
 
     Per line: ``dur = end - start``; ``gap = next.start - this.end`` (the last
-    line has no gap).  A missing ``start``/``end`` degrades that line's bracket
-    via :func:`format_dur_gap` (possibly to no bracket at all).
+    line has no gap).  When *silences* is given (audio_silence-cut seconds
+    inside each line's span, from :func:`nagare_clip.timing.segment_silences`),
+    a line with significant internal silence renders
+    ``[12.9s speech, 62.9s silence]`` — speech-only duration — so the LLM
+    never judges pacing from span time that is mostly already-dropped silence.
+    A missing ``start``/``end`` degrades that line's bracket via
+    :func:`format_dur_gap` (possibly to no bracket at all).
     """
     out: list[str] = []
     for i, text in enumerate(clean_lines):
         start, end = seg_times[i]
-        dur = end - start if start is not None and end is not None else None
+        raw = end - start if start is not None and end is not None else None
+        sil = silences[i] if silences is not None and i < len(silences) else None
+        dur = max(raw - sil, 0.0) if raw is not None and sil else raw
         gap: float | None = None
         if i + 1 < len(clean_lines):
             nxt_start = seg_times[i + 1][0]
             if end is not None and nxt_start is not None:
                 gap = nxt_start - end
-        bracket = format_dur_gap(dur, gap)
+        bracket = format_dur_gap(dur, gap, sil)
         out.append(f"{i + 1}: {text}  {bracket}".rstrip())
     return "\n".join(out)
 
@@ -247,6 +255,7 @@ def generate_director_ops(
     unit: str = "director",
     seg_times: list[tuple[float | None, float | None]] | None = None,
     gaps: list[Gap] | None = None,
+    silences: list[float] | None = None,
 ) -> list[DirectorOp]:
     """Run the director LLM over the transcript and return validated ops.
 
@@ -264,13 +273,17 @@ def generate_director_ops(
     worth keeping. Only applies when ``seg_times`` is also present (the
     annotation needs anchor times); an empty/absent ``gaps`` leaves the user
     content byte-identical to before this feature existed.
+
+    ``silences`` (per-line audio_silence overlap, same length as ``seg_times``)
+    splits each bracket into speech/silence; ``None`` keeps the output
+    byte-identical.
     """
     clean_lines = clean_for_display(edit_lines)
     system_prompt = cfg.get("prompt", "")
     if overview_context:
         system_prompt = f"{system_prompt}\n\n{overview_context}"
     if seg_times is not None and len(seg_times) == len(clean_lines):
-        user_content = format_numbered_transcript_timed(clean_lines, seg_times)
+        user_content = format_numbered_transcript_timed(clean_lines, seg_times, silences=silences)
         if gaps:
             user_content = annotate_numbered_transcript(user_content, anchor_gaps(gaps, seg_times))
     else:
