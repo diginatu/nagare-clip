@@ -122,8 +122,10 @@ call entirely — **in the same batch container** as frame extraction, per the
   so no job is planned and `GapFrames.ssim` stays `None`) **and only when
   `gap_context.static_ssim` is above `0`** — `_extract_gap_frames` reads its
   own `ssim_threshold = float(ctx.cfg["gap_context"].get("static_ssim",
-  0.0))` (same `.get`-with-default pattern as `frame_width`/`min_gap`) and
-  gates planning on `ssim_threshold > 0.0`, so `static_ssim: 0` genuinely
+  0.0))`; unlike `frame_width` (`ctx.cfg["gap_context"]["frame_width"]`) and
+  `min_gap` (`g["min_gap"]`), which are read via direct subscript,
+  `static_ssim` is the only gap_context key read with `.get`-and-default —
+  and gates planning on `ssim_threshold > 0.0`, so `static_ssim: 0` genuinely
   disables the prefilter end-to-end: no ssim job, no extra ffmpeg line in
   the batch script, no stats file ever written. (Previously only
   `run_gap_context`'s consumption-side threshold check gated the *result*,
@@ -164,6 +166,14 @@ call entirely — **in the same batch container** as frame extraction, per the
   flipping `"static": false` in `{stem}_gaps.json` forces a prefiltered gap
   back into the summary/director prompts exactly as it does for an
   LLM-judged static gap.
+- The prefilter can also **false-positive**: since it only compares the gap's
+  first and last extracted frame, a gap where the camera pans away and
+  returns to the same framing scores high and skips the vision call despite
+  real on-screen action in between. The measured margin between the two
+  classes is thin (action max 0.9416 vs. the 0.95 default — see the
+  calibration note below), so this is a real risk on some footage; the same
+  hand-flip (`"static": false` in `{stem}_gaps.json`) recovers a
+  wrongly-skipped gap.
 - **Calibration note:** measured against the water_pump_3 corpus's real
   `_gaps.json` static/action verdicts (handheld phone-camera footage), the
   first-vs-last-frame SSIM does not cleanly separate the two classes on most
