@@ -220,3 +220,37 @@ def test_run_director_without_a_gaps_file_is_unchanged(tmp_path, monkeypatch):
         gaps=tmp_path / "missing_gaps.json",
     )
     assert seen["user"] == "1: いち\n2: に"
+
+
+def test_run_director_reads_cuts_txt_for_silence_brackets(tmp_path, monkeypatch):
+    """cuts_txt spans inside a segment must surface as 'Ns speech, Ms silence'
+    in the LLM user content."""
+    import nagare_clip.director.director_llm as dl
+    from nagare_clip.audio_silence.cuts_file import write_cuts
+
+    edits = tmp_path / "v_edits.txt"
+    edits.write_text("hello\n", encoding="utf-8")
+    jsn = tmp_path / "v.json"
+    jsn.write_text(
+        json.dumps({"segments": [{"start": 0.0, "end": 75.8, "text": "hello"}]}),
+        encoding="utf-8",
+    )
+    cuts = tmp_path / "v_cuts.txt"
+    write_cuts(cuts, [(10.0, 72.9)])
+
+    seen = {}
+
+    def fake_llm(messages, cfg):
+        seen["user"] = messages[1]["content"]
+        return '{"ops": []}'
+
+    monkeypatch.setattr(dl, "_call_llm", fake_llm)
+    director_run.run_director(
+        edits,
+        tmp_path / "v_director.json",
+        {"director": {"enabled": True, "prompt": "p", "max_retries": 0}},
+        stem="v",
+        json_path=jsn,
+        cuts_txt=cuts,
+    )
+    assert "speech" in seen["user"] and "silence" in seen["user"]

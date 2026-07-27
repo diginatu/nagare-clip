@@ -371,6 +371,7 @@ def test_prompt_documents_duration_and_gap_bracket(stage):
     prompt = get_effective_config(None, {})[stage]["prompt"]
     assert format_dur_gap(4.2, 0.8) in prompt  # "[4.2s, gap 0.8s]"
     assert format_dur_gap(4.2, None) in prompt  # "[4.2s]" — last line/part, no gap
+    assert format_dur_gap(13.0, None, 62.9) in prompt  # "[13.0s speech, 62.9s silence]"
     lowered = prompt.lower()
     assert "duration" in lowered
     assert "gap" in lowered

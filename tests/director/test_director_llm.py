@@ -352,3 +352,33 @@ def test_generate_director_ops_transcript_is_byte_identical_without_gaps():
         seg_times=[(0.0, 10.0), (20.0, 25.0)],
     )
     assert seen["user"] == "1: いち  [10.0s, gap 10.0s]\n2: に  [5.0s]"
+
+
+class TestTimedTranscriptSilences:
+    def test_silence_split_bracket_rendered(self):
+        from nagare_clip.director.director_llm import format_numbered_transcript_timed
+
+        out = format_numbered_transcript_timed(
+            ["long line", "short line"],
+            [(0.0, 75.8), (80.0, 84.2)],
+            silences=[62.9, 0.0],
+        )
+        lines = out.split("\n")
+        # speech = 75.8 - 62.9 = 12.9; gap to next = 80.0 - 75.8 = 4.2
+        assert lines[0] == "1: long line  [12.9s speech, 62.9s silence, gap 4.2s]"
+        assert lines[1] == "2: short line  [4.2s]"
+
+    def test_no_silences_byte_identical_to_before(self):
+        from nagare_clip.director.director_llm import format_numbered_transcript_timed
+
+        args = (["a", "b"], [(0.0, 4.2), (5.0, 9.0)])
+        assert format_numbered_transcript_timed(*args) == format_numbered_transcript_timed(
+            *args, silences=None
+        )
+
+    def test_speech_clamped_non_negative(self):
+        from nagare_clip.director.director_llm import format_numbered_transcript_timed
+
+        # silence bigger than the span (rounding artifacts) must not render negative speech
+        out = format_numbered_transcript_timed(["x"], [(0.0, 5.0)], silences=[5.5])
+        assert "-" not in out.split("  ")[1]

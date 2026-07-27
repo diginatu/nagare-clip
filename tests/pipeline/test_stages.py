@@ -151,7 +151,7 @@ def test_director_adapter_passes_context_paths(tmp_path, monkeypatch):
     monkeypatch.setattr(
         st,
         "run_director",
-        lambda edits, out, cfg, *, summary=None, plan=None, stem=None, json_path=None, gaps=None, recorder=None: (
+        lambda edits, out, cfg, *, summary=None, plan=None, stem=None, json_path=None, gaps=None, cuts_txt=None, recorder=None: (
             seen.update(
                 edits=edits,
                 out=out,
@@ -160,6 +160,7 @@ def test_director_adapter_passes_context_paths(tmp_path, monkeypatch):
                 stem=stem,
                 json_path=json_path,
                 gaps=gaps,
+                cuts_txt=cuts_txt,
             )
         ),
     )
@@ -173,6 +174,7 @@ def test_director_adapter_passes_context_paths(tmp_path, monkeypatch):
     assert seen["stem"] == "a"
     assert seen["json_path"] == out / "sentence_split" / "a.json"
     assert seen["gaps"] == out / "gap_context" / "a_gaps.json"
+    assert seen["cuts_txt"] == out / "audio_silence" / "a_cuts.txt"
 
 
 def test_text_filter_adapter_passes_summary_json(tmp_path, monkeypatch):
