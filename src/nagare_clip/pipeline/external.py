@@ -107,11 +107,15 @@ def build_snapshot_batch_cmd(
     seek can't take down the rest of the batch. Paths are shell-quoted --
     real media filenames contain spaces.
 
-    *ssim_jobs* appends one first-vs-last frame SSIM comparison per gap
-    after all extraction lines -- same container, ~10ms each; the stats
-    file is parsed host-side to prefilter pixel-static gaps. A failed
-    comparison (`|| true`, no stats file) simply disables the prefilter
-    for that gap.
+    *ssim_jobs* appends one SSIM comparison per CONSECUTIVE pair of a gap's
+    extracted frames (a 3-frame gap yields 2: first-vs-mid, mid-vs-last)
+    after all extraction lines -- same container, ~10ms each; each stats
+    file is parsed host-side and the minimum of a gap's pair scores is used
+    to prefilter pixel-static gaps (comparing only first-vs-last would miss
+    a camera pan-away-and-return, since the middle frame -- already
+    extracted, already paid for -- is the one that would reveal the
+    on-screen action). A failed comparison (`|| true`, no stats file)
+    simply drops that pair's score from the min.
     """
     lines = [
         "ffmpeg -hide_banner -nostats -loglevel error -nostdin -y "

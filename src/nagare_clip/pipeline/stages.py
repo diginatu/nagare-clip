@@ -169,11 +169,16 @@ def _extract_gap_frames(
 
     jobs: list[tuple[str, float, str]] = []
     ssim_jobs: list[tuple[str, str, str]] = []
-    # Per stem: list of (start, end, [(t, rel, host_path), ...], ssim_host) so
+    # Per stem: list of (start, end, [(t, rel, host_path), ...], ssim_hosts) so
     # the single batch result can be re-split back per source/gap afterward.
-    plan: dict[str, list[tuple[float, float, list[tuple[float, str, Path]], Path | None]]] = {}
+    # ssim_hosts holds one stats-file path per CONSECUTIVE frame pair (0..1
+    # for a 3-frame gap, i.e. first-vs-mid and mid-vs-last) -- comparing only
+    # the first and last frame would miss a pan-away-and-return, since the
+    # middle frame (already extracted, already paid for) is the one that
+    # would reveal the on-screen action.
+    plan: dict[str, list[tuple[float, float, list[tuple[float, str, Path]], list[Path]]]] = {}
     for src, gaps in gaps_by_source:
-        entries: list[tuple[float, float, list[tuple[float, str, Path]], Path | None]] = []
+        entries: list[tuple[float, float, list[tuple[float, str, Path]], list[Path]]] = []
         for start, end in gaps:
             frame_entries: list[tuple[float, str, Path]] = []
             for t in frame_times(start, end):
@@ -182,18 +187,21 @@ def _extract_gap_frames(
                 host_path.parent.mkdir(parents=True, exist_ok=True)
                 jobs.append((src.relative, t, f"/output/gap_context/{rel}"))
                 frame_entries.append((t, rel, host_path))
-            ssim_host: Path | None = None
+            ssim_hosts: list[Path] = []
             if ssim_threshold > 0.0 and len(frame_entries) >= 2:
-                ssim_rel = ssim_relpath(src.stem, start, end)
-                ssim_host = d / ssim_rel
-                ssim_jobs.append(
-                    (
-                        f"/output/gap_context/{frame_entries[0][1]}",
-                        f"/output/gap_context/{frame_entries[-1][1]}",
-                        f"/output/gap_context/{ssim_rel}",
+                pairs = list(zip(frame_entries, frame_entries[1:], strict=False))
+                for i, (a, b) in enumerate(pairs):
+                    ssim_rel = ssim_relpath(src.stem, start, end, i)
+                    ssim_host = d / ssim_rel
+                    ssim_hosts.append(ssim_host)
+                    ssim_jobs.append(
+                        (
+                            f"/output/gap_context/{a[1]}",
+                            f"/output/gap_context/{b[1]}",
+                            f"/output/gap_context/{ssim_rel}",
+                        )
                     )
-                )
-            entries.append((start, end, frame_entries, ssim_host))
+            entries.append((start, end, frame_entries, ssim_hosts))
         plan[src.stem] = entries
 
     if jobs:
@@ -208,7 +216,7 @@ def _extract_gap_frames(
     result: dict[str, list[GapFrames]] = {}
     for stem, entries in plan.items():
         out: list[GapFrames] = []
-        for start, end, frame_entries, ssim_host in entries:
+        for start, end, frame_entries, ssim_hosts in entries:
             frames: list[Path] = []
             relpaths: list[str] = []
             for t, rel, host_path in frame_entries:
@@ -222,9 +230,18 @@ def _extract_gap_frames(
                     "gap_context: no frames for gap %.1f-%.1f in %s; skipping", start, end, stem
                 )
                 continue
-            ssim: float | None = None
-            if ssim_host is not None and ssim_host.is_file():
-                ssim = parse_ssim_stats(ssim_host.read_text(encoding="utf-8"))
+            # The gap is judged static only if it holds still THROUGHOUT, so
+            # take the min across consecutive-pair scores (min(a,b) >= T is
+            # exactly (a>=T) AND (b>=T)); a missing/unparseable stats file
+            # (failed comparison) is simply excluded, never fatal.
+            pair_scores = [
+                score
+                for ssim_host in ssim_hosts
+                if ssim_host.is_file()
+                for score in [parse_ssim_stats(ssim_host.read_text(encoding="utf-8"))]
+                if score is not None
+            ]
+            ssim: float | None = min(pair_scores) if pair_scores else None
             out.append(GapFrames(start=start, end=end, frames=frames, relpaths=relpaths, ssim=ssim))
         result[stem] = out
     return result

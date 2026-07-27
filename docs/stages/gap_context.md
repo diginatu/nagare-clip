@@ -107,46 +107,70 @@ source inside the loop.
 A real production run showed 23/54 vision calls returning `STATIC:` — nearly
 40% of the stage's LLM cost spent describing scenes where nothing visually
 changes. Since the frames already exist on disk by the time `describe_gap`
-would be called, one cheap ffmpeg SSIM comparison per gap (first frame vs.
-last frame) can catch the pixel-static subset of those and skip the vision
-call entirely — **in the same batch container** as frame extraction, per the
+would be called, cheap ffmpeg SSIM comparisons between a gap's extracted
+frames can catch the pixel-static subset of those and skip the vision call
+entirely — **in the same batch container** as frame extraction, per the
 "one `docker compose run` for the whole stage" invariant above.
 
-- `snapshot.ssim_relpath(stem, start, end)` names the stats-file path
-  (`frames/{stem}/ssim_{start:.3f}-{end:.3f}.txt`, relative to the stage dir,
-  mirroring `frame_relpath`'s `{stem}` namespacing so two sources' stats files
-  can never collide).
-- `_extract_gap_frames` plans one SSIM job per gap that has **at least 2**
-  extracted frame entries (a gap that collapsed to a single frame — see
-  `frame_times`'s short-span case — has no "first vs. last" pair to compare,
-  so no job is planned and `GapFrames.ssim` stays `None`) **and only when
-  `gap_context.static_ssim` is above `0`** — `_extract_gap_frames` reads its
-  own `ssim_threshold = float(ctx.cfg["gap_context"].get("static_ssim",
-  0.0))`; unlike `frame_width` (`ctx.cfg["gap_context"]["frame_width"]`) and
-  `min_gap` (`g["min_gap"]`), which are read via direct subscript,
-  `static_ssim` is the only gap_context key read with `.get`-and-default —
-  and gates planning on `ssim_threshold > 0.0`, so `static_ssim: 0` genuinely
-  disables the prefilter end-to-end: no ssim job, no extra ffmpeg line in
-  the batch script, no stats file ever written. (Previously only
-  `run_gap_context`'s consumption-side threshold check gated the *result*,
-  so the ffmpeg comparison and stats-file write still happened even at
-  `static_ssim: 0` — fixed in the Task 9 review round.) The job is
-  `(first_frame_container_path, last_frame_container_path,
-  stats_container_path)`, appended to `ssim_jobs` and passed to
-  `build_snapshot_batch_cmd(..., ssim_jobs=...)`.
+The comparison is over every **consecutive** pair of a gap's extracted
+frames, not just the first and last. An earlier version compared only
+first-vs-last, which false-positives on a camera that pans away and returns
+to the same framing: both endpoints look alike, so the pair scores high,
+even though the middle frame — already extracted, already paid for — shows
+real on-screen action in between. Taking the **minimum** across a gap's
+consecutive-pair scores fixes this: `min(a, b) >= T` is exactly `(a >= T)
+AND (b >= T)`, i.e. the gap is judged static only if it holds still
+*throughout*, not just at the two ends. The cost asymmetry also favors
+`min` over `max` (which would be an OR, wrongly skipping a gap whose first
+half is frozen and second half has action): a false negative merely spends
+one extra vision call, while a false positive silently drops visual context
+the director/summary stages never see.
+
+- `snapshot.ssim_relpath(stem, start, end, pair_index)` names the stats-file
+  path for one pair (`frames/{stem}/ssim_{start:.3f}-{end:.3f}_{pair_index}.txt`,
+  relative to the stage dir, mirroring `frame_relpath`'s `{stem}` namespacing
+  so two sources' stats files can never collide). The `pair_index` arg
+  disambiguates the multiple stats files a single gap can now have (a
+  3-frame gap has 2 consecutive pairs: 0 = first-vs-mid, 1 = mid-vs-last).
+- `_extract_gap_frames` plans one SSIM job per **consecutive pair** of a
+  gap's extracted frame entries (`zip(frame_entries, frame_entries[1:])`) —
+  a gap that collapsed to a single frame (see `frame_times`'s short-span
+  case) has no pair to compare at all, so no job is planned and
+  `GapFrames.ssim` stays `None`; a 2-frame gap gets exactly 1 job (identical
+  to the old first-vs-last behavior, since there IS no middle frame); a
+  3-frame gap gets 2 jobs — **and only when `gap_context.static_ssim` is
+  above `0`** — `_extract_gap_frames` reads its own `ssim_threshold =
+  float(ctx.cfg["gap_context"].get("static_ssim", 0.0))`; unlike
+  `frame_width` (`ctx.cfg["gap_context"]["frame_width"]`) and `min_gap`
+  (`g["min_gap"]`), which are read via direct subscript, `static_ssim` is
+  the only gap_context key read with `.get`-and-default — and gates
+  planning on `ssim_threshold > 0.0`, so `static_ssim: 0` genuinely disables
+  the prefilter end-to-end: no ssim job, no extra ffmpeg line in the batch
+  script, no stats file ever written. (Previously only `run_gap_context`'s
+  consumption-side threshold check gated the *result*, so the ffmpeg
+  comparison and stats-file write still happened even at `static_ssim: 0` —
+  fixed in the Task 9 review round.) Each job is `(frame_a_container_path,
+  frame_b_container_path, stats_container_path)`, appended to `ssim_jobs`
+  and passed to `build_snapshot_batch_cmd(..., ssim_jobs=...)`. The per-gap
+  stats paths are tracked as `ssim_hosts: list[Path]` (one per pair), not a
+  single optional path.
 - `build_snapshot_batch_cmd` appends one `ffmpeg ... -filter_complex
-  ssim=stats_file=<path> -f null - || true` line **after all extraction
-  lines** for the whole batch — ordering matters, since a comparison line
-  needs both its frames to already exist on disk. `ssim_jobs=()` (the
-  default) leaves the command byte-identical to before this feature
+  ssim=stats_file=<path> -f null - || true` line per pair **after all
+  extraction lines** for the whole batch — ordering matters, since a
+  comparison line needs both its frames to already exist on disk. The
+  builder itself is generic over `ssim_jobs`' tuples and needed no logic
+  change for the multi-pair-per-gap case. `ssim_jobs=()` (the default)
+  leaves the command byte-identical to before this feature
   (regression-guarded in `tests/pipeline/test_external.py`).
-- Back on the host, `_extract_gap_frames`'s result loop reads the stats file
-  (`ssim_host.is_file()`) and parses it with `snapshot.parse_ssim_stats`,
-  which extracts the `All:` score from ffmpeg's `ssim` filter stats-file
-  line (`n:1 Y:... U:... V:... All:0.996132 (24.12)`). A missing or
-  unparseable stats file (failed comparison, `|| true` swallowed it) simply
-  leaves `GapFrames.ssim = None` — the prefilter is disabled for that gap,
-  never an exception.
+- Back on the host, `_extract_gap_frames`'s result loop reads every stats
+  file for the gap that exists (`ssim_host.is_file()`), parses each with
+  `snapshot.parse_ssim_stats` (extracts the `All:` score from ffmpeg's
+  `ssim` filter stats-file line, `n:1 Y:... U:... V:... All:0.996132
+  (24.12)`), drops any missing/unparseable one, and sets `GapFrames.ssim` to
+  the `min` of whatever survived (`None` if nothing did). A partially-failed
+  batch (one pair's comparison failed, `|| true` swallowed it, but the
+  other's stats file is fine) degrades gracefully to the min of the
+  survivors — never an exception.
 - `run_gap_context` hoists `threshold = float(gc_cfg.get("static_ssim",
   0.0))` once per source, then for each gap: if `threshold > 0.0 and
   gf.ssim is not None and gf.ssim >= threshold`, the gap is written straight
@@ -166,28 +190,38 @@ call entirely — **in the same batch container** as frame extraction, per the
   flipping `"static": false` in `{stem}_gaps.json` forces a prefiltered gap
   back into the summary/director prompts exactly as it does for an
   LLM-judged static gap.
-- The prefilter can also **false-positive**: since it only compares the gap's
-  first and last extracted frame, a gap where the camera pans away and
-  returns to the same framing scores high and skips the vision call despite
-  real on-screen action in between. The measured margin between the two
-  classes is thin (action max 0.9416 vs. the 0.95 default — see the
-  calibration note below), so this is a real risk on some footage; the same
-  hand-flip (`"static": false` in `{stem}_gaps.json`) recovers a
-  wrongly-skipped gap.
-- **Calibration note:** measured against the water_pump_3 corpus's real
-  `_gaps.json` static/action verdicts (handheld phone-camera footage), the
-  first-vs-last-frame SSIM does not cleanly separate the two classes on most
-  of that footage — camera micro-motion over a 10-30s gap depresses SSIM
-  regardless of narrative content, so sampled `static: true` gaps scored as
-  low as 0.72 and sampled `static: false` gaps scored as high as 0.94 on the
-  dominant source. A second source in the same corpus (steadier shots)
-  showed a much cleaner split (static ≥0.96, action ≤0.90). The measured max
-  across BOTH sampled sources was action=0.9416, static=0.9763 — no true
-  action gap in either source scored above 0.95, so the default is
-  **`0.95`**: safely above the 0.9416 action max (margin ~0.008) while still
-  catching the steadier source's static gaps (all ≥0.96) and any
-  higher-scoring static gap on the dominant source. See the Task 9 report
-  for the full measured numbers.
+- The pan-away-and-return false positive described above is now
+  **mitigated** by the consecutive-pair min (previously an open risk when
+  the comparison was first-vs-last only): a low-scoring first-vs-mid pair
+  drags the gap's overall score down even when mid-vs-last looks nearly
+  identical (camera settled back to the same framing). The prefilter can
+  still miss action that happens strictly *between* two adjacent sampled
+  frames without ever showing at a sample point, but that residual risk
+  is far narrower than the original endpoints-only comparison.
+- **Calibration note (re-derived for the three-frame/min-of-pairs metric):**
+  measured against the same water_pump_3 corpus's real `_gaps.json`
+  static/action verdicts (handheld phone-camera footage), 108 consecutive-
+  frame-pair SSIM comparisons across 54 gaps (32 static, 22 action, all with
+  3 extracted frames) were computed and reduced to a per-gap min. The two
+  classes still do **not** cleanly separate on the dominant (handheld)
+  source — camera micro-motion depresses SSIM regardless of narrative
+  content, so sampled `static: true` gaps scored as low as 0.6975 and
+  sampled `static: false` (action) gaps scored as high as 0.9445 on that
+  source; a second, steadier source in the same corpus separated far more
+  cleanly (action max 0.9139, static min 0.9609). The measured max/min
+  across ALL sampled gaps: action max = **0.9445**, static max = 0.9772,
+  static min = 0.6975. No true action gap scored above 0.9445, so the
+  default is **`0.96`**: a real margin (~0.015) above the sampled action
+  max — a bit more conservative than the previous first-vs-last default's
+  thin ~0.008 margin, since a razor-thin margin risks flipping on
+  measurement noise given the classes don't separate on this corpus's
+  dominant source. At `0.96`, zero sampled action gaps false-positive and
+  11/32 (34%) of sampled static gaps are correctly caught (vs. 16/32 at a
+  thinner `0.95` margin, or 18/32 at `0.945` where the margin all but
+  vanishes). This prefilter mainly pays off on steadier/locked-off footage;
+  on heavily handheld footage most true statics simply fall through to the
+  normal (safe, just costs one vision call) `describe_gap` path. See the
+  three-frame-comparison follow-up report for the full measured numbers.
 
 ## Vision call (`describe.py`)
 
@@ -393,7 +427,7 @@ silently drifting from reality.
 Stage-specific: `min_gap` (seconds, default 3.0 — same default as
 `sentence_split.force_split_min_silence`, though the two are independent
 knobs over the same `_cuts.txt`), `frame_width` (px, default 960, passed
-straight to ffmpeg's `scale` filter), and `static_ssim` (default `0.95`, `0`
+straight to ffmpeg's `scale` filter), and `static_ssim` (default `0.96`, `0`
 disables — the pixel-static prefilter threshold; see the section above).
 `prompt` is `_commented` (has a
 sensible default, `GAP_CONTEXT_PROMPT`, documented rather than repeated in
@@ -411,6 +445,7 @@ sensible default, `GAP_CONTEXT_PROMPT`, documented rather than repeated in
 | A hand-edited gaps entry is malformed (bad start/end, blank description, non-string frames) | That entry is dropped (logged); the rest of the file still loads |
 | The vision LLM marks a gap `STATIC:` (or a hand-edit sets `"static": true`) | The gap stays in `{stem}_gaps.json` but `anchor_gaps` skips it — invisible to summary/director |
 | The vision LLM omits the ACTION:/STATIC: marker | Treated as ACTION (`static: false`); the description is used as-is |
-| A gap's first/last frame SSIM is >= `static_ssim` (default 0.95) | Written as `static: true` with a `(prefilter...)` description; no vision call is made |
-| The SSIM comparison fails or its stats file is missing/unparseable | `GapFrames.ssim` stays `None`; the prefilter is simply disabled for that gap (normal vision call proceeds) |
+| The min SSIM across a gap's consecutive extracted-frame pairs is >= `static_ssim` (default 0.96) | Written as `static: true` with a `(prefilter...)` description; no vision call is made |
+| One (but not all) of a gap's pair-wise SSIM comparisons fails or its stats file is missing/unparseable | That pair's score is dropped; `GapFrames.ssim` is the min of the surviving pair(s) |
+| Every one of a gap's pair-wise SSIM comparisons fails or is missing/unparseable | `GapFrames.ssim` stays `None`; the prefilter is simply disabled for that gap (normal vision call proceeds) |
 | `static_ssim: 0` | The prefilter is disabled entirely: `_extract_gap_frames` doesn't plan the SSIM job at all (no extra ffmpeg line, no stats file), and every gap goes through the normal vision call |

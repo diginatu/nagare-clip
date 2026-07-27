@@ -44,9 +44,15 @@ def frame_relpath(stem: str, t: float) -> str:
     return f"frames/{stem}/{t:.3f}.jpg"
 
 
-def ssim_relpath(stem: str, start: float, end: float) -> str:
-    """SSIM stats-file path (relative to the gap_context stage dir) for a gap."""
-    return f"frames/{stem}/ssim_{start:.3f}-{end:.3f}.txt"
+def ssim_relpath(stem: str, start: float, end: float, pair_index: int) -> str:
+    """SSIM stats-file path (relative to the gap_context stage dir) for one
+    consecutive-frame pair within a gap.
+
+    A gap with 3 extracted frames yields 2 consecutive pairs (0: first-vs-mid,
+    1: mid-vs-last), each needing its own stats file, so *pair_index*
+    disambiguates them.
+    """
+    return f"frames/{stem}/ssim_{start:.3f}-{end:.3f}_{pair_index}.txt"
 
 
 def parse_ssim_stats(text: str) -> float | None:

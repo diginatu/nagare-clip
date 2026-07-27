@@ -49,7 +49,7 @@ class GapFrames:
     end: float
     frames: list[Path] = field(default_factory=list)  # absolute, on disk
     relpaths: list[str] = field(default_factory=list)  # recorded in gaps.json
-    ssim: float | None = None  # first-vs-last frame SSIM (pixel-static prefilter)
+    ssim: float | None = None  # min SSIM across consecutive frame pairs (pixel-static prefilter)
 
     @property
     def duration(self) -> float:
