@@ -34,9 +34,7 @@ def _merge_ranges(ranges: list[tuple[float, float]]) -> list[tuple[float, float]
     return out
 
 
-def span_silence(
-    start: float | None, end: float | None, cuts: list[tuple[float, float]]
-) -> float:
+def span_silence(start: float | None, end: float | None, cuts: list[tuple[float, float]]) -> float:
     """Seconds of ``[start, end]`` covered by the (merged) *cuts* ranges."""
     if start is None or end is None or end <= start:
         return 0.0
