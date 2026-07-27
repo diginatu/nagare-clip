@@ -138,6 +138,10 @@ class Recorder:
         attempts = self._buffers.pop(unit, [])
         started = self._started.pop(unit, datetime.now())
         duration_ms = int((datetime.now() - started).total_seconds() * 1000)
+        # Both walk backwards on the same `a.model` predicate (not `a.thinking`
+        # for the second) so `model`/`thinking` describe the SAME attempt —
+        # the last one with a real LLM call, skipping deterministic attempts
+        # (cfg=None -> model="") like guided_edit's span-op verification.
         model = next((a.model for a in reversed(attempts) if a.model), "")
         thinking = next((a.thinking for a in reversed(attempts) if a.model), False)
         try:

@@ -1,7 +1,10 @@
 """Pure timing helpers shared by the plan and director stages.
 
-Extract per-segment times from a WhisperX JSON and render a compact
-``[dur, gap]`` bracket.  No I/O, no internal imports — safe to import anywhere.
+Extract per-segment times from a WhisperX JSON, measure how much of a span
+the audio_silence cut list already covers (``span_silence``/
+``segment_silences``), and render a compact ``[dur, gap]`` bracket —
+or, when silence overlaps, the ``[Xs speech, Ys silence]`` form
+(``format_dur_gap``).  No I/O, no internal imports — safe to import anywhere.
 """
 
 from __future__ import annotations
@@ -51,19 +54,7 @@ def segment_silences(
     cuts: list[tuple[float, float]],
 ) -> list[float]:
     """Per-segment internal-silence seconds (0.0 for unknown times)."""
-    merged = _merge_ranges(cuts)
-    out: list[float] = []
-    for start, end in seg_times:
-        if start is None or end is None or end <= start:
-            out.append(0.0)
-            continue
-        total = 0.0
-        for c_start, c_end in merged:
-            lo, hi = max(start, c_start), min(end, c_end)
-            if hi > lo:
-                total += hi - lo
-        out.append(total)
-    return out
+    return [span_silence(start, end, cuts) for start, end in seg_times]
 
 
 def format_dur_gap(dur: float | None, gap: float | None, silence: float | None = None) -> str:
