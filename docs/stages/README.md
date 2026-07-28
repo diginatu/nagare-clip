@@ -7,6 +7,7 @@ the hard constraints live in the top-level [`AGENTS.md`](../../AGENTS.md).
 
 | Topic | File |
 |-------|------|
+| Project editorial brief injected into summary/plan/director/text_filter prompts | [project_brief.md](project_brief.md) |
 | Audio-silence detection | [audio_silence.md](audio_silence.md) |
 | Sentence re-segmentation, windowing/carry-over, force-split | [sentence_split.md](sentence_split.md) |
 | Silent-gap visual context (vision LLM, summary/director consumption) | [gap_context.md](gap_context.md) |

@@ -254,3 +254,41 @@ def test_run_director_reads_cuts_txt_for_silence_brackets(tmp_path, monkeypatch)
         cuts_txt=cuts,
     )
     assert "speech" in seen["user"] and "silence" in seen["user"]
+
+
+def test_project_brief_appended_to_director_prompt(monkeypatch, tmp_path):
+    """The brief precedes the summary/plan overview block in the system prompt."""
+    from nagare_clip.director import director_llm as dl
+
+    edits = tmp_path / "v_edits.txt"
+    edits.write_text("あ\n", encoding="utf-8")
+
+    seen: dict = {}
+
+    def fake_llm(messages, cfg):
+        seen["system"] = messages[0]["content"]
+        return '{"ops": []}'
+
+    monkeypatch.setattr(dl, "_call_llm", fake_llm)
+    director_run.run_director(
+        edits,
+        tmp_path / "v_director.json",
+        {
+            "director": {"enabled": True, "prompt": "P", "max_retries": 0},
+            "project": {"audience": "DIY viewers"},
+        },
+        stem="v",
+    )
+    assert seen["system"] == (
+        "P\n\nEditorial brief (applies to the whole project; follow it when deciding "
+        "what to keep, cut, tighten and emphasise):\n- Audience: DIY viewers"
+    )
+
+    seen.clear()
+    director_run.run_director(
+        edits,
+        tmp_path / "v_director.json",
+        {"director": {"enabled": True, "prompt": "P", "max_retries": 0}},
+        stem="v",
+    )
+    assert seen["system"] == "P"

@@ -47,3 +47,26 @@ def test_enabled_writes_directions(monkeypatch, tmp_path):
             {"stem": "b", "lines": [1, 1], "direction": "remove"},
         ]
     }
+
+
+def test_project_brief_appended_to_plan_prompt(monkeypatch, tmp_path):
+    ps = ProjectSummary("all", [PartSummary("a", (1, 2), "x")])
+    seen: dict = {}
+
+    def fake_generate(project_summary, cfg, **kwargs):
+        seen["prompt"] = cfg["prompt"]
+        return []
+
+    monkeypatch.setattr(plan_run, "generate_plan", fake_generate)
+    _run(
+        monkeypatch,
+        tmp_path,
+        {"plan": {"enabled": True, "prompt": "P"}, "project": {"target_duration": "12 minutes"}},
+        ps,
+    )
+    assert seen["prompt"].startswith("P\n\n")
+    assert seen["prompt"].endswith("- Target duration: 12 minutes")
+
+    seen.clear()
+    _run(monkeypatch, tmp_path, {"plan": {"enabled": True, "prompt": "P"}}, ps)
+    assert seen["prompt"] == "P"

@@ -19,6 +19,20 @@ general:
   llm_report_dir: "output/llm_report"
   langfuse: true   # send LLM traces to Langfuse when LANGFUSE_PUBLIC_KEY/SECRET_KEY are set (false to force-disable)
 
+# project: the editorial brief for this project (all fields optional, free text).
+# Whatever is set here is appended to the system prompts of the summary, plan,
+# director and text_filter stages, so those LLMs know what the transcript cannot
+# tell them: who the video is for, how long it should be, how it should feel, and
+# what happened previously in a series. Leave everything empty (the default) and
+# every prompt is byte-identical to a run without this section.
+project:
+  # audience: "DIY hobbyists on YouTube, already familiar with the build"   # Who the video is for
+  # purpose: "show whether the siphon overflow drain actually works"   # What the video is trying to achieve
+  # target_duration: "about 12 minutes"   # Desired finished length (free text); guides how aggressively to cut
+  # tone: "fast, punchy vlog; frequent on-screen captions"   # Desired feel/pacing of the finished video
+  # story_so_far: "the previous episode built the rig; this one tests it"   # Series context the transcript never states
+  # previous_summary: "../previous-project/output/summary/summary.json"   # Path to a previous project's summary.json; its overall summary is added to the brief
+
 transcription:
   compute_type: float16
   batch_size: 16

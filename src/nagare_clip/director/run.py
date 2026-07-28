@@ -12,6 +12,7 @@ import logging
 from pathlib import Path
 
 from nagare_clip.audio_silence.cuts_file import read_cuts
+from nagare_clip.brief import apply_brief
 from nagare_clip.director import director_llm as director_llm_mod
 from nagare_clip.director.context import build_director_context
 from nagare_clip.director.director_llm import generate_director_ops, ops_to_dict
@@ -71,7 +72,7 @@ def run_director(
         logging.info("director: analysing %d line(s) with LLM", len(edit_lines))
         ops = generate_director_ops(
             edit_lines,
-            director_cfg,
+            apply_brief(director_cfg, cfg),
             call_llm=director_llm_mod._call_llm,
             overview_context=overview_context,
             recorder=recorder,
