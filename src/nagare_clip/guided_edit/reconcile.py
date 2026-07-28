@@ -15,7 +15,7 @@ from __future__ import annotations
 
 from nagare_clip.director.director_llm import DirectorOp
 from nagare_clip.intervals.sync_json import (
-    _OVERLAY_OPEN_RE,
+    _OVERLAY_MARK_RE,
     _SPEED_OPEN_RE,
     CUT_TAG_RE,
     KEEP_TAG_RE,
@@ -43,17 +43,14 @@ def clean_old(line: str) -> str:
 # op the open tag must sit on the *first* boundary line and the close tag on the
 # *last* — checking mere presence anywhere in the region would let the small LLM
 # collapse both tags onto one boundary, silently leaving the rest of the span
-# uncut/unprotected.
+# uncut/unprotected.  ``overlay`` is absent on purpose: it is a self-closing
+# point marker, checked separately in :func:`_reflection_failure`.
 _SPAN_TAGS = {
     "cut": (lambda s: "<cut>" in s, lambda s: "</cut>" in s),
     "keep": (lambda s: "<keep>" in s, lambda s: "</keep>" in s),
     "speed": (
         lambda s: _SPEED_OPEN_RE.search(s) is not None,
         lambda s: "</speed>" in s,
-    ),
-    "overlay": (
-        lambda s: _OVERLAY_OPEN_RE.search(s) is not None,
-        lambda s: "</overlay>" in s,
     ),
 }
 
@@ -65,6 +62,11 @@ def _reflection_failure(
     if op.type == "edit":
         if "".join(after[lo:hi]) == "".join(before[lo:hi]):
             return f"edit op not reflected on lines {a}-{b}"
+        return None
+    if op.type == "overlay":
+        # A point marker, not a span: it must sit on the op's own line.
+        if _OVERLAY_MARK_RE.search(after[lo]) is None:
+            return f"overlay op: marker missing on line {a}"
         return None
     tags = _SPAN_TAGS.get(op.type)
     if tags is None:

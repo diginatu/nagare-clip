@@ -28,13 +28,17 @@ SPEED_TAG_RE = re.compile(r'<speed\s+factor="[0-9.]+">|</speed>')
 _SPEED_SPLIT_RE = re.compile(r'(<speed\s+factor="[0-9.]+">|</speed>)')
 _SPEED_OPEN_RE = re.compile(r'<speed\s+factor="([0-9.]+)">')
 
-# <overlay text="...">...</overlay> markers: place a Blender VSE TEXT strip
-# at the wrapped span's time range. Like <speed> (and unlike <keep>), overlay
-# does NOT affect audio retention; if the wrapped audio is cut, the overlay is
-# skipped in the blender stage.
-OVERLAY_TAG_RE = re.compile(r'<overlay\s+text="[^"]*">|</overlay>')
-_OVERLAY_SPLIT_RE = re.compile(r'(<overlay\s+text="[^"]*">|</overlay>)')
-_OVERLAY_OPEN_RE = re.compile(r'<overlay\s+text="([^"]*)">')
+# <overlay text="..." duration="N.N"/> point markers: place a Blender VSE TEXT
+# strip starting where the marker sits, for `duration` seconds *of the edited
+# timeline*.  The marker has no closing tag on purpose — an end time derived
+# from a tag position turned an overlay's on-screen time into a side effect of
+# where that tag happened to land (a single-line director op once produced a
+# 75-second caption).  Like <speed> (and unlike <keep>), an overlay does NOT
+# affect audio retention; if the anchor word is cut, the overlay is skipped in
+# the blender stage.  Attribute order is fixed: text, then duration.
+OVERLAY_TAG_RE = re.compile(r'<overlay\s+text="[^"]*"\s+duration="[0-9.]+"\s*/>')
+_OVERLAY_SPLIT_RE = re.compile(r'(<overlay\s+text="[^"]*"\s+duration="[0-9.]+"\s*/>)')
+_OVERLAY_MARK_RE = re.compile(r'<overlay\s+text="([^"]*)"\s+duration="([0-9.]+)"\s*/>')
 
 # <cut>...</cut> deletion-shorthand markers (added by humans / guided_edit).
 # A <cut> span deletes the wrapped text; it desugars to a {{wrapped->}}
@@ -264,11 +268,11 @@ def sync_text_to_json(
     corrected text differs from the original but no markers are present.
 
     Any `<keep>...</keep>`, `<speed factor="N.N">...</speed>`, and
-    `<overlay text="...">...</overlay>` markers are stripped from each edit
+    `<overlay text="..." duration="N.N"/>` markers are stripped from each edit
     line before patches are applied; the wrapped text and inner
     `{{old->new}}` markers are otherwise unaffected.  See
     :func:`extract_keep_ranges`, :func:`extract_speed_ranges`, and
-    :func:`extract_overlay_ranges` for the time-range extraction passes.
+    :func:`extract_overlay_marks` for the time extraction passes.
 
     Returns a new dict (deep copy).
     """
@@ -481,54 +485,66 @@ def extract_speed_ranges(
     return ranges
 
 
-def extract_overlay_ranges(
+def _resolve_point(
+    segments: list[dict[str, Any]],
+    anchor: tuple[int, int],
+) -> float | None:
+    """Resolve a `(segment_index, position)` anchor to a single start time.
+
+    The anchor is the start of the first word at or after it (falling through
+    to later segments), so a marker sitting at the end of a line starts when
+    the next line does.  Past the very last word there is nothing to fall
+    through to, so the last word's end time is used instead.  ``None`` when the
+    transcript has no usable timing at all.
+    """
+    word = _first_word_at_or_after(segments, *anchor)
+    if word is not None and "start" in word:
+        return float(word["start"])
+    last = _last_word_before(segments, anchor[0], anchor[1])
+    if last is not None and "end" in last:
+        return float(last["end"])
+    return None
+
+
+def extract_overlay_marks(
     edit_lines: list[str], synced_json: dict[str, Any]
 ) -> list[tuple[float, float, str]]:
-    """Extract `(start, end, text)` triples from `<overlay text="...">...</overlay>` blocks.
+    """Extract `(start, duration, text)` triples from `<overlay .../>` point markers.
 
-    Behaves like :func:`extract_speed_ranges` for span resolution (multi-line
-    spans, position tracking, error handling) but returns the overlay text
-    parsed from each opening tag instead of a numeric factor.  Overlays do
-    NOT affect audio retention; they are consumed by the blender stage to place
-    on-screen TEXT strips only.
+    Unlike :func:`extract_keep_ranges`/:func:`extract_speed_ranges`, an overlay
+    is a *point*: its position gives the start time and its ``duration``
+    attribute — seconds on the **edited** timeline — gives how long the text
+    stays on screen (applied by the blender stage, which measures in output
+    frames, so cuts and speed ranges inside the window cannot shorten it).
+    There is no closing tag and therefore no tag-placement failure mode.
 
-    Empty ``text=""`` attributes are treated as invalid and skipped with a
-    warning (an overlay with no text would have nothing to display).
+    An empty ``text=""`` or a non-positive ``duration`` is skipped with a
+    warning; neither raises.
     """
     segments = synced_json.get("segments", [])
-    ranges: list[tuple[float, float, str]] = []
-    overlay_start: tuple[int, int] | None = None
-    overlay_text: str | None = None
+    marks: list[tuple[float, float, str]] = []
 
     for seg_idx, line in enumerate(edit_lines):
         if seg_idx >= len(segments):
             break
         output_pos = 0
         for part in _OVERLAY_SPLIT_RE.split(line):
-            open_match = _OVERLAY_OPEN_RE.fullmatch(part) if part else None
-            if open_match is not None:
-                if overlay_start is not None:
-                    logger.warning("Nested <overlay> opener; ignoring inner tag")
-                    continue
-                overlay_start = (seg_idx, output_pos)
-                overlay_text = open_match.group(1)
-            elif part == "</overlay>":
-                if overlay_start is None:
-                    logger.warning("Unmatched </overlay>; ignoring")
-                    continue
-                resolved = _resolve_keep_range(segments, overlay_start, (seg_idx, output_pos))
-                text = overlay_text
-                overlay_start = None
-                overlay_text = None
-                if resolved is None or not text:
-                    logger.warning("<overlay> resolved to an empty/invalid range; ignoring")
-                    continue
-                start_t, end_t = resolved
-                ranges.append((start_t, end_t, text))
-            else:
+            mark = _OVERLAY_MARK_RE.fullmatch(part) if part else None
+            if mark is None:
                 output_pos += _patched_visible_length(part)
+                continue
+            text = mark.group(1)
+            duration = float(mark.group(2))
+            if not text:
+                logger.warning("<overlay> has empty text; ignoring")
+                continue
+            if duration <= 0:
+                logger.warning("<overlay> duration %.3f is not positive; ignoring", duration)
+                continue
+            start_t = _resolve_point(segments, (seg_idx, output_pos))
+            if start_t is None:
+                logger.warning("<overlay> could not be anchored to a word time; ignoring")
+                continue
+            marks.append((start_t, duration, text))
 
-    if overlay_start is not None:
-        logger.warning("Unclosed <overlay>; ignoring")
-
-    return ranges
+    return marks

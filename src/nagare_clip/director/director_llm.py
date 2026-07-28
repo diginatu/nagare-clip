@@ -54,6 +54,7 @@ class DirectorOp:
     note: str = ""
     factor: float | None = None
     text: str | None = None
+    duration: float | None = None  # overlay: on-screen seconds (edited timeline)
     extra: dict = field(default_factory=dict)
 
 
@@ -107,14 +108,27 @@ def _parse_op(raw: Any, num_lines: int, drops: list[str] | None = None) -> Direc
             return None
 
     text: str | None = None
+    duration: float | None = None
     if op_type == "overlay":
         raw_text = raw.get("text")
         if not isinstance(raw_text, str) or raw_text == "":
             _drop("overlay op empty/missing text")
             return None
         text = raw_text
+        # The duration is what makes the op applicable at all: an overlay's
+        # on-screen time is stated, never derived from where a tag landed.
+        raw_duration = raw.get("duration")
+        if not isinstance(raw_duration, (int, float)) or isinstance(raw_duration, bool):
+            _drop("overlay op missing duration")
+            return None
+        duration = float(raw_duration)
+        if duration <= 0:
+            _drop(f"overlay duration {duration!r} <= 0")
+            return None
 
-    return DirectorOp(type=op_type, lines=lines, note=note, factor=factor, text=text)
+    return DirectorOp(
+        type=op_type, lines=lines, note=note, factor=factor, text=text, duration=duration
+    )
 
 
 def try_parse_director_response(
@@ -239,6 +253,8 @@ def ops_to_dict(ops: list[DirectorOp]) -> dict[str, Any]:
             entry["factor"] = op.factor
         if op.text is not None:
             entry["text"] = op.text
+        if op.duration is not None:
+            entry["duration"] = op.duration
         if op.note:
             entry["note"] = op.note
         out.append(entry)

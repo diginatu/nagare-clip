@@ -11,7 +11,7 @@ class TestCleanOld:
         assert clean_old("あ{{い->X}}う") == "あいう"
         assert clean_old("<cut>あ</cut>い") == "あい"
         assert clean_old('<speed factor="2.0">あ</speed>') == "あ"
-        assert clean_old('<overlay text="z">あ</overlay>') == "あ"
+        assert clean_old('<overlay text="z" duration="3.0"/>あ') == "あ"
 
 
 def _op(t, a, b, **kw):
@@ -34,10 +34,10 @@ class TestVerifyOk:
         after = ['<speed factor="2.0">あいう</speed>']
         assert verify_op(before, after, _op("speed", 1, 1, factor=2.0)) is None
 
-    def test_overlay_ok(self):
+    def test_overlay_marker_ok(self):
         before = ["あいう"]
-        after = ['<overlay text="z">あいう</overlay>']
-        assert verify_op(before, after, _op("overlay", 1, 1, text="z")) is None
+        after = ['<overlay text="z" duration="3.0"/>あいう']
+        assert verify_op(before, after, _op("overlay", 1, 1, text="z", duration=3.0)) is None
 
     def test_edit_ok(self):
         before = ["あえーとい"]
@@ -90,7 +90,12 @@ class TestVerifyFails:
         after = ["あい", '<speed factor="2.0">うえ</speed>']
         assert verify_op(before, after, _op("speed", 1, 2, factor=2.0)) is not None
 
-    def test_overlay_opener_not_on_first_line_rejected(self):
+    def test_overlay_marker_not_on_the_op_line_rejected(self):
         before = ["あい", "うえ"]
-        after = ["あい", '<overlay text="z">うえ</overlay>']
-        assert verify_op(before, after, _op("overlay", 1, 2, text="z")) is not None
+        after = ["あい", '<overlay text="z" duration="3.0"/>うえ']
+        assert verify_op(before, after, _op("overlay", 1, 1, text="z", duration=3.0)) is not None
+
+    def test_overlay_marker_missing_rejected(self):
+        before = ["あいう"]
+        after = ["あいう"]
+        assert verify_op(before, after, _op("overlay", 1, 1, text="z", duration=3.0)) is not None

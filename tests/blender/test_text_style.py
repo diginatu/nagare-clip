@@ -155,7 +155,7 @@ def test_place_overlays_forwards_shadow_attrs():
     strip = FakeStrip()
     seq = _seq_returning(strip)
     place_overlays(
-        [{"start": 0.5, "end": 1.5, "text": "hi"}],
+        [{"start": 0.5, "duration": 1.0, "text": "hi"}],
         _simple_tl_map(fps),
         effective_fps=fps,
         sequence_collection=seq,

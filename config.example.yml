@@ -216,7 +216,7 @@ blender:
     # Any other key is forwarded verbatim to the Blender TextStrip attribute of the
     # same name (see bpy.types.TextStrip), e.g. shadow_color / shadow_offset /
     # shadow_blur / box_margin. An unknown key is logged and skipped.
-  # Overlay TEXT strip style for <overlay text="..."> markers in _edits.txt.
+  # Overlay TEXT strip style for <overlay text="..." duration="N.N"/> markers.
   # Any field not set here is inherited from caption_style.
   overlay_style:
     anchor_y: TOP   # default: TOP (overlays sit at top of frame)

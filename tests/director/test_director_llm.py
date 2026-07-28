@@ -41,7 +41,7 @@ class TestParseValid:
         resp = """{"ops": [
           {"type": "cut", "lines": [2, 4], "note": "boring"},
           {"type": "speed", "lines": [5, 6], "factor": 2.0, "note": ""},
-          {"type": "overlay", "lines": [1, 1], "text": "ポイント"},
+          {"type": "overlay", "lines": [1, 1], "text": "ポイント", "duration": 2.5},
           {"type": "keep", "lines": [7, 8]},
           {"type": "edit", "lines": [3, 3], "note": "drop restatement"}
         ]}"""
@@ -50,6 +50,7 @@ class TestParseValid:
         assert ops[0] == DirectorOp(type="cut", lines=(2, 4), note="boring")
         assert ops[1].factor == 2.0
         assert ops[2].text == "ポイント"
+        assert ops[2].duration == 2.5
 
     def test_strips_markdown_fence(self):
         resp = '```json\n{"ops": [{"type": "cut", "lines": [1, 2]}]}\n```'
@@ -84,7 +85,20 @@ class TestParseInvalidDropped:
         assert parse_director_response(resp, num_lines=5) == []
 
     def test_overlay_without_text_dropped(self):
-        resp = '{"ops": [{"type": "overlay", "lines": [1, 2], "text": ""}, {"type": "overlay", "lines": [1, 2]}]}'
+        resp = (
+            '{"ops": [{"type": "overlay", "lines": [1, 2], "text": "", "duration": 2.0},'
+            ' {"type": "overlay", "lines": [1, 2], "duration": 2.0}]}'
+        )
+        assert parse_director_response(resp, num_lines=5) == []
+
+    def test_overlay_without_positive_duration_dropped(self):
+        # The duration is the whole point of the op: it states how long the
+        # text is on screen, so an overlay without one is not applicable.
+        resp = (
+            '{"ops": [{"type": "overlay", "lines": [1, 2], "text": "x"},'
+            ' {"type": "overlay", "lines": [1, 2], "text": "x", "duration": 0},'
+            ' {"type": "overlay", "lines": [1, 2], "text": "x", "duration": "3.0"}]}'
+        )
         assert parse_director_response(resp, num_lines=5) == []
 
     def test_malformed_json_returns_empty(self):
@@ -105,12 +119,17 @@ class TestHelpers:
     def test_ops_to_dict_roundtrips_fields(self):
         ops = [
             DirectorOp(type="speed", lines=(2, 3), note="n", factor=2.0),
-            DirectorOp(type="overlay", lines=(1, 1), text="x"),
+            DirectorOp(type="overlay", lines=(1, 1), text="x", duration=3.0),
             DirectorOp(type="cut", lines=(4, 5)),
         ]
         d = ops_to_dict(ops)
         assert d["ops"][0] == {"type": "speed", "lines": [2, 3], "factor": 2.0, "note": "n"}
-        assert d["ops"][1] == {"type": "overlay", "lines": [1, 1], "text": "x"}
+        assert d["ops"][1] == {
+            "type": "overlay",
+            "lines": [1, 1],
+            "text": "x",
+            "duration": 3.0,
+        }
         assert d["ops"][2] == {"type": "cut", "lines": [4, 5]}
 
 

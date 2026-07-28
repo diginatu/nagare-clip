@@ -92,7 +92,7 @@ class TestCleanFile:
         lines = [
             "<keep>hello</keep>",
             '<speed factor="2.0">world</speed>',
-            '<overlay text="note">foo bar</overlay>',
+            '<overlay text="note" duration="3.0"/>foo bar',
         ]
         assert check_edits(lines, _fixture()) == []
 
@@ -168,16 +168,36 @@ class TestTagBalance:
         assert any("factor" in m for m in _messages(_on_line(problems, 1)))
 
     def test_empty_overlay_text_reported(self):
-        problems = check_edits(['<overlay text="">hello</overlay>', "world", "foo bar"], _fixture())
+        problems = check_edits(
+            ['<overlay text="" duration="3.0"/>hello', "world", "foo bar"], _fixture()
+        )
         assert any("overlay" in m for m in _messages(_on_line(problems, 1)))
+
+    def test_zero_overlay_duration_reported(self):
+        problems = check_edits(
+            ['<overlay text="x" duration="0"/>hello', "world", "foo bar"], _fixture()
+        )
+        assert any("duration" in m for m in _messages(_on_line(problems, 1)))
 
     def test_malformed_overlay_tag_reported(self):
         # A quote inside text="..." breaks the [^"]*' regex → not recognised.
         problems = check_edits(
-            ['<overlay text="a"b">hello</overlay>', "world", "foo bar"],
+            ['<overlay text="a"b" duration="3.0"/>hello', "world", "foo bar"],
             _fixture(),
         )
         assert any("malformed" in m for m in _messages(_on_line(problems, 1)))
+
+    def test_overlay_without_duration_reported(self):
+        # The old wrapping form is gone: duration is mandatory, so a bare
+        # opener is a malformed tag rather than the start of a span.
+        problems = check_edits(
+            ['<overlay text="x">hello</overlay>', "world", "foo bar"], _fixture()
+        )
+        assert any("malformed" in m for m in _messages(_on_line(problems, 1)))
+
+    def test_overlay_closing_tag_reported(self):
+        problems = check_edits(["hello", "world</overlay>", "foo bar"], _fixture())
+        assert any("malformed" in m for m in _messages(_on_line(problems, 2)))
 
 
 class TestCutTag:

@@ -182,7 +182,11 @@ DIRECTOR_PROMPT = (
     "Operations (reference lines by their 1-based numbers, inclusive):\n"
     "- cut: remove a boring/redundant span entirely (deletes audio+video).\n"
     '- speed: play a span faster; give "factor" (e.g. 2.0). Internal silences/pauses are still dropped — add a "keep" over the same lines to preserve them while sped up.\n'
-    '- overlay: show an on-screen caption over a span; give "text".\n'
+    '- overlay: show an on-screen caption; give "text" and "duration" '
+    "(how many seconds it stays on screen). Pick the duration from reading "
+    "length — a short label needs about 2 seconds, a full sentence 4 to 6; "
+    'never a fixed value. Its "lines" say WHERE it appears (the caption '
+    "starts at the first line of the range), not how long it shows.\n"
     "- keep: protect a span from cutting, INCLUDING its silences/"
     "non-speech gaps (which are dropped by default).\n"
     '- edit: request a fine within-line text deletion/fix; describe it in "note".\n'
@@ -191,7 +195,7 @@ DIRECTOR_PROMPT = (
     '{"ops": [\n'
     '  {"type": "cut", "lines": [12, 18], "note": "why / where precisely"},\n'
     '  {"type": "speed", "lines": [30, 34], "factor": 2.0, "note": "..."},\n'
-    '  {"type": "overlay", "lines": [5, 5], "text": "ポイント", "note": ""},\n'
+    '  {"type": "overlay", "lines": [5, 5], "text": "ポイント", "duration": 2.0, "note": ""},\n'
     '  {"type": "keep", "lines": [40, 42], "note": "..."},\n'
     '  {"type": "edit", "lines": [7, 7], "note": "delete the redundant restatement"}\n'
     "]}\n"
@@ -217,7 +221,8 @@ GUIDED_EDIT_PROMPT = (
     "Markers:\n"
     "- Cut a span:    wrap it in <cut>...</cut>\n"
     '- Speed up:      wrap it in <speed factor="N.N">...</speed>\n'
-    '- Overlay text:  wrap it in <overlay text="...">...</overlay>\n'
+    '- Overlay text:  insert <overlay text="..." duration="N.N"/> where it '
+    "starts (a self-closing point marker; there is no closing tag)\n"
     "- Keep/protect:  wrap it in <keep>...</keep>\n"
     "- Delete words within a line: {{old->}} (old copied verbatim)\n"
     "- Fix words within a line:    {{old->new}}\n"
@@ -694,7 +699,7 @@ class CaptionStyleConfig(BaseModel):
 class OverlayStyleConfig(BaseModel):
     model_config = ConfigDict(extra="allow")
     section_comment: ClassVar[str] = (
-        'Overlay TEXT strip style for <overlay text="..."> markers in _edits.txt.\n'
+        'Overlay TEXT strip style for <overlay text="..." duration="N.N"/> markers.\n'
         "Any field not set here is inherited from caption_style."
     )
     example_extra: ClassVar[str] = (

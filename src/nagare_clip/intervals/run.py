@@ -24,7 +24,7 @@ from nagare_clip.intervals.io import infer_source_file
 from nagare_clip.intervals.speech import build_speech_spans, get_duration_sec
 from nagare_clip.intervals.sync_json import (
     extract_keep_ranges,
-    extract_overlay_ranges,
+    extract_overlay_marks,
     extract_speed_ranges,
     sync_text_to_json,
 )
@@ -52,13 +52,13 @@ def run_intervals(
     whisperx_data = sync_text_to_json(whisperx_data, edit_lines)
     force_keep_ranges = extract_keep_ranges(edit_lines, whisperx_data)
     speed_ranges = extract_speed_ranges(edit_lines, whisperx_data)
-    overlay_ranges = extract_overlay_ranges(edit_lines, whisperx_data)
+    overlay_marks = extract_overlay_marks(edit_lines, whisperx_data)
     if force_keep_ranges:
         logging.info("Force-keep ranges from <keep>: %d", len(force_keep_ranges))
     if speed_ranges:
         logging.info("Speed ranges from <speed>: %d", len(speed_ranges))
-    if overlay_ranges:
-        logging.info("Overlay ranges from <overlay>: %d", len(overlay_ranges))
+    if overlay_marks:
+        logging.info("Overlay marks from <overlay/>: %d", len(overlay_marks))
 
     logging.info(
         "Loaded %d segment(s) from %s",
@@ -216,9 +216,12 @@ def run_intervals(
         output_data["speed_ranges"] = [
             {"start": round(s, 3), "end": round(e, 3), "factor": f} for s, e, f in speed_ranges
         ]
-    if overlay_ranges:
+    if overlay_marks:
+        # An overlay is a point + a duration in *edited-timeline* seconds; the
+        # blender stage measures it in output frames, so cuts and speed ranges
+        # inside the window cannot shorten the reading time.
         output_data["overlays"] = [
-            {"start": round(s, 3), "end": round(e, 3), "text": t} for s, e, t in overlay_ranges
+            {"start": round(s, 3), "duration": round(d, 3), "text": t} for s, d, t in overlay_marks
         ]
 
     output.parent.mkdir(parents=True, exist_ok=True)

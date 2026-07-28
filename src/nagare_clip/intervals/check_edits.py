@@ -17,8 +17,9 @@ so the verdict matches what the intervals stage would do):
 - ``{{old->new}}`` patch syntax (unbalanced braces, empty no-op ``{{->}}``);
 - decomposition integrity (text changed outside markers, ``old`` side not
   matching the original, line not covering the whole segment);
-- ``<keep>`` / ``<speed>`` / ``<overlay>`` tag balance, speed factor > 0,
-  non-empty overlay text, and malformed tags.
+- ``<keep>`` / ``<speed>`` / ``<cut>`` tag balance, speed factor > 0,
+  ``<overlay .../>`` marker attributes (non-empty text, duration > 0), and
+  malformed tags.
 
 Empty ``new`` (``{{old->}}``, a deletion) is valid and is not flagged.
 """
@@ -33,6 +34,7 @@ from pathlib import Path
 from typing import Any, NamedTuple
 
 from nagare_clip.intervals.sync_json import (
+    _OVERLAY_MARK_RE,
     CUT_TAG_RE,
     KEEP_TAG_RE,
     OVERLAY_TAG_RE,
@@ -59,18 +61,17 @@ class Problem(NamedTuple):
 _ANY_TAG_RE = re.compile(
     r"<keep>|</keep>"
     r'|<speed\s+factor="[0-9.]+">|</speed>'
-    r'|<overlay\s+text="[^"]*">|</overlay>'
+    r'|<overlay\s+text="[^"]*"\s+duration="[0-9.]+"\s*/>'
     r"|<cut>|</cut>"
 )
 # A tag-like fragment that survives stripping the valid tags above → malformed.
 _TAGLIKE_RE = re.compile(r"</?(?:keep|speed|overlay|cut)\b")
 
 _SPEED_FACTOR_RE = re.compile(r'<speed\s+factor="([0-9.]+)">')
-_OVERLAY_TEXT_RE = re.compile(r'<overlay\s+text="([^"]*)">')
 
 
 def _strip_tags(line: str) -> str:
-    """Remove keep/speed/overlay/cut marker tags, leaving wrapped text + patches.
+    """Remove keep/speed/cut span tags and <overlay/> markers, leaving text + patches.
 
     `<cut>` tags are stripped leaving their wrapped text in place; the wrapped
     text must still match the original (the intervals stage desugars `<cut>` to a
@@ -143,19 +144,19 @@ def _diagnose_decomposition(edit_line: str, original_text: str) -> str | None:
 
 
 def _check_tags(edit_lines: list[str]) -> list[Problem]:
-    """Check keep/speed/overlay tag balance and well-formedness across lines.
+    """Check keep/speed/cut tag balance, overlay markers, and well-formedness.
 
-    Tracks one open state per tag type (nesting of the same type is not
-    allowed, matching the intervals-stage extractors).  ``edit_lines`` must already be
-    sliced to the segment count, mirroring the extractors' ``break`` at
-    ``seg_idx >= len(segments)``.
+    Tracks one open state per *span* tag type (nesting of the same type is not
+    allowed, matching the intervals-stage extractors).  ``<overlay .../>`` is a
+    self-closing point marker with no balance to track — only its attributes
+    are validated.  ``edit_lines`` must already be sliced to the segment count,
+    mirroring the extractors' ``break`` at ``seg_idx >= len(segments)``.
     """
     problems: list[Problem] = []
     # tag name -> opening line number (None == not open)
     open_at: dict[str, int | None] = {
         "keep": None,
         "speed": None,
-        "overlay": None,
         "cut": None,
     }
 
@@ -163,6 +164,15 @@ def _check_tags(edit_lines: list[str]) -> list[Problem]:
         lineno = idx + 1
         for tok in _ANY_TAG_RE.finditer(line):
             text = tok.group()
+            mark = _OVERLAY_MARK_RE.match(text)
+            if mark is not None:
+                if mark.group(1) == "":
+                    problems.append(
+                        Problem(lineno, '<overlay> has empty text=""; nothing to display')
+                    )
+                if float(mark.group(2)) <= 0:
+                    problems.append(Problem(lineno, "<overlay> duration must be greater than 0"))
+                continue
             if text.startswith("</"):
                 name = text[2:-1]
                 if open_at[name] is None:
@@ -181,12 +191,6 @@ def _check_tags(edit_lines: list[str]) -> list[Problem]:
                     fm = _SPEED_FACTOR_RE.match(text)
                     if fm is not None and float(fm.group(1)) <= 0:
                         problems.append(Problem(lineno, "<speed> factor must be greater than 0"))
-                elif name == "overlay":
-                    tm = _OVERLAY_TEXT_RE.match(text)
-                    if tm is not None and tm.group(1) == "":
-                        problems.append(
-                            Problem(lineno, '<overlay> has empty text=""; nothing to display')
-                        )
         # Malformed tags: tag-like fragments left after removing valid tags.
         if _TAGLIKE_RE.search(_ANY_TAG_RE.sub("", line)):
             problems.append(Problem(lineno, "malformed <keep>/<speed>/<overlay>/<cut> tag"))
@@ -266,7 +270,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         "--edits-txt",
         required=True,
         dest="edits_txt",
-        help="_edits.txt path (may contain {{old->new}} and keep/speed/overlay markers)",
+        help="_edits.txt path (may contain {{old->new}} and keep/speed/overlay/cut markers)",
     )
     parser.add_argument("--json", required=True, dest="json_path", help="WhisperX JSON path")
     return parser.parse_args(argv)

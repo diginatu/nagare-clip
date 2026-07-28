@@ -1,8 +1,9 @@
 """guided_edit apply orchestration (Pass B2).
 
-Span ops (``cut``/``speed``/``overlay``/``keep``) are a pure whole-line-range
-wrap — the director already fixed the boundaries, so they are applied
-deterministically with no LLM call (see :func:`apply_span_op`).  Only ``edit``
+Span ops (``cut``/``speed``/``keep``) are a pure whole-line-range wrap — the
+director already fixed the boundaries, so they are applied deterministically
+with no LLM call (see :func:`apply_span_op`); ``overlay`` is a single point
+marker carrying its own duration (:func:`apply_point_op`).  Only ``edit``
 ops, which need a within-line ``{{old->new}}`` the director only described in
 prose, go through a small-LLM call over the op's boundary line(s); the result
 is spliced back into the verbatim edit lines.  Every op is verified via
@@ -21,7 +22,6 @@ from typing import Any
 from nagare_clip.director.director_llm import DirectorOp
 from nagare_clip.guided_edit.reconcile import verify_op
 from nagare_clip.intervals.sync_json import (
-    _OVERLAY_OPEN_RE,
     _SPEED_OPEN_RE,
     OVERLAY_TAG_RE,
     SPEED_TAG_RE,
@@ -47,15 +47,18 @@ _LINE_RE = re.compile(r"^\s*(\d+):\s?(.*)$")
 
 
 def _open_close_counts(line: str, op_type: str) -> tuple[int, int]:
-    """(#open tags, #close tags) of *op_type* on a single line."""
+    """(#open tags, #close tags) of *op_type* on a single line.
+
+    An ``<overlay/>`` marker is self-closing, so it counts as both — it marks
+    its own line as occupied without opening a span over the lines below.
+    """
     if op_type == "speed":
         total = len(SPEED_TAG_RE.findall(line))
         opens = len(_SPEED_OPEN_RE.findall(line))
         return opens, total - opens
     if op_type == "overlay":
-        total = len(OVERLAY_TAG_RE.findall(line))
-        opens = len(_OVERLAY_OPEN_RE.findall(line))
-        return opens, total - opens
+        marks = len(OVERLAY_TAG_RE.findall(line))
+        return marks, marks
     if op_type == "keep":
         return line.count("<keep>"), line.count("</keep>")
     if op_type == "cut":
@@ -124,8 +127,6 @@ def _span_tags(op: DirectorOp) -> tuple[str, str]:
         return "<keep>", "</keep>"
     if op.type == "speed":
         return f'<speed factor="{op.factor}">', "</speed>"
-    if op.type == "overlay":
-        return f'<overlay text="{op.text}">', "</overlay>"
     raise ValueError(f"not a span op: {op.type}")  # pragma: no cover
 
 
@@ -149,6 +150,20 @@ def apply_span_op(lines: list[str], op: DirectorOp) -> list[str]:
     return new
 
 
+def apply_point_op(lines: list[str], op: DirectorOp) -> list[str]:
+    """Insert an overlay's point marker at the start of its (single) line.
+
+    An overlay has no closing tag: the marker's position is the start and its
+    ``duration`` attribute — seconds of the edited timeline — is how long the
+    text stays on screen.  Nothing about its on-screen time depends on where a
+    second tag lands, which is the whole reason the marker is a point.
+    """
+    a = op.lines[0]
+    new = list(lines)
+    new[a - 1] = f'<overlay text="{op.text}" duration="{op.duration}"/>{new[a - 1]}'
+    return new
+
+
 def _instruction(op: DirectorOp) -> str:
     if op.type == "cut":
         what = "Cut (delete) the span described below by wrapping it in <cut>...</cut>."
@@ -156,8 +171,8 @@ def _instruction(op: DirectorOp) -> str:
         what = f'Speed up the span by wrapping it in <speed factor="{op.factor}">...</speed>.'
     elif op.type == "overlay":
         what = (
-            f"Add an on-screen overlay by wrapping the span in "
-            f'<overlay text="{op.text}">...</overlay>.'
+            f"Add an on-screen overlay by inserting "
+            f'<overlay text="{op.text}" duration="{op.duration}"/> at the position described.'
         )
     elif op.type == "keep":
         what = "Protect the span from being cut by wrapping it in <keep>...</keep>."
@@ -243,7 +258,7 @@ def apply_ops(
     cfg = with_trace_meta(cfg, stage=recorder.stage, unit=unit)
     attempts = retry_attempts(cfg)
     # Apply cut ops after everything else: <cut> deletes whatever it wraps, so
-    # protective/annotation tags (keep/speed/overlay) must land first and the
+    # protective/annotation markers (keep/speed/overlay) must land first and the
     # cut then clips around them (the director may emit overlapping ops).
     ordered = sorted(enumerate(ops), key=lambda t: (t[1].type == "cut", t[0]))
     for i, op in ordered:
@@ -269,15 +284,26 @@ def apply_ops(
                 logger.warning("guided_edit: op %s dropped: %s", op.type, reason)
                 unapplied.append((op, reason))
                 continue
-            eff_op = op if clipped == tuple(op.lines) else replace(op, lines=clipped)
-            if eff_op is not op:
+            if op.type == "overlay":
+                # An overlay is a point: only the first free line matters, and
+                # the rest of the director's range is not a clip.
+                clipped = (clipped[0], clipped[0])
+                moved = clipped[0] != op.lines[0]
+            else:
+                moved = clipped != tuple(op.lines)
+            eff_op = replace(op, lines=clipped) if clipped != tuple(op.lines) else op
+            if moved:
                 logger.warning(
                     "guided_edit: op %s clipped from %s to %s (span overlap)",
                     op.type,
                     tuple(op.lines),
                     clipped,
                 )
-            candidate = apply_span_op(lines, eff_op)
+            candidate = (
+                apply_point_op(lines, eff_op)
+                if eff_op.type == "overlay"
+                else apply_span_op(lines, eff_op)
+            )
             reason = verify_op(lines, candidate, eff_op)
             recorder.attempt(
                 unit=unit,

@@ -493,45 +493,39 @@ def place_overlays(
     overlay_style: dict | None = None,
     channel: int = OVERLAY_CHANNEL,
 ) -> None:
-    """Place TEXT strips for <overlay> markers on a dedicated channel.
+    """Place TEXT strips for ``<overlay/>`` point markers on a dedicated channel.
 
-    Overlays do NOT force-keep audio: if an overlay's source time falls
-    entirely outside the timeline map (e.g., the wrapped audio was cut),
-    it is silently skipped.  Partial overlaps are clamped to the matching
-    keep interval.  Speed-factor scaling mirrors place_captions().
+    Each overlay is ``{start, duration, text}``: ``start`` is a source-time
+    anchor, ``duration`` is how long the text stays on screen **on the edited
+    timeline**.  Timeline frames are already post-cut and post-retime, so the
+    length is simply ``duration * fps`` — cuts and speed ranges falling inside
+    the window cannot eat into the viewer's reading time.  The strip is clamped
+    to the end of this source's timeline map so it never bleeds over the next
+    source's strips.
+
+    Overlays do NOT force-keep audio: if the anchor falls outside every keep
+    interval (e.g. its words were cut), the overlay is silently skipped.
     """
+    tl_limit = max((entry["tl_end"] for entry in tl_map), default=None)
     for ov in overlays:
         ov_src_start = float(ov["start"])
-        ov_src_end = float(ov["end"])
+        duration = float(ov["duration"])
         text = ov.get("text", "").strip()
-        if not text:
+        if not text or duration <= 0:
             continue
 
-        # Accumulate across ALL matching keep intervals so an overlay spanning
-        # several intervals renders as one contiguous strip (intervals are
-        # concatenated with no gaps, so tl_end of one == tl_start of the next).
         tl_start = None
-        tl_end = None
         for entry in tl_map:
-            if ov_src_start < entry["src_end"] and ov_src_end > entry["src_start"]:
+            if entry["src_start"] <= ov_src_start < entry["src_end"]:
                 speed = float(entry.get("speed_factor", 1.0))
-                clamped_start = max(ov_src_start, entry["src_start"])
-                clamped_end = min(ov_src_end, entry["src_end"])
-                offset_start = sec_to_frames(
-                    (clamped_start - entry["src_start"]) / speed, effective_fps
-                )
-                offset_end = sec_to_frames(
-                    (clamped_end - entry["src_start"]) / speed, effective_fps
-                )
-                entry_tl_start = entry["tl_start"] + offset_start
-                entry_tl_end = entry["tl_start"] + offset_end
-                tl_start = entry_tl_start if tl_start is None else min(tl_start, entry_tl_start)
-                tl_end = entry_tl_end if tl_end is None else max(tl_end, entry_tl_end)
+                offset = sec_to_frames((ov_src_start - entry["src_start"]) / speed, effective_fps)
+                tl_start = entry["tl_start"] + offset
+                break
 
-        if tl_start is None or tl_end is None:
-            logging.warning("Overlay skipped (no matching keep interval): %r", text[:60])
+        if tl_start is None or tl_limit is None:
+            logging.warning("Overlay skipped (anchor is not on a keep interval): %r", text[:60])
             continue
-        length = max(1, tl_end - tl_start)
+        length = max(1, min(sec_to_frames(duration, effective_fps), tl_limit - tl_start))
         tl_end = tl_start + length
 
         text_strip = sequence_collection.new_effect(

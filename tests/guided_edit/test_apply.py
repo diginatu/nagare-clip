@@ -78,14 +78,16 @@ class TestSpanDeterministic:
         assert out == ['<speed factor="2.0">あい', "うえ", "おか</speed>"]
         assert unapplied == []
 
-    def test_overlay_uses_text_attr(self):
+    def test_overlay_inserts_a_point_marker_on_the_first_line(self):
+        # An overlay is a point + a stated duration: no closing tag, so the
+        # rest of the range is untouched and no tag placement can stretch it.
         out, unapplied = apply_ops(
             ["あい", "うえ"],
-            [_op("overlay", 1, 2, text="メモ")],
+            [_op("overlay", 1, 2, text="メモ", duration=3.0)],
             CFG,
             call_llm=_no_llm,
         )
-        assert out == ['<overlay text="メモ">あい', "うえ</overlay>"]
+        assert out == ['<overlay text="メモ" duration="3.0"/>あい', "うえ"]
         assert unapplied == []
 
     def test_keep_single_line(self):
@@ -96,9 +98,9 @@ class TestSpanDeterministic:
     def test_span_wraps_outside_existing_markers(self):
         # speed applied over a line that already carries an overlay + patches:
         # the whole line range is wrapped, underlying text untouched.
-        lines = ['<overlay text="x">はい</overlay>{{で->}}これ', "おわり"]
+        lines = ['<overlay text="x" duration="2.0"/>はい{{で->}}これ', "おわり"]
         out, unapplied = apply_ops(lines, [_op("speed", 1, 2, factor=4.0)], CFG, call_llm=_no_llm)
-        assert out[0] == '<speed factor="4.0"><overlay text="x">はい</overlay>{{で->}}これ'
+        assert out[0] == '<speed factor="4.0"><overlay text="x" duration="2.0"/>はい{{で->}}これ'
         assert out[1] == "おわり</speed>"
         assert unapplied == []
 
@@ -131,31 +133,49 @@ class TestSpanDeterministic:
 
     def test_clip_picks_largest_free_run(self):
         # occupied middle line splits [1-5] into runs [1-2] and [4-5] (tie ->
-        # earliest), overlay clips to [1-2].
-        lines = ["L1", "L2", '<overlay text="x">L3</overlay>', "L4", "L5"]
-        out, unapplied = apply_ops(
-            lines, [_op("overlay", 1, 5, text="メモ")], CFG, call_llm=_no_llm
-        )
-        assert out[0] == '<overlay text="メモ">L1'
-        assert out[1] == "L2</overlay>"
+        # earliest), keep clips to [1-2].
+        lines = ["L1", "L2", "<keep>L3</keep>", "L4", "L5"]
+        out, unapplied = apply_ops(lines, [_op("keep", 1, 5)], CFG, call_llm=_no_llm)
+        assert out[0] == "<keep>L1"
+        assert out[1] == "L2</keep>"
         assert out[3] == "L4" and out[4] == "L5"
         assert unapplied == []
 
+    def test_overlay_clips_past_a_line_that_already_carries_a_marker(self):
+        # Two overlays on one line would stack on screen; the op moves to the
+        # first free line of its range instead.
+        lines = ['<overlay text="x" duration="2.0"/>L1', "L2"]
+        out, unapplied = apply_ops(
+            lines, [_op("overlay", 1, 2, text="メモ", duration=1.5)], CFG, call_llm=_no_llm
+        )
+        assert out[0] == '<overlay text="x" duration="2.0"/>L1'
+        assert out[1] == '<overlay text="メモ" duration="1.5"/>L2'
+        assert unapplied == []
+
+    def test_overlay_fully_blocked_is_dropped(self):
+        lines = ['<overlay text="x" duration="2.0"/>L1']
+        out, unapplied = apply_ops(
+            lines, [_op("overlay", 1, 1, text="メモ", duration=1.5)], CFG, call_llm=_no_llm
+        )
+        assert out == lines
+        assert [u[0].type for u in unapplied] == ["overlay"]
+
     def test_different_type_does_not_block(self):
-        # an existing <overlay> never blocks a <speed> op (independent types).
-        lines = ['<overlay text="x">L1</overlay>', "L2"]
+        # an existing <overlay/> never blocks a <speed> op (independent types).
+        lines = ['<overlay text="x" duration="2.0"/>L1', "L2"]
         out, unapplied = apply_ops(lines, [_op("speed", 1, 2, factor=2.0)], CFG, call_llm=_no_llm)
-        assert out[0] == '<speed factor="2.0"><overlay text="x">L1</overlay>'
+        assert out[0] == '<speed factor="2.0"><overlay text="x" duration="2.0"/>L1'
         assert out[1] == "L2</speed>"
         assert unapplied == []
 
-    def test_nested_span_ops_stay_balanced(self):
-        # overlay applied after speed over the same range nests cleanly.
+    def test_overlay_marker_and_span_ops_coexist(self):
+        # overlay applied after speed over the same range: the marker sits
+        # outside the span tags, which stay balanced.
         lines = ["あい", "うえ"]
-        ops = [_op("speed", 1, 2, factor=2.0), _op("overlay", 1, 2, text="メモ")]
+        ops = [_op("speed", 1, 2, factor=2.0), _op("overlay", 1, 2, text="メモ", duration=3.0)]
         out, unapplied = apply_ops(lines, ops, CFG, call_llm=_no_llm)
-        assert out[0] == '<overlay text="メモ"><speed factor="2.0">あい'
-        assert out[1] == "うえ</speed></overlay>"
+        assert out[0] == '<overlay text="メモ" duration="3.0"/><speed factor="2.0">あい'
+        assert out[1] == "うえ</speed>"
         assert unapplied == []
 
 
@@ -173,6 +193,13 @@ class TestCutExclusive:
         ops = [_op("cut", 1, 3), _op("keep", 3, 3)]
         out, unapplied = apply_ops(lines, ops, CFG, call_llm=_no_llm)
         assert out == ["<cut>L1", "L2</cut>", "<keep>L3</keep>"]
+        assert unapplied == []
+
+    def test_cut_clips_around_an_existing_overlay_marker(self):
+        # <cut> would swallow the marker into its deletion patch.
+        lines = ['<overlay text="x" duration="2.0"/>L1', "L2"]
+        out, unapplied = apply_ops(lines, [_op("cut", 1, 2)], CFG, call_llm=_no_llm)
+        assert out == ['<overlay text="x" duration="2.0"/>L1', "<cut>L2</cut>"]
         assert unapplied == []
 
     def test_cut_clips_around_existing_speed_span(self):

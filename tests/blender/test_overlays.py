@@ -1,4 +1,10 @@
-"""Tests for place_overlays() — TEXT strip placement for <overlay> markers."""
+"""Tests for place_overlays() — TEXT strip placement for <overlay/> markers.
+
+An overlay is a point + a duration in *edited-timeline* seconds: the start is
+mapped through the timeline map (speed-aware), the length is simply
+``duration * fps`` output frames, so cuts and speed ranges inside the window
+cannot shorten the time a viewer gets to read the text.
+"""
 
 from __future__ import annotations
 
@@ -34,10 +40,7 @@ def _simple_tl_map(fps: float = 30.0):
     return build_timeline_map([{"start": 0.0, "end": 4.0}], effective_fps=fps, source_fps=fps)
 
 
-def test_overlay_within_keep_interval_creates_text_strip():
-    fps = 30.0
-    tl_map = _simple_tl_map(fps)
-    overlays = [{"start": 1.0, "end": 3.0, "text": "Chapter 1"}]
+def _place(overlays, tl_map, fps=30.0):
     seq, captured = _seq_with_capture()
     place_overlays(
         overlays,
@@ -47,12 +50,78 @@ def test_overlay_within_keep_interval_creates_text_strip():
         overlay_style={},
         channel=OVERLAY_CHANNEL,
     )
+    return captured
+
+
+def test_overlay_length_comes_from_duration():
+    fps = 30.0
+    captured = _place([{"start": 1.0, "duration": 2.0, "text": "Chapter 1"}], _simple_tl_map(fps))
     assert len(captured) == 1
     kw = captured[0]
     assert kw["type"] == "TEXT"
     assert kw["channel"] == OVERLAY_CHANNEL
     assert kw["frame_start"] == 1 + 30  # 1.0s * 30fps offset within interval (tl_start=1)
-    assert kw["length"] == 60  # 2.0s duration
+    assert kw["length"] == 60  # 2.0s of timeline
+
+
+def test_duration_is_not_shortened_by_a_cut_inside_the_window():
+    """The source seconds 2.0-4.0 are cut; a 3-second overlay still reads for
+    3 seconds on the edited timeline."""
+    fps = 30.0
+    tl_map = build_timeline_map(
+        [{"start": 0.0, "end": 2.0}, {"start": 4.0, "end": 6.0}],
+        effective_fps=fps,
+        source_fps=fps,
+    )
+    captured = _place([{"start": 1.0, "duration": 3.0, "text": "Banner"}], tl_map)
+    assert len(captured) == 1
+    assert captured[0]["frame_start"] == 1 + 30
+    assert captured[0]["length"] == 90
+
+
+def test_duration_is_not_shortened_by_a_speed_range():
+    """A 2x interval halves the *source* span the window covers, but the
+    on-screen time is stated directly, so the strip is still duration long."""
+    fps = 30.0
+    tl_map = build_timeline_map(
+        [{"start": 0.0, "end": 10.0, "speed_factor": 2.0}],
+        effective_fps=fps,
+        source_fps=fps,
+    )
+    captured = _place([{"start": 1.0, "duration": 2.0, "text": "Fast"}], tl_map)
+    assert len(captured) == 1
+    # Start offset is speed-scaled: 1.0s/2.0 * 30fps = 15 frames from tl_start=1
+    assert captured[0]["frame_start"] == 1 + 15
+    assert captured[0]["length"] == 60
+
+
+def test_overlay_clamped_to_the_end_of_the_source_timeline():
+    """A duration running past the source's last frame is clamped, so the text
+    never bleeds over the next source's strips."""
+    fps = 30.0
+    tl_map = _simple_tl_map(fps)  # source 0-4s → timeline frames 1..121
+    captured = _place([{"start": 3.0, "duration": 10.0, "text": "Edge"}], tl_map)
+    assert len(captured) == 1
+    assert captured[0]["frame_start"] == 1 + 90
+    assert captured[0]["length"] == 30  # clamped from 300
+
+
+def test_overlay_start_outside_any_keep_interval_is_skipped():
+    fps = 30.0
+    captured = _place([{"start": 10.0, "duration": 2.0, "text": "Lost"}], _simple_tl_map(fps))
+    assert captured == []
+
+
+def test_empty_overlay_text_is_skipped():
+    fps = 30.0
+    captured = _place([{"start": 1.0, "duration": 2.0, "text": "   "}], _simple_tl_map(fps))
+    assert captured == []
+
+
+def test_non_positive_duration_is_skipped():
+    fps = 30.0
+    captured = _place([{"start": 1.0, "duration": 0.0, "text": "Zero"}], _simple_tl_map(fps))
+    assert captured == []
 
 
 class _AttrTracker:
@@ -72,21 +141,24 @@ class _AttrTracker:
             raise AttributeError(name)
 
 
-def test_overlay_text_assigned_to_strip():
+def _place_on_tracker(style):
     fps = 30.0
-    tl_map = _simple_tl_map(fps)
-    overlays = [{"start": 0.5, "end": 1.5, "text": "Hello"}]
     seq = MagicMock()
     strip = _AttrTracker()
     seq.new_effect = MagicMock(return_value=strip)
     place_overlays(
-        overlays,
-        tl_map,
+        [{"start": 0.5, "duration": 1.0, "text": "Hello"}],
+        _simple_tl_map(fps),
         effective_fps=fps,
         sequence_collection=seq,
-        overlay_style={"font_size": 70, "location_y": 0.95},
+        overlay_style=style,
         channel=OVERLAY_CHANNEL,
     )
+    return seq, strip
+
+
+def test_overlay_text_assigned_to_strip():
+    seq, strip = _place_on_tracker({"font_size": 70, "location_y": 0.95})
     assert seq.new_effect.call_count == 1
     assert strip.text == "Hello"
     assert strip.font_size == 70
@@ -94,140 +166,10 @@ def test_overlay_text_assigned_to_strip():
 
 
 def test_overlay_color_applied_when_present():
-    fps = 30.0
-    tl_map = _simple_tl_map(fps)
-    overlays = [{"start": 0.5, "end": 1.5, "text": "Hello"}]
-    seq = MagicMock()
-    strip = _AttrTracker()
-    seq.new_effect = MagicMock(return_value=strip)
-    place_overlays(
-        overlays,
-        tl_map,
-        effective_fps=fps,
-        sequence_collection=seq,
-        overlay_style={"color": [0.0, 1.0, 0.5, 1.0]},
-        channel=OVERLAY_CHANNEL,
-    )
+    _, strip = _place_on_tracker({"color": [0.0, 1.0, 0.5, 1.0]})
     assert strip.color == [0.0, 1.0, 0.5, 1.0]
 
 
 def test_overlay_color_not_set_when_absent():
-    fps = 30.0
-    tl_map = _simple_tl_map(fps)
-    overlays = [{"start": 0.5, "end": 1.5, "text": "Hello"}]
-    seq = MagicMock()
-    strip = _AttrTracker()
-    seq.new_effect = MagicMock(return_value=strip)
-    place_overlays(
-        overlays,
-        tl_map,
-        effective_fps=fps,
-        sequence_collection=seq,
-        overlay_style={"font_size": 70},
-        channel=OVERLAY_CHANNEL,
-    )
+    _, strip = _place_on_tracker({"font_size": 70})
     assert "color" not in strip._assigned
-
-
-def test_overlay_outside_any_keep_interval_is_skipped():
-    fps = 30.0
-    tl_map = _simple_tl_map(fps)  # covers source 0-4s
-    overlays = [{"start": 10.0, "end": 11.0, "text": "Lost"}]
-    seq, captured = _seq_with_capture()
-    place_overlays(
-        overlays,
-        tl_map,
-        effective_fps=fps,
-        sequence_collection=seq,
-        overlay_style={},
-        channel=OVERLAY_CHANNEL,
-    )
-    assert captured == []
-
-
-def test_overlay_inside_sped_up_interval_scales_offsets():
-    fps = 30.0
-    tl_map = build_timeline_map(
-        [{"start": 0.0, "end": 4.0, "speed_factor": 2.0}],
-        effective_fps=fps,
-        source_fps=fps,
-    )
-    overlays = [{"start": 1.0, "end": 3.0, "text": "Fast"}]
-    seq, captured = _seq_with_capture()
-    place_overlays(
-        overlays,
-        tl_map,
-        effective_fps=fps,
-        sequence_collection=seq,
-        overlay_style={},
-        channel=OVERLAY_CHANNEL,
-    )
-    assert len(captured) == 1
-    kw = captured[0]
-    # speed=2.0 halves offsets: 1.0s/2.0 * 30fps = 15 frames offset from tl_start=1
-    assert kw["frame_start"] == 1 + 15
-    # length: 2.0s/2.0 * 30fps = 30 frames
-    assert kw["length"] == 30
-
-
-def test_overlay_partial_overlap_clamps_to_interval():
-    """Overlay extends beyond the keep interval; should clamp to the interval edges."""
-    fps = 30.0
-    tl_map = _simple_tl_map(fps)  # 0-4s
-    overlays = [{"start": 3.0, "end": 6.0, "text": "Edge"}]
-    seq, captured = _seq_with_capture()
-    place_overlays(
-        overlays,
-        tl_map,
-        effective_fps=fps,
-        sequence_collection=seq,
-        overlay_style={},
-        channel=OVERLAY_CHANNEL,
-    )
-    assert len(captured) == 1
-    kw = captured[0]
-    # Clamped end = 4.0s → frame_start = 1 + 90, length = (4.0-3.0)*30 = 30
-    assert kw["frame_start"] == 1 + 90
-    assert kw["length"] == 30
-
-
-def test_overlay_spanning_multiple_keep_intervals():
-    """Overlay covering several keep intervals renders one contiguous strip."""
-    fps = 30.0
-    tl_map = build_timeline_map(
-        [{"start": 0.0, "end": 2.0}, {"start": 4.0, "end": 6.0}],
-        effective_fps=fps,
-        source_fps=fps,
-    )
-    # interval 1: tl 1-61; interval 2: tl 61-121 (contiguous on timeline)
-    overlays = [{"start": 1.0, "end": 5.0, "text": "Banner"}]
-    seq, captured = _seq_with_capture()
-    place_overlays(
-        overlays,
-        tl_map,
-        effective_fps=fps,
-        sequence_collection=seq,
-        overlay_style={},
-        channel=OVERLAY_CHANNEL,
-    )
-    assert len(captured) == 1
-    kw = captured[0]
-    # start = 1 + 30 (1.0s into interval 1); end = 61 + 30 (5.0s, 1.0s into interval 2)
-    assert kw["frame_start"] == 31
-    assert kw["length"] == 60
-
-
-def test_empty_overlay_text_is_skipped():
-    fps = 30.0
-    tl_map = _simple_tl_map(fps)
-    overlays = [{"start": 1.0, "end": 3.0, "text": "   "}]  # whitespace-only
-    seq, captured = _seq_with_capture()
-    place_overlays(
-        overlays,
-        tl_map,
-        effective_fps=fps,
-        sequence_collection=seq,
-        overlay_style={},
-        channel=OVERLAY_CHANNEL,
-    )
-    assert captured == []
