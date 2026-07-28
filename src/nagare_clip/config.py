@@ -153,7 +153,9 @@ PLAN_PROMPT = (
 DIRECTOR_PROMPT = (
     "You are a video editor. You receive a Japanese transcript as "
     "numbered lines (one line per subtitle segment). Decide high-level "
-    "edits to tighten the video. Do NOT rewrite or output the "
+    "edits to tighten AND STAGE the video: cut what drags, but also mark "
+    "the moments that make it worth watching — turning points, payoffs, "
+    "failures, mishaps. Do NOT rewrite or output the "
     "transcript text. Output ONLY a JSON object.\n"
     "\n"
     "Timing: a line may carry a bracket after its text — [4.2s, gap 0.8s] "
@@ -167,8 +169,13 @@ DIRECTOR_PROMPT = (
     "preserves them). Judge pacing from the speech figure, never from "
     "speech+silence. "
     "Use these numbers to judge pacing: long "
-    "durations are candidates for cutting or speeding up, and long gaps are "
-    'dead air (already dropped by default unless you "keep" them).\n'
+    "durations are candidates for cutting or speeding up. A long gap is "
+    "dead air by default, already dropped — but that is the fallback "
+    "reading, not the only one. Check the speech just before and after it: "
+    "if it announces something happening (an accident, a cleanup, a wait "
+    "for a result), the gap itself may be the most watchable moment in the "
+    'shot, and a "keep" spanning that line and the next (lines [N, N+1]) '
+    "preserves it.\n"
     "\n"
     "Visual context: an indented line like\n"
     "    [silent gap 12.4s: a build runs and logs scroll past]\n"
@@ -179,14 +186,23 @@ DIRECTOR_PROMPT = (
     "[N, N+1] preserves the silence between them. Annotation lines are not "
     "numbered; never reference them as op lines.\n"
     "\n"
-    "Operations (reference lines by their 1-based numbers, inclusive):\n"
+    "Operations (reference lines by their 1-based numbers, inclusive). "
+    "Prefer speed over cut for repetition that builds toward a payoff "
+    "(failed attempts, retries, warm-up) — the buildup is part of the "
+    "story, so tighten it rather than deleting it; reserve cut for spans "
+    "that leave the throughline entirely (digressions, dead ends, "
+    "redundant retakes with no payoff):\n"
     "- cut: remove a boring/redundant span entirely (deletes audio+video).\n"
     '- speed: play a span faster; give "factor" (e.g. 2.0). Internal silences/pauses are still dropped — add a "keep" over the same lines to preserve them while sped up.\n'
     '- overlay: show an on-screen caption; give "text" and "duration" '
     "(how many seconds it stays on screen). Pick the duration from reading "
     "length — a short label needs about 2 seconds, a full sentence 4 to 6; "
     'never a fixed value. Its "lines" say WHERE it appears (the caption '
-    "starts at the first line of the range), not how long it shows.\n"
+    "starts at the first line of the range), not how long it shows. Reach "
+    "for it at turning points, conclusions, failures, and mishaps — "
+    "moments worth labeling on screen. Aim for roughly one overlay per "
+    "3-5 minutes of finished video as a loose default target; if an "
+    "editorial brief states otherwise, follow the brief instead.\n"
     "- keep: protect a span from cutting, INCLUDING its silences/"
     "non-speech gaps (which are dropped by default).\n"
     '- edit: request a fine within-line text deletion/fix; describe it in "note".\n'
