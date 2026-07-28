@@ -509,6 +509,65 @@ def test_director_prompt_gap_example_matches_the_real_formatter():
     assert annotation_line in prompt
 
 
+def test_director_prompt_overlay_example_carries_a_duration():
+    """The prompt's overlay example must satisfy the real parser: an overlay
+    op without a positive duration is dropped, so a stale example would teach
+    the director to emit ops that never reach the timeline."""
+    from nagare_clip.director.director_llm import parse_director_response
+
+    cfg = get_effective_config(None, {})
+    prompt = cfg["director"]["prompt"]
+    example = next(
+        line.strip().rstrip(",") for line in prompt.splitlines() if '"type": "overlay"' in line
+    )
+    ops = parse_director_response('{"ops": [' + example + "]}", num_lines=10)
+    assert len(ops) == 1
+    assert ops[0].type == "overlay"
+    assert ops[0].duration is not None and ops[0].duration > 0
+
+
+def test_director_prompt_frames_goal_as_tighten_and_stage():
+    """The prompt's opening framing must ask for staging, not just removal --
+    otherwise the director has no license to add overlays or keep a moment
+    (see docs/superpowers/specs/2026-07-28-director-prompt-stage-not-trim-design.md)."""
+    cfg = get_effective_config(None, {})
+    prompt = cfg["director"]["prompt"]
+    opening = prompt.split("\n\n")[0].lower()
+    assert "tighten" in opening
+    assert "stage" in opening
+
+
+def test_director_prompt_treats_long_gap_as_keep_candidate_when_speech_announces_event():
+    """A long gap must not be an unconditional 'dead air' rule -- the prompt
+    must tell the director to read the surrounding speech and keep a gap that
+    the speech says is meaningful (an accident, a cleanup, a wait for a result)."""
+    cfg = get_effective_config(None, {})
+    prompt = cfg["director"]["prompt"].lower()
+    assert "fallback" in prompt
+    assert "accident" in prompt
+    assert "watchable moment" in prompt
+
+
+def test_director_prompt_prefers_speed_for_buildup_reserves_cut_for_digressions():
+    """Repetition that builds toward a payoff should be sped up, not cut --
+    the prompt must say so explicitly, reserving cut for spans that leave the
+    throughline entirely."""
+    cfg = get_effective_config(None, {})
+    prompt = cfg["director"]["prompt"].lower()
+    assert "payoff" in prompt
+    assert "throughline" in prompt
+    assert "buildup" in prompt
+
+
+def test_director_prompt_documents_overlay_density_target():
+    """Overlay needs a sense of when/how often -- a loose numeric target that
+    an editorial brief (future feature) can override, not a hard rule."""
+    cfg = get_effective_config(None, {})
+    prompt = cfg["director"]["prompt"]
+    assert "3-5 minutes" in prompt
+    assert "editorial brief" in prompt.lower()
+
+
 def test_text_filter_prompt_repeated_phrase_example_is_valid_patch_syntax():
     """Real-run failure mode: told to de-duplicate repeated phrases but shown
     no marker example, the filter LLM rewrites the line bare and the safety
