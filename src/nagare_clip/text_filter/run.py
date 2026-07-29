@@ -13,6 +13,7 @@ import json
 import logging
 from pathlib import Path
 
+from nagare_clip.brief import apply_brief
 from nagare_clip.llm_report import NULL_RECORDER, Recorder
 from nagare_clip.summary.summarize import summary_from_dict
 from nagare_clip.text_filter.context import build_enhanced_prompt
@@ -57,12 +58,14 @@ def run_text_filter(
     else:
         logging.info("text_filter: filtering %d lines with AI", len(lines))
 
-        filter_cfg = dict(s2)
+        # The project brief goes into the base prompt first, so the per-video
+        # summary context still lands last (closest to the transcript).
+        filter_cfg = dict(apply_brief(s2, cfg))
         summaries, summary_keywords, video_summary = _summary_context(summary_json, txt.stem)
         keywords = list(dict.fromkeys(list(s2.get("keywords", [])) + summary_keywords))
         if summaries or keywords or video_summary:
             filter_cfg["prompt"] = build_enhanced_prompt(
-                s2.get("prompt", ""), summaries, keywords, video_summary
+                filter_cfg.get("prompt", ""), summaries, keywords, video_summary
             )
             logging.info(
                 "text_filter: summary context: %d part summaries, %d keyword(s)",

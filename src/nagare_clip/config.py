@@ -313,6 +313,48 @@ class GeneralConfig(BaseModel):
     )
 
 
+class ProjectConfig(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    section_comment: ClassVar[str] = (
+        "project: the editorial brief for this project (all fields optional, free text).\n"
+        "Whatever is set here is appended to the system prompts of the summary, plan,\n"
+        "director and text_filter stages, so those LLMs know what the transcript cannot\n"
+        "tell them: who the video is for, how long it should be, how it should feel, and\n"
+        "what happened previously in a series. Leave everything empty (the default) and\n"
+        "every prompt is byte-identical to a run without this section."
+    )
+    audience: str = _commented(
+        "",
+        sample='"DIY hobbyists on YouTube, already familiar with the build"',
+        description="Who the video is for",
+    )
+    purpose: str = _commented(
+        "",
+        sample='"show whether the siphon overflow drain actually works"',
+        description="What the video is trying to achieve",
+    )
+    target_duration: str = _commented(
+        "",
+        sample='"about 12 minutes"',
+        description="Desired finished length (free text); guides how aggressively to cut",
+    )
+    tone: str = _commented(
+        "",
+        sample='"fast, punchy vlog; frequent on-screen captions"',
+        description="Desired feel/pacing of the finished video",
+    )
+    story_so_far: str = _commented(
+        "",
+        sample='"the previous episode built the rig; this one tests it"',
+        description="Series context the transcript never states",
+    )
+    previous_summary: str = _commented(
+        "",
+        sample='"../previous-project/output/summary/summary.json"',
+        description="Path to a previous project's summary.json; its overall summary is added to the brief",
+    )
+
+
 class TranscriptionConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
     compute_type: str = Field("float16")
@@ -782,6 +824,7 @@ class NagareClipConfig(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
     general: GeneralConfig = Field(default_factory=GeneralConfig)
+    project: ProjectConfig = Field(default_factory=ProjectConfig)
     transcription: TranscriptionConfig = Field(default_factory=TranscriptionConfig)
     audio_silence: AudioSilenceConfig = Field(default_factory=AudioSilenceConfig)
     sentence_split: SentenceSplitConfig = Field(default_factory=SentenceSplitConfig)

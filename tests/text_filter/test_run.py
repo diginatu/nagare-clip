@@ -26,7 +26,7 @@ def _s2_config(constant_keywords: list | None = None) -> dict:
     }
 
 
-def _run(tmp_path, s2_config, summary_data=None, lines=None):
+def _run(tmp_path, s2_config, summary_data=None, lines=None, project=None):
     """Run run_text_filter and return the filter_cfg passed to filter_transcript."""
     if lines is None:
         lines = ["test line"]
@@ -54,6 +54,8 @@ def _run(tmp_path, s2_config, summary_data=None, lines=None):
         "general": {"log_level": "WARNING", "log_file": ""},
         "text_filter": s2_config,
     }
+    if project is not None:
+        config["project"] = project
 
     with patch("nagare_clip.text_filter.run.filter_transcript", side_effect=mock_filter):
         run_text_filter(txt, output, config, summary_json=summary_json)
@@ -146,3 +148,30 @@ def test_disabled_copies_input(tmp_path):
     out = tmp_path / "clip_edits.txt"
     run_text_filter(src, out, get_effective_config(None, {}))
     assert out.read_text(encoding="utf-8") == "l1\nl2\n"
+
+
+class TestProjectBrief:
+    def test_brief_precedes_summary_context(self, tmp_path):
+        summary_data = {
+            "summary": "",
+            "parts": [{"stem": "test", "lines": [1, 1], "summary": "part one"}],
+            "keywords": {},
+            "video_summaries": {},
+        }
+        captured = _run(
+            tmp_path,
+            _s2_config(),
+            summary_data=summary_data,
+            project={"tone": "punchy"},
+        )
+        prompt = captured["prompt"]
+        assert prompt.startswith("Base prompt.\n\n")
+        assert prompt.index("- Tone: punchy") < prompt.index("Summary: part one")
+
+    def test_brief_injected_without_summary_json(self, tmp_path):
+        captured = _run(tmp_path, _s2_config(), project={"purpose": "test the rig"})
+        assert captured["prompt"].endswith("- Purpose: test the rig")
+
+    def test_no_brief_leaves_prompt_untouched(self, tmp_path):
+        captured = _run(tmp_path, _s2_config())
+        assert captured["prompt"] == "Base prompt."

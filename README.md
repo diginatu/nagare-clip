@@ -195,7 +195,24 @@ Parameters resolve in this priority order (highest wins):
 2. Config file values
 3. Built-in defaults
 
-The config file covers all sections, each named after its stage: `general`, `transcription`, `audio_silence`, `sentence_split`, `gap_context`, `text_filter`, `summary`, `plan`, `director`, `guided_edit`, `intervals`, `blender`, `pipeline`. See `config.example.yml` for the full list of keys and their defaults.
+### project: the editorial brief
+
+The `project:` section tells the editorial LLM stages what the transcript never says — who the video is for, how long it should be, how it should feel, and what happened last episode. Everything set here is appended to the system prompts of `summary`, `plan`, `director` and `text_filter`; every field is optional free text and defaults to empty (with nothing set, prompts are exactly as they were before this section existed).
+
+```yaml
+project:
+  audience: "DIY hobbyists on YouTube, already familiar with the build"
+  purpose: "show whether the siphon overflow drain actually works"
+  target_duration: "about 12 minutes"
+  tone: "fast, punchy vlog; frequent on-screen captions"
+  story_so_far: "the previous episode built the rig; this one tests it"
+  # Path to a previous project's summary.json — its overall summary joins the brief:
+  previous_summary: "../water_pump_2/video-editor-ai/summary/summary.json"
+```
+
+`previous_summary` is how a series carries over: point it at the earlier project's `output/summary/summary.json` and the director learns what "これ" refers to when the cut opens mid-story. A missing or unreadable file just drops that one line (logged), leaving the rest of the brief intact. `target_duration` and `tone` are what stop `plan` from defaulting every part to a conservative "shorten" and let `director` deviate from its default ~1-overlay-per-3-5-minutes density. The mechanical stages (`gap_context`, `sentence_split`, `guided_edit`) are deliberately not briefed.
+
+The config file covers all sections, each named after its stage: `general`, `project`, `transcription`, `audio_silence`, `sentence_split`, `gap_context`, `text_filter`, `summary`, `plan`, `director`, `guided_edit`, `intervals`, `blender`, `pipeline`. See `config.example.yml` for the full list of keys and their defaults.
 
 ### Choosing an LLM provider
 

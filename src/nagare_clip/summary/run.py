@@ -14,6 +14,7 @@ import logging
 from pathlib import Path
 
 from nagare_clip.audio_silence.cuts_file import read_cuts
+from nagare_clip.brief import apply_brief
 from nagare_clip.gap_context.context import anchor_gaps, format_gap_block
 from nagare_clip.gap_context.gaps import load_gaps
 from nagare_clip.llm_report import NULL_RECORDER, Recorder
@@ -72,7 +73,7 @@ def run_summary(
         logging.info("summary: analysing %d video(s) with LLM", len(parts_input))
         project = build_summary(
             parts_input,
-            summary_cfg,
+            apply_brief(summary_cfg, cfg, keys=("prompt", "overall_prompt")),
             call_llm=summarize_mod._call_llm,
             recorder=recorder,
             seg_times_by_stem=seg_times_by_stem or None,

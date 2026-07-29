@@ -143,3 +143,51 @@ def test_run_summary_feeds_gap_descriptions_into_the_prompt(tmp_path, monkeypatc
         gaps_paths=[gapsp],
     )
     assert any("after line 1" in u and "デモが動く" in u for u in seen["users"])
+
+
+def test_project_brief_appended_to_both_summary_prompts(monkeypatch, tmp_path):
+    """The editorial brief reaches the per-video and the all-videos prompts."""
+    from nagare_clip.summary import summarize as summarize_mod
+
+    txt = tmp_path / "v.txt"
+    txt.write_text("一行目\n", encoding="utf-8")
+
+    systems: list[str] = []
+
+    def fake_llm(messages, cfg):
+        systems.append(messages[0]["content"])
+        return json.dumps({"parts": [{"lines": [1, 1], "summary": "s"}], "video_summary": "v"})
+
+    monkeypatch.setattr(summarize_mod, "_call_llm", fake_llm)
+    summary_run.run_summary(
+        [txt],
+        tmp_path / "summary.json",
+        {
+            "summary": {"enabled": True, "prompt": "P", "overall_prompt": "O", "max_retries": 0},
+            "project": {"tone": "punchy"},
+        },
+    )
+    assert len(systems) == 2  # segment + reduce
+    assert all(s.endswith("- Tone: punchy") for s in systems)
+    assert systems[0].startswith("P\n\n") and systems[1].startswith("O\n\n")
+
+
+def test_no_brief_leaves_summary_prompts_untouched(monkeypatch, tmp_path):
+    from nagare_clip.summary import summarize as summarize_mod
+
+    txt = tmp_path / "v.txt"
+    txt.write_text("一行目\n", encoding="utf-8")
+
+    systems: list[str] = []
+
+    def fake_llm(messages, cfg):
+        systems.append(messages[0]["content"])
+        return json.dumps({"parts": [{"lines": [1, 1], "summary": "s"}], "video_summary": "v"})
+
+    monkeypatch.setattr(summarize_mod, "_call_llm", fake_llm)
+    summary_run.run_summary(
+        [txt],
+        tmp_path / "summary.json",
+        {"summary": {"enabled": True, "prompt": "P", "overall_prompt": "O", "max_retries": 0}},
+    )
+    assert systems == ["P", "O"]

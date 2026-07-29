@@ -148,6 +148,7 @@ src/nagare_clip/          # Main Python package (src layout)
   llm_retry.py                # Shared bounded-retry helpers (director/guided_edit): retry_attempts(), cfg_for_attempt()
   llm_report.py               # Structured per-call LLM report: Recorder + rebuild_index (index.md + per-call <stage>/<unit>.md)
   llm_client.py               # Unified LiteLLM transport: call_llm(messages, cfg) -> str (OpenAI/Gemini/Anthropic/Ollama)
+  brief.py                    # project: editorial brief -> format_brief()/apply_brief() (summary/plan/director/text_filter prompts)
   timing.py                   # Pure timing helpers: segment_times(), span_silence(), segment_silences(), format_dur_gap() (plan/director duration context)
   __main__.py                 # python -m nagare_clip support (re-aliased to the pipeline CLI)
   pipeline/                   # pipeline orchestrator (replaces bash run_pipeline.sh)
@@ -247,6 +248,18 @@ All tunable parameters are defined as typed **pydantic-settings models** in
 
 **Priority order (highest first):** CLI flags > YAML config file > model defaults.
 
+The `project:` section is the project-wide **editorial brief** (audience,
+purpose, target_duration, tone, story_so_far, previous_summary — all free text,
+all empty by default). `nagare_clip.brief.apply_brief()` appends the rendered
+brief to the system prompts of `summary` (both `prompt` and `overall_prompt`),
+`plan`, `director` and `text_filter`, called from those four stages' `run.py` so
+no LLM module needed a new parameter. `previous_summary` is a path to a previous
+project's `summary.json`; its overall summary joins the brief (a missing/unreadable
+file drops only that line). Every field empty → `apply_brief` returns the same
+dict and prompts are byte-identical to a run without the section — regression-tested
+per stage. `gap_context`/`sentence_split`/`guided_edit` are deliberately not briefed
+(mechanical stages). See [`docs/stages/project_brief.md`](docs/stages/project_brief.md).
+
 All LLM stages (`sentence_split`, `gap_context`, `summary`, `text_filter`, `plan`, `director`, `guided_edit`) route through `nagare_clip.llm_client.call_llm` (LiteLLM). Each block selects its backend with a `provider` key (default `ollama_chat`); the model id sent to LiteLLM is `"<provider>/<model>"`. An empty `api_base` falls back to `http://localhost:11434` for an ollama provider, or is omitted for a cloud provider. `api_key` is forwarded when set (or use the provider's env var). `response_format: "json"` maps to a JSON-object request; `thinking` maps to LiteLLM `reasoning_effort` (best-effort per provider).
 
 Only `blender/blender_cli.py` still takes a `--config <path>` flag on its command line — it runs as a separate Blender subprocess, so the pipeline CLI (`nagare_clip.pipeline.cli`) passes its resolved `config_path` through explicitly. Every other stage receives the already-merged `cfg` dict in-process (no subprocess, no re-parsing of `--config`).
@@ -259,6 +272,7 @@ read the relevant file first when you need to touch a stage, and keep every
 `docs/stages/` file up to date whenever you change that stage's behavior** (see
 the [Documentation Policy](#documentation-policy)):
 
+- project brief (`project:` config → summary/plan/director/text_filter prompts) → [`docs/stages/project_brief.md`](docs/stages/project_brief.md)
 - audio_silence → [`docs/stages/audio_silence.md`](docs/stages/audio_silence.md)
 - sentence_split (re-segmentation, windowing/carry-over, force-split) → [`docs/stages/sentence_split.md`](docs/stages/sentence_split.md)
 - gap_context (gap selection, frame sampling/extraction, vision-call contract, summary/director consumption) → [`docs/stages/gap_context.md`](docs/stages/gap_context.md)
