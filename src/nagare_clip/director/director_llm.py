@@ -114,7 +114,13 @@ def _parse_op(raw: Any, num_lines: int, drops: list[str] | None = None) -> Direc
         if not isinstance(raw_text, str) or raw_text == "":
             _drop("overlay op empty/missing text")
             return None
-        text = raw_text
+        # A multi-line caption is fine — Blender renders the break — but only
+        # "\n" is: a lone CR would survive into the single-line _edits.txt
+        # marker and split it on any reader that honours it.
+        text = raw_text.replace("\r\n", "\n").replace("\r", "\n")
+        if not text.strip():
+            _drop("overlay op text is blank")
+            return None
         # The duration is what makes the op applicable at all: an overlay's
         # on-screen time is stated, never derived from where a tag landed.
         raw_duration = raw.get("duration")

@@ -101,6 +101,21 @@ class TestParseInvalidDropped:
         )
         assert parse_director_response(resp, num_lines=5) == []
 
+    def test_overlay_text_line_endings_normalised(self):
+        # A multi-line caption is kept (Blender renders the break), but only
+        # "\n" — a stray CR would survive into the marker and split the
+        # _edits.txt line on readers that honour it.
+        resp = (
+            '{"ops": [{"type": "overlay", "lines": [1, 1],'
+            ' "text": "A\\r\\nB\\rC", "duration": 2.0}]}'
+        )
+        ops = parse_director_response(resp, num_lines=5)
+        assert [o.text for o in ops] == ["A\nB\nC"]
+
+    def test_overlay_text_of_only_line_breaks_dropped(self):
+        resp = '{"ops": [{"type": "overlay", "lines": [1, 1], "text": "\\n \\n", "duration": 2.0}]}'
+        assert parse_director_response(resp, num_lines=5) == []
+
     def test_malformed_json_returns_empty(self):
         assert parse_director_response("not json", num_lines=5) == []
 

@@ -40,6 +40,30 @@ OVERLAY_TAG_RE = re.compile(r'<overlay\s+text="[^"]*"\s+duration="[0-9.]+"\s*/>'
 _OVERLAY_SPLIT_RE = re.compile(r'(<overlay\s+text="[^"]*"\s+duration="[0-9.]+"\s*/>)')
 _OVERLAY_MARK_RE = re.compile(r'<overlay\s+text="([^"]*)"\s+duration="([0-9.]+)"\s*/>')
 
+# A caption may span several on-screen lines, but the marker carrying it must
+# stay on ONE _edits.txt line — that file maps line N to WhisperX segment N, so
+# a raw newline inside a marker shifts every later line off its segment and the
+# whole file is rejected by sync_text_to_json.  Line breaks therefore travel
+# escaped as the two characters \ and n, decoded back here.  Only \\ and \n are
+# recognised; any other backslash sequence is left verbatim, so a caption
+# containing a stray backslash is not silently mangled.
+_OVERLAY_ESCAPE_RE = re.compile(r"\\(.)")
+_OVERLAY_UNESCAPE = {"n": "\n", "\\": "\\"}
+
+
+def escape_overlay_text(text: str) -> str:
+    """Encode caption *text* for the single-line ``<overlay/>`` attribute."""
+    return text.replace("\\", "\\\\").replace("\n", "\\n")
+
+
+def unescape_overlay_text(text: str) -> str:
+    """Decode an ``<overlay/>`` attribute back into display caption text."""
+    return _OVERLAY_ESCAPE_RE.sub(
+        lambda m: _OVERLAY_UNESCAPE.get(m.group(1), m.group(0)),
+        text,
+    )
+
+
 # <cut>...</cut> deletion-shorthand markers (added by humans / guided_edit).
 # A <cut> span deletes the wrapped text; it desugars to a {{wrapped->}}
 # deletion patch before the normal patch flow, so the existing
@@ -519,7 +543,9 @@ def extract_overlay_marks(
     There is no closing tag and therefore no tag-placement failure mode.
 
     An empty ``text=""`` or a non-positive ``duration`` is skipped with a
-    warning; neither raises.
+    warning; neither raises.  The returned text is decoded with
+    :func:`unescape_overlay_text`, so an escaped ``\\n`` becomes a real line
+    break for the blender stage's TEXT strip.
     """
     segments = synced_json.get("segments", [])
     marks: list[tuple[float, float, str]] = []
@@ -533,7 +559,7 @@ def extract_overlay_marks(
             if mark is None:
                 output_pos += _patched_visible_length(part)
                 continue
-            text = mark.group(1)
+            text = unescape_overlay_text(mark.group(1))
             duration = float(mark.group(2))
             if not text:
                 logger.warning("<overlay> has empty text; ignoring")

@@ -136,3 +136,18 @@ New `project:` config section (`ProjectConfig`, six free-text fields, all `""` b
 `previous_summary` is a **path** to a previous project's `summary.json`, read at prompt-build time and rendered as `- Previous video (this project continues it): <its overall summary>` — the series-context case above, solved without copying prose between projects. A missing/unreadable/summary-less file logs a warning and drops only that line.
 
 The no-brief invariant is the load-bearing guarantee: with all fields empty, `format_brief` returns `""` and `apply_brief` returns the *same dict object*, so every prompt is byte-identical to before this feature. Pinned by `tests/test_brief.py` plus a `test_no_brief_leaves_*` regression test in each of the four stages' `test_run.py`. `gap_context`, `sentence_split` and `guided_edit` are deliberately unbriefed — they are mechanical, and editorial framing there invites paraphrase. See [`docs/stages/project_brief.md`](docs/stages/project_brief.md).
+
+## Multi-line overlay captions survive the edits file (2026-07-30)
+
+**Status: complete.** A real run (`water_pump_3`) crashed the `intervals` stage with `Segment 20: text changed without {{old->new}} markers`. Root cause: director op `overlay lines [21,21]` carried a two-line caption (`問題①：…\n問題②：…`), and `apply_point_op()` interpolated it into the marker raw. An `_edits.txt` line maps 1:1 to a WhisperX segment, so the embedded newline became an extra physical line at `"\n".join(lines)` write time (59 lines vs. 58 segments) and shifted every later line off its segment.
+
+Every existing guard passed, because in memory the newline sits *inside* one list element: `_OVERLAY_MARK_RE`'s `[^"]*` matches across a newline so `verify_op` saw the marker on its line, `clean_old()` stripped the marker so the underlying text compared equal, and `check_edits()` counted list elements, not physical lines. The corruption only existed on disk, and was first observed a stage later.
+
+A multi-line caption is legitimate — Blender's `TextStrip.text` renders the break, and the intervals JSON is JSON — so the fix preserves it rather than flattening or dropping it. The break travels **escaped** as the two characters `\n`, since only the marker needs to be single-line:
+
+- **`intervals/sync_json.py`** owns the encoding: `escape_overlay_text()` / `unescape_overlay_text()`. Only `\\` and `\n` are recognised; any other backslash sequence passes through verbatim, so a stray backslash in a caption is not silently mangled. `extract_overlay_marks()` decodes on the way out.
+- **`guided_edit/apply.py`:** `apply_point_op()` (and the `edit`-path instruction string) escape on the way in.
+- **`director/director_llm.py`:** an overlay op's `text` has CRLF/CR normalised to `\n` at the parse boundary, and an op whose text is blank after that is dropped.
+- **`intervals/check_edits.py`:** reports `line contains an embedded newline` directly — the invariant that broke, now checked where guided_edit already validates its result *before* writing, instead of surfacing as an intervals crash a stage later.
+
+Quotes in `text="..."` remain unsupported, but are not the same hazard: `verify_op` catches them (`underlying text was altered`), so the op is reverted and logged rather than corrupting the file.

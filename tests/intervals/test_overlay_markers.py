@@ -120,6 +120,27 @@ class TestExtractOverlayMarks:
         assert marks == []
         assert "empty text" in caplog.text
 
+    def test_escaped_newline_decodes_to_a_real_line_break(self):
+        # The marker lives on one physical _edits.txt line, so a multi-line
+        # caption travels escaped and is decoded here — Blender's TextStrip
+        # renders the resulting "\n" as a line break.
+        words = [_word("あ", 0.0, 0.2), _word("い", 0.2, 0.4)]
+        data = _whisperx(_segment("あい", words))
+        marks = extract_overlay_marks(['<overlay text="上\\n下" duration="2.0"/>あい'], data)
+        assert marks == [(0.0, 2.0, "上\n下")]
+
+    def test_escaped_backslash_decodes_to_one_backslash(self):
+        words = [_word("あ", 0.0, 0.2), _word("い", 0.2, 0.4)]
+        data = _whisperx(_segment("あい", words))
+        marks = extract_overlay_marks(['<overlay text="a\\\\nb" duration="2.0"/>あい'], data)
+        assert marks == [(0.0, 2.0, "a\\nb")]
+
+    def test_unknown_escape_is_left_alone(self):
+        words = [_word("あ", 0.0, 0.2), _word("い", 0.2, 0.4)]
+        data = _whisperx(_segment("あい", words))
+        marks = extract_overlay_marks(['<overlay text="a\\tb" duration="2.0"/>あい'], data)
+        assert marks == [(0.0, 2.0, "a\\tb")]
+
     def test_zero_duration_is_skipped_with_warning(self, caplog):
         words = [_word("あ", 0.0, 0.2), _word("い", 0.2, 0.4)]
         data = _whisperx(_segment("あい", words))

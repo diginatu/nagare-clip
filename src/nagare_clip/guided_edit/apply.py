@@ -25,6 +25,7 @@ from nagare_clip.intervals.sync_json import (
     _SPEED_OPEN_RE,
     OVERLAY_TAG_RE,
     SPEED_TAG_RE,
+    escape_overlay_text,
 )
 from nagare_clip.llm_client import with_trace_meta
 from nagare_clip.llm_report import (
@@ -157,10 +158,15 @@ def apply_point_op(lines: list[str], op: DirectorOp) -> list[str]:
     ``duration`` attribute — seconds of the edited timeline — is how long the
     text stays on screen.  Nothing about its on-screen time depends on where a
     second tag lands, which is the whole reason the marker is a point.
+
+    The caption text is escaped: a multi-line caption is legitimate (Blender
+    renders the break), but an edit line maps 1:1 to a WhisperX segment, so the
+    break must not reach the file as a raw newline.
     """
     a = op.lines[0]
     new = list(lines)
-    new[a - 1] = f'<overlay text="{op.text}" duration="{op.duration}"/>{new[a - 1]}'
+    text = escape_overlay_text(op.text or "")
+    new[a - 1] = f'<overlay text="{text}" duration="{op.duration}"/>{new[a - 1]}'
     return new
 
 
@@ -171,8 +177,9 @@ def _instruction(op: DirectorOp) -> str:
         what = f'Speed up the span by wrapping it in <speed factor="{op.factor}">...</speed>.'
     elif op.type == "overlay":
         what = (
-            f"Add an on-screen overlay by inserting "
-            f'<overlay text="{op.text}" duration="{op.duration}"/> at the position described.'
+            f"Add an on-screen overlay by inserting <overlay "
+            f'text="{escape_overlay_text(op.text or "")}" duration="{op.duration}"/> '
+            f"at the position described."
         )
     elif op.type == "keep":
         what = "Protect the span from being cut by wrapping it in <keep>...</keep>."
