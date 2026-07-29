@@ -58,6 +58,27 @@ class DirectorOp:
     extra: dict = field(default_factory=dict)
 
 
+def _max_keep_lines(cfg: dict[str, Any]) -> int:
+    """Read ``director.max_keep_lines`` defensively (``0``/invalid = no limit)."""
+    raw = cfg.get("max_keep_lines", 0)
+    if isinstance(raw, bool) or not isinstance(raw, int) or raw < 0:
+        return 0
+    return raw
+
+
+def keep_limit_note(max_keep_lines: int) -> str:
+    """The one-line prompt addendum stating the configured ``keep`` width cap.
+
+    Generated rather than written into ``DIRECTOR_PROMPT`` so the number the
+    LLM is told is always the number the parser enforces.
+    """
+    return (
+        f'A "keep" op may span at most {max_keep_lines} line(s); a wider one is '
+        "rejected and has no effect. To signal that a long span matters, say so "
+        'in a "note" on another op — do not stretch a keep across it.'
+    )
+
+
 def _coerce_lines(value: Any, num_lines: int) -> tuple[int, int] | None:
     """Validate a ``lines`` value into a 1-based inclusive (start, end) range."""
     if isinstance(value, bool):  # bool is an int subclass; reject explicitly
@@ -77,7 +98,12 @@ def _coerce_lines(value: Any, num_lines: int) -> tuple[int, int] | None:
     return (start, end)
 
 
-def _parse_op(raw: Any, num_lines: int, drops: list[str] | None = None) -> DirectorOp | None:
+def _parse_op(
+    raw: Any,
+    num_lines: int,
+    drops: list[str] | None = None,
+    max_keep_lines: int = 0,
+) -> DirectorOp | None:
     def _drop(msg: str) -> None:
         logger.warning("Director op dropped: %s", msg)
         if drops is not None:
@@ -93,6 +119,19 @@ def _parse_op(raw: Any, num_lines: int, drops: list[str] | None = None) -> Direc
     if lines is None:
         _drop(f"bad lines {raw.get('lines')!r}")
         return None
+
+    # A "keep" op restores every silent second inside its range, so a wide one
+    # can double the finished runtime while adding no speech (speech is never
+    # dropped by default).  The op exists to rescue one specific gap, which is
+    # a property of that gap, not of a 35-line span: reject anything wider.
+    if op_type == "keep" and max_keep_lines > 0:
+        span = lines[1] - lines[0] + 1
+        if span > max_keep_lines:
+            _drop(
+                f"keep op spans {span} lines {list(lines)} > max_keep_lines={max_keep_lines}; "
+                "keep rescues a specific silent gap, it does not mark a span as important"
+            )
+            return None
 
     note = str(raw.get("note", "") or "")
 
@@ -132,7 +171,10 @@ def _parse_op(raw: Any, num_lines: int, drops: list[str] | None = None) -> Direc
 
 
 def try_parse_director_response(
-    response: str, num_lines: int, drops: list[str] | None = None
+    response: str,
+    num_lines: int,
+    drops: list[str] | None = None,
+    max_keep_lines: int = 0,
 ) -> list[DirectorOp] | None:
     """Parse the director LLM response, distinguishing failure from empty.
 
@@ -141,6 +183,11 @@ def try_parse_director_response(
     list otherwise.  A valid ``{"ops": []}`` is a legitimate "no edits" result
     and yields ``[]`` (not ``None``).  Individual malformed ops are skipped
     (logged) rather than aborting the whole list.
+
+    ``max_keep_lines`` (config ``director.max_keep_lines``, ``0`` = no limit)
+    drops a ``keep`` op wider than that many lines: dropping it degrades to the
+    default behaviour (speech kept, internal silence cut) instead of restoring
+    a span's worth of dead air.
     """
     text = response.strip()
     fence = _FENCE_RE.match(text)
@@ -157,26 +204,31 @@ def try_parse_director_response(
 
     ops: list[DirectorOp] = []
     for raw in data["ops"]:
-        op = _parse_op(raw, num_lines, drops)
+        op = _parse_op(raw, num_lines, drops, max_keep_lines)
         if op is not None:
             ops.append(op)
     return ops
 
 
-def parse_director_response(response: str, num_lines: int) -> list[DirectorOp]:
+def parse_director_response(
+    response: str, num_lines: int, max_keep_lines: int = 0
+) -> list[DirectorOp]:
     """Parse the director LLM response into validated ops.
 
     Thin wrapper over :func:`try_parse_director_response` that collapses a hard
     parse failure to ``[]`` (backward-compatible).
     """
-    return try_parse_director_response(response, num_lines) or []
+    return try_parse_director_response(response, num_lines, max_keep_lines=max_keep_lines) or []
 
 
 def ops_from_dict(data: Any, num_lines: int) -> list[DirectorOp]:
     """Load validated ops from a parsed ``_director.json`` dict.
 
     Same validation as :func:`parse_director_response`; invalid/out-of-range
-    ops are skipped.
+    ops are skipped.  The ``max_keep_lines`` cap is deliberately NOT applied
+    here: ``_director.json`` is a hand-editable intermediate, so a human who
+    writes a wide ``keep`` into it means it.  The cap guards the LLM's output
+    only, at generation time.
     """
     if not isinstance(data, dict) or not isinstance(data.get("ops"), list):
         return []
@@ -295,7 +347,10 @@ def generate_director_ops(
     byte-identical.
     """
     clean_lines = clean_for_display(edit_lines)
+    max_keep_lines = _max_keep_lines(cfg)
     system_prompt = cfg.get("prompt", "")
+    if max_keep_lines > 0:
+        system_prompt = f"{system_prompt}\n\n{keep_limit_note(max_keep_lines)}"
     if overview_context:
         system_prompt = f"{system_prompt}\n\n{overview_context}"
     if seg_times is not None and len(seg_times) == len(clean_lines):
@@ -334,7 +389,12 @@ def generate_director_ops(
             )
             continue
         drops: list[str] = []
-        ops = try_parse_director_response(response, num_lines=len(clean_lines), drops=drops)
+        ops = try_parse_director_response(
+            response,
+            num_lines=len(clean_lines),
+            drops=drops,
+            max_keep_lines=max_keep_lines,
+        )
         if ops is None:
             recorder.attempt(
                 unit=unit,

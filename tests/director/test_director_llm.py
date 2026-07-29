@@ -12,6 +12,8 @@ from nagare_clip.director.director_llm import (
     format_numbered_transcript,
     format_numbered_transcript_timed,
     generate_director_ops,
+    keep_limit_note,
+    ops_from_dict,
     ops_to_dict,
     parse_director_response,
     try_parse_director_response,
@@ -170,6 +172,94 @@ class TestGenerate:
 
         generate_director_ops(["あ"], {"prompt": "P"}, call_llm=fake_llm, overview_context="CTX")
         assert captured["system"] == "P\n\nCTX"
+
+
+class TestKeepWidthLimit:
+    """`keep` restores every silence in its range, so a wide one can double the
+    finished runtime while adding no speech (speech is kept by default anyway).
+    `director.max_keep_lines` caps the LLM-emitted op width."""
+
+    def _resp(self, a, b):
+        return json.dumps({"ops": [{"type": "keep", "lines": [a, b], "note": "n"}]})
+
+    def test_keep_within_limit_survives(self):
+        ops = parse_director_response(self._resp(3, 4), num_lines=40, max_keep_lines=4)
+        assert [o.lines for o in ops] == [(3, 4)]
+
+    def test_keep_at_exactly_the_limit_survives(self):
+        ops = parse_director_response(self._resp(3, 6), num_lines=40, max_keep_lines=4)
+        assert [o.lines for o in ops] == [(3, 6)]
+
+    def test_wide_keep_is_dropped(self):
+        # The real-run shape: keep [97, 131] = 35 lines of restored silence.
+        assert parse_director_response(self._resp(97, 131), num_lines=140, max_keep_lines=4) == []
+
+    def test_drop_is_reported(self):
+        drops: list[str] = []
+        try_parse_director_response(
+            self._resp(97, 131), num_lines=140, drops=drops, max_keep_lines=4
+        )
+        assert len(drops) == 1
+        assert "35 lines" in drops[0] and "max_keep_lines=4" in drops[0]
+
+    def test_zero_means_no_limit(self):
+        ops = parse_director_response(self._resp(1, 99), num_lines=140, max_keep_lines=0)
+        assert [o.lines for o in ops] == [(1, 99)]
+
+    def test_only_keep_ops_are_capped(self):
+        resp = json.dumps(
+            {
+                "ops": [
+                    {"type": "cut", "lines": [1, 40]},
+                    {"type": "speed", "lines": [41, 90], "factor": 2.0},
+                    {"type": "keep", "lines": [91, 130]},
+                ]
+            }
+        )
+        ops = parse_director_response(resp, num_lines=140, max_keep_lines=4)
+        assert [o.type for o in ops] == ["cut", "speed"]
+
+    def test_hand_edited_director_json_is_not_capped(self):
+        """`_director.json` is a hand-editable intermediate: a human who writes
+        a wide keep into it means it, so `ops_from_dict` never applies the cap."""
+        data = {"ops": [{"type": "keep", "lines": [1, 99]}]}
+        assert [o.lines for o in ops_from_dict(data, num_lines=140)] == [(1, 99)]
+
+    def test_generate_reads_the_limit_from_cfg(self):
+        fake = _seq_llm([self._resp(1, 99)])
+        ops = generate_director_ops(
+            ["あ"] * 140, {"prompt": "P", "max_keep_lines": 4}, call_llm=fake
+        )
+        assert ops == []
+
+    def test_generate_without_cfg_key_is_unlimited(self):
+        fake = _seq_llm([self._resp(1, 99)])
+        ops = generate_director_ops(["あ"] * 140, {"prompt": "P"}, call_llm=fake)
+        assert [o.lines for o in ops] == [(1, 99)]
+
+    def test_limit_is_stated_in_the_system_prompt(self):
+        """The number the LLM is told must be the number the parser enforces."""
+        captured = {}
+
+        def fake_llm(messages, cfg):
+            captured["system"] = messages[0]["content"]
+            return '{"ops": []}'
+
+        generate_director_ops(
+            ["あ"], {"prompt": "P", "max_keep_lines": 3}, call_llm=fake_llm, overview_context="CTX"
+        )
+        assert captured["system"] == f"P\n\n{keep_limit_note(3)}\n\nCTX"
+        assert "at most 3 line(s)" in captured["system"]
+
+    def test_no_note_when_unlimited(self):
+        captured = {}
+
+        def fake_llm(messages, cfg):
+            captured["system"] = messages[0]["content"]
+            return '{"ops": []}'
+
+        generate_director_ops(["あ"], {"prompt": "P", "max_keep_lines": 0}, call_llm=fake_llm)
+        assert captured["system"] == "P"
 
 
 class TestTryParse:

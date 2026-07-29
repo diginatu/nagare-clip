@@ -116,7 +116,7 @@ PLAN_PROMPT = (
     "videos. You receive numbered PARTS (each with a source video, a line "
     "range, and a summary) plus an overall summary. For each part, give a "
     "ROUGH editorial direction — what to do with it (e.g. remove, shorten, "
-    "speed up, keep, emphasise) and why, considering the whole project "
+    "speed up, feature, emphasise) and why, considering the whole project "
     "(e.g. a part that repeats an earlier one can be removed). Reference "
     "parts by their 1-based index. Output ONLY a JSON object.\n"
     "\n"
@@ -128,25 +128,29 @@ PLAN_PROMPT = (
     "bracket. "
     "A part containing long internal silences splits its duration — "
     "[13.0s speech, 62.9s silence] means only 13.0 seconds are spoken; the "
-    'silent seconds are dropped by default ("keep" preserves them). Judge '
+    "silent seconds are dropped by default. Judge "
     "pacing from the speech figure. "
     "Use these numbers to judge pacing: long parts are candidates "
     "for shortening or speeding up, and long gaps mean dead air.\n"
     "\n"
-    'By default, non-speech stretches are dropped. "keep" preserves ALL '
-    "content in the range (silences and non-speech gaps included) — use "
-    "it when those moments matter.\n"
+    "By default, non-speech stretches are dropped. If a part's silent "
+    "moments are themselves worth watching (something visible happens, a "
+    "result arrives), say so in the direction — a later stage decides how "
+    "to preserve them.\n"
     "\n"
     "JSON shape:\n"
     '{"directions": [\n'
-    '  {"index": 1, "direction": "keep — the product\'s operating noise '
+    '  {"index": 1, "direction": "feature — the product\'s operating noise '
     'is the point"},\n'
     '  {"index": 2, "direction": "remove — repeats part 1"}\n'
     "]}\n"
     "\n"
     "Rules:\n"
     '- "index" must be one of the given part numbers.\n'
-    "- Keep each direction to one short, actionable phrase.\n"
+    "- One short, actionable phrase per direction.\n"
+    '- Never use the word "keep" in a direction: a later stage reads it as '
+    "a mechanical instruction to restore every silent second of the part. "
+    'Say "feature", "retain" or "emphasise" instead.\n'
     "- Output only the JSON object, no other text."
 )
 
@@ -203,8 +207,15 @@ DIRECTOR_PROMPT = (
     "moments worth labeling on screen. Aim for roughly one overlay per "
     "3-5 minutes of finished video as a loose default target; if an "
     "editorial brief states otherwise, follow the brief instead.\n"
-    "- keep: protect a span from cutting, INCLUDING its silences/"
-    "non-speech gaps (which are dropped by default).\n"
+    "- keep: rescue a specific silent gap that is worth watching — it "
+    "protects a span from cutting INCLUDING its silences/non-speech gaps "
+    "(which are dropped by default). Use the NARROWEST range that covers "
+    "the gap, normally the line before it and the next one ([N, N+1]). It "
+    "is not a way to mark a span as important: speech is never dropped by "
+    "default, so a wide keep adds nothing but dead air and inflates the "
+    "runtime. A project-context direction saying a part should be "
+    '"featured", "retained" or "emphasised" is editorial emphasis, NOT a '
+    "request for a keep op.\n"
     '- edit: request a fine within-line text deletion/fix; describe it in "note".\n'
     "\n"
     "JSON shape:\n"
@@ -581,6 +592,13 @@ class DirectorConfig(BaseModel):
     )
     retry_temp_step: float = Field(0.2, description="Temperature increment added on each retry")
     retry_temp_cap: float = Field(0.8, description="Maximum temperature any retry uses")
+    max_keep_lines: int = Field(
+        4,
+        description=(
+            'Reject a "keep" op wider than this many lines (0 = no limit); keep exists to '
+            "rescue a specific silent gap, and a wide one restores every silence in its range"
+        ),
+    )
     prompt: str = _commented(
         DIRECTOR_PROMPT, sample='"..."', description="System prompt (has a sensible default)"
     )

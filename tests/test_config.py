@@ -568,6 +568,52 @@ def test_director_prompt_documents_overlay_density_target():
     assert "editorial brief" in prompt.lower()
 
 
+def test_plan_prompt_never_offers_keep_as_a_direction_word():
+    """`keep` means two different things one stage apart: "this part earns its
+    place" (plan) vs. "restore every silence in this range" (a director op).
+    plan.json is fed to the director as context, so the director copies the word
+    across and pays the mechanical price.  The plan vocabulary must not contain
+    it — every occurrence in the prompt must be the rule forbidding it."""
+    cfg = get_effective_config(None, {})
+    prompt = cfg["plan"]["prompt"]
+
+    assert "feature" in prompt  # the editorial-sense replacement
+    assert 'Never use the word "keep" in a direction' in prompt
+
+    # Drop the rule (a single line) — no other line may mention the word.
+    remainder = [line for line in prompt.splitlines() if 'Never use the word "keep"' not in line]
+    assert not [line for line in remainder if "keep" in line.lower()]
+
+
+def test_plan_prompt_example_directions_are_not_director_op_names():
+    """The plan's own JSON example is what the LLM imitates most closely."""
+    from nagare_clip.director.director_llm import VALID_TYPES
+
+    cfg = get_effective_config(None, {})
+    examples = [line for line in cfg["plan"]["prompt"].splitlines() if '"direction":' in line]
+    assert examples
+    for line in examples:
+        verb = line.split('"direction": "')[1].split(" ")[0].strip('",')
+        assert verb not in VALID_TYPES, f"plan example uses director op name {verb!r}"
+
+
+def test_director_prompt_narrows_keep_to_gap_rescue():
+    """The keep op's blast radius must match its purpose: rescuing one silent
+    gap, not marking a wide span as important."""
+    cfg = get_effective_config(None, {})
+    prompt = cfg["director"]["prompt"]
+    assert "NARROWEST" in prompt
+    assert "[N, N+1]" in prompt
+    assert "not a way to mark a span as important" in prompt
+    # And a plan-side "feature/retain" direction must not be read as a keep op.
+    assert "editorial emphasis, NOT a " in prompt
+
+
+def test_director_max_keep_lines_default():
+    cfg = get_effective_config(None, {})
+    assert cfg["director"]["max_keep_lines"] == 4
+
+
 def test_text_filter_prompt_repeated_phrase_example_is_valid_patch_syntax():
     """Real-run failure mode: told to de-duplicate repeated phrases but shown
     no marker example, the filter LLM rewrites the line bare and the safety
