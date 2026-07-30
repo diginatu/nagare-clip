@@ -503,8 +503,13 @@ def place_overlays(
     to the end of this source's timeline map so it never bleeds over the next
     source's strips.
 
-    Overlays do NOT force-keep audio: if the anchor falls outside every keep
-    interval (e.g. its words were cut), the overlay is silently skipped.
+    Overlays do NOT force-keep audio, so an anchor can land on cut footage.
+    The intervals stage already snaps such an anchor forward to the first
+    surviving moment of the marker's own line
+    (``intervals.snap_overlay_starts``), so what reaches here is off-keep only
+    when that line has no surviving footage at all (or the JSON was hand-edited
+    into that state) — genuinely nowhere to put the caption, so it is skipped
+    with a warning.
     """
     tl_limit = max((entry["tl_end"] for entry in tl_map), default=None)
     for ov in overlays:

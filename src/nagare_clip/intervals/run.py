@@ -18,6 +18,7 @@ from nagare_clip.intervals.intervals import (
     invert_intervals,
     merge_close_intervals,
     merge_intervals,
+    snap_overlay_starts,
     subtract_intervals,
 )
 from nagare_clip.intervals.io import infer_source_file
@@ -28,6 +29,7 @@ from nagare_clip.intervals.sync_json import (
     extract_speed_ranges,
     sync_text_to_json,
 )
+from nagare_clip.timing import segment_times
 
 
 def run_intervals(
@@ -202,6 +204,23 @@ def run_intervals(
             ivl["min_cut"],
             len(keep_intervals_dicts),
         )
+
+    if overlay_marks:
+        # Runs after every keep-interval pass: the anchor is snapped against the
+        # final intervals, so a caption whose line opened on cut footage moves to
+        # the line's first surviving moment instead of being dropped in blender.
+        moved = snap_overlay_starts(
+            overlay_marks, segment_times(whisperx_data), keep_intervals_dicts
+        )
+        for (before, _, text), (after, _, _) in zip(overlay_marks, moved):
+            if after != before:
+                logging.info(
+                    "Overlay anchor snapped %.3f -> %.3f (cut line opening): %r",
+                    before,
+                    after,
+                    text[:40],
+                )
+        overlay_marks = moved
 
     output_data = {
         "source_file": infer_source_file(whisperx_data, json_path),

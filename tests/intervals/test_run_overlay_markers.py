@@ -6,6 +6,7 @@ import json
 import yaml
 
 import nagare_clip.intervals.run as stage_run
+from nagare_clip.audio_silence.cuts_file import write_cuts
 from nagare_clip.config import get_effective_config
 from nagare_clip.intervals.run import run_intervals
 
@@ -87,6 +88,87 @@ def test_overlay_does_not_affect_keep_intervals(monkeypatch, tmp_path):
         assert not (iv["start"] <= 1.5 and iv["end"] >= 4.5), (
             f"Overlay accidentally force-kept gap: {iv}"
         )
+
+
+def _whisperx_with_cut_opening():
+    """The water_pump_3 shape: one line 2.495-18.751 whose opening seconds are
+    cut by the audio_silence list, leaving 4.488-12.638 as the only keep."""
+    words = []
+    t = 2.495
+    while round(t + 0.5, 3) <= 12.638:
+        words.append({"word": "あ", "start": round(t, 3), "end": round(t + 0.5, 3)})
+        t += 0.5
+    words.append({"word": "あ", "start": round(t, 3), "end": 12.638})
+    return {
+        "duration": 18.751,
+        "segments": [
+            {
+                "start": 2.495,
+                "end": 18.751,
+                "text": "あ" * len(words),
+                "words": words,
+            },
+        ],
+    }
+
+
+def _run_cut_opening(monkeypatch, tmp_path, margins: dict | None = None):
+    data = _whisperx_with_cut_opening()
+    json_path = tmp_path / "in.json"
+    json_path.write_text(json.dumps(data), encoding="utf-8")
+    edits_path = tmp_path / "in_edits.txt"
+    line = "あ" * len(data["segments"][0]["words"])
+    edits_path.write_text(
+        f'<overlay text="前回のおさらい" duration="5.0"/>{line}', encoding="utf-8"
+    )
+    cuts_path = tmp_path / "in_cuts.txt"
+    write_cuts(cuts_path, [(0.0, 4.488)])
+    out_path = tmp_path / "out.json"
+
+    cfg_path = tmp_path / "config.yml"
+    ivl = {
+        "silence_threshold": 1.0,
+        "min_keep": 0.001,
+        "keep_pre_margin": 0.0,
+        "keep_post_margin": 0.0,
+    }
+    ivl.update(margins or {})
+    cfg_path.write_text(yaml.safe_dump({"intervals": ivl}), encoding="utf-8")
+
+    monkeypatch.setattr(stage_run.spacy, "load", lambda *a, **k: object())
+    monkeypatch.setattr(stage_run, "build_bunsetu_times", lambda *a, **k: [])
+    cfg = get_effective_config(cfg_path, {})
+    run_intervals(edits_path, json_path, out_path, cfg, cuts_txt=cuts_path)
+    return json.loads(out_path.read_text(encoding="utf-8"))
+
+
+def test_overlay_on_a_cut_line_opening_snaps_to_the_first_surviving_moment(monkeypatch, tmp_path):
+    """The anchor lands 1.99s inside cut footage; the caption moves to the
+    start of the line's first keep interval instead of being dropped later."""
+    out = _run_cut_opening(monkeypatch, tmp_path)
+
+    assert out["keep_intervals"] == [{"start": 4.488, "end": 12.638}]
+    assert out["overlays"] == [
+        {"start": 4.488, "duration": 5.0, "text": "前回のおさらい"},
+    ]
+
+
+def test_snapped_anchor_lands_inside_a_written_keep_interval(monkeypatch, tmp_path):
+    """The blender stage looks the anchor up in the keep intervals *as written*,
+    with half-open containment — so a snapped start must survive the rounding
+    both values go through, margins and all."""
+    out = _run_cut_opening(
+        # 4.488 - 0.1239 = 4.3641: a keep start whose 4th decimal rounds *down*,
+        # so an unrounded interval would leave the rounded anchor just outside it.
+        monkeypatch,
+        tmp_path,
+        {"keep_pre_margin": 0.1239, "keep_post_margin": 0.0567},
+    )
+
+    start = out["overlays"][0]["start"]
+    assert any(iv["start"] <= start < iv["end"] for iv in out["keep_intervals"]), (
+        f"anchor {start} is on no keep interval: {out['keep_intervals']}"
+    )
 
 
 def test_director_duration_survives_guided_edit_into_intervals(monkeypatch, tmp_path):

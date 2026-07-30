@@ -179,3 +179,85 @@ def merge_close_intervals(keep_intervals: list[dict], min_cut: float) -> list[di
         else:
             merged.append(dict(iv))
     return merged
+
+
+def snap_overlay_starts(
+    overlays: Sequence[tuple[float, float, str]],
+    line_spans: Sequence[tuple[float | None, float | None]],
+    keep_intervals: Sequence[dict],
+) -> list[tuple[float, float, str]]:
+    """Move an overlay anchor that landed on cut footage onto surviving footage.
+
+    An ``<overlay/>`` is a point marker at the start of a transcript line, and
+    a line's opening seconds are routinely cut (silence detection reaches them,
+    keep margins do not reach back far enough).  The blender stage drops an
+    overlay whose anchor is on no keep interval, so a 2-second miss used to
+    cost the whole caption.  Here the anchor is snapped to the first surviving
+    moment **of its own line** instead: the earliest keep interval that
+    overlaps the line, clamped to the line's own start so a keep interval
+    reaching in from the previous line can't pull the caption backwards.  A
+    later surviving chunk wins over an earlier one when the anchor sits between
+    them — the caption moves forward with the words it belongs to.
+
+    ``duration`` is never touched: it is stated reading time on the edited
+    timeline, so clipping it to the line's surviving footage would re-introduce
+    exactly the derived-length problem the point marker replaced.  A caption is
+    allowed to run on over whatever follows (the blender stage still clamps it
+    to the end of the source's timeline).
+
+    An overlay is returned unchanged when its line has no surviving footage at
+    all, when no line contains the anchor, or when the line has no timing —
+    there is genuinely nowhere to put it, and the blender stage's skip warning
+    is left to fire.
+
+    Containment is half-open (``start <= t < end``) to match the blender
+    stage's ``tl_map`` lookup, so an anchor exactly on a keep interval's end is
+    snapped rather than left to be dropped.
+    """
+    if not overlays or not keep_intervals:
+        return list(overlays)
+
+    ivs = sorted(
+        (float(iv["start"]), float(iv["end"]))
+        for iv in keep_intervals
+        if float(iv["end"]) > float(iv["start"])
+    )
+
+    snapped: list[tuple[float, float, str]] = []
+    for start, duration, text in overlays:
+        if any(iv_start <= start < iv_end for iv_start, iv_end in ivs):
+            snapped.append((start, duration, text))
+            continue
+
+        line = _line_containing(line_spans, start)
+        if line is None:
+            snapped.append((start, duration, text))
+            continue
+        line_start, line_end = line
+
+        covering = [
+            (iv_start, iv_end)
+            for iv_start, iv_end in ivs
+            if iv_start < line_end and iv_end > line_start
+        ]
+        if not covering:
+            snapped.append((start, duration, text))
+            continue
+
+        forward = [iv for iv in covering if iv[0] > start]
+        chosen = forward[0] if forward else covering[0]
+        snapped.append((max(chosen[0], line_start), duration, text))
+
+    return snapped
+
+
+def _line_containing(
+    line_spans: Sequence[tuple[float | None, float | None]], t: float
+) -> tuple[float, float] | None:
+    """First ``(start, end)`` line span containing *t* (inclusive), if any."""
+    for start, end in line_spans:
+        if start is None or end is None:
+            continue
+        if start <= t <= end:
+            return (float(start), float(end))
+    return None
