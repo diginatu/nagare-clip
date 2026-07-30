@@ -219,6 +219,17 @@ def check_edits(edit_lines: list[str], json_data: dict[str, Any]) -> list[Proble
     in_range = edit_lines[: len(segments)]
     problems.extend(_check_tags(in_range))
 
+    # A line must never contain a newline. Read from a file it cannot; but an
+    # in-memory list (guided_edit checks its result before writing) can, and
+    # every other check here still passes because the list length is right.
+    # The newline only becomes an extra physical line at "\n".join() time,
+    # shifting every later line off its segment — so catch it before the write.
+    for idx, line in enumerate(in_range):
+        if "\n" in line or "\r" in line:
+            problems.append(
+                Problem(idx + 1, "line contains an embedded newline; one line per segment")
+            )
+
     for idx, line in enumerate(in_range):
         lineno = idx + 1
         cleaned = _strip_tags(line)

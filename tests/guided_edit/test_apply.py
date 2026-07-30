@@ -95,6 +95,49 @@ class TestSpanDeterministic:
         assert out == ["<keep>あいう</keep>"]
         assert unapplied == []
 
+    def test_overlay_text_line_break_is_escaped_into_the_marker(self):
+        # A two-line caption must not become two _edits.txt lines: an edit line
+        # maps 1:1 to a WhisperX segment, so a raw newline spliced into the
+        # marker shifts every later line off its segment (the intervals stage
+        # then rejects the file as "text changed without {{old->new}}").
+        out, unapplied = apply_ops(
+            ["あい", "うえ"],
+            [_op("overlay", 1, 1, text="問題①：A\n問題②：B", duration=5.0)],
+            CFG,
+            call_llm=_no_llm,
+        )
+        assert out == ['<overlay text="問題①：A\\n問題②：B" duration="5.0"/>あい', "うえ"]
+        assert unapplied == []
+
+    def test_overlay_text_backslash_is_escaped(self):
+        # A literal backslash must survive the round trip distinguishable from
+        # an encoded line break.
+        out, _ = apply_ops(
+            ["あい"], [_op("overlay", 1, 1, text="a\\nb", duration=2.0)], CFG, call_llm=_no_llm
+        )
+        assert out == ['<overlay text="a\\\\nb" duration="2.0"/>あい']
+
+
+class TestOverlayEditLineInvariant:
+    """No applied op may put a newline inside an edit line.
+
+    ``_edits.txt`` is written with ``"\\n".join(lines)``, so a newline inside a
+    list element silently becomes an extra physical line at write time — after
+    every in-memory guard has already passed.
+    """
+
+    def test_written_file_keeps_one_line_per_segment(self):
+        lines = ["あい", "うえ", "おか"]
+        out, unapplied = apply_ops(
+            lines,
+            [_op("overlay", 2, 2, text="上\n下", duration=4.0)],
+            CFG,
+            call_llm=_no_llm,
+        )
+        assert unapplied == []
+        assert "\n".join(out).split("\n") == out
+        assert len("\n".join(out).split("\n")) == len(lines)
+
     def test_span_wraps_outside_existing_markers(self):
         # speed applied over a line that already carries an overlay + patches:
         # the whole line range is wrapped, underlying text untouched.

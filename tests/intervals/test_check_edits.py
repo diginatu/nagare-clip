@@ -108,6 +108,24 @@ class TestLineCount:
         assert any("4" in m and "3" in m for m in _messages(problems))
 
 
+class TestEmbeddedNewline:
+    """An edit line must never contain a newline.
+
+    In-memory the list length still matches the segment count, so every other
+    check passes — but the file is written with ``"\\n".join(lines)``, so the
+    newline becomes an extra physical line and shifts every later line off its
+    segment. This is the last guard before that hits disk.
+    """
+
+    def test_newline_inside_a_line_reported(self):
+        problems = check_edits(["hello", "wo\nrld", "foo bar"], _fixture())
+        on_2 = _messages(_on_line(problems, 2))
+        assert any("newline" in m for m in on_2)
+
+    def test_clean_file_reports_nothing(self):
+        assert check_edits(["hello", "world", "foo bar"], _fixture()) == []
+
+
 class TestPatchSyntax:
     def test_unbalanced_braces_reported(self):
         # Missing one closing brace → not a valid patch.
