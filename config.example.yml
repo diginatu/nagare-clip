@@ -167,6 +167,7 @@ director:
   max_retries: 2   # Extra attempts on LLM error / unparseable JSON (0 = single attempt)
   retry_temp_step: 0.2   # Temperature increment added on each retry
   retry_temp_cap: 0.8   # Maximum temperature any retry uses
+  max_keep_lines: 4   # Reject a "keep" op wider than this many lines (0 = no limit); keep exists to rescue a specific silent gap, and a wide one restores every silence in its range
   # prompt: "..."   # System prompt (has a sensible default)
 
 # guided_edit stage (Pass B2): a small local LLM applies each director op,

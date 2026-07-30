@@ -429,6 +429,12 @@ for the equivalent `Gap`, not just to a substring match, so a rendering change
 (indent width, decimal places, wording) fails loudly instead of the prompt
 silently drifting from reality.
 
+`[N, N+1]` is not merely the recommended shape but the affordable one:
+`director.max_keep_lines` (default 4) drops a wider `keep` the LLM emits,
+because a `keep` restores every silent second in its range and a span-sized one
+inflates the finished runtime without adding any speech (speech is never
+dropped by default). Gap rescue is unaffected — it only ever needs two lines.
+
 ## Config (`GapContextConfig` in `config.py`)
 
 `enabled` (default `false`), `provider`/`api_base`/`model`
