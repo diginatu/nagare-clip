@@ -172,8 +172,9 @@ DIRECTOR_PROMPT = (
     '62.9 silent seconds are dropped by default (a "keep" over the line '
     "preserves them). Judge pacing from the speech figure, never from "
     "speech+silence. "
-    "Use these numbers to judge pacing: long "
-    "durations are candidates for cutting or speeding up. A long gap is "
+    "Use these numbers to judge pacing: a long speech duration is a "
+    "candidate for cutting, not speeding up — a long stretch of manual "
+    "work is a timelapse candidate instead. A long gap is "
     "dead air by default, already dropped — but that is the fallback "
     "reading, not the only one. Check the speech just before and after it: "
     "if it announces something happening (an accident, a cleanup, a wait "
@@ -229,7 +230,7 @@ DIRECTOR_PROMPT = (
     "JSON shape:\n"
     '{"ops": [\n'
     '  {"type": "cut", "lines": [12, 18], "note": "why / where precisely"},\n'
-    '  {"type": "speed", "lines": [30, 34], "factor": 2.0, "note": "..."},\n'
+    '  {"type": "speed", "lines": [30, 34], "factor": 4.0, "note": "..."},\n'
     '  {"type": "overlay", "lines": [5, 5], "text": "ポイント", "duration": 2.0, "note": ""},\n'
     '  {"type": "keep", "lines": [40, 42], "note": "..."},\n'
     '  {"type": "edit", "lines": [7, 7], "note": "delete the redundant restatement"}\n'

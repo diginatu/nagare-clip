@@ -376,8 +376,9 @@ def test_director_prompt_makes_speed_a_two_mode_choice():
     assert "timelapse" in bullet
     assert "1x" in bullet
     # The listening mode's alternative to a mild speed-up is a cut, not a
-    # slower speed.
-    assert "cut" in bullet
+    # slower speed. Assert the actual clause, not just the substring "cut" --
+    # "jump cuts" elsewhere in the bullet would satisfy a bare "cut" in bullet.
+    assert "cut the weakest parts" in bullet
 
 
 def test_director_prompt_timelapse_states_its_price_and_its_partners():
@@ -399,6 +400,41 @@ def test_director_prompt_marks_mild_speed_factors_as_the_exception():
     assert "1.3" in bullet and "2.0" in bullet
     assert "exception" in bullet
     assert "accent" in bullet
+
+
+def test_director_prompt_speed_example_factor_is_at_least_4():
+    """The JSON-shape speed example is what an LLM copies over the prose --
+    a factor inside the 1.3-2.0 band the bullet above calls "the exception,
+    not the default" would teach exactly the mild sustained fast-forward
+    the two-mode rule exists to prevent. Parse the example through the real
+    parser so a stale example fails loudly (mirrors
+    test_director_prompt_overlay_example_carries_a_duration)."""
+    from nagare_clip.director.director_llm import parse_director_response
+
+    cfg = get_effective_config(None, {})
+    prompt = cfg["director"]["prompt"]
+    example = next(
+        line.strip().rstrip(",") for line in prompt.splitlines() if '"type": "speed"' in line
+    )
+    ops = parse_director_response('{"ops": [' + example + "]}", num_lines=40)
+    assert len(ops) == 1
+    assert ops[0].type == "speed"
+    assert ops[0].factor is not None and ops[0].factor >= 4.0
+
+
+def test_director_prompt_timing_line_does_not_offer_speed_for_long_duration():
+    """The Timing paragraph must not offer speeding up as the remedy for a
+    long line duration -- that contradicts the two-mode speed rule elsewhere
+    in the prompt (speed is a LISTENING/TIMELAPSE choice, not a dial). A long
+    speech duration should route to cutting instead; a long stretch of manual
+    work remains a timelapse candidate."""
+    cfg = get_effective_config(None, {})
+    prompt = cfg["director"]["prompt"]
+    line = next(ln for ln in prompt.splitlines() if "Use these numbers to judge pacing" in ln)
+    lowered = line.lower()
+    assert "candidates for cutting or speeding up" not in lowered
+    assert "cutting" in lowered
+    assert "timelapse" in lowered
 
 
 @pytest.mark.parametrize("stage", ["director", "plan"])
