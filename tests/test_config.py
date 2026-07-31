@@ -597,21 +597,35 @@ def test_plan_prompt_example_directions_are_not_director_op_names():
         assert verb not in VALID_TYPES, f"plan example uses director op name {verb!r}"
 
 
-def test_director_prompt_narrows_keep_to_gap_rescue():
-    """The keep op's blast radius must match its purpose: rescuing one silent
-    gap, not marking a wide span as important."""
+def test_director_prompt_scales_keep_width_to_what_is_on_screen():
+    """A keep's width must follow what is on screen: narrow to rescue one silent
+    gap, but wide enough to carry a continuous event (an accident, a cleanup)
+    without chopping the payoff into jump cuts.  Widening one to mark *talking*
+    as important stays forbidden — that abuse took a 22.3-minute cut to 53.9."""
     cfg = get_effective_config(None, {})
     prompt = cfg["director"]["prompt"]
-    assert "NARROWEST" in prompt
+    # Rescuing one gap keeps its narrow example...
+    assert "narrowest range" in prompt
     assert "[N, N+1]" in prompt
-    assert "not a way to mark a span as important" in prompt
+    # ...but a continuous event may be spanned whole.
+    assert "WHOLE event" in prompt
+    assert "jump cuts" in prompt
+    # Talking is never a reason to widen one.
+    assert "Never widen a keep to mark talking as important" in prompt
     # And a plan-side "feature/retain" direction must not be read as a keep op.
     assert "editorial emphasis, NOT a " in prompt
 
 
+def test_director_prompt_lets_a_described_action_span_its_whole_run():
+    """The visual-context paragraph is where a described gap's keep width is
+    decided; ending every one at [N, N+1] is what lost the water-spill cleanup."""
+    cfg = get_effective_config(None, {})
+    assert "continues across several gaps" in cfg["director"]["prompt"]
+
+
 def test_director_max_keep_lines_default():
     cfg = get_effective_config(None, {})
-    assert cfg["director"]["max_keep_lines"] == 4
+    assert cfg["director"]["max_keep_lines"] == 8
 
 
 def test_text_filter_prompt_repeated_phrase_example_is_valid_patch_syntax():

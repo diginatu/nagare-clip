@@ -187,8 +187,11 @@ DIRECTOR_PROMPT = (
     "during the silence after that line (nobody is speaking). Such gaps are "
     "dropped by default. If the gap shows something worth watching, emit a "
     '"keep" op spanning that line and the next one — a keep over lines '
-    "[N, N+1] preserves the silence between them. Annotation lines are not "
-    "numbered; never reference them as op lines.\n"
+    "[N, N+1] preserves the silence between them. If the described action "
+    "continues across several gaps (it is still unfolding in the next "
+    "annotation, or the speech around it narrates the same event), span the "
+    "whole run in ONE keep instead of one narrow keep per gap. Annotation "
+    "lines are not numbered; never reference them as op lines.\n"
     "\n"
     "Operations (reference lines by their 1-based numbers, inclusive). "
     "Prefer speed over cut for repetition that builds toward a payoff "
@@ -207,13 +210,16 @@ DIRECTOR_PROMPT = (
     "moments worth labeling on screen. Aim for roughly one overlay per "
     "3-5 minutes of finished video as a loose default target; if an "
     "editorial brief states otherwise, follow the brief instead.\n"
-    "- keep: rescue a specific silent gap that is worth watching — it "
-    "protects a span from cutting INCLUDING its silences/non-speech gaps "
-    "(which are dropped by default). Use the NARROWEST range that covers "
-    "the gap, normally the line before it and the next one ([N, N+1]). It "
-    "is not a way to mark a span as important: speech is never dropped by "
-    "default, so a wide keep adds nothing but dead air and inflates the "
-    "runtime. A project-context direction saying a part should be "
+    "- keep: protect a span from cutting INCLUDING its silences/non-speech "
+    "gaps (which are dropped by default). Let its width follow what is ON "
+    "SCREEN. To rescue one silent gap, use the narrowest range covering it — "
+    "the line before it and the next one ([N, N+1]). When a continuous event "
+    "is playing out across several gaps — an accident and the cleanup after "
+    "it, a demo running, a result arriving — span the WHOLE event in one "
+    "keep, so the payoff is not chopped into jump cuts. Never widen a keep "
+    "to mark talking as important: speech is never dropped by default, so a "
+    "keep over a talking span only restores its pauses and inflates the "
+    "runtime for nothing. A project-context direction saying a part should be "
     '"featured", "retained" or "emphasised" is editorial emphasis, NOT a '
     "request for a keep op.\n"
     '- edit: request a fine within-line text deletion/fix; describe it in "note".\n'
@@ -593,10 +599,10 @@ class DirectorConfig(BaseModel):
     retry_temp_step: float = Field(0.2, description="Temperature increment added on each retry")
     retry_temp_cap: float = Field(0.8, description="Maximum temperature any retry uses")
     max_keep_lines: int = Field(
-        4,
+        8,
         description=(
-            'Reject a "keep" op wider than this many lines (0 = no limit); keep exists to '
-            "rescue a specific silent gap, and a wide one restores every silence in its range"
+            'Reject a "keep" op wider than this many lines (0 = no limit); a keep may span a '
+            "continuous on-screen event, but one this wide is marking talking, not an event"
         ),
     )
     prompt: str = _commented(

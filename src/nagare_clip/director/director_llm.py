@@ -74,8 +74,10 @@ def keep_limit_note(max_keep_lines: int) -> str:
     """
     return (
         f'A "keep" op may span at most {max_keep_lines} line(s); a wider one is '
-        "rejected and has no effect. To signal that a long span matters, say so "
-        'in a "note" on another op — do not stretch a keep across it.'
+        "rejected and has no effect. A continuous on-screen event fits well "
+        "inside that, because nobody is talking through it. Do not stretch a "
+        "keep across a talking span to signal that it matters — say so in a "
+        '"note" on another op instead.'
     )
 
 
@@ -120,16 +122,18 @@ def _parse_op(
         _drop(f"bad lines {raw.get('lines')!r}")
         return None
 
-    # A "keep" op restores every silent second inside its range, so a wide one
-    # can double the finished runtime while adding no speech (speech is never
-    # dropped by default).  The op exists to rescue one specific gap, which is
-    # a property of that gap, not of a 35-line span: reject anything wider.
+    # A "keep" op restores every silent second inside its range.  Spanning a
+    # continuous on-screen event is legitimate (chopping it up reads as jump
+    # cuts through the payoff) and stays narrow anyway, because nobody is
+    # talking through such an event.  A range wide enough to cover talking is
+    # instead marking speech as important — which restores only its pauses and
+    # can double the finished runtime, so reject it.
     if op_type == "keep" and max_keep_lines > 0:
         span = lines[1] - lines[0] + 1
         if span > max_keep_lines:
             _drop(
                 f"keep op spans {span} lines {list(lines)} > max_keep_lines={max_keep_lines}; "
-                "keep rescues a specific silent gap, it does not mark a span as important"
+                "a keep may span a continuous on-screen event, not a talking span"
             )
             return None
 

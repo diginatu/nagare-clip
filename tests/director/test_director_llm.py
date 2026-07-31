@@ -217,6 +217,21 @@ class TestKeepWidthLimit:
         assert len(drops) == 1
         assert "35 lines" in drops[0] and "max_keep_lines=4" in drops[0]
 
+    def test_shipped_default_admits_an_event_keep_but_not_a_talking_keep(self):
+        """Pinned to the real default rather than a literal: the water-spill op
+        (`[128,132]`, 5 lines, an accident and the cleanup after it) must
+        survive, while the 54-minute-regression op (`[97,131]`, 35 lines of
+        restored dead air over talking) must not.  A continuous event spans few
+        lines precisely because nobody is talking through it."""
+        from nagare_clip.config import get_effective_config
+
+        limit = get_effective_config(None, {})["director"]["max_keep_lines"]
+        ops = parse_director_response(self._resp(128, 132), num_lines=200, max_keep_lines=limit)
+        assert [o.lines for o in ops] == [(128, 132)]
+        assert (
+            parse_director_response(self._resp(97, 131), num_lines=200, max_keep_lines=limit) == []
+        )
+
     def test_zero_means_no_limit(self):
         ops = parse_director_response(self._resp(1, 99), num_lines=140, max_keep_lines=0)
         assert [o.lines for o in ops] == [(1, 99)]

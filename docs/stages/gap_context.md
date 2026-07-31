@@ -429,11 +429,18 @@ for the equivalent `Gap`, not just to a substring match, so a rendering change
 (indent width, decimal places, wording) fails loudly instead of the prompt
 silently drifting from reality.
 
-`[N, N+1]` is not merely the recommended shape but the affordable one:
-`director.max_keep_lines` (default 4) drops a wider `keep` the LLM emits,
-because a `keep` restores every silent second in its range and a span-sized one
-inflates the finished runtime without adding any speech (speech is never
-dropped by default). Gap rescue is unaffected — it only ever needs two lines.
+`[N, N+1]` is the shape for rescuing **one** gap, not the shape of every keep.
+When the described action is still unfolding in the next annotation (or the
+speech around it narrates the same event), the prompt asks for the whole run in
+one `keep` instead of one narrow keep per gap — a real run split the best moment
+in the project, water spilling and the cleanup after it, across two surviving
+cuts because each gap was rescued separately.
+
+A ceiling still applies: `director.max_keep_lines` (default 8) drops a wider
+`keep` the LLM emits, because a `keep` restores every silent second in its range
+and a keep stretched over *talking* inflates the finished runtime without adding
+any speech (speech is never dropped by default). A continuous on-screen event
+fits well inside the limit, precisely because nobody is talking through it.
 
 ## Config (`GapContextConfig` in `config.py`)
 
