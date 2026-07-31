@@ -175,6 +175,75 @@ def test_place_strips_unsped_sound_not_muted(blender_result):
             assert not s["mute"], f"{name} should not be muted"
 
 
+def test_place_strips_video_connected_to_its_own_audio(blender_result):
+    """Each video strip is connected to its own audio strip and nothing else.
+
+    The connection is what makes the pair move together in the VSE, so a video
+    connected to a *different* interval's audio would silently desync the human
+    editor's drags.
+    """
+    for s in blender_result["strips"]:
+        if s["type"] != "MOVIE":
+            continue
+        assert s["connections"] == [f"{s['name']}_audio"], (
+            f"{s['name']} connected to {s['connections']}, expected ['{s['name']}_audio']"
+        )
+
+
+def test_place_strips_odd_interval_count_places_exactly_one_pair_each(blender_result):
+    """5 intervals produce exactly 5 video + 5 sound strips, no spares."""
+    odd = blender_result["odd"]
+    names = [s["name"] for s in odd["strips"]]
+    assert not any("tmpl" in n for n in names), f"template strips remain: {names}"
+    assert odd["strip_count"] == 10, f"expected 10 strips, got {names}"
+    assert sorted(n for n in names if not n.endswith("_audio")) == [
+        f"keep_{i:04d}" for i in range(1, 6)
+    ]
+
+
+def test_place_strips_odd_interval_count_offsets(blender_result):
+    """Every strip of the odd-count case is trimmed to its own interval."""
+    odd = blender_result["odd"]
+    fps = odd["effective_fps"]
+    videos = sorted(
+        [s for s in odd["strips"] if s["type"] == "MOVIE"],
+        key=lambda s: s["name"],
+    )
+    for i, s in enumerate(videos):
+        assert s["frame_offset_start"] == round(i * fps), (
+            f"{s['name']} starts at {s['frame_offset_start']}, expected {round(i * fps)}"
+        )
+
+
+def test_place_strips_odd_interval_count_connections(blender_result):
+    """Connections survive an allocation that is not a power of two."""
+    for s in blender_result["odd"]["strips"]:
+        if s["type"] != "MOVIE":
+            continue
+        assert s["connections"] == [f"{s['name']}_audio"], (
+            f"{s['name']} connected to {s['connections']}"
+        )
+
+
+def test_place_strips_zero_length_interval_skipped_without_renumbering(blender_result):
+    """A zero-length interval places no strip, and the next one keeps index 3.
+
+    Strip names are the only link back to the interval list (captions and the
+    retiming regression test both index by them), so a skipped interval must
+    not shift the numbering of the ones after it.
+    """
+    degenerate = blender_result["degenerate"]
+    videos = sorted(s["name"] for s in degenerate["strips"] if s["type"] == "MOVIE")
+    assert videos == ["keep_0001", "keep_0003"]
+    assert degenerate["strip_count"] == 4
+
+
+def test_place_strips_no_intervals_leaves_no_strips(blender_result):
+    """An empty interval list places nothing and cleans up the templates."""
+    assert blender_result["empty"]["strip_count"] == 0
+    assert blender_result["empty"]["cursor"] == 1
+
+
 def test_place_strips_sound_pitch_correction_preserved(blender_result):
     """Source sound strip in sped interval keeps pitch_correction=True (Blender auto-pitch)."""
     sound_by_name = {s["name"]: s for s in blender_result["strips"] if s["type"] == "SOUND"}

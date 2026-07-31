@@ -119,7 +119,7 @@ Applies `{{old->new}}` patches from `_edits.txt`, syncs corrected text back into
 
 ### blender — Blender VSE Layout
 
-Auto-assembles the rough cut in headless Blender. References original media in-place (no re-encoding). Concatenates all sources onto a single timeline.
+Auto-assembles the rough cut in headless Blender. References original media in-place (no re-encoding). Concatenates all sources onto a single timeline. Strip placement opens the source once as a template video+sound pair, connects that pair **once** (every duplicate inherits a connection to its own audio copy), and grows the copies by **doubling** (`allocate_pairs()`, `ceil(log2(N)) + 1` duplicate ops instead of one per interval) — `sequencer.duplicate`/`connect` both cost more per call the fuller the scene gets, so per-interval operator calls made placement quadratic (1600 intervals: 41.8s → 2.6s; 4000: >10min → 15.3s). Everything else per interval is plain property assignment.
 
 - **Inputs:** source video files, `{stem}_intervals.json` for each source
 - **Outputs:** `{stem}_edited.blend` — ready for human editing

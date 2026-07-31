@@ -22,14 +22,8 @@ from nagare_clip.blender.scene import reset_scene
 from nagare_clip.blender.timeline import place_strips
 
 
-def main() -> None:
-    argv = sys.argv
-    if "--" not in argv:
-        raise SystemExit("Usage: blender --background --python <script> -- <video> <output_json>")
-    user_args = argv[argv.index("--") + 1 :]
-    video_path = user_args[0]
-    output_json = user_args[1]
-
+def run_case(video_path: str, intervals: list[dict]) -> dict:
+    """Place *intervals* in a fresh scene and report the resulting strips."""
     scene = reset_scene()
 
     # Set up scene from Video_Editing template (provides SEQUENCE_EDITOR area)
@@ -47,14 +41,6 @@ def main() -> None:
         seq_col = sequence_editor.strips
     effective_fps = scene.render.fps / scene.render.fps_base
 
-    # Four intervals to test with; the 4th has speed_factor=2.0.
-    intervals = [
-        {"start": 0.0, "end": 1.0},
-        {"start": 2.0, "end": 3.0},
-        {"start": 4.0, "end": 5.0},
-        {"start": 6.0, "end": 7.0, "speed_factor": 2.0},
-    ]
-
     cursor = place_strips(intervals, video_path, seq_col, effective_fps)
 
     # Collect strip info
@@ -69,6 +55,8 @@ def main() -> None:
             "frame_offset_end": s.right_handle_offset,
             "frame_final_duration": s.duration,
             "mute": s.mute,
+            # Names of the strips this one is connected to (video<->its audio).
+            "connections": sorted(c.name for c in s.connections),
         }
         if s.type == "SPEED":
             strip_info["speed_factor"] = getattr(s, "speed_factor", None)
@@ -77,12 +65,52 @@ def main() -> None:
             strip_info["pitch_correction"] = getattr(s, "pitch_correction", None)
         strips.append(strip_info)
 
-    result = {
+    return {
         "cursor": cursor,
         "effective_fps": effective_fps,
         "strip_count": len(strips),
         "strips": strips,
     }
+
+
+def main() -> None:
+    argv = sys.argv
+    if "--" not in argv:
+        raise SystemExit("Usage: blender --background --python <script> -- <video> <output_json>")
+    user_args = argv[argv.index("--") + 1 :]
+    video_path = user_args[0]
+    output_json = user_args[1]
+
+    # Four intervals to test with; the 4th has speed_factor=2.0.
+    result = run_case(
+        video_path,
+        [
+            {"start": 0.0, "end": 1.0},
+            {"start": 2.0, "end": 3.0},
+            {"start": 4.0, "end": 5.0},
+            {"start": 6.0, "end": 7.0, "speed_factor": 2.0},
+        ],
+    )
+
+    # A count that is not a power of two: strip allocation must produce exactly
+    # one pair per interval, with no spare strips left behind.
+    result["odd"] = run_case(
+        video_path,
+        [{"start": float(i), "end": i + 0.5} for i in range(5)],
+    )
+
+    # A zero-length interval places nothing but still consumes its index.
+    result["degenerate"] = run_case(
+        video_path,
+        [
+            {"start": 0.0, "end": 1.0},
+            {"start": 5.0, "end": 5.0},
+            {"start": 6.0, "end": 7.0},
+        ],
+    )
+
+    # No intervals at all: no strips, and the templates are still cleaned up.
+    result["empty"] = run_case(video_path, [])
 
     Path(output_json).write_text(json.dumps(result, indent=2))
 

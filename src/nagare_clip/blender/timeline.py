@@ -185,6 +185,75 @@ def _deselect_all(sequence_collection):
         s.select = False
 
 
+def _duplicate_pairs(
+    seeds: list,
+    sequence_collection: object,
+    window: object,
+    sequencer_area: object,
+) -> list | None:
+    """Duplicate every (video, sound) pair in *seeds*, returning the new pairs.
+
+    Each copy is paired with its own sound strip through the connection the
+    seed pair carries (``allocate_pairs`` connects the template once, and a
+    duplicate inherits a connection to *its own* copy, not to the seed).
+    Returns ``None`` when the duplicate operator could not run.
+    """
+    _deselect_all(sequence_collection)
+    for video, sound in seeds:
+        video.select = True
+        sound.select = True
+
+    if not _sequencer_op(window, sequencer_area, bpy.ops.sequencer.duplicate):
+        return None
+
+    new_videos = []
+    new_sounds = []
+    for strip in sequence_collection:
+        if not strip.select:
+            continue
+        if strip.type == "MOVIE":
+            new_videos.append(strip)
+        elif strip.type == "SOUND":
+            new_sounds.append(strip)
+
+    if len(new_videos) != len(seeds) or len(new_sounds) != len(seeds):
+        return None
+
+    pairs = []
+    for i, video in enumerate(new_videos):
+        sound = next((c for c in video.connections if c.type == "SOUND"), None)
+        pairs.append((video, sound if sound is not None else new_sounds[i]))
+    return pairs
+
+
+def allocate_pairs(
+    count: int,
+    template: tuple,
+    sequence_collection: object,
+    window: object,
+    sequencer_area: object,
+) -> list:
+    """Grow a pool of *count* (video, sound) strip pairs from *template*.
+
+    Each round duplicates the whole pool, so the pool doubles per operator
+    call: ``ceil(log2(count)) + 1`` calls instead of one per interval. The
+    per-call cost of ``sequencer.duplicate`` grows with the number of strips in
+    the scene, so duplicating one interval at a time makes placement quadratic
+    — this keeps it near-linear (measured: 4000 intervals, 10+ min -> ~7s).
+
+    Returns fewer pairs than requested (possibly none) when the duplicate
+    operator cannot run; the caller warns and places what it got.
+    """
+    pairs: list = []
+    while len(pairs) < count:
+        seeds = pairs[: count - len(pairs)] or [template]
+        new_pairs = _duplicate_pairs(seeds, sequence_collection, window, sequencer_area)
+        if not new_pairs:
+            break
+        pairs.extend(new_pairs)
+    return pairs
+
+
 def place_strips(
     keep_intervals: list,
     source_path: str,
@@ -202,6 +271,10 @@ def place_strips(
     (as a muted template pair on high channels), then duplicated per interval.
     This avoids opening a new FFmpeg decoder per interval and keeps memory
     usage constant regardless of interval count.
+
+    The template pair is connected once up front and the copies are allocated
+    by doubling (``allocate_pairs``), so the only per-interval work left is
+    plain property assignment — no operator call, no selection scan.
 
     Returns the final timeline cursor position (one past the last frame).
     """
@@ -247,17 +320,45 @@ def place_strips(
 
     window, sequencer_area = _get_sequencer_context()
 
+    # Connect the template pair ONCE: sequencer.connect costs as much as the
+    # duplicate itself, and every copy inherits a connection to its own audio
+    # copy, so connecting here covers all of them.
+    _deselect_all(sequence_collection)
+    tmpl_video.select = True
+    tmpl_sound.select = True
+    if not _sequencer_op(window, sequencer_area, bpy.ops.sequencer.connect, toggle=False):
+        logging.warning("%sNo SEQUENCE_EDITOR area found, cannot place strips.", src_tag)
+
     # Records (video, sound, intended_timeline_start) for every placed strip so
     # positions can be re-asserted after all operators have run (see Phase D).
     placed: list[tuple[object, object, int]] = []
 
-    # --- Phase B: duplicate templates for each keep interval ---
-    for idx, interval in enumerate(keep_intervals, start=1 + idx_offset):
+    # --- Phase B: allocate one strip pair per interval, then configure them ---
+    intervals = [
+        (idx, interval)
+        for idx, interval in enumerate(keep_intervals, start=1 + idx_offset)
+        if float(interval["end"]) > float(interval["start"])
+    ]
+    pairs = allocate_pairs(
+        len(intervals),
+        (tmpl_video, tmpl_sound),
+        sequence_collection,
+        window,
+        sequencer_area,
+    )
+    if len(pairs) < len(intervals):
+        logging.warning(
+            "%sOnly %d of %d strip pairs could be duplicated; placing what was created.",
+            src_tag,
+            len(pairs),
+            len(intervals),
+        )
+    _deselect_all(sequence_collection)
+
+    for (idx, interval), (new_video, new_sound) in zip(intervals, pairs):
         start_sec = float(interval["start"])
         end_sec = float(interval["end"])
         speed = float(interval.get("speed_factor", 1.0))
-        if end_sec <= start_sec:
-            continue
 
         src_start_frame = max(0, sec_to_frames(start_sec, effective_fps))
         src_end_frame = max(src_start_frame + 1, sec_to_frames(end_sec, effective_fps))
@@ -291,34 +392,6 @@ def place_strips(
                 bounded_end,
             )
 
-        # Deselect all, then select only templates
-        _deselect_all(sequence_collection)
-        tmpl_video.select = True
-        tmpl_sound.select = True
-
-        if not _sequencer_op(window, sequencer_area, bpy.ops.sequencer.duplicate):
-            logging.warning(
-                "%sStrip %d: no SEQUENCE_EDITOR area found, cannot duplicate.", src_tag, idx
-            )
-            continue
-
-        # Find the newly duplicated strips (duplicate deselects originals)
-        new_video = None
-        new_sound = None
-        for s in sequence_collection:
-            if not s.select:
-                continue
-            if s.type == "MOVIE" and new_video is None:
-                new_video = s
-            elif s.type == "SOUND" and new_sound is None:
-                new_sound = s
-
-        if new_video is None or new_sound is None:
-            logging.warning(
-                "%sStrip %d: duplicate did not produce expected strips, skipping.", src_tag, idx
-            )
-            continue
-
         # Configure the duplicated video strip
         # Set frame position and offsets before channel so Blender sees the
         # trimmed range and does not reject channel 1 due to overlap.
@@ -338,12 +411,6 @@ def place_strips(
         if new_sound.right_handle_offset < 0:
             new_sound.right_handle_offset = 0
         new_sound.channel = 2
-
-        # Connect the video+audio pair
-        _deselect_all(sequence_collection)
-        new_video.select = True
-        new_sound.select = True
-        _sequencer_op(window, sequencer_area, bpy.ops.sequencer.connect, toggle=False)
 
         if new_video.duration != keep_frame_count:
             logging.warning(
@@ -365,6 +432,7 @@ def place_strips(
             se = bpy.context.scene.sequence_editor
             for strip in (new_video, new_sound):
                 se.active_strip = strip
+                strip.select = True
                 strip.show_retiming_keys = True
                 _sequencer_op(
                     window,
@@ -373,6 +441,7 @@ def place_strips(
                     speed=speed * 100.0,
                 )
                 strip.show_retiming_keys = False
+                strip.select = False
 
         logging.debug(
             "%sStrip %d: frame_start=%d frame_offset_start=%d frame_offset_end=%d "
