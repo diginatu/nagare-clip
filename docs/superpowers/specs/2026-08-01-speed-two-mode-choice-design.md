@@ -122,9 +122,10 @@ reported alongside the green run.
 
 ## Docs to update
 
-- `config.example.yml` — regenerate with `make config-example` (it embeds the
-  default prompt; `tests/test_config.py::test_example_file_matches_generator`
-  fails otherwise).
+- `config.example.yml` — no change expected: the generator elides prompt bodies
+  (`# prompt: "..."   # System prompt (has a sensible default)`), so a prompt edit
+  does not move the file. `make config-example` is still run once to confirm
+  `tests/test_config.py::test_example_file_matches_generator` stays green.
 - `AGENTS.md` — the director section's closing sentence states the prefer-speed
   rule in its old form.
 - `README.md` — the `<speed>` passages describe marker *mechanics*, which do not
