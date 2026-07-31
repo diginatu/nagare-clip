@@ -589,15 +589,33 @@ def test_director_prompt_treats_long_gap_as_keep_candidate_when_speech_announces
     assert "watchable moment" in prompt
 
 
-def test_director_prompt_prefers_speed_for_buildup_reserves_cut_for_digressions():
-    """Repetition that builds toward a payoff should be sped up, not cut --
-    the prompt must say so explicitly, reserving cut for spans that leave the
-    throughline entirely."""
+def test_director_prompt_prefers_speed_for_visible_work_reserves_cut_for_digressions():
+    """Repetition that is VISIBLE WORK should be timelapsed rather than deleted --
+    the tighten-rather-than-delete instinct from the 2026-07-28 rewrite -- while
+    cut stays reserved for spans that leave the throughline entirely."""
     cfg = get_effective_config(None, {})
     prompt = cfg["director"]["prompt"].lower()
     assert "payoff" in prompt
     assert "throughline" in prompt
     assert "buildup" in prompt
+    assert "visible work" in prompt
+
+
+def test_director_prompt_does_not_offer_speed_as_a_way_to_tighten_speech():
+    """The prefer-speed-over-cut paragraph must route repeated SPEECH to 1x or a
+    cut.  Left ungated it reads as a licence to shave talking with a mild
+    speed-up, which is how a real run put 57% of the finished video under speed
+    with 85% of that footage carrying captions."""
+    cfg = get_effective_config(None, {})
+    prompt = cfg["director"]["prompt"]
+    # The paragraph is one prompt line ending in ":" above the bullet list --
+    # select it alone, so the `- speed:` bullet's own wording cannot satisfy
+    # these assertions for it.
+    para = next(ln for ln in prompt.splitlines() if "Prefer speed over cut" in ln).lower()
+    assert "speech" in para
+    assert "speed is not the tool" in para
+    assert "1x" in para
+    assert "cut the weakest passes" in para
 
 
 def test_director_prompt_documents_overlay_density_target():
