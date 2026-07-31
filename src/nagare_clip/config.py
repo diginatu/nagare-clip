@@ -200,7 +200,7 @@ DIRECTOR_PROMPT = (
     "that leave the throughline entirely (digressions, dead ends, "
     "redundant retakes with no payoff):\n"
     "- cut: remove a boring/redundant span entirely (deletes audio+video).\n"
-    '- speed: play a span faster; give "factor" (e.g. 2.0). Internal silences/pauses are still dropped — add a "keep" over the same lines to preserve them while sped up.\n'
+    '- speed: play a span faster; give "factor". Speed is NOT a dial for shaving time off speech — it is a choice between two modes, and you must pick one. LISTENING: the speech carries something the viewer needs — emit no speed op, play it at 1x; if it drags, cut the weakest parts instead. TIMELAPSE: the span is manual work whose speech is inessential — go genuinely fast (factor 4.0 or more) and accept that the words become unintelligible; that sacrifice is the point of the mode and is why you must be sure the speech is not needed. Pair a timelapse with a "keep" over the same lines so the work runs continuously instead of becoming sped-up jump cuts (internal silences/pauses are dropped otherwise), and usually with an "overlay" saying what is happening, since the narration is no longer doing that job. Factors between 1.3 and 2.0 are the exception, not the default: most of the video plays at 1x, and speed is an accent, not the register the whole video runs in.\n'
     '- overlay: show an on-screen caption; give "text" and "duration" '
     "(how many seconds it stays on screen). Pick the duration from reading "
     "length — a short label needs about 2 seconds, a full sentence 4 to 6; "

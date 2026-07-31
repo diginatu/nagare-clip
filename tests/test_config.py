@@ -360,6 +360,47 @@ def test_director_prompt_documents_speed_does_not_keep_silence():
     assert "silence" in speed_line.lower() or "pause" in speed_line.lower()
 
 
+def _speed_bullet() -> str:
+    """The single DIRECTOR_PROMPT line describing the `speed` op."""
+    prompt = get_effective_config(None, {})["director"]["prompt"]
+    return next(ln for ln in prompt.splitlines() if ln.startswith("- speed:"))
+
+
+def test_director_prompt_makes_speed_a_two_mode_choice():
+    """speed must read as a choice between playing at 1x and a real timelapse,
+    not as a dial -- a mild sustained fast-forward is the failure this guards
+    (see docs/superpowers/specs/2026-08-01-speed-two-mode-choice-design.md)."""
+    bullet = _speed_bullet().lower()
+    assert "not a dial" in bullet
+    assert "listening" in bullet
+    assert "timelapse" in bullet
+    assert "1x" in bullet
+    # The listening mode's alternative to a mild speed-up is a cut, not a
+    # slower speed.
+    assert "cut" in bullet
+
+
+def test_director_prompt_timelapse_states_its_price_and_its_partners():
+    """A timelapse loses intelligible audio; saying so is what forces an honest
+    choice instead of a mild speed-up that splits the difference.  It also has
+    to be paired with keep (so it is continuous) and usually overlay (so the
+    viewer still knows what is happening)."""
+    bullet = _speed_bullet().lower()
+    assert "4.0" in bullet  # the fast floor
+    assert "unintelligible" in bullet
+    assert "keep" in bullet
+    assert "overlay" in bullet
+
+
+def test_director_prompt_marks_mild_speed_factors_as_the_exception():
+    """1.3-2.0 was the entire observed range of a real run (57% of the finished
+    video).  The prompt must name that band as the exception, not the default."""
+    bullet = _speed_bullet().lower()
+    assert "1.3" in bullet and "2.0" in bullet
+    assert "exception" in bullet
+    assert "accent" in bullet
+
+
 @pytest.mark.parametrize("stage", ["director", "plan"])
 def test_prompt_documents_duration_and_gap_bracket(stage):
     """The director/plan inputs carry a `[4.2s, gap 0.8s]` bracket per line/part
