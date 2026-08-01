@@ -350,9 +350,10 @@ def test_director_defaults_present():
 
 
 def test_director_prompt_documents_speed_does_not_keep_silence():
-    """The director prompt must tell the LLM that <speed> drops internal
-    silences and that a `keep` over the same span preserves them (so the
-    director can express keep+speed)."""
+    """The director prompt must tell the LLM that a bare <speed> protects
+    nothing: its internal silences and pauses are still dropped by default,
+    unlike a "timelapse" op's derived keep. The director needs to know this
+    so it doesn't expect a fast `speed` span to play back continuous."""
     cfg = get_effective_config(None, {})
     prompt = cfg["director"]["prompt"]
     speed_line = next(ln for ln in prompt.splitlines() if ln.startswith("- speed:"))
