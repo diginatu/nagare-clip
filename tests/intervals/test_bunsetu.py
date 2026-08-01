@@ -235,9 +235,7 @@ def test_build_bunsetu_times_multichar_bunsetu_preserves_silence_gap():
 def test_bunsetu_join_text_inserts_separator_between_spans():
     nlp = make_nlp([["前回自作した", "サイフォン式", "排水装置を", "水槽に", "取り付けてテスト"]])
     with patch("ginza.bunsetu_spans", side_effect=bunsetu_spans_from_doc):
-        result = bunsetu_join_text(
-            "前回自作したサイフォン式排水装置を水槽に取り付けてテスト", nlp
-        )
+        result = bunsetu_join_text("前回自作したサイフォン式排水装置を水槽に取り付けてテスト", nlp)
 
     assert result == "前回自作した サイフォン式 排水装置を 水槽に 取り付けてテスト"
 
