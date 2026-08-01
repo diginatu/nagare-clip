@@ -402,6 +402,45 @@ def test_director_prompt_timelapse_is_self_contained():
     assert "consecutive" in bullet  # how to change the caption partway through
 
 
+def test_director_prompt_timelapse_ties_factor_to_target_runtime():
+    """A flat factor instruction becomes the director's default regardless of
+    wording (see improvement 11: keep width, overlay duration and the old bare
+    speed factor all clustered on the one number the prompt showed). The
+    bullet must instead target an on-screen runtime and offer three worked
+    factors, not one, so no single number is the sole anchor."""
+    bullet = _timelapse_bullet().lower()
+    assert "1 to 2 minutes" in bullet
+    assert "4x" in bullet
+    assert "8x" in bullet
+    assert "16x" in bullet
+
+
+def test_director_prompt_timelapse_worked_examples_are_arithmetically_correct():
+    """Pin the worked examples' own arithmetic so a typo in the prompt (wrong
+    span length or on-screen result for a stated factor) fails loudly here
+    instead of silently teaching the director bad math."""
+    bullet = _timelapse_bullet()
+    examples = re.findall(
+        r"(\d+)x suits an?(?: \w+)* ~?(\d+(?:\.\d+)?)-minute span \(about (\d+(?:\.\d+)?) min",
+        bullet,
+    )
+    assert len(examples) == 3
+    for factor_s, span_s, result_s in examples:
+        factor, span, result = float(factor_s), float(span_s), float(result_s)
+        assert abs(span / factor - result) < 0.05
+        assert 1.0 <= result <= 2.0
+
+
+def test_director_prompt_timelapse_weighs_visible_motion_and_repetition():
+    """Length is the starting point, not the whole answer: the director must
+    also judge how much is visibly happening and adjust the factor from
+    there, rather than reading the worked examples as a lookup table."""
+    bullet = _timelapse_bullet().lower()
+    assert "barely changes" in bullet or "motionless" in bullet
+    assert "legible" in bullet
+    assert "repetition" in bullet or "repetitions" in bullet
+
+
 def test_director_prompt_limits_a_bare_speed_op_to_a_mild_accent():
     """1.3-2.0 was the entire observed range of a real run (57% of the finished
     video). With timelapse carrying the fast case, that band is all a bare
