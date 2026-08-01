@@ -91,3 +91,14 @@ def test_consecutive_timelapses_produce_captions_that_do_not_overlap():
     captions = [o for o in out if o.type == "overlay"]
     assert [c.duration for c in captions] == [5.0, 5.0]
     assert [c.lines for c in captions] == [(1, 1), (3, 3)]
+
+
+def test_apply_ops_reports_an_unexpanded_timelapse_instead_of_raising():
+    """Defence in depth: expansion happens in run_guided_edit, but apply_ops is
+    public. An unexpanded op must be reported, not crash _span_tags."""
+    from nagare_clip.guided_edit.apply import apply_ops
+
+    lines, unapplied = apply_ops(["あ", "い"], [_tl(a=1, b=2)], {})
+    assert lines == ["あ", "い"]
+    assert len(unapplied) == 1
+    assert "unexpanded" in unapplied[0][1]
