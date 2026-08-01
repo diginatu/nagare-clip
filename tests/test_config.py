@@ -397,7 +397,7 @@ def test_director_prompt_timelapse_is_self_contained():
     The prompt must not ask for a companion keep/speed/overlay, or the director
     will emit the ops the desugaring already creates."""
     bullet = _timelapse_bullet().lower()
-    assert 'do not add a separate "keep"' in bullet
+    assert 'do not add a separate "keep", "speed" or "overlay"' in bullet
     assert "consecutive" in bullet  # how to change the caption partway through
 
 
