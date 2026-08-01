@@ -450,6 +450,29 @@ def test_director_prompt_limits_a_bare_speed_op_to_a_mild_accent():
     assert "accent" in bullet
 
 
+def test_director_prompt_speed_span_has_a_duration_limit():
+    """Improvement 14: the factor band alone constrained faithfully in a real
+    run, but nothing bounded the span's length -- two long stretches (11-13
+    minutes of source each) got covered by a mild speed instead of a
+    timelapse or cut, reproducing the register problem the two-mode split
+    was meant to prevent. The bullet needs a number for the span the way it
+    already has one for the factor."""
+    bullet = _speed_bullet().lower()
+    assert "handful of lines" in bullet
+    assert "30 seconds" in bullet
+
+
+def test_director_prompt_speed_span_limit_names_the_alternative():
+    """A length limit with no alternative just gets ignored once a stretch
+    exceeds it: the bullet must say what to reach for instead, for both the
+    worth-going-fast-over case (timelapse) and the case where it isn't
+    (cut)."""
+    bullet = _speed_bullet().lower()
+    assert "not a job for speed at all" in bullet
+    assert '"timelapse"' in bullet
+    assert '"cut"' in bullet
+
+
 def test_director_prompt_speed_example_is_a_mild_accent():
     """The JSON-shape speed example is what an LLM copies over the prose. Fast
     now belongs to timelapse, so a 4.0+ speed example would teach exactly the
