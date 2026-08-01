@@ -4,7 +4,7 @@ from unittest.mock import patch
 
 import pytest
 
-from nagare_clip.intervals.bunsetu import build_bunsetu_times
+from nagare_clip.intervals.bunsetu import build_bunsetu_times, bunsetu_join_text
 from tests.intervals.conftest import make_nlp
 
 
@@ -225,3 +225,54 @@ def test_build_bunsetu_times_multichar_bunsetu_preserves_silence_gap():
     assert gap > 1.5, (
         f"gap between 'ね' and 'あとは' is only {gap:.3f} s; silence is hidden inside the bunsetsu"
     )
+
+
+# ---------------------------------------------------------------------------
+# bunsetu_join_text (timing-free: overlay text)
+# ---------------------------------------------------------------------------
+
+
+def test_bunsetu_join_text_inserts_separator_between_spans():
+    nlp = make_nlp([["前回自作した", "サイフォン式", "排水装置を", "水槽に", "取り付けてテスト"]])
+    with patch("ginza.bunsetu_spans", side_effect=bunsetu_spans_from_doc):
+        result = bunsetu_join_text(
+            "前回自作したサイフォン式排水装置を水槽に取り付けてテスト", nlp
+        )
+
+    assert result == "前回自作した サイフォン式 排水装置を 水槽に 取り付けてテスト"
+
+
+def test_bunsetu_join_text_uses_custom_separator():
+    nlp = make_nlp([["水浸し", "！"]])
+    with patch("ginza.bunsetu_spans", side_effect=bunsetu_spans_from_doc):
+        result = bunsetu_join_text("水浸し！", nlp, separator="　")
+
+    assert result == "水浸し　！"
+
+
+def test_bunsetu_join_text_preserves_explicit_line_breaks():
+    """Each \\n-separated line is parsed independently (one nlp() call per
+    line), so an author's explicit line break is never merged into a single
+    GiNZA parse or lost."""
+    nlp = make_nlp([["1行目"], ["2行目"]])
+    with patch("ginza.bunsetu_spans", side_effect=bunsetu_spans_from_doc):
+        result = bunsetu_join_text("1行目\n2行目", nlp)
+
+    assert result == "1行目\n2行目"
+    assert nlp.call_count == 2
+
+
+def test_bunsetu_join_text_empty_string_passthrough():
+    nlp = make_nlp([])
+    result = bunsetu_join_text("", nlp)
+
+    assert result == ""
+    assert nlp.call_count == 0
+
+
+def test_bunsetu_join_text_single_bunsetsu_no_separator_inserted():
+    nlp = make_nlp([["水浸し"]])
+    with patch("ginza.bunsetu_spans", side_effect=bunsetu_spans_from_doc):
+        result = bunsetu_join_text("水浸し", nlp)
+
+    assert result == "水浸し"

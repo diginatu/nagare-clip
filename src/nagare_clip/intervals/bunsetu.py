@@ -108,6 +108,37 @@ def build_bunsetu_times(
     return all_bunsetu
 
 
+def bunsetu_join_text(
+    text: str,
+    nlp: spacy.language.Language,
+    separator: str = " ",
+) -> str:
+    """Insert *separator* between bunsetsu units of *text*.
+
+    Timing-free counterpart to :func:`build_bunsetu_times`: overlay text is
+    free-form (director-written, not necessarily verbatim transcript text),
+    so there is no per-character timing to map spans back onto -- only the
+    surface text matters here. Blender's TEXT strip wraps only at
+    whitespace, and overlay text otherwise has none.
+
+    Segmentation runs independently per ``\\n``-separated line so an
+    author's explicit line break is preserved rather than merged into one
+    GiNZA parse. An empty line (or empty *text*) passes through unchanged.
+    """
+    import ginza
+
+    lines = text.split("\n")
+    joined_lines: list[str] = []
+    for line in lines:
+        if not line:
+            joined_lines.append(line)
+            continue
+        doc = nlp(line)
+        spans = list(ginza.bunsetu_spans(doc))
+        joined_lines.append(separator.join(span.text for span in spans) if spans else line)
+    return "\n".join(joined_lines)
+
+
 def flatten_bunsetu(whisperx_data: dict) -> list[tuple[float, float, str]]:
     """Convenience wrapper: loads the ``ja_ginza`` model and calls
     ``build_bunsetu_times``."""
