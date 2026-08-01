@@ -44,9 +44,8 @@ CallLLM = Callable[[list[dict[str, str]], dict[str, Any]], str]
 
 VALID_TYPES = {"cut", "speed", "overlay", "keep", "edit", "timelapse"}
 
-# The factor DIRECTOR_PROMPT calls a real timelapse.  A keep that exists to
-# make such a span continuous is exempt from max_keep_lines; a keep beside a
-# mild speed-up is not.
+# The factor DIRECTOR_PROMPT calls a real timelapse; the parse-time floor for
+# a "timelapse" op (see _parse_op) below which it is a mild speed-up instead.
 TIMELAPSE_MIN_FACTOR = 4.0
 
 _FENCE_RE = re.compile(r"^\s*```(?:json)?\s*(.*?)\s*```\s*$", re.DOTALL)
@@ -82,10 +81,8 @@ def keep_limit_note(max_keep_lines: int) -> str:
         "rejected and has no effect. A continuous on-screen event fits well "
         "inside that, because nobody is talking through it. Do not stretch a "
         "keep across a talking span to signal that it matters — say so in a "
-        '"note" on another op instead. Exception: a "keep" fully inside a '
-        f'timelapse "speed" op (factor {TIMELAPSE_MIN_FACTOR} or more) may '
-        "exceed this limit, since it exists only to keep that timelapse "
-        "continuous — a keep beside a milder speed-up is still capped."
+        '"note" on another op instead. A "timelapse" op needs no keep of its '
+        "own; it protects its whole range by itself."
     )
 
 
@@ -130,8 +127,7 @@ def _parse_op(
         return None
 
     # The max_keep_lines cap itself is enforced as a post-pass over the whole
-    # op list (see _apply_keep_cap), not here: a single op can't tell whether
-    # a covering timelapse speed op exists elsewhere in the same response.
+    # op list (see _apply_keep_cap), not here.
 
     note = str(raw.get("note", "") or "")
 
@@ -194,33 +190,15 @@ def _parse_op(
     )
 
 
-def _timelapse_covers(keep: DirectorOp, ops: list[DirectorOp]) -> bool:
-    """True when some ``speed`` op in *ops* is a qualifying timelapse (factor
-    at least :data:`TIMELAPSE_MIN_FACTOR`) whose line range fully contains
-    *keep*'s.  Containment, not overlap: a keep line outside the speed range
-    is unprotected talking, exactly what the cap exists to catch.
-    """
-    return any(
-        op.type == "speed"
-        and op.factor is not None
-        and op.factor >= TIMELAPSE_MIN_FACTOR
-        and op.lines[0] <= keep.lines[0]
-        and keep.lines[1] <= op.lines[1]
-        for op in ops
-    )
-
-
 def _apply_keep_cap(
     ops: list[DirectorOp],
     max_keep_lines: int,
     drops: list[str] | None,
 ) -> list[DirectorOp]:
-    """Post-pass: drop a ``keep`` op wider than ``max_keep_lines``, unless it
-    is fully contained in a qualifying timelapse ``speed`` op elsewhere in
-    *ops* (see :data:`TIMELAPSE_MIN_FACTOR`).  A single op can't make this
-    call on its own — hence a pass over the whole parsed list rather than a
-    check inside :func:`_parse_op`.  The drop message/logging matches the
-    pre-existing per-op cap exactly, since tests assert on it.
+    """Post-pass: drop a ``keep`` op wider than ``max_keep_lines``.  Kept as a
+    pass over the whole parsed list (rather than a check inside
+    :func:`_parse_op`) so the drop message/logging stays in one place; tests
+    assert on it.
     """
     if max_keep_lines <= 0:
         return ops
@@ -228,7 +206,7 @@ def _apply_keep_cap(
     for op in ops:
         if op.type == "keep":
             span = op.lines[1] - op.lines[0] + 1
-            if span > max_keep_lines and not _timelapse_covers(op, ops):
+            if span > max_keep_lines:
                 msg = (
                     f"keep op spans {span} lines {list(op.lines)} > "
                     f"max_keep_lines={max_keep_lines}; a keep may span a "
@@ -260,8 +238,7 @@ def try_parse_director_response(
     drops a ``keep`` op wider than that many lines: dropping it degrades to the
     default behaviour (speech kept, internal silence cut) instead of restoring
     a span's worth of dead air. Applied as a post-pass (:func:`_apply_keep_cap`)
-    after every op is parsed, so a wide keep fully inside a qualifying
-    timelapse ``speed`` op (see :data:`TIMELAPSE_MIN_FACTOR`) is exempt.
+    after every op is parsed.
     """
     text = response.strip()
     fence = _FENCE_RE.match(text)
