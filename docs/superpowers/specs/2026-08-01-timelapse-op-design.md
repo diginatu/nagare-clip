@@ -142,12 +142,27 @@ The pairing currently has dedicated support, which comes out:
   capped again, as it was before that exemption landed.
 - `keep_limit_note` loses its exception clause.
 - `TIMELAPSE_MIN_FACTOR` survives as the `timelapse` op's factor floor.
-- In `DIRECTOR_PROMPT`, the `speed` bullet loses the pairing paragraph — keeping
-  the two-mode framing and the "1.3–2.0 is the exception" line — and a
-  `timelapse` bullet replaces it. The JSON-shape block gains a `timelapse` entry.
+- In `DIRECTOR_PROMPT`, the `speed` bullet loses the pairing paragraph and the
+  two-mode prose, and a `timelapse` bullet is added beside it. The JSON-shape
+  block gains a `timelapse` entry.
 
 The prompt gets shorter as a result: one op with three fields replaces a paragraph
 explaining how to coordinate three ops.
+
+### 3a. `speed` stays a primitive
+
+`speed` is untouched mechanically: still in `VALID_TYPES`, still any positive
+factor, still available to the LLM and to a hand-edited `_director.json`. Only its
+recommended use narrows. The two-mode framing described *listening* (no speed op)
+versus *timelapse*; the second mode is now its own op, so what is left for a bare
+`speed` is the mild 1.3–2.0 accent the prompt already calls the exception. The
+rewritten bullet says that directly, and points a genuinely fast span at
+`timelapse` instead.
+
+That steering is **prompt-only**. A bare `speed` at 4.0+ — a timelapse with no
+keep, i.e. sped-up jump cuts — is discouraged in prose but not rejected at parse
+time and not silently promoted, matching how `_director.json` is treated
+everywhere else: advisory to the LLM, honoured from a human.
 
 ### 4. Tests
 
@@ -163,14 +178,23 @@ New:
 - Prompt: the prompt's own `timelapse` example parses through
   `parse_director_response`, so a stale example fails loudly.
 
-Deleted: `TestTimelapseKeepExemption` (8 tests) and
-`test_note_states_the_timelapse_exemption` — both assert the exemption being
-removed.
+Deleted (`tests/director/test_director_llm.py`): `TestTimelapseKeepExemption`
+(8 tests) and `test_note_states_the_timelapse_exemption` — both assert the
+exemption being removed.
 
-Rewritten: `test_director_prompt_timelapse_states_its_price_and_its_partners`,
-which asserts the `speed` bullet names `keep` and `overlay` as partners. That
-prose is what goes away; the replacement asserts the `timelapse` bullet states
-its price (unintelligible audio, factor 4.0 floor) and that it needs no partners.
+Rewritten (`tests/test_config.py`) — the `speed` bullet and the JSON-shape
+examples are pinned by several existing tests, and rewriting the bullet moves
+what each one should be asserting:
+
+| test | change |
+|---|---|
+| `..._makes_speed_a_two_mode_choice` | the choice now spans two ops; assert it across the `speed` **and** `timelapse` bullets instead of inside one line |
+| `..._timelapse_states_its_price_and_its_partners` | retarget to the `timelapse` bullet; keep the price half (unintelligible audio, 4.0 floor), drop the partners half |
+| `..._marks_mild_speed_factors_as_the_exception` | 1.3–2.0 is now the bare `speed` op's whole remit; assert that positively rather than as an exception |
+| `..._speed_example_factor_is_at_least_4` | **inverts**: the JSON-shape `speed` example must now be a mild accent (below 4.0), because fast belongs to `timelapse`. A sibling test asserts the `timelapse` example parses and is at least 4.0 |
+| `..._documents_speed_does_not_keep_silence` | still true and still needed for a bare `speed`; retarget to whichever line carries it after the rewrite |
+| `..._prefers_speed_for_visible_work_reserves_cut_for_digressions`, `..._does_not_offer_speed_as_a_way_to_tighten_speech` | both pin the "Prefer speed over cut" paragraph; update in step with any rewording there (visible work now points at `timelapse`) |
+| `..._timing_line_does_not_offer_speed_for_long_duration` | unchanged in intent; verify it still selects its line after the edits |
 
 Per the repo's TDD rule, each new test is verified to fail against a mutated
 implementation before the real one is written.
