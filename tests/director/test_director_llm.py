@@ -296,6 +296,11 @@ class TestKeepWidthLimit:
         note = keep_limit_note(8)
         assert "timelapse" in note.lower()
         assert f"{TIMELAPSE_MIN_FACTOR}" in note
+        # Merely naming timelapses/the factor isn't enough -- the note must
+        # actually state the exemption: a keep fully inside such a speed op
+        # may exceed the cap.
+        assert "fully inside a" in note
+        assert "may exceed this limit" in note
 
 
 class TestTimelapseKeepExemption:
@@ -349,6 +354,31 @@ class TestTimelapseKeepExemption:
     def test_ops_from_dict_uncapped_honours_wide_keep_with_no_speed_op(self):
         data = {"ops": [{"type": "keep", "lines": [10, 21]}]}
         assert [o.lines for o in ops_from_dict(data, num_lines=40)] == [(10, 21)]
+
+    def test_wide_keep_jointly_covered_by_two_speed_ops_is_dropped(self):
+        # The exemption is per-op containment: no single speed op here spans
+        # the whole keep, only the two of them together (10-15 and 16-21
+        # jointly cover 10-21). That must still be capped.
+        resp = json.dumps(
+            {
+                "ops": [
+                    {"type": "keep", "lines": [10, 21], "note": "n"},
+                    {"type": "speed", "lines": [10, 15], "factor": TIMELAPSE_MIN_FACTOR},
+                    {"type": "speed", "lines": [16, 21], "factor": TIMELAPSE_MIN_FACTOR},
+                ]
+            }
+        )
+        ops = parse_director_response(resp, num_lines=40, max_keep_lines=8)
+        assert [o.type for o in ops] == ["speed", "speed"]
+
+    def test_max_keep_lines_zero_survives_without_exemption(self):
+        # No covering speed op at all, so this keep would need the exemption
+        # to survive under a cap. With max_keep_lines=0 (no limit) it must
+        # survive anyway -- because the cap is off, not because of the
+        # exemption.
+        resp = self._resp((10, 21))
+        ops = parse_director_response(resp, num_lines=40, max_keep_lines=0)
+        assert [o.lines for o in ops if o.type == "keep"] == [(10, 21)]
 
 
 class TestTryParse:
