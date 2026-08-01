@@ -134,3 +134,44 @@ reported alongside the green run.
 There is no `docs/stages/director.md`; the director's deep-dive text lives in
 `AGENTS.md`. `plan.md` named by the documentation policy does not exist in the
 repo, so nothing to update there.
+
+## Addendum — timelapse keeps are exempt from the cap
+
+Added after the final whole-branch review, by explicit user decision
+(`task-4-brief.md`). It overrides this spec's "prompt-only, no code change"
+constraint (Design, above) for this one behaviour.
+
+The rewritten `speed` bullet asks the director to pair a timelapse (factor
+4.0+) with a `keep` over the same lines so the sped-up work runs continuously
+instead of becoming sped-up jump cuts. But `director.max_keep_lines` (default
+8) drops any `keep` op wider than that, and a timelapse of manual work
+routinely spans more than 8 lines — so the very keep the prompt now asks for
+was being silently dropped, leaving the 4x speed op alone and reproducing the
+jump-cut failure the prompt exists to prevent.
+
+Fix: `director_llm.py` gained a module constant
+`TIMELAPSE_MIN_FACTOR = 4.0` and a post-pass, `_apply_keep_cap()`, run inside
+`try_parse_director_response()` after every op in the response is parsed
+(not inside `_parse_op()`, which sees one op at a time and can't know whether
+a covering `speed` op exists elsewhere in the response). A `keep` op wider
+than `max_keep_lines` is exempt exactly when its line range is fully
+**contained** in a `speed` op in the same response whose factor is at least
+`TIMELAPSE_MIN_FACTOR`:
+
+- containment, not overlap — a keep line outside the speed range is
+  unprotected talking, the abuse the cap targets;
+- the factor floor stops a mild 1.3–2.0 speed-up paired with a wide keep from
+  reopening the runtime-inflation hole the cap was built to close (a real run
+  turned a 22.3min cut into 53.9min by widening a keep over talking).
+
+`ops_from_dict()` (the hand-edited `_director.json` path) is untouched and
+does not route through the post-pass — a human-written wide keep is honoured
+regardless of any speed op, as before. `keep_limit_note()` (the runtime
+prompt note stating the enforced cap) now also states the exemption, so the
+director knows a timelapse's keep may legitimately exceed it.
+
+Tests: `tests/director/test_director_llm.py::TestTimelapseKeepExemption`
+covers containment-survives, mild-factor-drops, partial-overlap-drops,
+no-speed-op-drops (regression guard), narrow-keep-unaffected, and
+`ops_from_dict` staying uncapped. `TestKeepWidthLimit::test_note_states_the_timelapse_exemption`
+pins the updated `keep_limit_note()` text.

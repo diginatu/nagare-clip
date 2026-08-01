@@ -7,6 +7,7 @@ import json
 import pytest
 
 from nagare_clip.director.director_llm import (
+    TIMELAPSE_MIN_FACTOR,
     DirectorOp,
     clean_for_display,
     format_numbered_transcript,
@@ -290,6 +291,64 @@ class TestKeepWidthLimit:
 
         generate_director_ops(["あ"], {"prompt": "P", "max_keep_lines": 0}, call_llm=fake_llm)
         assert captured["system"] == "P"
+
+    def test_note_states_the_timelapse_exemption(self):
+        note = keep_limit_note(8)
+        assert "timelapse" in note.lower()
+        assert f"{TIMELAPSE_MIN_FACTOR}" in note
+
+
+class TestTimelapseKeepExemption:
+    """A `keep` that exists only to make a timelapse's `speed` op continuous is
+    exempt from `max_keep_lines` when it is fully contained in a `speed` op
+    whose factor is at least TIMELAPSE_MIN_FACTOR (task-4-brief.md). Every
+    other wide keep is capped exactly as before."""
+
+    def _resp(self, keep_lines, speed=None):
+        ops = [{"type": "keep", "lines": list(keep_lines), "note": "n"}]
+        if speed is not None:
+            speed_lines, factor = speed
+            ops.append({"type": "speed", "lines": list(speed_lines), "factor": factor})
+        return json.dumps({"ops": ops})
+
+    def test_wide_keep_contained_in_timelapse_speed_survives(self):
+        # 12-line keep, cap 8, fully inside a 4.0x speed op over the same span.
+        resp = self._resp((10, 21), speed=((10, 21), TIMELAPSE_MIN_FACTOR))
+        ops = parse_director_response(resp, num_lines=40, max_keep_lines=8)
+        assert [o.lines for o in ops if o.type == "keep"] == [(10, 21)]
+
+    def test_wide_keep_beside_mild_speed_is_dropped(self):
+        # Same wide keep, but the covering speed op is only 2.0x (below the
+        # timelapse floor) -- the mild-speed runtime-inflation hole the cap
+        # was built to close.
+        resp = self._resp((10, 21), speed=((10, 21), 2.0))
+        ops = parse_director_response(resp, num_lines=40, max_keep_lines=8)
+        assert [o.type for o in ops] == ["speed"]
+
+    def test_wide_keep_only_partly_covered_by_timelapse_is_dropped(self):
+        # keep [10,21] extends past the qualifying speed op's [10,18]: lines
+        # 19-21 would be unprotected talking, so containment (not overlap)
+        # is required.
+        resp = self._resp((10, 21), speed=((10, 18), TIMELAPSE_MIN_FACTOR))
+        ops = parse_director_response(resp, num_lines=40, max_keep_lines=8)
+        assert [o.type for o in ops] == ["speed"]
+
+    def test_wide_keep_with_no_speed_op_is_dropped(self):
+        # Regression guard: today's behaviour when no speed op exists at all.
+        resp = self._resp((10, 21))
+        ops = parse_director_response(resp, num_lines=40, max_keep_lines=8)
+        assert ops == []
+
+    def test_narrow_keep_in_timelapse_speed_survives_unaffected(self):
+        # Within the cap already -- the exemption must not disturb the
+        # ordinary (uncapped-anyway) path.
+        resp = self._resp((10, 14), speed=((10, 21), TIMELAPSE_MIN_FACTOR))
+        ops = parse_director_response(resp, num_lines=40, max_keep_lines=8)
+        assert [o.lines for o in ops if o.type == "keep"] == [(10, 14)]
+
+    def test_ops_from_dict_uncapped_honours_wide_keep_with_no_speed_op(self):
+        data = {"ops": [{"type": "keep", "lines": [10, 21]}]}
+        assert [o.lines for o in ops_from_dict(data, num_lines=40)] == [(10, 21)]
 
 
 class TestTryParse:
