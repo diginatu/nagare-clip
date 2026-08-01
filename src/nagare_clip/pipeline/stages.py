@@ -36,6 +36,8 @@ from nagare_clip.pipeline.external import (
 from nagare_clip.pipeline.runner import PipelineContext, Stage
 from nagare_clip.pipeline.sources import SourceMedia
 from nagare_clip.plan.run import run_plan
+from nagare_clip.publish.run import run_publish
+from nagare_clip.publish.thumbs import ThumbCandidate
 from nagare_clip.sentence_split.run import run_sentence_split
 from nagare_clip.summary.run import run_summary
 from nagare_clip.text_filter.run import run_text_filter
@@ -52,6 +54,7 @@ STAGE_NAMES = [
     "guided_edit",
     "intervals",
     "blender",
+    "publish",
 ]
 
 
@@ -449,6 +452,66 @@ def _blender_run(ctx: PipelineContext) -> None:
     )
 
 
+# --- publish -----------------------------------------------------------------
+
+
+def _extract_thumb_frames(ctx: PipelineContext, candidates: list[ThumbCandidate]) -> None:
+    """Pull every shortlisted still in ONE docker container run.
+
+    Same batching rationale as gap_context's frame extraction: a
+    ``docker compose run`` pays ~0.8s of container init regardless of how
+    little work happens inside, and the ffmpeg seek itself is ~30ms.
+    """
+    d = ctx.stage_dir("publish")
+    relative_by_stem = {s.stem: s.relative for s in ctx.sources}
+    jobs: list[tuple[str, float, str]] = []
+    for c in candidates:
+        relative = relative_by_stem.get(c.stem)
+        if relative is None:
+            continue
+        (d / c.relpath).parent.mkdir(parents=True, exist_ok=True)
+        jobs.append((relative, c.source_time, f"/output/publish/{c.relpath}"))
+    if not jobs:
+        return
+    try:
+        run_command(
+            build_snapshot_batch_cmd(ctx.project_root, jobs, ctx.cfg["publish"]["frame_width"]),
+            env_extra=_docker_env(ctx),
+        )
+    except Exception:  # noqa: BLE001 - a failed batch must never abort the run
+        logging.warning("publish: batch frame extraction failed (%d job(s))", len(jobs))
+    for c in candidates:
+        if not (d / c.relpath).is_file():
+            logging.warning("publish: no frame written at %.3fs for %s", c.source_time, c.stem)
+
+
+def _publish_run(ctx: PipelineContext) -> None:
+    print("[publish] Title, description, chapters, thumbnail material")
+    rec = _recorder(ctx, "publish")
+    rec.clear()
+    try:
+        d = ctx.stage_dir("publish")
+        candidates = run_publish(
+            ctx.stems,
+            d / "publish.json",
+            d / "publish.md",
+            ctx.cfg,
+            intervals_paths=[ctx.stage_dir("intervals") / f"{s}_intervals.json" for s in ctx.stems],
+            summary_json=ctx.stage_dir("summary") / "summary.json",
+            plan_json=ctx.stage_dir("plan") / "plan.json",
+            director_paths=[ctx.stage_dir("director") / f"{s}_director.json" for s in ctx.stems],
+            json_paths=[ctx.stage_dir("sentence_split") / f"{s}.json" for s in ctx.stems],
+            recorder=rec,
+        )
+    finally:
+        rec.rebuild_index()
+    _extract_thumb_frames(ctx, candidates)
+
+
+def _publish_required(ctx: PipelineContext) -> list[Path]:
+    return [ctx.stage_dir("publish") / "publish.json"]
+
+
 STAGES = [
     Stage("transcription", _transcription_run, _transcription_required),
     Stage("audio_silence", _audio_silence_run, _audio_silence_required),
@@ -461,4 +524,5 @@ STAGES = [
     Stage("guided_edit", _guided_edit_run, _guided_edit_required),
     Stage("intervals", _intervals_run, _intervals_required),
     Stage("blender", _blender_run),
+    Stage("publish", _publish_run, _publish_required),
 ]

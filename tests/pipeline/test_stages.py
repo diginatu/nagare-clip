@@ -56,6 +56,7 @@ def test_stage_names_canonical_order():
         "guided_edit",
         "intervals",
         "blender",
+        "publish",
     ]
     assert [s.name for s in st.STAGES] == st.STAGE_NAMES
 
@@ -823,3 +824,83 @@ def test_extract_gap_frames_unparseable_stats_content_excluded_from_min(gap_ctx,
     result = stages_mod._extract_gap_frames(gap_ctx, [(src, [(10.0, 20.0)])])
 
     assert result["talk1"][0].ssim == pytest.approx(0.81)
+
+
+# --- publish -----------------------------------------------------------------
+
+
+def test_publish_adapter_wires_every_stage_input(tmp_path, monkeypatch):
+    seen = {}
+    monkeypatch.setattr(st, "recorder_from_config", lambda *a, **k: _NullRec())
+    monkeypatch.setattr(
+        st,
+        "run_publish",
+        lambda stems, oj, om, cfg, **kw: (seen.update(stems=stems, oj=oj, om=om, **kw), [])[1],
+    )
+    by_name = {s.name: s for s in st.STAGES}
+    by_name["publish"].run(_ctx(tmp_path, stems=("a",)))
+    out = tmp_path / "out"
+    assert seen["stems"] == ["a"]
+    assert seen["oj"] == out / "publish" / "publish.json"
+    assert seen["om"] == out / "publish" / "publish.md"
+    assert seen["intervals_paths"] == [out / "intervals" / "a_intervals.json"]
+    assert seen["summary_json"] == out / "summary" / "summary.json"
+    assert seen["plan_json"] == out / "plan" / "plan.json"
+    assert seen["director_paths"] == [out / "director" / "a_director.json"]
+    assert seen["json_paths"] == [out / "sentence_split" / "a.json"]
+
+
+def test_publish_required_output(tmp_path):
+    by_name = {s.name: s for s in st.STAGES}
+    ctx = _ctx(tmp_path, from_index=len(st.STAGE_NAMES) - 1)
+    assert by_name["publish"].required_outputs(ctx) == [
+        tmp_path / "out" / "publish" / "publish.json"
+    ]
+
+
+def test_publish_without_candidates_runs_no_docker(tmp_path, monkeypatch):
+    run_calls = []
+    monkeypatch.setattr(st, "recorder_from_config", lambda *a, **k: _NullRec())
+    monkeypatch.setattr(st, "run_command", lambda *a, **k: run_calls.append((a, k)))
+    monkeypatch.setattr(st, "run_publish", lambda *a, **k: [])
+    by_name = {s.name: s for s in st.STAGES}
+    by_name["publish"].run(_ctx(tmp_path, stems=("a",)))
+    assert run_calls == []
+
+
+def test_publish_extracts_every_candidate_frame_in_one_container(tmp_path, monkeypatch):
+    from nagare_clip.publish.thumbs import ThumbCandidate
+
+    candidates = [
+        ThumbCandidate("a", 12.5, 3.0, "overlay: x"),
+        ThumbCandidate("b", 30.0, 40.0, "timelapse start"),
+        ThumbCandidate("ghost", 1.0, 1.0, "unknown source"),
+    ]
+    cmds = []
+    monkeypatch.setattr(st, "recorder_from_config", lambda *a, **k: _NullRec())
+    monkeypatch.setattr(st, "run_command", lambda cmd, **k: cmds.append(cmd))
+    monkeypatch.setattr(st, "run_publish", lambda *a, **k: candidates)
+    by_name = {s.name: s for s in st.STAGES}
+    by_name["publish"].run(_ctx(tmp_path))
+
+    assert len(cmds) == 1  # ONE container for the whole shortlist
+    script = cmds[0][-1]
+    assert script.count("ffmpeg") == 2  # the unknown stem contributes no job
+    assert "-ss 12.500" in script and "/output/publish/frames/a/12.500.jpg" in script
+    assert "-ss 30.000" in script and "/output/publish/frames/b/30.000.jpg" in script
+    assert "scale=1920:-2" in script
+    # the host-side frame dirs exist so the container can write into them
+    assert (tmp_path / "out" / "publish" / "frames" / "a").is_dir()
+
+
+def test_publish_frame_extraction_failure_never_aborts_the_run(tmp_path, monkeypatch):
+    from nagare_clip.publish.thumbs import ThumbCandidate
+
+    def boom(*a, **k):
+        raise RuntimeError("docker missing")
+
+    monkeypatch.setattr(st, "recorder_from_config", lambda *a, **k: _NullRec())
+    monkeypatch.setattr(st, "run_command", boom)
+    monkeypatch.setattr(st, "run_publish", lambda *a, **k: [ThumbCandidate("a", 1.0, 1.0, "x")])
+    by_name = {s.name: s for s in st.STAGES}
+    by_name["publish"].run(_ctx(tmp_path))

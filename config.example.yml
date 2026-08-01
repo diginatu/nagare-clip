@@ -251,8 +251,34 @@ blender:
     location_y: 0.95
     # color: [1, 1, 1, 1]   # Font fill color (RGBA); overrides caption_style
 
+# publish stage: runs once project-wide after blender. Collects the material
+# needed to publish the cut — title candidates, a description lead, YouTube
+# chapters timed on the FINISHED timeline, thumbnail copy sets and a shortlist
+# of thumbnail frames pulled at the director's payoff moments. Outputs
+# publish.json (for a project-level thumbnail script) and publish.md (for the
+# human); the upload itself stays manual. Disabled by default (empty = no-op).
+publish:
+  enabled: false   # Enable the publish LLM
+  provider: ollama_chat   # LiteLLM provider prefix: ollama_chat | openai | gemini | anthropic
+  api_base: ""   # Base URL; empty -> Ollama localhost default; leave empty for cloud providers
+  model: "gpt-oss:120b"   # A larger model (passed to LiteLLM as "<provider>/<model>")
+  api_key: ""   # API key for the provider (or set the provider's env var)
+  temperature: 0.6   # Higher than the editing stages: copy wants range
+  thinking: false
+  timeout: 300
+  response_format: json
+  max_retries: 2   # Extra attempts on LLM error / unparseable JSON (0 = single attempt)
+  retry_temp_step: 0.2
+  retry_temp_cap: 0.8
+  title_count: 5   # How many title candidates to ask for
+  thumbnail_sets: 3   # How many alternative thumbnail copy sets
+  min_chapter: 10.0   # Chapters shorter than this (seconds) are merged into a neighbour; YouTube ignores a chapter list containing any chapter under 10s
+  max_frames: 12   # Cap on extracted thumbnail frame candidates (0 = no limit)
+  frame_width: 1920   # Width (px) of the extracted thumbnail candidates; height is auto
+  # prompt: "..."   # System prompt (has a sensible default)
+
 pipeline:
   input_videos_dir: src_video
   output_dir: output   # Root dir; stage outputs go to per-stage named subdirs
   from_stage: transcription   # Start from this stage; reuses earlier stage outputs
-  to_stage: blender   # Stop after this stage (inclusive). Must not precede from_stage
+  to_stage: publish   # Stop after this stage (inclusive). Must not precede from_stage

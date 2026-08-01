@@ -17,8 +17,9 @@ The pipeline creates a rough-cut Blender project for human review and fine-tunin
 9. guided_edit (optional): a small LLM applies the director's ops into `_edits.txt` (deterministically verified)
 10. intervals: Patch application + keep intervals -> `*_intervals.json` keep ranges (audio cuts unioned in)
 11. blender: Blender headless -> `.blend` with VSE strips arranged back-to-back
+12. publish (optional, project-wide): a larger LLM writes the publishing material — title candidates, a description with chapters timed on the **finished** timeline, thumbnail copy sets — and a shortlist of thumbnail frames pulled at the director's payoff moments -> reviewable `output/publish/publish.md` + `publish.json`
 
-Stages are referenced by name (`--from-stage <name>`); the gap_context/summary/plan/director/guided_edit stages are no-ops unless enabled in config.
+Stages are referenced by name (`--from-stage <name>`); the gap_context/summary/plan/director/guided_edit/publish stages are no-ops unless enabled in config.
 
 ## Human Editing Workflow
 
@@ -180,6 +181,26 @@ This produces outputs under `output/` (or your `--output-dir`), including:
 - `text_filter/myvideo_edits.txt`
 - `intervals/myvideo_intervals.json`
 - `blender/myvideo_edited.blend` (named after the first source file)
+- `publish/publish.md` + `publish/publish.json` (when `publish.enabled`)
+
+## Publishing material (`publish` stage)
+
+Enable `publish.enabled` to have the pipeline write what you need to actually upload the video, into `output/publish/`:
+
+- **`publish.md`** — the review file: several title candidates, the description as one paste-ready block, the thumbnail copy options, and a table of thumbnail frame candidates.
+- **`publish.json`** — the same content as data, for a project-level thumbnail script.
+- **`frames/{stem}/{time}.jpg`** — stills pulled at the moments the director marked as payoffs (`overlay`, `keep`, and the boundaries of `timelapse` ops), so you pick from a shortlist instead of scrubbing the timeline.
+
+Chapter timestamps are computed on the **finished** timeline, so a part that was cut entirely drops out and a part inside a timelapse gets its compressed position. The stage also aims at YouTube's chapter conditions for you: the first entry is forced to `0:00`, and a chapter under `publish.min_chapter` (default 10s) is merged into a neighbour. If the list still cannot qualify (fewer than three chapters, for instance) it is written anyway — YouTube auto-links timestamps regardless, so a viewer can still jump — and `publish.md` says what is missing.
+
+Compositing the chosen frame and copy into the actual thumbnail stays yours: read the copy out of `publish.json` rather than hardcoding it into the script.
+
+```bash
+jq -r '.thumbnail_copy[0].lines[] | "\(.role)\t\(.text)"' output/publish/publish.json
+jq -r '.thumbnail_frames[].path' output/publish/publish.json
+```
+
+Each copy set is one to three lines and each line carries its role (`tag` / `hook` / `subtitle`), so a punchy video can ship a hook alone instead of padding out a three-line template — have the script branch on the lines it gets.
 
 ## Configuration
 
@@ -214,7 +235,7 @@ project:
 
 `previous_summary` is how a series carries over: point it at the earlier project's `output/summary/summary.json` and the director learns what "これ" refers to when the cut opens mid-story. A missing or unreadable file just drops that one line (logged), leaving the rest of the brief intact. `target_duration` and `tone` are what stop `plan` from defaulting every part to a conservative "shorten" and let `director` deviate from its default ~1-overlay-per-3-5-minutes density. The mechanical stages (`gap_context`, `sentence_split`, `guided_edit`) are deliberately not briefed.
 
-The config file covers all sections, each named after its stage: `general`, `project`, `transcription`, `audio_silence`, `sentence_split`, `gap_context`, `text_filter`, `summary`, `plan`, `director`, `guided_edit`, `intervals`, `blender`, `pipeline`. See `config.example.yml` for the full list of keys and their defaults.
+The config file covers all sections, each named after its stage: `general`, `project`, `transcription`, `audio_silence`, `sentence_split`, `gap_context`, `text_filter`, `summary`, `plan`, `director`, `guided_edit`, `intervals`, `blender`, `publish`, `pipeline`. See `config.example.yml` for the full list of keys and their defaults.
 
 ### Choosing an LLM provider
 
@@ -339,8 +360,8 @@ Options:
 - `--source FILE` — source video file (may be repeated for multiple sources); when omitted, all videos in `--input-videos-dir` are processed alphabetically.
 - `--config FILE` — path to a YAML config file; config values fill in between CLI overrides and built-in defaults.
 - `--language LANG` — ISO 639-1 language code passed to WhisperX (default: `ja`). Also settable via `transcription.language` in config.
-- `--from-stage NAME` — start from stage `NAME`, reusing earlier stage outputs. `NAME` is a stage name: `transcription`, `audio_silence`, `sentence_split`, `gap_context`, `summary`, `text_filter`, `plan`, `director`, `guided_edit`, `intervals`, `blender`. Also settable via `pipeline.from_stage` in config.
-- `--to-stage NAME` — stop **after** stage `NAME` (inclusive); later stages are skipped. Same stage names as `--from-stage`, and must not precede it. Defaults to `blender` (run to the end). Also settable via `pipeline.to_stage` in config. Combine with `--from-stage` to run a window of stages, e.g. `--from-stage summary --to-stage director`.
+- `--from-stage NAME` — start from stage `NAME`, reusing earlier stage outputs. `NAME` is a stage name: `transcription`, `audio_silence`, `sentence_split`, `gap_context`, `summary`, `text_filter`, `plan`, `director`, `guided_edit`, `intervals`, `blender`, `publish`. Also settable via `pipeline.from_stage` in config.
+- `--to-stage NAME` — stop **after** stage `NAME` (inclusive); later stages are skipped. Same stage names as `--from-stage`, and must not precede it. Defaults to `publish` (run to the end). Also settable via `pipeline.to_stage` in config. Combine with `--from-stage` to run a window of stages, e.g. `--from-stage summary --to-stage director`.
 - Defaults: input videos under `src_video/`, outputs under `output/`.
 - If `--source` contains `/`, it is treated as the exact path; otherwise it is resolved inside `--input-videos-dir`.
 - `silence_threshold` and `min_keep` default to `1.5` and `1.0` (overridable via config).

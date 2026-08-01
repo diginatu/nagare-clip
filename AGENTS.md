@@ -17,14 +17,15 @@ Maintain and improve a multi-stage rough-cut pipeline:
 9. guided_edit — a small LLM applies the director's ops into `_edits.txt`, deterministically verified
 10. Patch application + keep-interval computation in Python (audio cuts unioned in)
 11. Blender VSE auto-layout in headless mode
+12. publish — title candidates, description + finished-timeline chapters, thumbnail copy and frame shortlist (disabled by default)
 
-Final deliverable is a `.blend` project for human editing.
+Final deliverable is a `.blend` project for human editing, plus the publish material for the human to upload.
 
 > **Naming convention:** Stages are identified only by their **functional /
 > config-section name** — there are no stage numbers anywhere. The canonical
 > identifiers are: `transcription:`, `audio_silence:`, `sentence_split:`,
 > `gap_context:`, `summary:`, `text_filter:`, `plan:`, `director:`, `guided_edit:`,
-> `intervals:`, `blender:`.
+> `intervals:`, `blender:`, `publish:`.
 > Package dirs (`src/nagare_clip/<name>/`), `output/<name>/` subdirs, and
 > `run_pipeline.sh --from-stage`/`--to-stage` all use these same names. A new
 > stage can be inserted anywhere without renumbering the others.
@@ -124,6 +125,22 @@ Auto-assembles the rough cut in headless Blender. References original media in-p
 - **Inputs:** source video files, `{stem}_intervals.json` for each source
 - **Outputs:** `{stem}_edited.blend` — ready for human editing
 
+### publish — Title, Description, Chapters and Thumbnail Material
+
+A larger LLM (config `publish:`, disabled by default) runs **once project-wide after `blender`** and collects what the pipeline already knows into a reviewable file pair; the upload itself stays a human action. Chapter timestamps are the part only this stage can do: they need the source-time → finished-timeline mapping, which exists in `intervals` (and in `blender/timeline.py`'s `speed_factor`-aware placement) and nowhere else. `publish/timeline.py` reproduces that placement arithmetic on the host in **seconds** (`build_edit_map`/`to_timeline`/`first_surviving`), reusing the blender stage's own `split_intervals_by_speed` — which moved to `blender/frames.py` (no `bpy` import) and is re-exported from `blender/timeline.py`, so there is one implementation rather than a copy that can drift. Blender rounds each span to whole frames and this does not; the sub-frame-per-span drift is immaterial against whole-second timestamps merged at a 10s floor.
+
+- **Title:** several candidates, never one — hook quality varies a lot between attempts and picking from a list is cheap.
+- **Description:** a short lead from the whole-video summary and the brief, plus the chapter list. `chapters.py` anchors each `summary.json` part onto the finished timeline (a part cut in its entirety drops out; a part inside a timelapse gets its compressed position) and then *satisfies* YouTube's four conditions rather than hoping the mapping lands correctly: the first entry is **forced to `0:00`** (a part's opening is routinely cut), and any chapter under `publish.min_chapter` (default 10.0s) is **merged into a neighbour** — into the chapter before it, which keeps its title, or for the first chapter into the one after it, which inherits the earlier start. The list is **always written**, even when it cannot qualify: YouTube auto-links timestamps regardless, so a list of two still lets a viewer jump, it just draws no segmented progress bar — `chapter_issues()` reports every unmet condition into `publish.json` and as a blockquote in `publish.md` instead of the output being suppressed behind a gate.
+- **Thumbnail copy:** several alternative SETS of 1-3 lines, each line carrying the role it plays (`tag`/`hook`/`subtitle`), so the layout follows the copy rather than the copy being padded to fill a three-line template. Over three lines is truncated; an unknown/absent role normalises to `hook`.
+- **Thumbnail frames:** stills at the moments the director marked as payoffs — an `overlay`'s line start, a `keep`'s midpoint, and a `timelapse`'s start/end (end inset by 0.2s, since a span's end is exclusive) — each snapped onto surviving footage within its own op span, deduped at 2.0s of finished timeline with the collision resolved by rank (overlay < keep < timelapse boundary, because inside a timelapse a 0.2s source inset is 0.025s of output and the caption is why the human would pick the frame), and thinned to `publish.max_frames` (default 12) by **even sampling** rather than truncation. Extraction runs in ONE `docker compose run` via `build_snapshot_batch_cmd` (as gap_context does); a failed batch logs and never aborts.
+
+ONE LLM call produces the titles, lead, chapter titles (index-mapped by chapter position, like `plan`) and thumbnail copy; the chapters are computed BEFORE it and the prompt states their timestamps are FINAL. `publish.title_count`/`thumbnail_sets` are stated at runtime via `publish_llm.counts_note()`, not baked into `publish.prompt`. Invalid JSON / no `titles` array retries; everything else degrades field by field, and all attempts failing still writes the chapters (LLM-free). Compositing the chosen frame and copy into the final image stays a project-level script — fonts, colours and layout are taste — which reads `publish.json` for its parameters instead of hardcoding them.
+
+- **Inputs:** every `{stem}_intervals.json`, `output/summary/summary.json`, `output/plan/plan.json`, each `{stem}_director.json` (payoff moments + on-screen caption text), each sentence_split `{stem}.json` (line → source time)
+- **Outputs:** `output/publish/publish.json` (contract for a thumbnail script), `output/publish/publish.md` (reviewable), frames under `output/publish/frames/{stem}/`
+
+See [`docs/stages/publish.md`](docs/stages/publish.md) for the timeline mapping, the chapter-merging rule, the LLM contract and the frame shortlist.
+
 ### Human Editing Workflow
 
 1. Run transcription–text_filter → audio_silence produces `{stem}_cuts.txt`, text_filter produces `{stem}_edits.txt`
@@ -205,8 +222,15 @@ src/nagare_clip/          # Main Python package (src layout)
   blender/                    # blender stage modules (Blender VSE)
     blender_cli.py            # Blender-stage CLI (separate process, runs inside Blender)
     scene.py                  # Blender scene setup
-    timeline.py               # Strip and caption placement
-    frames.py                 # Pure frame-range clamp helper (no bpy import, host-testable)
+    timeline.py               # Strip and caption placement (re-exports split_intervals_by_speed)
+    frames.py                 # Pure frame/interval helpers, no bpy: clamp_frames(), split_intervals_by_speed()
+  publish/                    # publish stage (project-wide): publishing material
+    timeline.py               # Pure: source seconds -> finished-timeline seconds (Placed, build_edit_map)
+    chapters.py               # Chapter anchoring/merging + YouTube's four conditions
+    thumbs.py                 # Pure: director payoff moments -> frame candidate shortlist
+    publish_llm.py            # One LLM call: titles, lead, chapter titles, thumbnail copy sets
+    render.py                 # publish.json contract + publish.md review file
+    run.py                    # run_publish() (empty artifact when disabled)
 scripts/
   run_pipeline.sh             # Shim: exec uv run python -m nagare_clip.pipeline "$@"
 docs/
@@ -226,6 +250,7 @@ tests/
   guided_edit/                # guided_edit apply/reconcile + run() tests
   intervals/                  # interval-stage unit tests (incl. <keep>/<cut> markers, cuts_txt union)
   blender/                    # Blender-stage tests
+  publish/                    # publish (timeline / chapters / thumbs / llm / render / run) tests
 ```
 
 ## Configuration System
@@ -253,15 +278,15 @@ The `project:` section is the project-wide **editorial brief** (audience,
 purpose, target_duration, tone, story_so_far, previous_summary — all free text,
 all empty by default). `nagare_clip.brief.apply_brief()` appends the rendered
 brief to the system prompts of `summary` (both `prompt` and `overall_prompt`),
-`plan`, `director` and `text_filter`, called from those four stages' `run.py` so
-no LLM module needed a new parameter. `previous_summary` is a path to a previous
+`plan`, `director`, `text_filter` and `publish`, called from those stages' `run.py`
+so no LLM module needed a new parameter. `previous_summary` is a path to a previous
 project's `summary.json`; its overall summary joins the brief (a missing/unreadable
 file drops only that line). Every field empty → `apply_brief` returns the same
 dict and prompts are byte-identical to a run without the section — regression-tested
 per stage. `gap_context`/`sentence_split`/`guided_edit` are deliberately not briefed
 (mechanical stages). See [`docs/stages/project_brief.md`](docs/stages/project_brief.md).
 
-All LLM stages (`sentence_split`, `gap_context`, `summary`, `text_filter`, `plan`, `director`, `guided_edit`) route through `nagare_clip.llm_client.call_llm` (LiteLLM). Each block selects its backend with a `provider` key (default `ollama_chat`); the model id sent to LiteLLM is `"<provider>/<model>"`. An empty `api_base` falls back to `http://localhost:11434` for an ollama provider, or is omitted for a cloud provider. `api_key` is forwarded when set (or use the provider's env var). `response_format: "json"` maps to a JSON-object request; `thinking` maps to LiteLLM `reasoning_effort` (best-effort per provider).
+All LLM stages (`sentence_split`, `gap_context`, `summary`, `text_filter`, `plan`, `director`, `guided_edit`, `publish`) route through `nagare_clip.llm_client.call_llm` (LiteLLM). Each block selects its backend with a `provider` key (default `ollama_chat`); the model id sent to LiteLLM is `"<provider>/<model>"`. An empty `api_base` falls back to `http://localhost:11434` for an ollama provider, or is omitted for a cloud provider. `api_key` is forwarded when set (or use the provider's env var). `response_format: "json"` maps to a JSON-object request; `thinking` maps to LiteLLM `reasoning_effort` (best-effort per provider).
 
 Only `blender/blender_cli.py` still takes a `--config <path>` flag on its command line — it runs as a separate Blender subprocess, so the pipeline CLI (`nagare_clip.pipeline.cli`) passes its resolved `config_path` through explicitly. Every other stage receives the already-merged `cfg` dict in-process (no subprocess, no re-parsing of `--config`).
 
@@ -280,6 +305,7 @@ the [Documentation Policy](#documentation-policy)):
 - text_filter (+ summary-stage filter context) → [`docs/stages/text_filter.md`](docs/stages/text_filter.md)
 - intervals (`<keep>`/`<speed>`/`<overlay/>`/`<cut>` markers, margins, captions) → [`docs/stages/intervals.md`](docs/stages/intervals.md)
 - blender (VSE layout, text styling, retiming) → [`docs/stages/blender.md`](docs/stages/blender.md)
+- publish (timeline mapping, chapters, thumbnail shortlist) → [`docs/stages/publish.md`](docs/stages/publish.md)
 - pipeline orchestration (`nagare_clip.pipeline`) → [`docs/stages/pipeline.md`](docs/stages/pipeline.md)
 - observability (LLM report + Langfuse tracing) → [`docs/stages/observability.md`](docs/stages/observability.md)
 

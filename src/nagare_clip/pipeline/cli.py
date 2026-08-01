@@ -129,6 +129,11 @@ def main(argv: list[str] | None = None) -> int:
         if to_index == len(STAGES) - 1:
             blend = ctx.stage_dir("blender") / f"{ctx.stems[0]}_edited.blend"
             print(f"Done: {blend}")
+            # The .blend is still the deliverable; the publish material is a
+            # second file the human reads, so point at it only when it holds
+            # something (the stage is disabled by default).
+            if cfg["publish"]["enabled"]:
+                print(f"Publish material: {ctx.stage_dir('publish') / 'publish.md'}")
         else:
             print(f"Done (stopped at --to-stage {p['to_stage']})")
         return 0

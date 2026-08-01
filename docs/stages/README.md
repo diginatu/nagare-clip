@@ -14,5 +14,6 @@ the hard constraints live in the top-level [`AGENTS.md`](../../AGENTS.md).
 | Text filter + summary-stage filter context | [text_filter.md](text_filter.md) |
 | Intervals: `<keep>`/`<speed>`/`<overlay/>`/`<cut>` markers, margins, captions | [intervals.md](intervals.md) |
 | Blender VSE layout, text styling, retiming | [blender.md](blender.md) |
+| Publish material: titles, description, chapters, thumbnail shortlist | [publish.md](publish.md) |
 | Pipeline orchestration (`run_pipeline.sh`) | [pipeline.md](pipeline.md) |
 | Observability: LLM report + Langfuse tracing | [observability.md](observability.md) |

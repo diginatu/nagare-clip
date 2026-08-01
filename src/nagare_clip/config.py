@@ -293,6 +293,46 @@ GAP_CONTEXT_PROMPT = (
     "- Describe only what you can see; do not speculate about the audio."
 )
 
+PUBLISH_PROMPT = (
+    "You write the publishing material for a finished video: the title, the "
+    "description lead, the chapter titles and the thumbnail copy. You receive "
+    "the project summary, each video's parts (with the rough editorial plan "
+    "where there is one), the captions the edit already puts on screen, and "
+    "the FINAL chapter list with timestamps already fixed.\n"
+    "Write in the same language as the summaries. Output ONLY a JSON "
+    "object.\n"
+    "\n"
+    "JSON shape:\n"
+    "{\n"
+    '  "titles": ["candidate 1", "candidate 2"],\n'
+    '  "lead": "two or three sentences opening the description",\n'
+    '  "chapters": [{"index": 1, "title": "short chapter title"}],\n'
+    '  "thumbnail_copy": [\n'
+    '    {"lines": [{"role": "tag", "text": "水槽DIY"},\n'
+    '               {"role": "hook", "text": "穴あけ不要。"},\n'
+    '               {"role": "subtitle", "text": "擬似オーバーフロー"}]},\n'
+    '    {"lines": [{"role": "hook", "text": "水浸し！"}]}\n'
+    "  ]\n"
+    "}\n"
+    "\n"
+    "Rules:\n"
+    '- "titles": each a DIFFERENT angle on the video (what happened, what '
+    "went wrong, what the viewer learns) — not rewordings of one another. "
+    "Keep them under about 40 characters so they are not truncated.\n"
+    '- "lead": what the video shows and who it is for, from the summary and '
+    "the brief. No timestamps — the chapter list is added after it "
+    "automatically.\n"
+    '- "chapters": one entry per chapter NUMBER you were given, titled in a '
+    "few words. Never invent, drop, reorder or re-time a chapter: the "
+    "timestamps are already final.\n"
+    '- "thumbnail_copy": alternative SETS, each 1-3 lines. A role is "tag" '
+    '(what kind of video), "hook" (the line that makes someone click) or '
+    '"subtitle" (the detail under it). Use only the lines the video needs — '
+    "a punchy result may want a hook alone. Thumbnail lines are read at a "
+    "glance: a few words each, never a sentence.\n"
+    "- Output only the JSON object, no other text."
+)
+
 
 # ---------------------------------------------------------------------------
 # Field helper: mark a field to be emitted commented-out in the example file
@@ -831,6 +871,59 @@ class BlenderConfig(BaseModel):
     speed_mark: SpeedMarkConfig = Field(default_factory=SpeedMarkConfig)
 
 
+class PublishConfig(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    section_comment: ClassVar[str] = (
+        "publish stage: runs once project-wide after blender. Collects the material\n"
+        "needed to publish the cut — title candidates, a description lead, YouTube\n"
+        "chapters timed on the FINISHED timeline, thumbnail copy sets and a shortlist\n"
+        "of thumbnail frames pulled at the director's payoff moments. Outputs\n"
+        "publish.json (for a project-level thumbnail script) and publish.md (for the\n"
+        "human); the upload itself stays manual. Disabled by default (empty = no-op)."
+    )
+    enabled: bool = Field(False, description="Enable the publish LLM")
+    provider: str = Field(
+        "ollama_chat",
+        description="LiteLLM provider prefix: ollama_chat | openai | gemini | anthropic",
+    )
+    api_base: str = Field(
+        "",
+        description="Base URL; empty -> Ollama localhost default; leave empty for cloud providers",
+    )
+    model: str = Field(
+        "gpt-oss:120b", description='A larger model (passed to LiteLLM as "<provider>/<model>")'
+    )
+    api_key: str = Field("", description="API key for the provider (or set the provider's env var)")
+    temperature: float = Field(0.6, description="Higher than the editing stages: copy wants range")
+    thinking: bool | str = Field(False)
+    timeout: int = Field(300)
+    response_format: str = Field("json")
+    max_retries: int = Field(
+        2, description="Extra attempts on LLM error / unparseable JSON (0 = single attempt)"
+    )
+    retry_temp_step: float = Field(0.2)
+    retry_temp_cap: float = Field(0.8)
+    title_count: int = Field(5, ge=1, description="How many title candidates to ask for")
+    thumbnail_sets: int = Field(3, ge=1, description="How many alternative thumbnail copy sets")
+    min_chapter: float = Field(
+        10.0,
+        ge=0.0,
+        description=(
+            "Chapters shorter than this (seconds) are merged into a neighbour; "
+            "YouTube ignores a chapter list containing any chapter under 10s"
+        ),
+    )
+    max_frames: int = Field(
+        12, ge=0, description="Cap on extracted thumbnail frame candidates (0 = no limit)"
+    )
+    frame_width: int = Field(
+        1920, description="Width (px) of the extracted thumbnail candidates; height is auto"
+    )
+    prompt: str = _commented(
+        PUBLISH_PROMPT, sample='"..."', description="System prompt (has a sensible default)"
+    )
+
+
 class PipelineConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
     input_videos_dir: str = Field("src_video")
@@ -841,7 +934,7 @@ class PipelineConfig(BaseModel):
         "transcription", description="Start from this stage; reuses earlier stage outputs"
     )
     to_stage: str = Field(
-        "blender", description="Stop after this stage (inclusive). Must not precede from_stage"
+        "publish", description="Stop after this stage (inclusive). Must not precede from_stage"
     )
 
 
@@ -865,6 +958,7 @@ class NagareClipConfig(BaseModel):
     guided_edit: GuidedEditConfig = Field(default_factory=GuidedEditConfig)
     intervals: IntervalsConfig = Field(default_factory=IntervalsConfig)
     blender: BlenderConfig = Field(default_factory=BlenderConfig)
+    publish: PublishConfig = Field(default_factory=PublishConfig)
     pipeline: PipelineConfig = Field(default_factory=PipelineConfig)
 
 
