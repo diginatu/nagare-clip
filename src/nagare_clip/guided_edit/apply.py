@@ -270,6 +270,25 @@ def apply_ops(
     ordered = sorted(enumerate(ops), key=lambda t: (t[1].type == "cut", t[0]))
     for i, op in ordered:
         section = f"op {i}: {op.type} [{op.lines[0]}-{op.lines[1]}]"
+        if op.type == "timelapse":
+            # run_guided_edit desugars these before we see them (see
+            # guided_edit.timelapse); reaching here means a caller skipped that
+            # step, and _span_tags has no marker pair for the type.
+            reason = "timelapse op reached apply_ops unexpanded"
+            recorder.attempt(
+                unit=unit,
+                attempt=0,
+                total=1,
+                messages=[],
+                outcome=VERIFY_FAIL,
+                reason=reason,
+                cfg=None,
+                deterministic=True,
+                section=section,
+            )
+            logger.warning("guided_edit: op %s dropped: %s", op.type, reason)
+            unapplied.append((op, reason))
+            continue
         if op.type != "edit":
             # Span ops are a pure line-range wrap — no LLM judgement needed.
             # Clip the range to lines it may touch (see blocked_lines) so the

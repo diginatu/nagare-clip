@@ -350,9 +350,10 @@ def test_director_defaults_present():
 
 
 def test_director_prompt_documents_speed_does_not_keep_silence():
-    """The director prompt must tell the LLM that <speed> drops internal
-    silences and that a `keep` over the same span preserves them (so the
-    director can express keep+speed)."""
+    """The director prompt must tell the LLM that a bare <speed> protects
+    nothing: its internal silences and pauses are still dropped by default,
+    unlike a "timelapse" op's derived keep. The director needs to know this
+    so it doesn't expect a fast `speed` span to play back continuous."""
     cfg = get_effective_config(None, {})
     prompt = cfg["director"]["prompt"]
     speed_line = next(ln for ln in prompt.splitlines() if ln.startswith("- speed:"))
@@ -366,60 +367,80 @@ def _speed_bullet() -> str:
     return next(ln for ln in prompt.splitlines() if ln.startswith("- speed:"))
 
 
-def test_director_prompt_makes_speed_a_two_mode_choice():
-    """speed must read as a choice between playing at 1x and a real timelapse,
-    not as a dial -- a mild sustained fast-forward is the failure this guards
-    (see docs/superpowers/specs/2026-08-01-speed-two-mode-choice-design.md)."""
-    bullet = _speed_bullet().lower()
-    assert "not a dial" in bullet
-    assert "listening" in bullet
-    assert "timelapse" in bullet
-    assert "1x" in bullet
-    # The listening mode's alternative to a mild speed-up is a cut, not a
-    # slower speed. Assert the actual clause, not just the substring "cut" --
-    # "jump cuts" elsewhere in the bullet would satisfy a bare "cut" in bullet.
-    assert "cut the weakest parts" in bullet
+def _timelapse_bullet() -> str:
+    """The single DIRECTOR_PROMPT line describing the `timelapse` op."""
+    prompt = get_effective_config(None, {})["director"]["prompt"]
+    return next(ln for ln in prompt.splitlines() if ln.startswith("- timelapse:"))
 
 
-def test_director_prompt_timelapse_states_its_price_and_its_partners():
+def test_director_prompt_keeps_the_two_mode_choice_across_both_ops():
+    """The listening/timelapse choice now spans two ops -- speed for a mild
+    accent, timelapse for the real thing. It must still read as a choice, not
+    a dial (see docs/superpowers/specs/2026-08-01-speed-two-mode-choice-design.md)."""
+    both = (_speed_bullet() + "\n" + _timelapse_bullet()).lower()
+    assert "not a dial" in both
+    assert "listening" in both
+    assert "timelapse" in both
+    assert "1x" in both
+    assert "cut the weakest parts" in both
+
+
+def test_director_prompt_timelapse_states_its_price():
     """A timelapse loses intelligible audio; saying so is what forces an honest
-    choice instead of a mild speed-up that splits the difference.  It also has
-    to be paired with keep (so it is continuous) and usually overlay (so the
-    viewer still knows what is happening)."""
-    bullet = _speed_bullet().lower()
-    assert "4.0" in bullet  # the fast floor
+    choice instead of a mild speed-up that splits the difference."""
+    bullet = _timelapse_bullet().lower()
+    assert "4.0" in bullet
     assert "unintelligible" in bullet
-    assert "keep" in bullet
-    assert "overlay" in bullet
 
 
-def test_director_prompt_marks_mild_speed_factors_as_the_exception():
+def test_director_prompt_timelapse_is_self_contained():
+    """The whole point of the op: one op does the arrangement three ops used to.
+    The prompt must not ask for a companion keep/speed/overlay, or the director
+    will emit the ops the desugaring already creates."""
+    bullet = _timelapse_bullet().lower()
+    assert 'do not add a separate "keep", "speed" or "overlay"' in bullet
+    assert "consecutive" in bullet  # how to change the caption partway through
+
+
+def test_director_prompt_limits_a_bare_speed_op_to_a_mild_accent():
     """1.3-2.0 was the entire observed range of a real run (57% of the finished
-    video).  The prompt must name that band as the exception, not the default."""
+    video). With timelapse carrying the fast case, that band is all a bare
+    speed op is for."""
     bullet = _speed_bullet().lower()
     assert "1.3" in bullet and "2.0" in bullet
-    assert "exception" in bullet
     assert "accent" in bullet
 
 
-def test_director_prompt_speed_example_factor_is_at_least_4():
-    """The JSON-shape speed example is what an LLM copies over the prose --
-    a factor inside the 1.3-2.0 band the bullet above calls "the exception,
-    not the default" would teach exactly the mild sustained fast-forward
-    the two-mode rule exists to prevent. Parse the example through the real
-    parser so a stale example fails loudly (mirrors
-    test_director_prompt_overlay_example_carries_a_duration)."""
-    from nagare_clip.director.director_llm import parse_director_response
+def test_director_prompt_speed_example_is_a_mild_accent():
+    """The JSON-shape speed example is what an LLM copies over the prose. Fast
+    now belongs to timelapse, so a 4.0+ speed example would teach exactly the
+    keepless fast speed-up that plays back as jump cuts."""
+    from nagare_clip.director.director_llm import TIMELAPSE_MIN_FACTOR, parse_director_response
 
-    cfg = get_effective_config(None, {})
-    prompt = cfg["director"]["prompt"]
+    prompt = get_effective_config(None, {})["director"]["prompt"]
     example = next(
         line.strip().rstrip(",") for line in prompt.splitlines() if '"type": "speed"' in line
     )
-    ops = parse_director_response('{"ops": [' + example + "]}", num_lines=40)
+    ops = parse_director_response('{"ops": [' + example + "]}", num_lines=100)
     assert len(ops) == 1
     assert ops[0].type == "speed"
-    assert ops[0].factor is not None and ops[0].factor >= 4.0
+    assert ops[0].factor is not None and ops[0].factor < TIMELAPSE_MIN_FACTOR
+
+
+def test_director_prompt_timelapse_example_parses_and_is_fast():
+    """Pin the documented example to the real parser: a stale one (missing text,
+    or a factor under the floor) would be silently dropped at runtime."""
+    from nagare_clip.director.director_llm import TIMELAPSE_MIN_FACTOR, parse_director_response
+
+    prompt = get_effective_config(None, {})["director"]["prompt"]
+    example = next(
+        line.strip().rstrip(",") for line in prompt.splitlines() if '"type": "timelapse"' in line
+    )
+    ops = parse_director_response('{"ops": [' + example + "]}", num_lines=100)
+    assert len(ops) == 1
+    assert ops[0].type == "timelapse"
+    assert ops[0].factor is not None and ops[0].factor >= TIMELAPSE_MIN_FACTOR
+    assert ops[0].text
 
 
 def test_director_prompt_timing_line_does_not_offer_speed_for_long_duration():
@@ -647,7 +668,7 @@ def test_director_prompt_does_not_offer_speed_as_a_way_to_tighten_speech():
     # The paragraph is one prompt line ending in ":" above the bullet list --
     # select it alone, so the `- speed:` bullet's own wording cannot satisfy
     # these assertions for it.
-    para = next(ln for ln in prompt.splitlines() if "Prefer speed over cut" in ln).lower()
+    para = next(ln for ln in prompt.splitlines() if "Prefer a timelapse over a cut" in ln).lower()
     assert "speech" in para
     assert "speed is not the tool" in para
     assert "1x" in para
