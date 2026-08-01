@@ -241,8 +241,8 @@ DIRECTOR_PROMPT = (
     "Rules:\n"
     '- "lines" must be within the transcript range.\n'
     '- A "cut" range must not overlap any other op\'s range: cutting deletes '
-    "the span, so never include a line you also keep/speed/overlay in a cut "
-    "(e.g. to cut lines 12-18 but keep line 18, emit cut [12, 17]). "
+    "the span, so never include a line you also keep/speed/overlay/timelapse in "
+    "a cut (e.g. to cut lines 12-18 but keep line 18, emit cut [12, 17]). "
     "Overlapping ops are clipped and the cut loses the shared lines.\n"
     '- Use "note" to describe in natural language precisely WHERE in the '
     "line(s) the edit starts and ends, so a downstream editor can place "
