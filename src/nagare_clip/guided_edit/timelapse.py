@@ -32,6 +32,20 @@ def caption_duration(op: DirectorOp, seg_times: SegTimes) -> float | None:
     timelapse's real length on the edited timeline, not an estimate.  It is
     deliberately unclamped: every overlay shares one Blender channel, so a
     caption padded past its own span would collide with the next timelapse's.
+
+    This assumes the *segment* times used here (``seg_times``) agree with the
+    *word* times the derived ``<keep>``/``<speed>`` actually resolve to
+    downstream (``intervals/sync_json.py::_resolve_keep_range`` uses
+    ``first_word["start"]``/``last_word["end"]``).
+    ``sentence_split.segment.segment_from_words`` sets segment bounds to the
+    min/max over words that carry timings, so the two agree in the normal
+    case — but can diverge when word times are non-monotonic or a boundary
+    word is unaligned. If the segment end lands after the word end, the
+    caption outlives its own sped span; that is the one condition the
+    no-clamp decision above assumes cannot happen. The magnitude is bounded —
+    at most ``(seg_end - word_end) / factor``, i.e. at most 0.25s per second
+    of divergence at the ``TIMELAPSE_MIN_FACTOR`` floor — so this is a
+    tolerated, rare edge case rather than one worth guarding against.
     """
     a, b = op.lines
     factor = op.factor
