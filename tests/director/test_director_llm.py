@@ -299,6 +299,7 @@ class TestKeepWidthLimit:
         note = keep_limit_note(8)
         assert "may exceed this limit" not in note
         assert "fully inside a" not in note
+        assert '"timelapse" op needs no keep of its own' in note
 
 
 class TestKeepCapHasNoExemption:
@@ -339,6 +340,27 @@ class TestKeepCapHasNoExemption:
         resp = json.dumps({"ops": [{"type": "keep", "lines": [10, 21], "note": "n"}]})
         ops = parse_director_response(resp, num_lines=40, max_keep_lines=0)
         assert [o.lines for o in ops] == [(10, 21)]
+
+    def test_wide_timelapse_op_is_not_subject_to_the_cap(self):
+        """Load-bearing claim of the whole design: a `timelapse` op's derived
+        `keep` is created in guided_edit, AFTER the director stage has already
+        parsed and capped its ops, so `_apply_keep_cap` can never see it.
+        `_apply_keep_cap` must therefore never measure a `timelapse` op's span
+        against `max_keep_lines` — only a literal `keep` op is capped."""
+        resp = json.dumps(
+            {
+                "ops": [
+                    {
+                        "type": "timelapse",
+                        "lines": [10, 21],
+                        "factor": TIMELAPSE_MIN_FACTOR,
+                        "note": "n",
+                    },
+                ]
+            }
+        )
+        ops = parse_director_response(resp, num_lines=40, max_keep_lines=8)
+        assert [o.lines for o in ops if o.type == "timelapse"] == [(10, 21)]
 
 
 class TestTryParse:
