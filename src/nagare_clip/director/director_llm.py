@@ -42,7 +42,7 @@ logger = logging.getLogger(__name__)
 
 CallLLM = Callable[[list[dict[str, str]], dict[str, Any]], str]
 
-VALID_TYPES = {"cut", "speed", "overlay", "keep", "edit"}
+VALID_TYPES = {"cut", "speed", "overlay", "keep", "edit", "timelapse"}
 
 # The factor DIRECTOR_PROMPT calls a real timelapse.  A keep that exists to
 # make such a span continuous is exempt from max_keep_lines; a keep beside a
@@ -136,18 +136,36 @@ def _parse_op(
     note = str(raw.get("note", "") or "")
 
     factor: float | None = None
-    if op_type == "speed":
+    if op_type in ("speed", "timelapse"):
         raw_factor = raw.get("factor")
         if not isinstance(raw_factor, (int, float)) or isinstance(raw_factor, bool):
-            _drop("speed op missing factor")
+            _drop(f"{op_type} op missing factor")
             return None
         factor = float(raw_factor)
         if factor <= 0:
-            _drop(f"speed factor {factor!r} <= 0")
+            _drop(f"{op_type} factor {factor!r} <= 0")
+            return None
+        # The floor is part of what "timelapse" means, not a policy cap: the op
+        # carries an uncapped keep, and below this a mild speed-up would smuggle
+        # one over talking. A slow span is a plain `speed` op instead.
+        if op_type == "timelapse" and factor < TIMELAPSE_MIN_FACTOR:
+            _drop(
+                f"timelapse factor {factor!r} < {TIMELAPSE_MIN_FACTOR}; "
+                "below that it is a mild speed-up, not a timelapse"
+            )
             return None
 
     text: str | None = None
     duration: float | None = None
+    if op_type == "timelapse":
+        # The caption is optional — a timelapse with no text is still a valid
+        # continuity fix.  Its on-screen duration is derived downstream, never
+        # stated, so any supplied `duration` is ignored.
+        raw_text = raw.get("text")
+        if isinstance(raw_text, str):
+            normalised = raw_text.replace("\r\n", "\n").replace("\r", "\n")
+            text = normalised if normalised.strip() else None
+
     if op_type == "overlay":
         raw_text = raw.get("text")
         if not isinstance(raw_text, str) or raw_text == "":

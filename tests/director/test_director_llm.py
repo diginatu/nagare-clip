@@ -610,3 +610,103 @@ class TestTimedTranscriptSilences:
         # silence bigger than the span (rounding artifacts) must not render negative speech
         out = format_numbered_transcript_timed(["x"], [(0.0, 5.0)], silences=[5.5])
         assert "-" not in out.split("  ")[1]
+
+
+def parse_director_response_with_drops(response, num_lines, drops):
+    from nagare_clip.director.director_llm import try_parse_director_response
+
+    return try_parse_director_response(response, num_lines=num_lines, drops=drops) or []
+
+
+class TestTimelapseOp:
+    """A timelapse is one op carrying the range, the factor and the caption.
+    The factor floor is part of what the word means, so it holds on both the
+    LLM path and the hand-edited _director.json path (spec 2026-08-01)."""
+
+    def _resp(self, **fields):
+        op = {"type": "timelapse", "lines": [10, 20]}
+        op.update(fields)
+        return json.dumps({"ops": [op]})
+
+    def test_timelapse_at_the_floor_is_accepted(self):
+        ops = parse_director_response(
+            self._resp(factor=TIMELAPSE_MIN_FACTOR, text="配管の取り付け"), num_lines=40
+        )
+        assert len(ops) == 1
+        assert ops[0].type == "timelapse"
+        assert ops[0].lines == (10, 20)
+        assert ops[0].factor == TIMELAPSE_MIN_FACTOR
+        assert ops[0].text == "配管の取り付け"
+        assert ops[0].duration is None
+
+    def test_timelapse_above_the_floor_is_accepted(self):
+        ops = parse_director_response(self._resp(factor=8.0, text="作業"), num_lines=40)
+        assert [o.factor for o in ops] == [8.0]
+
+    def test_timelapse_below_the_floor_is_dropped(self):
+        # 2.0x is a mild speed-up, not a timelapse; accepting it would smuggle
+        # an uncapped keep over talking past max_keep_lines.
+        drops: list[str] = []
+        ops = parse_director_response_with_drops(
+            self._resp(factor=2.0, text="作業"), num_lines=40, drops=drops
+        )
+        assert ops == []
+        assert "timelapse" in drops[0] and str(TIMELAPSE_MIN_FACTOR) in drops[0]
+
+    def test_timelapse_without_factor_is_dropped(self):
+        assert parse_director_response(self._resp(text="作業"), num_lines=40) == []
+
+    def test_timelapse_text_is_optional(self):
+        # No caption is legitimate: the op still fixes continuity.
+        ops = parse_director_response(self._resp(factor=6.0), num_lines=40)
+        assert len(ops) == 1
+        assert ops[0].text is None
+
+    def test_timelapse_blank_text_counts_as_absent(self):
+        ops = parse_director_response(self._resp(factor=6.0, text="   "), num_lines=40)
+        assert [o.text for o in ops] == [None]
+
+    def test_timelapse_text_newlines_are_normalised(self):
+        ops = parse_director_response(self._resp(factor=6.0, text="一行目\r\n二行目"), num_lines=40)
+        assert ops[0].text == "一行目\n二行目"
+
+    def test_timelapse_ignores_a_supplied_duration(self):
+        # The caption's on-screen time is derived, never stated.
+        ops = parse_director_response(
+            self._resp(factor=6.0, text="作業", duration=2.0), num_lines=40
+        )
+        assert ops[0].duration is None
+
+    def test_hand_written_timelapse_gets_the_same_floor(self):
+        good = {"ops": [{"type": "timelapse", "lines": [10, 20], "factor": 5.0}]}
+        bad = {"ops": [{"type": "timelapse", "lines": [10, 20], "factor": 2.0}]}
+        assert len(ops_from_dict(good, num_lines=40)) == 1
+        assert ops_from_dict(bad, num_lines=40) == []
+
+    def test_timelapse_round_trips_through_ops_to_dict(self):
+        ops = parse_director_response(
+            self._resp(factor=8.0, text="配管の取り付け", note="長い作業"), num_lines=40
+        )
+        data = ops_to_dict(ops)
+        assert data["ops"] == [
+            {
+                "type": "timelapse",
+                "lines": [10, 20],
+                "factor": 8.0,
+                "text": "配管の取り付け",
+                "note": "長い作業",
+            }
+        ]
+        assert [o.lines for o in ops_from_dict(data, num_lines=40)] == [(10, 20)]
+
+    def test_a_bare_speed_op_is_untouched_by_the_floor(self):
+        # speed stays a primitive: any positive factor, above or below 4.0.
+        resp = json.dumps(
+            {
+                "ops": [
+                    {"type": "speed", "lines": [1, 2], "factor": 1.5},
+                    {"type": "speed", "lines": [3, 4], "factor": 8.0},
+                ]
+            }
+        )
+        assert [o.factor for o in parse_director_response(resp, num_lines=40)] == [1.5, 8.0]
