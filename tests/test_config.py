@@ -360,6 +360,83 @@ def test_director_prompt_documents_speed_does_not_keep_silence():
     assert "silence" in speed_line.lower() or "pause" in speed_line.lower()
 
 
+def _speed_bullet() -> str:
+    """The single DIRECTOR_PROMPT line describing the `speed` op."""
+    prompt = get_effective_config(None, {})["director"]["prompt"]
+    return next(ln for ln in prompt.splitlines() if ln.startswith("- speed:"))
+
+
+def test_director_prompt_makes_speed_a_two_mode_choice():
+    """speed must read as a choice between playing at 1x and a real timelapse,
+    not as a dial -- a mild sustained fast-forward is the failure this guards
+    (see docs/superpowers/specs/2026-08-01-speed-two-mode-choice-design.md)."""
+    bullet = _speed_bullet().lower()
+    assert "not a dial" in bullet
+    assert "listening" in bullet
+    assert "timelapse" in bullet
+    assert "1x" in bullet
+    # The listening mode's alternative to a mild speed-up is a cut, not a
+    # slower speed. Assert the actual clause, not just the substring "cut" --
+    # "jump cuts" elsewhere in the bullet would satisfy a bare "cut" in bullet.
+    assert "cut the weakest parts" in bullet
+
+
+def test_director_prompt_timelapse_states_its_price_and_its_partners():
+    """A timelapse loses intelligible audio; saying so is what forces an honest
+    choice instead of a mild speed-up that splits the difference.  It also has
+    to be paired with keep (so it is continuous) and usually overlay (so the
+    viewer still knows what is happening)."""
+    bullet = _speed_bullet().lower()
+    assert "4.0" in bullet  # the fast floor
+    assert "unintelligible" in bullet
+    assert "keep" in bullet
+    assert "overlay" in bullet
+
+
+def test_director_prompt_marks_mild_speed_factors_as_the_exception():
+    """1.3-2.0 was the entire observed range of a real run (57% of the finished
+    video).  The prompt must name that band as the exception, not the default."""
+    bullet = _speed_bullet().lower()
+    assert "1.3" in bullet and "2.0" in bullet
+    assert "exception" in bullet
+    assert "accent" in bullet
+
+
+def test_director_prompt_speed_example_factor_is_at_least_4():
+    """The JSON-shape speed example is what an LLM copies over the prose --
+    a factor inside the 1.3-2.0 band the bullet above calls "the exception,
+    not the default" would teach exactly the mild sustained fast-forward
+    the two-mode rule exists to prevent. Parse the example through the real
+    parser so a stale example fails loudly (mirrors
+    test_director_prompt_overlay_example_carries_a_duration)."""
+    from nagare_clip.director.director_llm import parse_director_response
+
+    cfg = get_effective_config(None, {})
+    prompt = cfg["director"]["prompt"]
+    example = next(
+        line.strip().rstrip(",") for line in prompt.splitlines() if '"type": "speed"' in line
+    )
+    ops = parse_director_response('{"ops": [' + example + "]}", num_lines=40)
+    assert len(ops) == 1
+    assert ops[0].type == "speed"
+    assert ops[0].factor is not None and ops[0].factor >= 4.0
+
+
+def test_director_prompt_timing_line_does_not_offer_speed_for_long_duration():
+    """The Timing paragraph must not offer speeding up as the remedy for a
+    long line duration -- that contradicts the two-mode speed rule elsewhere
+    in the prompt (speed is a LISTENING/TIMELAPSE choice, not a dial). A long
+    speech duration should route to cutting instead; a long stretch of manual
+    work remains a timelapse candidate."""
+    cfg = get_effective_config(None, {})
+    prompt = cfg["director"]["prompt"]
+    line = next(ln for ln in prompt.splitlines() if "Use these numbers to judge pacing" in ln)
+    lowered = line.lower()
+    assert "candidates for cutting or speeding up" not in lowered
+    assert "cutting" in lowered
+    assert "timelapse" in lowered
+
+
 @pytest.mark.parametrize("stage", ["director", "plan"])
 def test_prompt_documents_duration_and_gap_bracket(stage):
     """The director/plan inputs carry a `[4.2s, gap 0.8s]` bracket per line/part
@@ -548,15 +625,33 @@ def test_director_prompt_treats_long_gap_as_keep_candidate_when_speech_announces
     assert "watchable moment" in prompt
 
 
-def test_director_prompt_prefers_speed_for_buildup_reserves_cut_for_digressions():
-    """Repetition that builds toward a payoff should be sped up, not cut --
-    the prompt must say so explicitly, reserving cut for spans that leave the
-    throughline entirely."""
+def test_director_prompt_prefers_speed_for_visible_work_reserves_cut_for_digressions():
+    """Repetition that is VISIBLE WORK should be timelapsed rather than deleted --
+    the tighten-rather-than-delete instinct from the 2026-07-28 rewrite -- while
+    cut stays reserved for spans that leave the throughline entirely."""
     cfg = get_effective_config(None, {})
     prompt = cfg["director"]["prompt"].lower()
     assert "payoff" in prompt
     assert "throughline" in prompt
     assert "buildup" in prompt
+    assert "visible work" in prompt
+
+
+def test_director_prompt_does_not_offer_speed_as_a_way_to_tighten_speech():
+    """The prefer-speed-over-cut paragraph must route repeated SPEECH to 1x or a
+    cut.  Left ungated it reads as a licence to shave talking with a mild
+    speed-up, which is how a real run put 57% of the finished video under speed
+    with 85% of that footage carrying captions."""
+    cfg = get_effective_config(None, {})
+    prompt = cfg["director"]["prompt"]
+    # The paragraph is one prompt line ending in ":" above the bullet list --
+    # select it alone, so the `- speed:` bullet's own wording cannot satisfy
+    # these assertions for it.
+    para = next(ln for ln in prompt.splitlines() if "Prefer speed over cut" in ln).lower()
+    assert "speech" in para
+    assert "speed is not the tool" in para
+    assert "1x" in para
+    assert "cut the weakest passes" in para
 
 
 def test_director_prompt_documents_overlay_density_target():

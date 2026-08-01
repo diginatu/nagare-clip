@@ -44,6 +44,11 @@ CallLLM = Callable[[list[dict[str, str]], dict[str, Any]], str]
 
 VALID_TYPES = {"cut", "speed", "overlay", "keep", "edit"}
 
+# The factor DIRECTOR_PROMPT calls a real timelapse.  A keep that exists to
+# make such a span continuous is exempt from max_keep_lines; a keep beside a
+# mild speed-up is not.
+TIMELAPSE_MIN_FACTOR = 4.0
+
 _FENCE_RE = re.compile(r"^\s*```(?:json)?\s*(.*?)\s*```\s*$", re.DOTALL)
 
 
@@ -77,7 +82,10 @@ def keep_limit_note(max_keep_lines: int) -> str:
         "rejected and has no effect. A continuous on-screen event fits well "
         "inside that, because nobody is talking through it. Do not stretch a "
         "keep across a talking span to signal that it matters — say so in a "
-        '"note" on another op instead.'
+        '"note" on another op instead. Exception: a "keep" fully inside a '
+        f'timelapse "speed" op (factor {TIMELAPSE_MIN_FACTOR} or more) may '
+        "exceed this limit, since it exists only to keep that timelapse "
+        "continuous — a keep beside a milder speed-up is still capped."
     )
 
 
@@ -104,7 +112,6 @@ def _parse_op(
     raw: Any,
     num_lines: int,
     drops: list[str] | None = None,
-    max_keep_lines: int = 0,
 ) -> DirectorOp | None:
     def _drop(msg: str) -> None:
         logger.warning("Director op dropped: %s", msg)
@@ -122,20 +129,9 @@ def _parse_op(
         _drop(f"bad lines {raw.get('lines')!r}")
         return None
 
-    # A "keep" op restores every silent second inside its range.  Spanning a
-    # continuous on-screen event is legitimate (chopping it up reads as jump
-    # cuts through the payoff) and stays narrow anyway, because nobody is
-    # talking through such an event.  A range wide enough to cover talking is
-    # instead marking speech as important — which restores only its pauses and
-    # can double the finished runtime, so reject it.
-    if op_type == "keep" and max_keep_lines > 0:
-        span = lines[1] - lines[0] + 1
-        if span > max_keep_lines:
-            _drop(
-                f"keep op spans {span} lines {list(lines)} > max_keep_lines={max_keep_lines}; "
-                "a keep may span a continuous on-screen event, not a talking span"
-            )
-            return None
+    # The max_keep_lines cap itself is enforced as a post-pass over the whole
+    # op list (see _apply_keep_cap), not here: a single op can't tell whether
+    # a covering timelapse speed op exists elsewhere in the same response.
 
     note = str(raw.get("note", "") or "")
 
@@ -180,6 +176,54 @@ def _parse_op(
     )
 
 
+def _timelapse_covers(keep: DirectorOp, ops: list[DirectorOp]) -> bool:
+    """True when some ``speed`` op in *ops* is a qualifying timelapse (factor
+    at least :data:`TIMELAPSE_MIN_FACTOR`) whose line range fully contains
+    *keep*'s.  Containment, not overlap: a keep line outside the speed range
+    is unprotected talking, exactly what the cap exists to catch.
+    """
+    return any(
+        op.type == "speed"
+        and op.factor is not None
+        and op.factor >= TIMELAPSE_MIN_FACTOR
+        and op.lines[0] <= keep.lines[0]
+        and keep.lines[1] <= op.lines[1]
+        for op in ops
+    )
+
+
+def _apply_keep_cap(
+    ops: list[DirectorOp],
+    max_keep_lines: int,
+    drops: list[str] | None,
+) -> list[DirectorOp]:
+    """Post-pass: drop a ``keep`` op wider than ``max_keep_lines``, unless it
+    is fully contained in a qualifying timelapse ``speed`` op elsewhere in
+    *ops* (see :data:`TIMELAPSE_MIN_FACTOR`).  A single op can't make this
+    call on its own — hence a pass over the whole parsed list rather than a
+    check inside :func:`_parse_op`.  The drop message/logging matches the
+    pre-existing per-op cap exactly, since tests assert on it.
+    """
+    if max_keep_lines <= 0:
+        return ops
+    kept: list[DirectorOp] = []
+    for op in ops:
+        if op.type == "keep":
+            span = op.lines[1] - op.lines[0] + 1
+            if span > max_keep_lines and not _timelapse_covers(op, ops):
+                msg = (
+                    f"keep op spans {span} lines {list(op.lines)} > "
+                    f"max_keep_lines={max_keep_lines}; a keep may span a "
+                    "continuous on-screen event, not a talking span"
+                )
+                logger.warning("Director op dropped: %s", msg)
+                if drops is not None:
+                    drops.append(msg)
+                continue
+        kept.append(op)
+    return kept
+
+
 def try_parse_director_response(
     response: str,
     num_lines: int,
@@ -197,7 +241,9 @@ def try_parse_director_response(
     ``max_keep_lines`` (config ``director.max_keep_lines``, ``0`` = no limit)
     drops a ``keep`` op wider than that many lines: dropping it degrades to the
     default behaviour (speech kept, internal silence cut) instead of restoring
-    a span's worth of dead air.
+    a span's worth of dead air. Applied as a post-pass (:func:`_apply_keep_cap`)
+    after every op is parsed, so a wide keep fully inside a qualifying
+    timelapse ``speed`` op (see :data:`TIMELAPSE_MIN_FACTOR`) is exempt.
     """
     text = response.strip()
     fence = _FENCE_RE.match(text)
@@ -214,10 +260,10 @@ def try_parse_director_response(
 
     ops: list[DirectorOp] = []
     for raw in data["ops"]:
-        op = _parse_op(raw, num_lines, drops, max_keep_lines)
+        op = _parse_op(raw, num_lines, drops)
         if op is not None:
             ops.append(op)
-    return ops
+    return _apply_keep_cap(ops, max_keep_lines, drops)
 
 
 def parse_director_response(
