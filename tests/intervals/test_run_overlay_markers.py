@@ -62,6 +62,7 @@ def _run(monkeypatch, tmp_path, edits_text: str):
 
     monkeypatch.setattr(stage_run.spacy, "load", lambda *a, **k: object())
     monkeypatch.setattr(stage_run, "build_bunsetu_times", lambda *a, **k: [])
+    monkeypatch.setattr(stage_run, "bunsetu_join_text", lambda text, nlp, sep: text)
     cfg = get_effective_config(cfg_path, {})
     run_intervals(edits_path, json_path, out_path, cfg)
     return json.loads(out_path.read_text(encoding="utf-8"))
@@ -137,6 +138,7 @@ def _run_cut_opening(monkeypatch, tmp_path, margins: dict | None = None):
 
     monkeypatch.setattr(stage_run.spacy, "load", lambda *a, **k: object())
     monkeypatch.setattr(stage_run, "build_bunsetu_times", lambda *a, **k: [])
+    monkeypatch.setattr(stage_run, "bunsetu_join_text", lambda text, nlp, sep: text)
     cfg = get_effective_config(cfg_path, {})
     run_intervals(edits_path, json_path, out_path, cfg, cuts_txt=cuts_path)
     return json.loads(out_path.read_text(encoding="utf-8"))

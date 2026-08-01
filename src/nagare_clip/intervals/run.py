@@ -9,7 +9,7 @@ from pathlib import Path
 import spacy
 
 from nagare_clip.audio_silence.cuts_file import read_cuts
-from nagare_clip.intervals.bunsetu import build_bunsetu_times
+from nagare_clip.intervals.bunsetu import build_bunsetu_times, bunsetu_join_text
 from nagare_clip.intervals.captions import apply_caption_margins, collect_captions
 from nagare_clip.intervals.intervals import (
     apply_margins,
@@ -221,6 +221,15 @@ def run_intervals(
                     text[:40],
                 )
         overlay_marks = moved
+
+    if overlay_marks:
+        # Blender's TEXT strip wraps only at whitespace; free-form overlay
+        # text otherwise has none. Reuses the caption separator/nlp already
+        # loaded above rather than adding a second config knob.
+        overlay_marks = [
+            (start, duration, bunsetu_join_text(text, nlp, cap["bunsetu_separator"]))
+            for start, duration, text in overlay_marks
+        ]
 
     output_data = {
         "source_file": infer_source_file(whisperx_data, json_path),
