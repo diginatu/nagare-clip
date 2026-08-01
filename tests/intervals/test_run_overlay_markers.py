@@ -2,6 +2,7 @@
 written to the output JSON's `overlays` key without affecting `keep_intervals`."""
 
 import json
+from unittest.mock import patch
 
 import yaml
 
@@ -9,6 +10,8 @@ import nagare_clip.intervals.run as stage_run
 from nagare_clip.audio_silence.cuts_file import write_cuts
 from nagare_clip.config import get_effective_config
 from nagare_clip.intervals.run import run_intervals
+from tests.intervals.conftest import make_nlp
+from tests.intervals.test_bunsetu import bunsetu_spans_from_doc
 
 
 def _whisperx_with_silence():
@@ -89,6 +92,30 @@ def test_overlay_does_not_affect_keep_intervals(monkeypatch, tmp_path):
         assert not (iv["start"] <= 1.5 and iv["end"] >= 4.5), (
             f"Overlay accidentally force-kept gap: {iv}"
         )
+
+
+def test_overlay_text_is_bunsetu_joined_by_the_real_function(monkeypatch, tmp_path):
+    """Regression for the run.py wiring: exercises the REAL bunsetu_join_text
+    (not the identity stub used by ``_run``/``_run_cut_opening``) against a
+    mocked nlp, so a genuine spaced-text assertion lands in the output JSON.
+    Deleting the wiring block in run.py, or passing the wrong separator/nlp,
+    would fail this test even though every other test in this file is stubbed
+    past the call."""
+    json_path = tmp_path / "in.json"
+    json_path.write_text(json.dumps(_whisperx_with_silence()), encoding="utf-8")
+    edits_path = tmp_path / "in_edits.txt"
+    edits_path.write_text('あ<overlay text="あい" duration="3.0"/>いうえ', encoding="utf-8")
+    out_path = tmp_path / "out.json"
+    cfg_path = _config(tmp_path)
+
+    monkeypatch.setattr(stage_run.spacy, "load", lambda *a, **k: make_nlp([["あ", "い"]]))
+    monkeypatch.setattr(stage_run, "build_bunsetu_times", lambda *a, **k: [])
+    cfg = get_effective_config(cfg_path, {})
+    with patch("ginza.bunsetu_spans", side_effect=bunsetu_spans_from_doc):
+        run_intervals(edits_path, json_path, out_path, cfg)
+    out = json.loads(out_path.read_text(encoding="utf-8"))
+
+    assert out["overlays"] == [{"start": 0.8, "duration": 3.0, "text": "あ い"}]
 
 
 def _whisperx_with_cut_opening():

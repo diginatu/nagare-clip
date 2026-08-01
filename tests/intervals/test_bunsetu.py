@@ -274,3 +274,13 @@ def test_bunsetu_join_text_single_bunsetsu_no_separator_inserted():
         result = bunsetu_join_text("水浸し", nlp)
 
     assert result == "水浸し"
+
+
+def test_bunsetu_join_text_no_spans_passthrough():
+    """When GiNZA returns no bunsetsu spans for a non-empty line, the line
+    passes through unchanged rather than joining an empty span list into ""."""
+    nlp = make_nlp([[]])
+    with patch("ginza.bunsetu_spans", return_value=[]):
+        result = bunsetu_join_text("水浸し", nlp)
+
+    assert result == "水浸し"

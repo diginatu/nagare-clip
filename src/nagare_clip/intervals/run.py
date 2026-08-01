@@ -222,7 +222,6 @@ def run_intervals(
                 )
         overlay_marks = moved
 
-    if overlay_marks:
         # Blender's TEXT strip wraps only at whitespace; free-form overlay
         # text otherwise has none. Reuses the caption separator/nlp already
         # loaded above rather than adding a second config knob.
