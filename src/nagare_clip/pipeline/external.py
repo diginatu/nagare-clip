@@ -182,3 +182,13 @@ def run_command(
             subprocess.run(cmd, check=True, env=env, stdout=subprocess.DEVNULL, stderr=f)
     else:
         subprocess.run(cmd, check=True, env=env)
+
+
+def run_magick(cmd: list[str]) -> str:
+    """Run an ImageMagick command and return its stdout.
+
+    ImageMagick is a host binary here, like `blender` -- the whisperx image has
+    neither ImageMagick nor CJK fonts, and font slots resolve through host
+    fontconfig.  Never `shell=True`: the copy is LLM-written.
+    """
+    return subprocess.run(cmd, check=True, capture_output=True, text=True).stdout

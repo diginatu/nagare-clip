@@ -196,3 +196,31 @@ def test_missing_director_json_leaves_the_shortlist_empty(ctx, monkeypatch):
     next(s for s in st.STAGES if s.name == "publish").run(ctx)
     assert seen["thumbs"] == []
     assert calls == []
+
+
+def test_the_publish_stage_passes_a_renderer(ctx, monkeypatch):
+    seen = {}
+
+    def fake_run_publish(*args, **kwargs):
+        seen["render"] = kwargs.get("render")
+
+    monkeypatch.setattr(st, "run_publish", fake_run_publish)
+    monkeypatch.setattr(st, "recorder_from_config", lambda *a, **k: _NullRec())
+    _enable(ctx)
+    st._publish_run(ctx)
+    assert callable(seen["render"])
+
+
+def test_the_renderer_uses_run_magick(ctx, monkeypatch):
+    calls = {}
+
+    def fake_render_sets(sets, thumbs, cfg, stage_dir, run):
+        calls["run"] = run
+        calls["cfg"] = cfg
+        return []
+
+    monkeypatch.setattr(st, "render_sets", fake_render_sets)
+    _enable(ctx)
+    st._render_thumbnails(ctx, [], [])
+    assert calls["run"] is st.run_magick
+    assert calls["cfg"] == ctx.cfg["publish"]["thumbnail"]

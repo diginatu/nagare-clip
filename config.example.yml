@@ -253,12 +253,13 @@ blender:
 
 # publish stage: runs once project-wide AFTER blender. An LLM turns the summaries
 # and the project brief into several title candidates, a description lead, chapter
-# titles and alternative thumbnail-copy sets; the chapter TIMESTAMPS are computed
-# from the finished timeline (keep intervals + speed ranges), which exists nowhere
-# else. Stills are extracted at the moments the director marked as payoffs, so a
-# human picks a thumbnail frame from a shortlist. Output publish.md (reviewable)
-# and publish.json (for a project-level compositing script). Uploading, and
-# compositing the final thumbnail, stay manual. Disabled by default (no-op).
+# titles and alternative thumbnail-copy sets (copy AND look, in ImageMagick's own
+# vocabulary); the chapter TIMESTAMPS are computed from the finished timeline (keep
+# intervals + speed ranges), which exists nowhere else. Stills are extracted at the
+# moments the director marked as payoffs, one thumbnail is rendered per copy set
+# with ImageMagick (see publish.thumbnail below), and publish.md embeds the results
+# alongside publish.json (the hand-editable contract for the look). Uploading, and
+# picking which rendered set to ship, stay manual. Disabled by default (no-op).
 publish:
   enabled: false   # Enable the publish LLM
   provider: ollama_chat   # LiteLLM provider prefix: ollama_chat | openai | gemini | anthropic
@@ -275,6 +276,18 @@ publish:
   min_chapter_duration: 10.0   # YouTube ignores a chapter list unless every chapter is at least this long; a shorter one is merged into a neighbour
   max_frames: 24   # Cap on thumbnail candidate stills (0 = no limit); overlays outrank keeps
   frame_width: 1280   # Downscale width (px) of the extracted JPEG stills; height is auto
+  # Thumbnail rendering: one image per LLM copy set, composited with ImageMagick
+  # (`magick` must be on PATH). The LLM writes the colours, point sizes and
+  # placement for its own copy, in ImageMagick's vocabulary; only `fonts` is set
+  # here, because the model cannot know what is installed. Renders land in
+  # output/publish/thumbnails/ and are embedded in publish.md.
+  thumbnail:
+    enabled: true   # Render a thumbnail per copy set
+    background: ""   # Still to composite onto: path relative to output/publish/ (or absolute); empty = the first candidate in the frame shortlist
+    width: 1280   # Canvas width in px
+    height: 720   # Canvas height in px
+    line_gap: 12   # Vertical gap between stacked lines in px
+    # fonts: {sans-bold: "Noto-Sans-CJK-JP-Bold", serif-black: "Noto-Serif-CJK-JP-Black"}   # Font slots the LLM may choose from: slot name -> ImageMagick font name or path
   # prompt: "..."   # System prompt (has a sensible default)
 
 pipeline:

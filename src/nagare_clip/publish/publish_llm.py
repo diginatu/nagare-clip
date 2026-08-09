@@ -20,7 +20,7 @@ from __future__ import annotations
 
 import json
 import logging
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -37,6 +37,7 @@ from nagare_clip.llm_report import (
 )
 from nagare_clip.llm_retry import cfg_for_attempt, retry_attempts
 from nagare_clip.plan.plan_llm import PartDirection
+from nagare_clip.publish.thumbnail import LINE_KEYS, SET_KEYS
 from nagare_clip.summary.summarize import ProjectSummary
 
 logger = logging.getLogger(__name__)
@@ -53,6 +54,15 @@ MAX_THUMB_LINES = 3
 class ThumbLine:
     role: str  # one of VALID_ROLES
     text: str
+    style: dict[str, Any] = field(default_factory=dict)  # raw; validated at render time
+
+
+@dataclass(frozen=True)
+class ThumbSet:
+    """One alternative: its copy, and the look the model chose for that copy."""
+
+    lines: list[ThumbLine] = field(default_factory=list)
+    style: dict[str, Any] = field(default_factory=dict)  # gravity / offset / shadow
 
 
 @dataclass
@@ -60,7 +70,7 @@ class PublishCopy:
     titles: list[str] = field(default_factory=list)
     lead: str = ""
     chapter_titles: dict[int, str] = field(default_factory=dict)  # 1-based part index -> title
-    thumbnail_copy: list[list[ThumbLine]] = field(default_factory=list)
+    thumbnail_copy: list[ThumbSet] = field(default_factory=list)
 
 
 def collect_overlay_texts(ops: Sequence[DirectorOp]) -> list[str]:
@@ -145,7 +155,12 @@ def _parse_chapter_titles(
     return out
 
 
-def _parse_thumb_set(raw: Any, drop: Callable[[str], None]) -> list[ThumbLine]:
+def _pick(raw: Mapping[str, Any], keys: Sequence[str]) -> dict[str, Any]:
+    """Only the style keys we know; anything else never enters the artifact."""
+    return {k: raw[k] for k in keys if k in raw}
+
+
+def _parse_thumb_set(raw: Any, drop: Callable[[str], None]) -> ThumbSet:
     raw_lines = raw.get("lines") if isinstance(raw, dict) else None
     lines: list[ThumbLine] = []
     for entry in raw_lines if isinstance(raw_lines, list) else []:
@@ -159,11 +174,11 @@ def _parse_thumb_set(raw: Any, drop: Callable[[str], None]) -> list[ThumbLine]:
         if not text:
             drop(f"thumbnail line dropped, empty text ({role})")
             continue
-        lines.append(ThumbLine(role=role, text=text))
+        lines.append(ThumbLine(role=role, text=text, style=_pick(entry, LINE_KEYS)))
     if len(lines) > MAX_THUMB_LINES:
         drop(f"thumbnail set trimmed from {len(lines)} to {MAX_THUMB_LINES} line(s)")
         lines = lines[:MAX_THUMB_LINES]
-    return lines
+    return ThumbSet(lines=lines, style=_pick(raw, SET_KEYS) if isinstance(raw, dict) else {})
 
 
 def try_parse_publish_response(
@@ -201,17 +216,30 @@ def try_parse_publish_response(
         return None
 
     raw_sets = data.get("thumbnail_copy")
-    thumbnail_copy: list[list[ThumbLine]] = []
+    thumbnail_copy: list[ThumbSet] = []
     for raw in raw_sets if isinstance(raw_sets, list) else []:
-        lines = _parse_thumb_set(raw, drop)
-        if lines:
-            thumbnail_copy.append(lines)
+        thumb_set = _parse_thumb_set(raw, drop)
+        if thumb_set.lines:
+            thumbnail_copy.append(thumb_set)
 
     return PublishCopy(
         titles=titles,
         lead=_clean_str(data.get("lead")),
         chapter_titles=_parse_chapter_titles(data.get("chapters"), num_parts, drop),
         thumbnail_copy=thumbnail_copy,
+    )
+
+
+def font_slot_note(fonts: Mapping[str, str]) -> str:
+    """The one-line prompt addendum naming the installed font slots.
+
+    Generated rather than written into PUBLISH_PROMPT so the names the LLM is
+    offered are always the names the renderer can resolve.
+    """
+    return (
+        'Thumbnail "font" must be one of these slot names: '
+        + ", ".join(sorted(fonts))
+        + ". A line with no font, or an unknown one, uses the default face."
     )
 
 
@@ -230,8 +258,12 @@ def generate_publish_copy(
     if not parts:
         logger.warning("publish: no summary parts; nothing to write copy from")
         return PublishCopy()
+    system_prompt = cfg.get("prompt", "")
+    fonts = (cfg.get("thumbnail") or {}).get("fonts") or {}
+    if fonts:
+        system_prompt = f"{system_prompt}\n\n{font_slot_note(fonts)}"
     messages = [
-        {"role": "system", "content": cfg.get("prompt", "")},
+        {"role": "system", "content": system_prompt},
         {
             "role": "user",
             "content": format_publish_context(project_summary, directions, overlay_texts),
@@ -294,12 +326,19 @@ def generate_publish_copy(
     return PublishCopy()
 
 
-def thumbnail_copy_to_dict(copy: PublishCopy) -> list[list[dict[str, str]]]:
-    """The thumbnail sets as plain JSON: role/text pairs, one to three per set.
+def thumbnail_copy_to_dict(copy: PublishCopy) -> list[dict[str, Any]]:
+    """The thumbnail sets as plain JSON: copy and look together.
 
-    The count is never normalised — a punchier video may want only a hook, and
-    the compositing script is expected to take a variable number of lines.
+    The line count is never normalised -- a punchier video may want only a
+    hook.  Style keys sit beside the text they apply to, which is what makes
+    publish.json hand-editable: change a colour, re-run the render CLI.
     """
     return [
-        [{"role": line.role, "text": line.text} for line in lines] for lines in copy.thumbnail_copy
+        {
+            "lines": [
+                {"role": line.role, "text": line.text, **line.style} for line in thumb_set.lines
+            ],
+            **thumb_set.style,
+        }
+        for thumb_set in copy.thumbnail_copy
     ]
