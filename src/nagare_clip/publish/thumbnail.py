@@ -21,6 +21,7 @@ import logging
 import re
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, replace
+from pathlib import Path
 from typing import Any
 
 logger = logging.getLogger(__name__)
@@ -294,3 +295,64 @@ def layout_lines(
         placed.append(PlacedLine(text=text, style=style, offset=f"{x0:+d}{y:+d}"))
         y += h + line_gap
     return list(reversed(placed)) if set_style.gravity.startswith("south") else placed
+
+
+def _annotate(line: PlacedLine, *, fill: str, stroke: str, strokewidth: int) -> list[str]:
+    args: list[str] = []
+    if line.style.font:
+        args += ["-font", line.style.font]
+    args += [
+        "-pointsize",
+        str(line.style.pointsize),
+        "-fill",
+        fill,
+        "-stroke",
+        stroke,
+        "-strokewidth",
+        str(strokewidth),
+        "-annotate",
+        line.offset,
+        escape_magick_text(line.text),
+    ]
+    return args
+
+
+def build_render_cmd(
+    background: Path,
+    placed: Sequence[PlacedLine],
+    set_style: SetStyle,
+    canvas: tuple[int, int],
+    out_path: Path,
+) -> list[str]:
+    """One thumbnail, in one magick call.
+
+    Follows ``make_thumb.sh``: the still is cropped to fill the canvas, a
+    single blurred layer carries every line's shadow, then each line is drawn
+    twice -- a thick stroke in the outline colour, the fill on top.  All three
+    passes of a line share one ``-pointsize``, which is why shrink-to-fit
+    changes the point size rather than resizing a rendered layer.
+    """
+    width, height = canvas
+    size = f"{width}x{height}"
+    cmd = ["magick", str(background), "-resize", f"{size}^", "-gravity", "center", "-extent", size]
+
+    if set_style.shadow:
+        cmd += ["(", "-size", size, "xc:none", "-gravity", set_style.gravity]
+        for line in placed:
+            cmd += _annotate(
+                line, fill=set_style.shadow_color, stroke=set_style.shadow_color, strokewidth=1
+            )
+        cmd += ["-blur", set_style.shadow_blur, ")", "-gravity", "center", "-composite"]
+
+    cmd += ["-gravity", set_style.gravity]
+    for line in placed:
+        cmd += _annotate(
+            line,
+            fill=line.style.stroke,
+            stroke=line.style.stroke,
+            strokewidth=line.style.strokewidth,
+        )
+    for line in placed:
+        cmd += _annotate(line, fill=line.style.fill, stroke="none", strokewidth=0)
+    cmd += ["-quality", "92", str(out_path)]
+    return cmd

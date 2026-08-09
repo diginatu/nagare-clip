@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import shutil
 import subprocess
+from pathlib import Path
 
 import pytest
 
@@ -13,6 +14,7 @@ from nagare_clip.publish.thumbnail import (
     PlacedLine,
     SetStyle,
     build_measure_cmd,
+    build_render_cmd,
     escape_magick_text,
     layout_lines,
     parse_metrics,
@@ -312,3 +314,99 @@ def test_the_text_and_the_rest_of_the_style_survive_layout():
     assert placed[0].text == "穴あけ不要。"
     assert (placed[0].style.fill, placed[0].style.strokewidth) == ("#B08D3E", 12)
     assert isinstance(placed[0], PlacedLine)
+
+
+PLACED = [
+    PlacedLine(
+        "水槽DIY",
+        LineStyle(font="F1", pointsize=70, fill="white", stroke="rgba(30,30,30,1)", strokewidth=8),
+        "+56+62",
+    ),
+    PlacedLine(
+        "穴あけ不要。",
+        LineStyle(font="F2", pointsize=156, fill="#B08D3E", stroke="white", strokewidth=12),
+        "+56+166",
+    ),
+]
+
+
+def _render(set_style=None, placed=None):
+    if set_style is None:
+        set_style = SetStyle()
+    if placed is None:
+        placed = PLACED
+    return build_render_cmd(Path("bg.jpg"), placed, set_style, CANVAS, Path("out.jpg"))
+
+
+def test_the_background_is_cropped_to_fill_the_canvas():
+    cmd = _render()
+    assert cmd[:2] == ["magick", "bg.jpg"]
+    assert "-resize" in cmd and "1280x720^" in cmd
+    assert "-extent" in cmd and "1280x720" in cmd
+    assert cmd[-1] == "out.jpg"
+
+
+def test_each_line_is_drawn_twice_outline_then_fill():
+    """make_thumb.sh's two-pass outline: a thick stroke in the outline colour,
+    then the fill on top."""
+    cmd = _render()
+    at = [i for i, a in enumerate(cmd) if a == "-annotate"]
+    # 2 shadow passes + 2 outline passes + 2 fill passes
+    assert len(at) == 6
+    outline = cmd[at[2] - 6 : at[2]]
+    assert "rgba(30,30,30,1)" in outline and "8" in outline
+    fill = cmd[at[3] - 6 : at[3]]
+    assert "white" in fill and "none" in fill
+
+
+def test_all_three_passes_of_a_line_share_one_pointsize():
+    cmd = _render()
+    sizes = [cmd[i + 1] for i, a in enumerate(cmd) if a == "-pointsize"]
+    assert sizes == ["70", "156", "70", "156", "70", "156"]
+
+
+def test_the_shadow_layer_is_blurred_and_composited():
+    cmd = _render()
+    assert "xc:none" in cmd
+    assert cmd[cmd.index("-blur") + 1] == "0x8"
+    assert "-composite" in cmd
+    assert cmd.index("-composite") < cmd.index("-annotate", cmd.index("-composite"))
+
+
+def test_no_shadow_layer_when_the_set_turns_it_off():
+    cmd = _render(SetStyle(shadow=False))
+    assert "xc:none" not in cmd and "-composite" not in cmd
+    assert len([a for a in cmd if a == "-annotate"]) == 4
+
+
+def test_the_gravity_is_the_sets_and_the_offsets_are_the_placed_ones():
+    cmd = _render(SetStyle(gravity="southeast"))
+    assert "southeast" in cmd
+    assert cmd[cmd.index("-annotate") + 1] == "+56+62"
+
+
+def test_text_is_escaped_and_stays_one_argument():
+    placed = [PlacedLine("100% @x", LineStyle(font=""), "+0+0")]
+    cmd = _render(placed=placed)
+    assert r"100%% \@x" in cmd
+    assert "-font" not in cmd
+
+
+def test_the_command_is_an_argument_list_of_plain_strings():
+    assert all(isinstance(a, str) for a in _render())
+
+
+@pytest.mark.skipif(not HAS_MAGICK, reason="ImageMagick not installed")
+def test_a_real_thumbnail_is_produced(tmp_path):
+    bg = tmp_path / "bg.jpg"
+    subprocess.run(["magick", "-size", "1920x1080", "xc:steelblue", str(bg)], check=True)
+    out = tmp_path / "set1.jpg"
+    placed = [PlacedLine("100% 水浸し！", LineStyle(font="", pointsize=120), "+56+62")]
+    subprocess.run(build_render_cmd(bg, placed, SetStyle(), CANVAS, out), check=True)
+    size = subprocess.run(
+        ["magick", "identify", "-format", "%wx%h", str(out)],
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout
+    assert size == "1280x720"
