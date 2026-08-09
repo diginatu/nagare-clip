@@ -175,12 +175,12 @@ knows rather than an abstraction over it:
 |---|---|---|---|
 | `font` | `-font` | line | a key of `publish.thumbnail.fonts` (a config *slot name*, never a path — the model cannot know what is installed) |
 | `pointsize` | `-pointsize` | line | int 8–400 |
-| `fill` | `-fill` | line | `#RGB`/`#RRGGBB`/`#RRGGBBAA`, `rgb(…)`/`rgba(…)`, or a named-colour allowlist |
+| `fill` | `-fill` | line | `#RGB`/`#RGBA`/`#RRGGBB`/`#RRGGBBAA`, `rgb(…)`/`rgba(…)`, or a named-colour allowlist |
 | `stroke` | `-stroke` | line | as `fill` |
 | `strokewidth` | `-strokewidth` | line | int 0–40 |
 | `gravity` | `-gravity` | set | one of the nine gravity names |
-| `offset` | `-annotate +x+y` | set | `[+-]N[+-]N`, within the canvas |
-| `shadow` | (an inline blurred layer) | set | `{color, blur}`, `blur` as `RxS` |
+| `offset` | `-annotate +x+y` | set | `[+-]N[+-]N` (1-4 digit signed pair) — the shape is validated, not whether it lands on-canvas |
+| `shadow` | (an inline blurred layer) | set | `{color, blur}` (`blur` as `RxS`), or literal `false` to disable the shadow layer entirely |
 
 `resolve_line_style()`/`resolve_set_style()` validate and clamp every value
 against that table; an unknown key is dropped with a log line, and a rejected
@@ -228,13 +228,19 @@ the model that would author a `magick` invocation, and `magick` reads and
 writes files (`@`, `-write`, MSL). With an allowlisted operator set and argv
 construction the worst a bad generation can do is an ugly image.
 
-**Degrading**: a missing `magick`, a non-zero exit, unusable metrics, or no
-background still each drop that render with a warning and the run continues —
+**Degrading**: a missing `magick` or a non-zero exit from either subprocess
+call drops that one set's render with a warning, and the rest still render —
 `publish.json` is written either way, exactly as a failed frame batch behaves
-today. `resolve_background()` picks the still every set is composited onto:
+today. Unusable measure output does **not** drop a render: `parse_metrics()`
+returning `None` falls back to a point-size-based estimate
+(`(1, int(pointsize * 1.2))` per line) and the set renders anyway
+(`test_unusable_measure_output_still_renders_the_set`). No background is the
+one failure that is not per-set: `resolve_background()` runs **once**, before
+the per-set loop, and when it returns `None` `render_sets()` returns `[]`
+immediately — every set in the run is skipped, not just one
+(`test_no_background_renders_nothing`). Background resolution itself:
 `publish.thumbnail.background` if set (relative to the stage dir, or
-absolute), else the first entry of the frame shortlist, else no rendering at
-all for the whole stage.
+absolute), else the first entry of the frame shortlist, else nothing renders.
 
 `publish.json` gains a `renders` array beside `thumbnails` —
 `{set, path, background}` — and `publish.md` embeds
