@@ -487,6 +487,13 @@ def test_a_candidate_whose_file_vanished_is_skipped(tmp_path):
     assert resolve_background(CFG, shots, tmp_path) == tmp_path / "frames/a/2.000.jpg"
 
 
+def test_a_missing_configured_background_does_not_fall_back_to_a_candidate(tmp_path):
+    """A named background that silently renders onto a different frame misleads review."""
+    _touch(tmp_path, "frames/a/1.000.jpg")
+    cfg = {**CFG, "background": "frames/a/missing.jpg"}
+    assert resolve_background(cfg, [_shot()], tmp_path) is None
+
+
 def _sets(n=2):
     return [
         ThumbSet(lines=[ThumbLine("hook", f"H{i}", {"font": "serif-black"})], style={})
