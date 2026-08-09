@@ -871,6 +871,33 @@ class BlenderConfig(BaseModel):
     speed_mark: SpeedMarkConfig = Field(default_factory=SpeedMarkConfig)
 
 
+class ThumbnailConfig(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    section_comment: ClassVar[str] = (
+        "Thumbnail rendering: one image per LLM copy set, composited with ImageMagick\n"
+        "(`magick` must be on PATH). The LLM writes the colours, point sizes and\n"
+        "placement for its own copy, in ImageMagick's vocabulary; only `fonts` is set\n"
+        "here, because the model cannot know what is installed. Renders land in\n"
+        "output/publish/thumbnails/ and are embedded in publish.md."
+    )
+    enabled: bool = Field(True, description="Render a thumbnail per copy set")
+    background: str = Field(
+        "",
+        description=(
+            "Still to composite onto: path relative to output/publish/ (or absolute); "
+            "empty = the first candidate in the frame shortlist"
+        ),
+    )
+    width: int = Field(1280, description="Canvas width in px")
+    height: int = Field(720, description="Canvas height in px")
+    line_gap: int = Field(12, description="Vertical gap between stacked lines in px")
+    fonts: dict[str, str] = _commented(
+        {},
+        sample='{sans-bold: "Noto-Sans-CJK-JP-Bold", serif-black: "Noto-Serif-CJK-JP-Black"}',
+        description="Font slots the LLM may choose from: slot name -> ImageMagick font name or path",
+    )
+
+
 class PublishConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
     section_comment: ClassVar[str] = (
@@ -923,6 +950,7 @@ class PublishConfig(BaseModel):
     frame_width: int = Field(
         1280, description="Downscale width (px) of the extracted JPEG stills; height is auto"
     )
+    thumbnail: ThumbnailConfig = Field(default_factory=ThumbnailConfig)
     prompt: str = _commented(
         PUBLISH_PROMPT, sample='"..."', description="System prompt (has a sensible default)"
     )

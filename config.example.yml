@@ -275,6 +275,18 @@ publish:
   min_chapter_duration: 10.0   # YouTube ignores a chapter list unless every chapter is at least this long; a shorter one is merged into a neighbour
   max_frames: 24   # Cap on thumbnail candidate stills (0 = no limit); overlays outrank keeps
   frame_width: 1280   # Downscale width (px) of the extracted JPEG stills; height is auto
+  # Thumbnail rendering: one image per LLM copy set, composited with ImageMagick
+  # (`magick` must be on PATH). The LLM writes the colours, point sizes and
+  # placement for its own copy, in ImageMagick's vocabulary; only `fonts` is set
+  # here, because the model cannot know what is installed. Renders land in
+  # output/publish/thumbnails/ and are embedded in publish.md.
+  thumbnail:
+    enabled: true   # Render a thumbnail per copy set
+    background: ""   # Still to composite onto: path relative to output/publish/ (or absolute); empty = the first candidate in the frame shortlist
+    width: 1280   # Canvas width in px
+    height: 720   # Canvas height in px
+    line_gap: 12   # Vertical gap between stacked lines in px
+    # fonts: {sans-bold: "Noto-Sans-CJK-JP-Bold", serif-black: "Noto-Serif-CJK-JP-Black"}   # Font slots the LLM may choose from: slot name -> ImageMagick font name or path
   # prompt: "..."   # System prompt (has a sensible default)
 
 pipeline:

@@ -766,3 +766,30 @@ def test_text_filter_prompt_repeated_phrase_example_is_valid_patch_syntax():
     assert "映ってる映ってるね" in prompt  # example input line
     assert "{{映ってる->}}映ってるね" in prompt  # example output line
     assert apply_patches_to_lines(["{{映ってる->}}映ってるね"]) == ["映ってるね"]
+
+
+def test_publish_thumbnail_defaults():
+    cfg = get_effective_config(None, {})
+    thumb = cfg["publish"]["thumbnail"]
+    assert thumb["enabled"] is True
+    assert thumb["background"] == ""
+    assert (thumb["width"], thumb["height"]) == (1280, 720)
+    assert thumb["line_gap"] == 12
+    assert thumb["fonts"] == {}
+
+
+def test_publish_thumbnail_fonts_come_from_the_file(tmp_path):
+    path = tmp_path / "c.yml"
+    path.write_text(
+        'publish:\n  thumbnail:\n    fonts:\n      hook: "Noto-Serif-CJK-JP-Black"\n',
+        encoding="utf-8",
+    )
+    cfg = get_effective_config(path, {})
+    assert cfg["publish"]["thumbnail"]["fonts"] == {"hook": "Noto-Serif-CJK-JP-Black"}
+
+
+def test_an_unknown_thumbnail_key_is_rejected(tmp_path):
+    path = tmp_path / "c.yml"
+    path.write_text("publish:\n  thumbnail:\n    colour: red\n", encoding="utf-8")
+    with pytest.raises(ValidationError):
+        get_effective_config(path, {})
