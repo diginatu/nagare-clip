@@ -19,7 +19,7 @@ from __future__ import annotations
 
 import logging
 import re
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any
@@ -355,3 +355,102 @@ def build_render_cmd(
         cmd += _annotate(line, fill=line.style.fill, stroke="none", strokewidth=0)
     cmd += ["-quality", "92", str(out_path)]
     return cmd
+
+
+@dataclass(frozen=True)
+class ThumbRender:
+    index: int  # 1-based set number, matching publish.md's "Set N"
+    path: str  # relative to the publish stage dir
+    background: str  # the still it was composited onto
+
+
+def set_relpath(index: int) -> str:
+    """Render path relative to the publish stage dir."""
+    return f"thumbnails/set{index}.jpg"
+
+
+def resolve_background(
+    thumbnail_cfg: Mapping[str, Any], thumbs: Sequence[Any], stage_dir: Path
+) -> Path | None:
+    """The still every set is composited onto.
+
+    Config wins; otherwise the first candidate that is actually on disk --
+    picking the frame is quick, and the shortlist is already ordered by how
+    interesting the director thought the moment was.
+    """
+    configured = str(thumbnail_cfg.get("background", "")).strip()
+    if configured:
+        path = Path(configured)
+        path = path if path.is_absolute() else stage_dir / path
+        if path.is_file():
+            return path
+        logger.warning("publish: thumbnail background %s not found", configured)
+        return None
+    for shot in thumbs:
+        path = stage_dir / shot.path
+        if path.is_file():
+            return path
+    return None
+
+
+def render_sets(
+    sets: Sequence[Any],
+    thumbs: Sequence[Any],
+    thumbnail_cfg: Mapping[str, Any],
+    stage_dir: Path,
+    run: Callable[[list[str]], str],
+) -> list[ThumbRender]:
+    """One rendered thumbnail per copy set, so publish.md shows options.
+
+    Two calls per set: measure, then render.  *run* returns stdout, and is
+    injected so this module never starts a subprocess itself.
+
+    Nothing here is allowed to fail the stage: a set whose magick call dies is
+    dropped with a warning and the rest still render.
+    """
+    if not thumbnail_cfg.get("enabled", True) or not sets:
+        return []
+    background = resolve_background(thumbnail_cfg, thumbs, stage_dir)
+    if background is None:
+        logger.warning("publish: no thumbnail background available; nothing rendered")
+        return []
+
+    fonts = thumbnail_cfg.get("fonts") or {}
+    canvas = (int(thumbnail_cfg.get("width", 1280)), int(thumbnail_cfg.get("height", 720)))
+    line_gap = int(thumbnail_cfg.get("line_gap", 12))
+    out_dir = stage_dir / "thumbnails"
+    out_dir.mkdir(parents=True, exist_ok=True)
+
+    renders: list[ThumbRender] = []
+    for index, thumb_set in enumerate(sets, start=1):
+        preset = preset_for(index)
+        styled = [
+            (line.text, resolve_line_style(line.style, line.role, fonts, preset))
+            for line in thumb_set.lines
+        ]
+        if not styled:
+            continue
+        set_style = resolve_set_style(thumb_set.style, preset)
+        try:
+            metrics = parse_metrics(run(build_measure_cmd(styled)), expected=len(styled))
+        except Exception:  # noqa: BLE001 - a dead magick must not fail the stage
+            logger.warning("publish: could not measure thumbnail set %d", index, exc_info=True)
+            continue
+        if metrics is None:
+            # Unmeasured fallback: point size is a fair proxy for line height.
+            logger.warning("publish: unusable text metrics for set %d; estimating", index)
+            metrics = [(1, int(style.pointsize * 1.2)) for _, style in styled]
+        placed = layout_lines(styled, metrics, set_style, canvas, line_gap)
+        rel = set_relpath(index)
+        try:
+            run(build_render_cmd(background, placed, set_style, canvas, stage_dir / rel))
+        except Exception:  # noqa: BLE001
+            logger.warning("publish: could not render thumbnail set %d", index, exc_info=True)
+            continue
+        try:
+            bg_name = str(background.relative_to(stage_dir))
+        except ValueError:
+            bg_name = str(background)
+        renders.append(ThumbRender(index=index, path=rel, background=bg_name))
+    logger.info("publish: rendered %d thumbnail(s)", len(renders))
+    return renders

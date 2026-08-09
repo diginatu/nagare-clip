@@ -268,3 +268,9 @@ def test_build_snapshot_batch_cmd_no_ssim_jobs_is_byte_identical():
     assert build_snapshot_batch_cmd(Path("/p"), jobs, 960) == build_snapshot_batch_cmd(
         Path("/p"), jobs, 960, ssim_jobs=()
     )
+
+
+def test_run_magick_returns_stdout():
+    from nagare_clip.pipeline.external import run_magick
+
+    assert run_magick(["printf", "hello"]) == "hello"

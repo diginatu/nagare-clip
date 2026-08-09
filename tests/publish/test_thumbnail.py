@@ -8,20 +8,26 @@ from pathlib import Path
 
 import pytest
 
+from nagare_clip.publish.publish_llm import ThumbLine, ThumbSet
 from nagare_clip.publish.thumbnail import (
     PRESETS,
     LineStyle,
     PlacedLine,
     SetStyle,
+    ThumbRender,
     build_measure_cmd,
     build_render_cmd,
     escape_magick_text,
     layout_lines,
     parse_metrics,
     preset_for,
+    render_sets,
+    resolve_background,
     resolve_line_style,
     resolve_set_style,
+    set_relpath,
 )
+from nagare_clip.publish.thumbs import ThumbShot
 
 HAS_MAGICK = shutil.which("magick") is not None
 
@@ -410,3 +416,171 @@ def test_a_real_thumbnail_is_produced(tmp_path):
         text=True,
     ).stdout
     assert size == "1280x720"
+
+
+CFG = {
+    "enabled": True,
+    "background": "",
+    "width": 1280,
+    "height": 720,
+    "line_gap": 12,
+    "fonts": {"serif-black": "SerifFace"},
+}
+
+
+def _shot(path="frames/a/1.000.jpg"):
+    return ThumbShot(stem="a", time=1.0, kind="overlay", label="l", path=path)
+
+
+def _touch(stage_dir, rel):
+    p = stage_dir / rel
+    p.parent.mkdir(parents=True, exist_ok=True)
+    p.write_bytes(b"x")
+    return p
+
+
+class FakeRun:
+    """Records commands; answers measure calls with plausible metrics."""
+
+    def __init__(self):
+        self.cmds: list[list[str]] = []
+
+    def __call__(self, cmd: list[str]) -> str:
+        self.cmds.append(cmd)
+        if cmd[-1] == "info:":
+            return "".join("300 90\n" for a in cmd if a.startswith("label:"))
+        return ""
+
+
+def test_the_background_defaults_to_the_first_candidate(tmp_path):
+    _touch(tmp_path, "frames/a/1.000.jpg")
+    got = resolve_background(CFG, [_shot()], tmp_path)
+    assert got == tmp_path / "frames/a/1.000.jpg"
+
+
+def test_a_configured_background_wins(tmp_path):
+    _touch(tmp_path, "frames/a/1.000.jpg")
+    _touch(tmp_path, "frames/a/9.000.jpg")
+    cfg = {**CFG, "background": "frames/a/9.000.jpg"}
+    assert resolve_background(cfg, [_shot()], tmp_path) == tmp_path / "frames/a/9.000.jpg"
+
+
+def test_an_absolute_background_is_used_as_is(tmp_path):
+    p = _touch(tmp_path, "elsewhere.jpg")
+    cfg = {**CFG, "background": str(p)}
+    assert resolve_background(cfg, [], tmp_path) == p
+
+
+def test_a_missing_configured_background_is_reported_and_gives_nothing(tmp_path, caplog):
+    cfg = {**CFG, "background": "nope.jpg"}
+    assert resolve_background(cfg, [_shot()], tmp_path) is None
+    assert "nope.jpg" in caplog.text
+
+
+def test_no_candidates_and_no_config_means_no_background(tmp_path):
+    assert resolve_background(CFG, [], tmp_path) is None
+
+
+def test_a_candidate_whose_file_vanished_is_skipped(tmp_path):
+    _touch(tmp_path, "frames/a/2.000.jpg")
+    shots = [_shot("frames/a/1.000.jpg"), _shot("frames/a/2.000.jpg")]
+    assert resolve_background(CFG, shots, tmp_path) == tmp_path / "frames/a/2.000.jpg"
+
+
+def _sets(n=2):
+    return [
+        ThumbSet(lines=[ThumbLine("hook", f"H{i}", {"font": "serif-black"})], style={})
+        for i in range(n)
+    ]
+
+
+def test_one_measure_and_one_render_call_per_set(tmp_path):
+    _touch(tmp_path, "frames/a/1.000.jpg")
+    run = FakeRun()
+    renders = render_sets(_sets(2), [_shot()], CFG, tmp_path, run)
+    assert len(run.cmds) == 4
+    assert [c[-1] for c in run.cmds] == [
+        "info:",
+        str(tmp_path / "thumbnails/set1.jpg"),
+        "info:",
+        str(tmp_path / "thumbnails/set2.jpg"),
+    ]
+    assert renders == [
+        ThumbRender(1, "thumbnails/set1.jpg", "frames/a/1.000.jpg"),
+        ThumbRender(2, "thumbnails/set2.jpg", "frames/a/1.000.jpg"),
+    ]
+
+
+def test_the_font_slot_is_resolved_before_the_command_is_built(tmp_path):
+    _touch(tmp_path, "frames/a/1.000.jpg")
+    run = FakeRun()
+    render_sets(_sets(1), [_shot()], CFG, tmp_path, run)
+    assert "SerifFace" in run.cmds[1]
+
+
+def test_sets_without_a_usable_style_get_different_presets(tmp_path):
+    _touch(tmp_path, "frames/a/1.000.jpg")
+    run = FakeRun()
+    render_sets(_sets(2), [_shot()], CFG, tmp_path, run)
+    first, second = run.cmds[1], run.cmds[3]
+    assert first[first.index("-gravity", 3) :] != second[second.index("-gravity", 3) :]
+
+
+def test_the_output_directory_is_created(tmp_path):
+    _touch(tmp_path, "frames/a/1.000.jpg")
+    render_sets(_sets(1), [_shot()], CFG, tmp_path, FakeRun())
+    assert (tmp_path / "thumbnails").is_dir()
+
+
+def test_disabled_renders_nothing(tmp_path):
+    _touch(tmp_path, "frames/a/1.000.jpg")
+    run = FakeRun()
+    assert render_sets(_sets(2), [_shot()], {**CFG, "enabled": False}, tmp_path, run) == []
+    assert run.cmds == []
+
+
+def test_no_background_renders_nothing(tmp_path, caplog):
+    run = FakeRun()
+    assert render_sets(_sets(1), [], CFG, tmp_path, run) == []
+    assert run.cmds == []
+    assert "background" in caplog.text
+
+
+def test_a_failing_magick_drops_only_that_set(tmp_path, caplog):
+    _touch(tmp_path, "frames/a/1.000.jpg")
+
+    calls = {"n": 0}
+
+    def run(cmd):
+        calls["n"] += 1
+        if calls["n"] == 2:  # the first set's render
+            raise OSError("magick: boom")
+        return FakeRun()(cmd)
+
+    renders = render_sets(_sets(2), [_shot()], CFG, tmp_path, run)
+    assert [r.index for r in renders] == [2]
+    assert "boom" in caplog.text
+
+
+def test_a_missing_magick_binary_drops_every_set_without_raising(tmp_path, caplog):
+    _touch(tmp_path, "frames/a/1.000.jpg")
+
+    def run(cmd):
+        raise FileNotFoundError("magick")
+
+    assert render_sets(_sets(2), [_shot()], CFG, tmp_path, run) == []
+    assert "magick" in caplog.text
+
+
+def test_unusable_measure_output_still_renders_the_set(tmp_path):
+    """Falling back to unmeasured layout beats losing the thumbnail."""
+    _touch(tmp_path, "frames/a/1.000.jpg")
+
+    def run(cmd):
+        return "garbage\n" if cmd[-1] == "info:" else ""
+
+    assert len(render_sets(_sets(1), [_shot()], CFG, tmp_path, run)) == 1
+
+
+def test_set_relpath_is_one_based():
+    assert set_relpath(1) == "thumbnails/set1.jpg"
