@@ -408,6 +408,8 @@ def render_sets(
     Nothing here is allowed to fail the stage: a set whose magick call dies is
     dropped with a warning and the rest still render.
     """
+    import subprocess
+
     if not thumbnail_cfg.get("enabled", True) or not sets:
         return []
     background = resolve_background(thumbnail_cfg, thumbs, stage_dir)
@@ -428,11 +430,18 @@ def render_sets(
             (line.text, resolve_line_style(line.style, line.role, fonts, preset))
             for line in thumb_set.lines
         ]
-        if not styled:
-            continue
         set_style = resolve_set_style(thumb_set.style, preset)
         try:
             metrics = parse_metrics(run(build_measure_cmd(styled)), expected=len(styled))
+        except subprocess.CalledProcessError as e:
+            # magick's stderr is the actual reason (e.g. "unable to read font 'X'"
+            # from a bad `publish.thumbnail.fonts` slot) -- without it the log only
+            # has the argv and "exit status 1", and the human has to re-run by hand
+            # to learn why every set silently dropped.
+            logger.warning(
+                "publish: could not measure thumbnail set %d: %s", index, e.stderr, exc_info=True
+            )
+            continue
         except Exception:  # noqa: BLE001 - a dead magick must not fail the stage
             logger.warning("publish: could not measure thumbnail set %d", index, exc_info=True)
             continue
@@ -444,6 +453,11 @@ def render_sets(
         rel = set_relpath(index)
         try:
             run(build_render_cmd(background, placed, set_style, canvas, stage_dir / rel))
+        except subprocess.CalledProcessError as e:
+            logger.warning(
+                "publish: could not render thumbnail set %d: %s", index, e.stderr, exc_info=True
+            )
+            continue
         except Exception:  # noqa: BLE001
             logger.warning("publish: could not render thumbnail set %d", index, exc_info=True)
             continue
@@ -550,7 +564,15 @@ def main(argv: Sequence[str] | None = None) -> int:
         default="output/publish",
         help="directory holding publish.json (default: output/publish)",
     )
-    parser.add_argument("--config", default=None, help="config YAML")
+    parser.add_argument(
+        "--config",
+        default=None,
+        help=(
+            "path to your project's config YAML; omitting this uses built-in defaults "
+            "(1280x720, no -font flag) rather than your project's config, so your "
+            "configured fonts and canvas size will not be applied"
+        ),
+    )
     parser.add_argument(
         "--background",
         default=None,

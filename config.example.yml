@@ -253,12 +253,13 @@ blender:
 
 # publish stage: runs once project-wide AFTER blender. An LLM turns the summaries
 # and the project brief into several title candidates, a description lead, chapter
-# titles and alternative thumbnail-copy sets; the chapter TIMESTAMPS are computed
-# from the finished timeline (keep intervals + speed ranges), which exists nowhere
-# else. Stills are extracted at the moments the director marked as payoffs, so a
-# human picks a thumbnail frame from a shortlist. Output publish.md (reviewable)
-# and publish.json (for a project-level compositing script). Uploading, and
-# compositing the final thumbnail, stay manual. Disabled by default (no-op).
+# titles and alternative thumbnail-copy sets (copy AND look, in ImageMagick's own
+# vocabulary); the chapter TIMESTAMPS are computed from the finished timeline (keep
+# intervals + speed ranges), which exists nowhere else. Stills are extracted at the
+# moments the director marked as payoffs, one thumbnail is rendered per copy set
+# with ImageMagick (see publish.thumbnail below), and publish.md embeds the results
+# alongside publish.json (the hand-editable contract for the look). Uploading, and
+# picking which rendered set to ship, stay manual. Disabled by default (no-op).
 publish:
   enabled: false   # Enable the publish LLM
   provider: ollama_chat   # LiteLLM provider prefix: ollama_chat | openai | gemini | anthropic

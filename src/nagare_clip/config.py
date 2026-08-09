@@ -917,12 +917,13 @@ class PublishConfig(BaseModel):
     section_comment: ClassVar[str] = (
         "publish stage: runs once project-wide AFTER blender. An LLM turns the summaries\n"
         "and the project brief into several title candidates, a description lead, chapter\n"
-        "titles and alternative thumbnail-copy sets; the chapter TIMESTAMPS are computed\n"
-        "from the finished timeline (keep intervals + speed ranges), which exists nowhere\n"
-        "else. Stills are extracted at the moments the director marked as payoffs, so a\n"
-        "human picks a thumbnail frame from a shortlist. Output publish.md (reviewable)\n"
-        "and publish.json (for a project-level compositing script). Uploading, and\n"
-        "compositing the final thumbnail, stay manual. Disabled by default (no-op)."
+        "titles and alternative thumbnail-copy sets (copy AND look, in ImageMagick's own\n"
+        "vocabulary); the chapter TIMESTAMPS are computed from the finished timeline (keep\n"
+        "intervals + speed ranges), which exists nowhere else. Stills are extracted at the\n"
+        "moments the director marked as payoffs, one thumbnail is rendered per copy set\n"
+        "with ImageMagick (see publish.thumbnail below), and publish.md embeds the results\n"
+        "alongside publish.json (the hand-editable contract for the look). Uploading, and\n"
+        "picking which rendered set to ship, stay manual. Disabled by default (no-op)."
     )
     enabled: bool = Field(False, description="Enable the publish LLM")
     provider: str = Field(

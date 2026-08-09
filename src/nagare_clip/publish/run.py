@@ -12,10 +12,13 @@ Two halves:
 - **timing** (deterministic): chapter timestamps taken from the finished
   timeline, which is the one thing that can only be computed here.
 
-Compositing the chosen frame and copy into the actual thumbnail stays a
-project-level script: fonts, colours, shadows and layout are taste and change
-from video to video.  What this stage owes that script is the copy and the
-frame shortlist.
+Compositing the chosen frame and copy into the actual thumbnail is no longer a
+project-level script: the LLM writes each copy set's look in ImageMagick's own
+vocabulary (fill/stroke/pointsize/gravity/offset/shadow), this stage validates
+every value and builds every ``magick`` command as an argument list, and one
+thumbnail per copy set lands under ``output/publish/thumbnails/`` and is
+embedded in ``publish.md``. What still stays manual is picking which rendered
+set to ship and uploading it.
 
 When ``publish.enabled`` is false (default) an empty artifact is written and no
 LLM or Docker call is made.

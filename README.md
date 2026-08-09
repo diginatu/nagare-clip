@@ -507,8 +507,14 @@ CLI reads it back and re-runs ImageMagick with **no LLM call at all**:
 ```bash
 uv run python -m nagare_clip.publish.thumbnail \
   --publish-dir output/publish \
+  --config my_project.yml \
   --background frames/myvideo/2528.021.jpg
 ```
+
+Pass `--config` explicitly, the same as the pipeline CLI — this CLI does not
+pick up a project config file on its own, so without it the render falls back
+to built-in defaults (1280x720, no `-font` flag) instead of your configured
+canvas size and CJK font slots.
 
 `--background` (a path relative to `--publish-dir`, or absolute) overrides
 `publish.thumbnail.background` for that run only; omit it to reuse whatever is

@@ -183,11 +183,19 @@ knows rather than an abstraction over it:
 | `shadow` | (an inline blurred layer) | set | `{color, blur}` (`blur` as `RxS`), or literal `false` to disable the shadow layer entirely |
 
 `resolve_line_style()`/`resolve_set_style()` validate and clamp every value
-against that table; an unknown key is dropped with a log line, and a rejected
-value falls back to a preset's value **per key** — one bad colour does not
-cost the set the rest of the style the model chose for it. A set with *no*
-usable style at all gets a whole preset, chosen **round-robin** by set index
-(`preset_for()`) rather than randomly, so a rerun of the same pipeline
+against that table, and a rejected value falls back to a preset's value **per
+key** — one bad colour does not cost the set the rest of the style the model
+chose for it. An unknown key never reaches either function in practice: both
+producers of a style dict already filter to `LINE_KEYS`/`SET_KEYS` at the
+parse boundary (`publish_llm._pick()` on the LLM path, the same-named
+comprehensions in `thumbnail.sets_from_dict()` on the CLI path), so a key
+outside that table is dropped before it enters `publish.json` or reaches a
+`magick` command. `resolve_line_style()`/`resolve_set_style()` still validate
+and log an unknown key themselves (`_warn_unknown()`) as a second guard, but
+that path is exercised by direct unit tests, not by the stage in production.
+
+A set with *no* usable style at all gets a whole preset, chosen **round-robin**
+by set index (`preset_for()`) rather than randomly, so a rerun of the same pipeline
 produces the same images and four sets still read as four options.
 
 **Line positions are computed, never the model's.** The model gives the block
@@ -262,8 +270,17 @@ again with **no model call at all**:
 ```bash
 uv run python -m nagare_clip.publish.thumbnail \
   --publish-dir output/publish \
+  --config my_project.yml \
   --background frames/myvideo/2528.021.jpg
 ```
+
+Unlike the pipeline CLI, this one does not fall back to a project config file
+on its own -- `main()` calls `get_effective_config(None, {})` when `--config`
+is omitted, which is pure model defaults (1280x720, no `-font` flag). Pass
+`--config` explicitly (as above) or the re-render silently loses the
+configured canvas size and the CJK font slots. This is deliberate rather than
+a default-discovery bug: the pipeline CLI also requires an explicit `--config`,
+and having this CLI guess at a config path would diverge from that.
 
 `--background` overrides `publish.thumbnail.background` for that run only;
 omit it to use whatever is already configured or the first shortlist entry.

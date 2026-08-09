@@ -245,7 +245,10 @@ def test_parse_metrics_reads_width_and_height_per_line():
     assert parse_metrics("120 42\n980 190\n", expected=2) == [(120, 42), (980, 190)]
 
 
-@pytest.mark.parametrize("out", ["", "120 42\n", "nonsense\n", "120\n980 190\n"])
+@pytest.mark.parametrize(
+    "out",
+    ["", "120 42\n", "nonsense\n", "120\n980 190\n", "12 4a\n980 190\n"],
+)
 def test_parse_metrics_rejects_output_it_cannot_trust(out):
     assert parse_metrics(out, expected=2) is None
 
@@ -307,6 +310,24 @@ def test_a_shrunk_line_takes_less_vertical_room():
 def test_a_line_that_fits_keeps_its_pointsize_exactly():
     placed = _layout([(1000, 190)], styles=[LineStyle(pointsize=156)])
     assert placed[0].style.pointsize == 156
+
+
+def test_a_shrunk_line_keeps_its_font_fill_stroke_and_strokewidth():
+    """The shrink-to-fit branch reduces pointsize only -- everything else the
+    model chose for this (usually the big hook) line must survive it, since
+    building a fresh LineStyle instead of `replace()`-ing the existing one
+    would silently drop font/fill/stroke/strokewidth for exactly the lines
+    that get shrunk."""
+    style = LineStyle(font="F1", pointsize=156, fill="#B08D3E", stroke="white", strokewidth=12)
+    placed = _layout([(2400, 190)], styles=[style])
+    shrunk = placed[0].style
+    assert shrunk.pointsize < 156
+    assert (shrunk.font, shrunk.fill, shrunk.stroke, shrunk.strokewidth) == (
+        "F1",
+        "#B08D3E",
+        "white",
+        12,
+    )
 
 
 def test_the_text_and_the_rest_of_the_style_survive_layout():
@@ -577,6 +598,44 @@ def test_a_missing_magick_binary_drops_every_set_without_raising(tmp_path, caplo
 
     assert render_sets(_sets(2), [_shot()], CFG, tmp_path, run) == []
     assert "magick" in caplog.text
+
+
+# A CalledProcessError's own __str__ never includes stderr (just argv + exit
+# status), and `exc_info=True` logging also dumps the raising frame's SOURCE
+# LINE into caplog.text -- so a stderr literal written directly on a `raise`
+# line would leak into caplog.text via that source dump even without the fix
+# under test, making the assertion pass for the wrong reason. Keeping the
+# value in this module-level constant (referenced by name, not by literal, on
+# the `raise` line below) and asserting against each LogRecord's formatted
+# `getMessage()` -- which excludes the traceback -- avoids that false positive.
+_MAGICK_STDERR = "unable to read font 'X'"
+
+
+def test_a_failing_render_logs_magicks_stderr(tmp_path, caplog):
+    """The most likely real failure -- a `publish.thumbnail.fonts` slot naming a
+    face fontconfig cannot resolve -- must surface magick's own explanation
+    (e.g. "unable to read font 'X'"), not just the argv and exit status."""
+    _touch(tmp_path, "frames/a/1.000.jpg")
+
+    def run(cmd):
+        if cmd[-1] == "info:":
+            return FakeRun()(cmd)
+        raise subprocess.CalledProcessError(1, cmd, output="", stderr=_MAGICK_STDERR)
+
+    renders = render_sets(_sets(1), [_shot()], CFG, tmp_path, run)
+    assert renders == []
+    assert any(_MAGICK_STDERR in r.getMessage() for r in caplog.records)
+
+
+def test_a_failing_measure_logs_magicks_stderr(tmp_path, caplog):
+    _touch(tmp_path, "frames/a/1.000.jpg")
+
+    def run(cmd):
+        raise subprocess.CalledProcessError(1, cmd, output="", stderr=_MAGICK_STDERR)
+
+    renders = render_sets(_sets(1), [_shot()], CFG, tmp_path, run)
+    assert renders == []
+    assert any(_MAGICK_STDERR in r.getMessage() for r in caplog.records)
 
 
 def test_unusable_measure_output_still_renders_the_set(tmp_path):
