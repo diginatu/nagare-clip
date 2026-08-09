@@ -20,7 +20,7 @@ from __future__ import annotations
 import logging
 import re
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Any
 
 logger = logging.getLogger(__name__)
@@ -241,3 +241,56 @@ def parse_metrics(stdout: str, expected: int) -> list[tuple[int, int]] | None:
             return None
         out.append((int(parts[0]), int(parts[1])))
     return out if len(out) == expected else None
+
+
+@dataclass(frozen=True)
+class PlacedLine:
+    text: str
+    style: LineStyle  # pointsize possibly reduced to fit the frame
+    offset: str  # the ready-made `-annotate` argument, e.g. "+56+228"
+
+
+def _parse_offset(offset: str) -> tuple[int, int]:
+    x, y = re.findall(r"[+-]\d+", offset)
+    return int(x), int(y)
+
+
+def layout_lines(
+    lines: Sequence[tuple[str, LineStyle]],
+    metrics: Sequence[tuple[int, int]],
+    set_style: SetStyle,
+    canvas: tuple[int, int],
+    line_gap: int,
+) -> list[PlacedLine]:
+    """Where each line goes, and how big it may be.
+
+    Positions are ours, not the model's: it can pick the block anchor and a
+    point size, but it cannot measure a rendered glyph run, and that is where
+    overlap and overflow come from.
+
+    An over-wide line has its **pointsize** scaled down rather than its
+    rendered layer resized, because the shadow, outline and fill passes must
+    share one size to line up.
+
+    With a ``south*`` gravity a larger ``+y`` moves the text UP, so the block
+    is laid out from its last line; the returned list still reads top-to-bottom.
+    """
+    width, _ = canvas
+    x0, y0 = _parse_offset(set_style.offset)
+    usable = max(width - 2 * abs(x0), 1)
+
+    sized: list[tuple[str, LineStyle, int]] = []
+    for (text, style), (w, h) in zip(lines, metrics):
+        if w > usable:
+            factor = usable / w
+            style = replace(style, pointsize=max(MIN_POINTSIZE, int(style.pointsize * factor)))
+            h = int(h * factor)
+        sized.append((text, style, h))
+
+    order = list(reversed(sized)) if set_style.gravity.startswith("south") else sized
+    placed: list[PlacedLine] = []
+    y = y0
+    for text, style, h in order:
+        placed.append(PlacedLine(text=text, style=style, offset=f"{x0:+d}{y:+d}"))
+        y += h + line_gap
+    return list(reversed(placed)) if set_style.gravity.startswith("south") else placed

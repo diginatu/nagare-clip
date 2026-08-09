@@ -10,8 +10,11 @@ import pytest
 from nagare_clip.publish.thumbnail import (
     PRESETS,
     LineStyle,
+    PlacedLine,
+    SetStyle,
     build_measure_cmd,
     escape_magick_text,
+    layout_lines,
     parse_metrics,
     preset_for,
     resolve_line_style,
@@ -248,3 +251,64 @@ def test_the_measure_command_actually_runs():
     metrics = parse_metrics(out, expected=2)
     assert metrics is not None
     assert metrics[1][0] > metrics[0][0]  # two glyphs are wider than one
+
+
+CANVAS = (1280, 720)
+
+
+def _layout(metrics, gravity="northwest", offset="+56+62", styles=None, gap=12):
+    styles = styles or [LineStyle(pointsize=70)] * len(metrics)
+    lines = [(f"L{i}", s) for i, s in enumerate(styles)]
+    return layout_lines(lines, metrics, SetStyle(gravity=gravity, offset=offset), CANVAS, gap)
+
+
+def test_lines_stack_downward_by_measured_height_plus_the_gap():
+    placed = _layout([(200, 80), (900, 190), (400, 120)])
+    assert [p.offset for p in placed] == ["+56+62", "+56+154", "+56+356"]
+
+
+def test_the_horizontal_offset_is_the_anchor_for_every_line():
+    placed = _layout([(200, 80), (900, 190)], offset="-40+30")
+    assert [p.offset for p in placed] == ["-40+30", "-40+122"]
+
+
+def test_south_gravity_stacks_upward_so_the_block_stays_on_screen():
+    """With a south* gravity a bigger +y moves UP, so the order reverses;
+    the returned list still reads top-to-bottom."""
+    placed = _layout([(200, 80), (900, 190)], gravity="southwest")
+    assert [p.offset for p in placed] == ["+56+264", "+56+62"]
+
+
+def test_a_line_wider_than_the_frame_gets_a_smaller_pointsize():
+    # 2400px wide at 156pt, usable width is 1280 - 2*56 = 1168 -> factor 0.486
+    placed = _layout([(2400, 190)], styles=[LineStyle(pointsize=156)])
+    assert placed[0].style.pointsize == 75
+
+
+def test_shrinking_never_goes_below_the_minimum_pointsize():
+    placed = _layout([(40000, 190)], styles=[LineStyle(pointsize=156)])
+    assert placed[0].style.pointsize == 8
+
+
+def test_a_shrunk_line_takes_less_vertical_room():
+    placed = _layout([(2400, 200), (100, 100)], styles=[LineStyle(pointsize=156), LineStyle()])
+    # 200 * (1168/2400) = 97 -> next line at 62 + 97 + 12
+    assert placed[1].offset == "+56+171"
+
+
+def test_a_line_that_fits_keeps_its_pointsize_exactly():
+    placed = _layout([(1000, 190)], styles=[LineStyle(pointsize=156)])
+    assert placed[0].style.pointsize == 156
+
+
+def test_the_text_and_the_rest_of_the_style_survive_layout():
+    placed = layout_lines(
+        [("穴あけ不要。", LineStyle(fill="#B08D3E", stroke="white", strokewidth=12))],
+        [(300, 190)],
+        SetStyle(),
+        CANVAS,
+        12,
+    )
+    assert placed[0].text == "穴あけ不要。"
+    assert (placed[0].style.fill, placed[0].style.strokewidth) == ("#B08D3E", 12)
+    assert isinstance(placed[0], PlacedLine)
