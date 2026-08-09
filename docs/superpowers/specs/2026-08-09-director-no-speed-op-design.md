@@ -110,10 +110,11 @@ Nothing else changes: `guided_edit/apply.py`, `guided_edit/reconcile.py`,
 The three worked examples were added by improvement 11 precisely because a single
 anchor number becomes the director's uniform output (keep width stuck at
 `[N, N+1]`, overlay durations clustering on the example value, the bare speed
-factor clustering on 4.0). Removing them risks factors clustering at the 4.0
-floor.
+factor clustering on 4.0). Removing them risks factors clustering on the 4.0
+floor or on the `8.0` the JSON-shape example shows — that example must carry a
+valid factor, so one number stays visible either way.
 
-That is a far cheaper failure than the mild band: 4.0 is a real timelapse, the
+That is a far cheaper failure than the mild band: both are real timelapses, the
 floor is parser-enforced, and the run where the band nearly vanished is the run
 where this bullet was at its simplest. If factors do flatten at 4.0 in the next
 run, the fix is a separate, later change — deriving the factor in code from the

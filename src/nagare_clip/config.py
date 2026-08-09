@@ -198,13 +198,12 @@ DIRECTOR_PROMPT = (
     "Prefer a timelapse over a cut where the repetition is VISIBLE WORK building "
     "toward a payoff (failed attempts, assembly, waiting for a result) — "
     "the buildup is part of the story, so timelapse it rather than "
-    "deleting it. Where the repetition is SPEECH, speed is not the tool: "
+    "deleting it. Where the repetition is SPEECH, there is no fast option: "
     "leave it at 1x, or cut the weakest passes. Reserve cut for spans "
     "that leave the throughline entirely (digressions, dead ends, "
     "redundant retakes with no payoff):\n"
     "- cut: remove a boring/redundant span entirely (deletes audio+video).\n"
-    '- speed: play a span slightly faster; give "factor". It is an ACCENT, not a dial for shaving time off speech: stay in the 1.3 to 2.0 band, keep the span itself short — a handful of lines, well under 30 seconds of finished video once the speed is applied — and never let it become the register the video runs in. It protects nothing — unlike a "keep", the silences and pauses inside its span are still dropped — so a fast factor here plays back as sped-up jump cuts. A longer stretch that needs compressing is not a job for speed at all: emit a "timelapse" if it is manual work worth going genuinely fast over, or a "cut" if it is not.\n'
-    '- timelapse: play a long stretch of manual work fast under one on-screen caption; give "factor" (4.0 or more) and "text". Speed is a choice between two modes and this is the second one. LISTENING: the speech carries something the viewer needs — emit no speed op at all, play it at 1x, and if it drags cut the weakest parts instead. TIMELAPSE: the speech is inessential — go genuinely fast and accept that the words become unintelligible; that sacrifice is the point of the mode and is why you must be sure first. Pick "factor" from how long the result should run on screen, not a fixed number — target roughly 1 to 2 minutes of finished timelapse. Worked examples: 4x suits a ~5-minute span (about 1.25 min on screen); once 4x would overstay, step up — 8x suits a ~12-minute span (about 1.5 min); 16x suits a very long ~20-minute span (about 1.25 min). Then weigh how much is actually happening on screen and adjust from there, rather than reading those as a lookup table: a span where the shot barely changes — waiting, a fixed camera on a motionless subject — can go faster than its length suggests, or be cut outright. Hands-on work is not automatically the slow case either; what matters is whether the viewer is still learning something by watching more of it — the first pass of an action must stay legible, but later repetitions of the same action can run much faster once the point has landed. Judge it from length, motion and repetition together. One op does the whole arrangement: the work runs continuously (its internal pauses are preserved, so it is not chopped into jump cuts) and the caption stays on screen for the entire timelapse — do not add a separate "keep", "speed" or "overlay" over the same lines. To change the caption partway through, emit consecutive timelapse ops; a new caption means a new phase of work.\n'
+    '- timelapse: play a long stretch of manual work fast under one on-screen caption; give "factor" (4.0 or more) and "text". Compressing a stretch is a choice between two modes and this is the second one. LISTENING: the speech carries something the viewer needs — play it at 1x, and if it drags cut the weakest parts instead. TIMELAPSE: the speech is inessential — go genuinely fast and accept that the words become unintelligible; that sacrifice is the point of the mode and is why you must be sure first. Pick "factor" so the result runs about a minute on screen: a longer span needs a bigger number, and a span where little is happening can go faster still. One op does the whole arrangement: the work runs continuously (its internal pauses are preserved, so it is not chopped into jump cuts) and the caption stays on screen for the entire timelapse — do not add a separate "keep" or "overlay" over the same lines. To change the caption partway through, emit consecutive timelapse ops; a new caption means a new phase of work.\n'
     '- overlay: show an on-screen caption; give "text" and "duration" '
     "(how many seconds it stays on screen). Pick the duration from reading "
     "length — a short label needs about 2 seconds, a full sentence 4 to 6; "
@@ -231,7 +230,6 @@ DIRECTOR_PROMPT = (
     "JSON shape:\n"
     '{"ops": [\n'
     '  {"type": "cut", "lines": [12, 18], "note": "why / where precisely"},\n'
-    '  {"type": "speed", "lines": [30, 34], "factor": 1.5, "note": "..."},\n'
     '  {"type": "timelapse", "lines": [60, 92], "factor": 8.0, "text": "配管の取り付け", "note": "..."},\n'
     '  {"type": "overlay", "lines": [5, 5], "text": "ポイント", "duration": 2.0, "note": ""},\n'
     '  {"type": "keep", "lines": [40, 42], "note": "..."},\n'
@@ -241,7 +239,7 @@ DIRECTOR_PROMPT = (
     "Rules:\n"
     '- "lines" must be within the transcript range.\n'
     '- A "cut" range must not overlap any other op\'s range: cutting deletes '
-    "the span, so never include a line you also keep/speed/overlay/timelapse in "
+    "the span, so never include a line you also keep/overlay/timelapse in "
     "a cut (e.g. to cut lines 12-18 but keep line 18, emit cut [12, 17]). "
     "Overlapping ops are clipped and the cut loses the shared lines.\n"
     '- Use "note" to describe in natural language precisely WHERE in the '

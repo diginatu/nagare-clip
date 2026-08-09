@@ -349,22 +349,31 @@ def test_director_defaults_present():
     assert isinstance(d["prompt"], str) and d["prompt"]
 
 
-def test_director_prompt_documents_speed_does_not_keep_silence():
-    """The director prompt must tell the LLM that a bare <speed> protects
-    nothing: its internal silences and pauses are still dropped by default,
-    unlike a "timelapse" op's derived keep. The director needs to know this
-    so it doesn't expect a fast `speed` span to play back continuous."""
-    cfg = get_effective_config(None, {})
-    prompt = cfg["director"]["prompt"]
-    speed_line = next(ln for ln in prompt.splitlines() if ln.startswith("- speed:"))
-    assert "keep" in speed_line.lower()
-    assert "silence" in speed_line.lower() or "pause" in speed_line.lower()
-
-
-def _speed_bullet() -> str:
-    """The single DIRECTOR_PROMPT line describing the `speed` op."""
+def test_director_prompt_offers_no_speed_op():
+    """Improvement 16: `speed` is off the director's menu. Three prompt rounds
+    bounded the mild 1.3-2.0 band and it kept coming back (57.4% -> 1.4% ->
+    49.0% -> 29.9% of the finished video), because a middle option is always
+    cheaper to choose than a timelapse. Neither a bullet nor a JSON-shape
+    example may offer it -- an example is what an LLM copies over the prose,
+    and the parser would drop the op it teaches."""
     prompt = get_effective_config(None, {})["director"]["prompt"]
-    return next(ln for ln in prompt.splitlines() if ln.startswith("- speed:"))
+    assert not [ln for ln in prompt.splitlines() if ln.startswith("- speed:")]
+    assert '"type": "speed"' not in prompt
+
+
+def test_every_op_type_in_the_json_shape_is_one_the_director_may_emit():
+    """Each JSON-shape example must survive the real LLM-path parser. An
+    example for an off-menu type would be silently dropped at runtime while
+    still teaching the director to emit it."""
+    from nagare_clip.director.director_llm import MENU_TYPES, try_parse_director_response
+
+    prompt = get_effective_config(None, {})["director"]["prompt"]
+    examples = [ln.strip().rstrip(",") for ln in prompt.splitlines() if '{"type": "' in ln]
+    assert len(examples) == len(MENU_TYPES)
+    for example in examples:
+        ops = try_parse_director_response('{"ops": [' + example + "]}", num_lines=100)
+        assert ops, f"prompt example is dropped by the parser: {example}"
+        assert ops[0].type in MENU_TYPES
 
 
 def _timelapse_bullet() -> str:
@@ -373,16 +382,16 @@ def _timelapse_bullet() -> str:
     return next(ln for ln in prompt.splitlines() if ln.startswith("- timelapse:"))
 
 
-def test_director_prompt_keeps_the_two_mode_choice_across_both_ops():
-    """The listening/timelapse choice now spans two ops -- speed for a mild
-    accent, timelapse for the real thing. It must still read as a choice, not
-    a dial (see docs/superpowers/specs/2026-08-01-speed-two-mode-choice-design.md)."""
-    both = (_speed_bullet() + "\n" + _timelapse_bullet()).lower()
-    assert "not a dial" in both
-    assert "listening" in both
-    assert "timelapse" in both
-    assert "1x" in both
-    assert "cut the weakest parts" in both
+def test_director_prompt_keeps_the_two_mode_choice():
+    """With `speed` off the menu the listening/timelapse choice lives entirely
+    in the timelapse bullet, and it must still read as a choice between two
+    modes (see docs/superpowers/specs/2026-08-01-speed-two-mode-choice-design.md
+    and 2026-08-09-director-no-speed-op-design.md)."""
+    bullet = _timelapse_bullet().lower()
+    assert "two modes" in bullet
+    assert "listening" in bullet
+    assert "1x" in bullet
+    assert "cut the weakest parts" in bullet
 
 
 def test_director_prompt_timelapse_states_its_price():
@@ -398,95 +407,31 @@ def test_director_prompt_timelapse_is_self_contained():
     The prompt must not ask for a companion keep/speed/overlay, or the director
     will emit the ops the desugaring already creates."""
     bullet = _timelapse_bullet().lower()
-    assert 'do not add a separate "keep", "speed" or "overlay"' in bullet
+    assert 'do not add a separate "keep" or "overlay"' in bullet
     assert "consecutive" in bullet  # how to change the caption partway through
 
 
 def test_director_prompt_timelapse_ties_factor_to_target_runtime():
     """A flat factor instruction becomes the director's default regardless of
     wording (see improvement 11: keep width, overlay duration and the old bare
-    speed factor all clustered on the one number the prompt showed). The
-    bullet must instead target an on-screen runtime and offer three worked
-    factors, not one, so no single number is the sole anchor."""
+    speed factor all clustered on the one number the prompt showed), so the
+    bullet states a target on-screen runtime and lets the span's own length
+    set the number -- rather than showing a factor to copy."""
     bullet = _timelapse_bullet().lower()
-    assert "1 to 2 minutes" in bullet
-    assert "4x" in bullet
-    assert "8x" in bullet
-    assert "16x" in bullet
+    assert "about a minute on screen" in bullet
+    assert "longer span" in bullet
 
 
-def test_director_prompt_timelapse_worked_examples_are_arithmetically_correct():
-    """Pin the worked examples' own arithmetic so a typo in the prompt (wrong
-    span length or on-screen result for a stated factor) fails loudly here
-    instead of silently teaching the director bad math."""
-    bullet = _timelapse_bullet()
-    examples = re.findall(
-        r"(\d+)x suits an?(?: \w+)* ~?(\d+(?:\.\d+)?)-minute span \(about (\d+(?:\.\d+)?) min",
-        bullet,
-    )
-    assert len(examples) == 3
-    for factor_s, span_s, result_s in examples:
-        factor, span, result = float(factor_s), float(span_s), float(result_s)
-        assert abs(span / factor - result) < 0.05
-        assert 1.0 <= result <= 2.0
-
-
-def test_director_prompt_timelapse_weighs_visible_motion_and_repetition():
-    """Length is the starting point, not the whole answer: the director must
-    also judge how much is visibly happening and adjust the factor from
-    there, rather than reading the worked examples as a lookup table."""
+def test_director_prompt_timelapse_bullet_stays_cheap_to_choose():
+    """Improvement 16: the run that nearly eliminated the mild band is the run
+    where this bullet was at its simplest; the two rounds that grew it (a
+    target length, three worked examples, motion and repetition to weigh) both
+    saw the band come back, because making the right option harder to choose
+    pushes the director to the easier one. The worked-example table is gone
+    and must not creep back."""
     bullet = _timelapse_bullet().lower()
-    assert "barely changes" in bullet or "motionless" in bullet
-    assert "legible" in bullet
-    assert "repetition" in bullet or "repetitions" in bullet
-
-
-def test_director_prompt_limits_a_bare_speed_op_to_a_mild_accent():
-    """1.3-2.0 was the entire observed range of a real run (57% of the finished
-    video). With timelapse carrying the fast case, that band is all a bare
-    speed op is for."""
-    bullet = _speed_bullet().lower()
-    assert "1.3" in bullet and "2.0" in bullet
-    assert "accent" in bullet
-
-
-def test_director_prompt_speed_span_has_a_duration_limit():
-    """Improvement 14: the factor band alone constrained faithfully in a real
-    run, but nothing bounded the span's length -- two long stretches (11-13
-    minutes of source each) got covered by a mild speed instead of a
-    timelapse or cut, reproducing the register problem the two-mode split
-    was meant to prevent. The bullet needs a number for the span the way it
-    already has one for the factor."""
-    bullet = _speed_bullet().lower()
-    assert "handful of lines" in bullet
-    assert "30 seconds" in bullet
-
-
-def test_director_prompt_speed_span_limit_names_the_alternative():
-    """A length limit with no alternative just gets ignored once a stretch
-    exceeds it: the bullet must say what to reach for instead, for both the
-    worth-going-fast-over case (timelapse) and the case where it isn't
-    (cut)."""
-    bullet = _speed_bullet().lower()
-    assert "not a job for speed at all" in bullet
-    assert '"timelapse"' in bullet
-    assert '"cut"' in bullet
-
-
-def test_director_prompt_speed_example_is_a_mild_accent():
-    """The JSON-shape speed example is what an LLM copies over the prose. Fast
-    now belongs to timelapse, so a 4.0+ speed example would teach exactly the
-    keepless fast speed-up that plays back as jump cuts."""
-    from nagare_clip.director.director_llm import TIMELAPSE_MIN_FACTOR, parse_director_response
-
-    prompt = get_effective_config(None, {})["director"]["prompt"]
-    example = next(
-        line.strip().rstrip(",") for line in prompt.splitlines() if '"type": "speed"' in line
-    )
-    ops = parse_director_response('{"ops": [' + example + "]}", num_lines=100)
-    assert len(ops) == 1
-    assert ops[0].type == "speed"
-    assert ops[0].factor is not None and ops[0].factor < TIMELAPSE_MIN_FACTOR
+    assert "8x" not in bullet and "16x" not in bullet
+    assert "lookup table" not in bullet
 
 
 def test_director_prompt_timelapse_example_parses_and_is_fast():
@@ -708,7 +653,7 @@ def test_director_prompt_treats_long_gap_as_keep_candidate_when_speech_announces
     assert "watchable moment" in prompt
 
 
-def test_director_prompt_prefers_speed_for_visible_work_reserves_cut_for_digressions():
+def test_director_prompt_prefers_timelapse_for_visible_work_reserves_cut_for_digressions():
     """Repetition that is VISIBLE WORK should be timelapsed rather than deleted --
     the tighten-rather-than-delete instinct from the 2026-07-28 rewrite -- while
     cut stays reserved for spans that leave the throughline entirely."""
@@ -720,19 +665,20 @@ def test_director_prompt_prefers_speed_for_visible_work_reserves_cut_for_digress
     assert "visible work" in prompt
 
 
-def test_director_prompt_does_not_offer_speed_as_a_way_to_tighten_speech():
-    """The prefer-speed-over-cut paragraph must route repeated SPEECH to 1x or a
-    cut.  Left ungated it reads as a licence to shave talking with a mild
+def test_director_prompt_does_not_offer_a_fast_option_for_repeated_speech():
+    """The prefer-timelapse-over-cut paragraph must route repeated SPEECH to 1x
+    or a cut.  Left ungated it reads as a licence to shave talking with a mild
     speed-up, which is how a real run put 57% of the finished video under speed
-    with 85% of that footage carrying captions."""
+    with 85% of that footage carrying captions.  It must not name `speed`
+    either: with the op off the menu, mentioning it is naming an option that no
+    longer exists."""
     cfg = get_effective_config(None, {})
     prompt = cfg["director"]["prompt"]
     # The paragraph is one prompt line ending in ":" above the bullet list --
-    # select it alone, so the `- speed:` bullet's own wording cannot satisfy
-    # these assertions for it.
+    # select it alone, so a bullet's own wording cannot satisfy these for it.
     para = next(ln for ln in prompt.splitlines() if "Prefer a timelapse over a cut" in ln).lower()
     assert "speech" in para
-    assert "speed is not the tool" in para
+    assert "speed" not in para
     assert "1x" in para
     assert "cut the weakest passes" in para
 

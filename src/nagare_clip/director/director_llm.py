@@ -44,6 +44,16 @@ CallLLM = Callable[[list[dict[str, str]], dict[str, Any]], str]
 
 VALID_TYPES = {"cut", "speed", "overlay", "keep", "edit", "timelapse"}
 
+# What the director LLM may emit.  ``speed`` is off the menu: three rounds of
+# prompt tightening bounded the mild 1.3-2.0 band and it kept coming back
+# (57.4% -> 1.4% -> 49.0% -> 29.9% of the finished video across four runs of the
+# same footage), because a middle option is always cheaper to choose than a
+# timelapse.  It stays in VALID_TYPES because it is still the marker a
+# timelapse desugars into (guided_edit.timelapse.expand_timelapse_ops, which
+# runs after parsing) and because a human may still write one into the
+# hand-editable _director.json.
+MENU_TYPES = VALID_TYPES - {"speed"}
+
 # The factor DIRECTOR_PROMPT calls a real timelapse; the parse-time floor for
 # a "timelapse" op (see _parse_op) below which it is a mild speed-up instead.
 TIMELAPSE_MIN_FACTOR = 4.0
@@ -220,6 +230,33 @@ def _apply_keep_cap(
     return kept
 
 
+def _drop_off_menu_ops(
+    ops: list[DirectorOp],
+    drops: list[str] | None,
+) -> list[DirectorOp]:
+    """Post-pass: drop an op whose type is not on the director's menu.
+
+    Currently that is ``speed`` only (see :data:`MENU_TYPES`).  A post-pass
+    rather than a check inside :func:`_parse_op` — like :func:`_apply_keep_cap`
+    — so the drop message/logging stays in one place and
+    :func:`ops_from_dict` (the hand-edit path) is left uncapped.
+    """
+    kept: list[DirectorOp] = []
+    for op in ops:
+        if op.type not in MENU_TYPES:
+            msg = (
+                f"{op.type!r} op {list(op.lines)} is not an operation the "
+                'director may emit; a stretch worth going fast over is a "timelapse", '
+                'anything else plays at 1x or is a "cut"'
+            )
+            logger.warning("Director op dropped: %s", msg)
+            if drops is not None:
+                drops.append(msg)
+            continue
+        kept.append(op)
+    return kept
+
+
 def try_parse_director_response(
     response: str,
     num_lines: int,
@@ -258,7 +295,7 @@ def try_parse_director_response(
         op = _parse_op(raw, num_lines, drops)
         if op is not None:
             ops.append(op)
-    return _apply_keep_cap(ops, max_keep_lines, drops)
+    return _apply_keep_cap(_drop_off_menu_ops(ops, drops), max_keep_lines, drops)
 
 
 def parse_director_response(

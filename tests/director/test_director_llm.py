@@ -43,15 +43,15 @@ class TestParseValid:
     def test_parses_all_op_types(self):
         resp = """{"ops": [
           {"type": "cut", "lines": [2, 4], "note": "boring"},
-          {"type": "speed", "lines": [5, 6], "factor": 2.0, "note": ""},
+          {"type": "timelapse", "lines": [5, 6], "factor": 8.0, "note": ""},
           {"type": "overlay", "lines": [1, 1], "text": "ポイント", "duration": 2.5},
           {"type": "keep", "lines": [7, 8]},
           {"type": "edit", "lines": [3, 3], "note": "drop restatement"}
         ]}"""
         ops = parse_director_response(resp, num_lines=10)
-        assert [o.type for o in ops] == ["cut", "speed", "overlay", "keep", "edit"]
+        assert [o.type for o in ops] == ["cut", "timelapse", "overlay", "keep", "edit"]
         assert ops[0] == DirectorOp(type="cut", lines=(2, 4), note="boring")
-        assert ops[1].factor == 2.0
+        assert ops[1].factor == 8.0
         assert ops[2].text == "ポイント"
         assert ops[2].duration == 2.5
 
@@ -242,13 +242,13 @@ class TestKeepWidthLimit:
             {
                 "ops": [
                     {"type": "cut", "lines": [1, 40]},
-                    {"type": "speed", "lines": [41, 90], "factor": 2.0},
+                    {"type": "timelapse", "lines": [41, 90], "factor": 8.0},
                     {"type": "keep", "lines": [91, 130]},
                 ]
             }
         )
         ops = parse_director_response(resp, num_lines=140, max_keep_lines=4)
-        assert [o.type for o in ops] == ["cut", "speed"]
+        assert [o.type for o in ops] == ["cut", "timelapse"]
 
     def test_hand_edited_director_json_is_not_capped(self):
         """`_director.json` is a hand-editable intermediate: a human who writes
@@ -303,27 +303,29 @@ class TestKeepWidthLimit:
 
 
 class TestKeepCapHasNoExemption:
-    """Regression: a wide keep inside a fast speed op used to be exempt.
-    That exemption is removed with the timelapse op (spec 2026-08-01)."""
+    """Regression: a wide keep inside a fast span used to be exempt.
+    That exemption is removed with the timelapse op (spec 2026-08-01).  The
+    fast companion op is a `timelapse` here rather than the `speed` it used to
+    be, because `speed` is no longer an op the director may emit."""
 
-    def test_wide_keep_inside_a_fast_speed_op_is_now_dropped(self):
+    def test_wide_keep_inside_a_timelapse_is_now_dropped(self):
         resp = json.dumps(
             {
                 "ops": [
                     {"type": "keep", "lines": [10, 21], "note": "n"},
-                    {"type": "speed", "lines": [10, 21], "factor": TIMELAPSE_MIN_FACTOR},
+                    {"type": "timelapse", "lines": [10, 21], "factor": TIMELAPSE_MIN_FACTOR},
                 ]
             }
         )
         ops = parse_director_response(resp, num_lines=40, max_keep_lines=8)
-        assert [o.type for o in ops] == ["speed"]
+        assert [o.type for o in ops] == ["timelapse"]
 
-    def test_narrow_keep_inside_a_fast_speed_op_still_survives(self):
+    def test_narrow_keep_inside_a_timelapse_still_survives(self):
         resp = json.dumps(
             {
                 "ops": [
                     {"type": "keep", "lines": [10, 14], "note": "n"},
-                    {"type": "speed", "lines": [10, 21], "factor": TIMELAPSE_MIN_FACTOR},
+                    {"type": "timelapse", "lines": [10, 21], "factor": TIMELAPSE_MIN_FACTOR},
                 ]
             }
         )
@@ -681,14 +683,73 @@ class TestTimelapseOp:
         ]
         assert [o.lines for o in ops_from_dict(data, num_lines=40)] == [(10, 20)]
 
-    def test_a_bare_speed_op_is_untouched_by_the_floor(self):
-        # speed stays a primitive: any positive factor, above or below 4.0.
+    def test_a_hand_written_bare_speed_op_is_untouched_by_the_floor(self):
+        # speed stays a primitive on the hand-edit path: any positive factor,
+        # above or below 4.0.  (The LLM may no longer emit one at all --
+        # see TestSpeedIsOffTheDirectorsMenu.)
+        data = {
+            "ops": [
+                {"type": "speed", "lines": [1, 2], "factor": 1.5},
+                {"type": "speed", "lines": [3, 4], "factor": 8.0},
+            ]
+        }
+        assert [o.factor for o in ops_from_dict(data, num_lines=40)] == [1.5, 8.0]
+
+
+class TestSpeedIsOffTheDirectorsMenu:
+    """Improvement 16: the director LLM may no longer emit a ``speed`` op.
+
+    Three prompt rounds bounded the mild 1.3-2.0 band and it kept coming back
+    (57.4% -> 1.4% -> 49.0% -> 29.9% of the finished video across four runs of
+    the same footage), because a middle option is always cheaper to choose than
+    a timelapse.  Removing it leaves the two-mode choice the prompt describes.
+    ``speed`` remains an internal marker: ``expand_timelapse_ops`` still builds
+    one, and a human may still write one into ``_director.json``.
+    """
+
+    def test_an_llm_emitted_speed_op_is_dropped(self):
+        resp = json.dumps({"ops": [{"type": "speed", "lines": [10, 21], "factor": 1.5}]})
+        assert parse_director_response(resp, num_lines=40) == []
+
+    def test_the_drop_is_reported(self):
+        resp = json.dumps({"ops": [{"type": "speed", "lines": [10, 21], "factor": 1.5}]})
+        drops: list[str] = []
+        try_parse_director_response(resp, num_lines=40, drops=drops)
+        assert len(drops) == 1
+        assert "speed" in drops[0]
+        assert "timelapse" in drops[0]
+
+    def test_the_other_ops_in_the_response_survive(self):
         resp = json.dumps(
             {
                 "ops": [
-                    {"type": "speed", "lines": [1, 2], "factor": 1.5},
-                    {"type": "speed", "lines": [3, 4], "factor": 8.0},
+                    {"type": "cut", "lines": [1, 2]},
+                    {"type": "speed", "lines": [10, 21], "factor": 1.5},
+                    {"type": "timelapse", "lines": [22, 30], "factor": 8.0, "text": "作業"},
                 ]
             }
         )
-        assert [o.factor for o in parse_director_response(resp, num_lines=40)] == [1.5, 8.0]
+        ops = parse_director_response(resp, num_lines=40)
+        assert [o.type for o in ops] == ["cut", "timelapse"]
+
+    def test_every_other_type_is_still_on_the_menu(self):
+        resp = json.dumps(
+            {
+                "ops": [
+                    {"type": "cut", "lines": [1, 2]},
+                    {"type": "overlay", "lines": [3, 3], "text": "ポイント", "duration": 2.0},
+                    {"type": "keep", "lines": [4, 5]},
+                    {"type": "edit", "lines": [6, 6], "note": "n"},
+                    {"type": "timelapse", "lines": [7, 20], "factor": 8.0, "text": "作業"},
+                ]
+            }
+        )
+        ops = parse_director_response(resp, num_lines=40)
+        assert [o.type for o in ops] == ["cut", "overlay", "keep", "edit", "timelapse"]
+
+    def test_a_hand_edited_director_json_keeps_its_speed_op(self):
+        # _director.json is a hand-editable intermediate: a human who writes a
+        # speed op into it means it, exactly as for a wide keep.
+        data = {"ops": [{"type": "speed", "lines": [10, 21], "factor": 1.5}]}
+        ops = ops_from_dict(data, num_lines=40)
+        assert [(o.type, o.factor) for o in ops] == [("speed", 1.5)]
