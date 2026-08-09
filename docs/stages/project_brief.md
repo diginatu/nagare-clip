@@ -1,14 +1,15 @@
 # project brief — runtime notes
 
 The `project:` config section is not a stage: it is a project-wide **editorial
-brief** appended to the system prompts of the four LLM stages that make
-editorial judgements — `summary`, `plan`, `director` and `text_filter`. It
+brief** appended to the system prompts of the five LLM stages that make
+editorial judgements — `summary`, `plan`, `director`, `text_filter` and
+`publish`. It
 carries what no transcript can state: who the video is for, how long it should
 be, how it should feel, and what happened in a previous episode of a series.
 
 Implemented in [`src/nagare_clip/brief.py`](../../src/nagare_clip/brief.py);
 tests in [`tests/test_brief.py`](../../tests/test_brief.py) plus a
-brief-injection test in each of the four stages' `test_run.py`.
+brief-injection test in each of those stages' `test_run.py`.
 
 ## Config
 
@@ -46,7 +47,7 @@ Editorial brief (applies to the whole project; follow it when deciding what to k
 
 `apply_brief(stage_cfg, cfg, keys=("prompt",))` returns a **copy** of the stage
 config with the block appended to each named prompt key, separated by a blank
-line. Only the four stages' `run.py` call it, so the brief enters through the
+line. Only those stages' `run.py` call it, so the brief enters through the
 already-merged `cfg` dict and no LLM module gained a new parameter:
 
 | Stage | Prompt key(s) briefed | Ordering |
@@ -55,6 +56,7 @@ already-merged `cfg` dict and no LLM module gained a new parameter:
 | `plan` | `prompt` | — |
 | `director` | `prompt` | brief first, then the summary/plan overview block appended by `generate_director_ops` |
 | `text_filter` | `prompt` | brief first, then `build_enhanced_prompt`'s per-video summary/keyword context (which stays closest to the transcript) |
+| `publish` | `prompt` | — (the audience/tone the title, lead and thumbnail copy are written for) |
 
 `gap_context`, `sentence_split` and `guided_edit` are deliberately **not**
 briefed: they are mechanical (describe frames / split sentences / apply an op
@@ -65,6 +67,6 @@ paraphrase at worst.
 
 When every field is empty (the default), `format_brief` returns `""` and
 `apply_brief` returns the **same dict object** it was given — so every prompt is
-byte-identical to a run from before this feature existed. Each of the four
-stages has a regression test pinning that (`test_no_brief_leaves_*`).
+byte-identical to a run from before this feature existed. Each briefed
+stage has a regression test pinning that (`test_no_brief_leaves_*`).
 Whitespace-only values count as empty.

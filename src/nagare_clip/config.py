@@ -293,6 +293,48 @@ GAP_CONTEXT_PROMPT = (
     "- Describe only what you can see; do not speculate about the audio."
 )
 
+PUBLISH_PROMPT = (
+    "You write the publishing material for a finished video: the title, the "
+    "description lead, the chapter titles and the thumbnail copy. You receive "
+    "an overall summary of the project, a per-video summary, and the video's "
+    "numbered PARTS (each with a line range and a one-sentence summary); some "
+    "parts may carry the editing plan's direction for them, and a list of the "
+    "on-screen captions the edit places at its payoff moments. Write in the "
+    "same language as those summaries. Output ONLY a JSON object.\n"
+    "\n"
+    "JSON shape:\n"
+    "{\n"
+    '  "titles": ["candidate 1", "candidate 2", "candidate 3"],\n'
+    '  "lead": "two or three sentences opening the description",\n'
+    '  "chapters": [{"index": 1, "title": "short chapter title"}],\n'
+    '  "thumbnail_copy": [\n'
+    '    {"lines": [{"role": "tag", "text": "..."}, {"role": "hook", "text": "..."}]},\n'
+    '    {"lines": [{"role": "hook", "text": "..."}]}\n'
+    "  ]\n"
+    "}\n"
+    "\n"
+    "Rules:\n"
+    '- "titles": several genuinely different candidates, not variations of '
+    "one phrasing — a human picks one. Each stands on its own without the "
+    "thumbnail.\n"
+    '- "lead": what the video does and why someone would watch it. Do NOT '
+    "write timestamps or a chapter list; those are added mechanically.\n"
+    '- "chapters": one entry per part you can title, keyed by the part\'s '
+    "number as given. A few words each, naming what happens — not a "
+    "sentence, and no timestamps (they are computed from the finished "
+    "timeline, which you cannot see). Skipping a part is fine; its summary "
+    "is used instead.\n"
+    '- "thumbnail_copy": two to four ALTERNATIVE sets. Each set is one to '
+    "three lines and must be readable at a glance: a `tag` names the "
+    "genre/series in a word or two, a `hook` is the punchy line the "
+    "thumbnail is built around, a `subtitle` adds the one detail that makes "
+    "the hook land. Only the roles you need — a punchy video may want a hook "
+    "alone. Never pad a set to three lines.\n"
+    "- Prefer the concrete moments the captions and part summaries name "
+    "(a failure, a fix, a result) over generic phrasing.\n"
+    "- Output only the JSON object, no other text."
+)
+
 
 # ---------------------------------------------------------------------------
 # Field helper: mark a field to be emitted commented-out in the example file
@@ -831,6 +873,63 @@ class BlenderConfig(BaseModel):
     speed_mark: SpeedMarkConfig = Field(default_factory=SpeedMarkConfig)
 
 
+class PublishConfig(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    section_comment: ClassVar[str] = (
+        "publish stage: runs once project-wide AFTER blender. An LLM turns the summaries\n"
+        "and the project brief into several title candidates, a description lead, chapter\n"
+        "titles and alternative thumbnail-copy sets; the chapter TIMESTAMPS are computed\n"
+        "from the finished timeline (keep intervals + speed ranges), which exists nowhere\n"
+        "else. Stills are extracted at the moments the director marked as payoffs, so a\n"
+        "human picks a thumbnail frame from a shortlist. Output publish.md (reviewable)\n"
+        "and publish.json (for a project-level compositing script). Uploading, and\n"
+        "compositing the final thumbnail, stay manual. Disabled by default (no-op)."
+    )
+    enabled: bool = Field(False, description="Enable the publish LLM")
+    provider: str = Field(
+        "ollama_chat",
+        description="LiteLLM provider prefix: ollama_chat | openai | gemini | anthropic",
+    )
+    api_base: str = Field(
+        "",
+        description="Base URL; empty -> Ollama localhost default; leave empty for cloud providers",
+    )
+    model: str = Field(
+        "gpt-oss:120b", description='A larger model (passed to LiteLLM as "<provider>/<model>")'
+    )
+    api_key: str = Field("", description="API key for the provider (or set the provider's env var)")
+    temperature: float = Field(
+        0.7,
+        description="Higher than the editing stages: title and hook candidates should differ from each other",
+    )
+    thinking: bool | str = Field(False)
+    timeout: int = Field(300)
+    response_format: str = Field("json")
+    max_retries: int = Field(
+        2, description="Extra attempts on LLM error / unparseable JSON (0 = single attempt)"
+    )
+    retry_temp_step: float = Field(0.2)
+    retry_temp_cap: float = Field(0.8)
+    min_chapter_duration: float = Field(
+        10.0,
+        description=(
+            "YouTube ignores a chapter list unless every chapter is at least this long; "
+            "a shorter one is merged into a neighbour"
+        ),
+    )
+    max_frames: int = Field(
+        24,
+        ge=0,
+        description="Cap on thumbnail candidate stills (0 = no limit); overlays outrank keeps",
+    )
+    frame_width: int = Field(
+        1280, description="Downscale width (px) of the extracted JPEG stills; height is auto"
+    )
+    prompt: str = _commented(
+        PUBLISH_PROMPT, sample='"..."', description="System prompt (has a sensible default)"
+    )
+
+
 class PipelineConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
     input_videos_dir: str = Field("src_video")
@@ -841,7 +940,7 @@ class PipelineConfig(BaseModel):
         "transcription", description="Start from this stage; reuses earlier stage outputs"
     )
     to_stage: str = Field(
-        "blender", description="Stop after this stage (inclusive). Must not precede from_stage"
+        "publish", description="Stop after this stage (inclusive). Must not precede from_stage"
     )
 
 
@@ -865,6 +964,7 @@ class NagareClipConfig(BaseModel):
     guided_edit: GuidedEditConfig = Field(default_factory=GuidedEditConfig)
     intervals: IntervalsConfig = Field(default_factory=IntervalsConfig)
     blender: BlenderConfig = Field(default_factory=BlenderConfig)
+    publish: PublishConfig = Field(default_factory=PublishConfig)
     pipeline: PipelineConfig = Field(default_factory=PipelineConfig)
 
 

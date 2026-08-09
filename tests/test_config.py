@@ -232,7 +232,7 @@ class TestGetEffectiveConfig:
     def test_pipeline_stage_defaults_are_names(self):
         cfg = get_effective_config(None)
         assert cfg["pipeline"]["from_stage"] == "transcription"
-        assert cfg["pipeline"]["to_stage"] == "blender"
+        assert cfg["pipeline"]["to_stage"] == "publish"
 
     def test_transcription_language_default(self):
         cfg = get_effective_config(None)

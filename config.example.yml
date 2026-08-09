@@ -251,8 +251,34 @@ blender:
     location_y: 0.95
     # color: [1, 1, 1, 1]   # Font fill color (RGBA); overrides caption_style
 
+# publish stage: runs once project-wide AFTER blender. An LLM turns the summaries
+# and the project brief into several title candidates, a description lead, chapter
+# titles and alternative thumbnail-copy sets; the chapter TIMESTAMPS are computed
+# from the finished timeline (keep intervals + speed ranges), which exists nowhere
+# else. Stills are extracted at the moments the director marked as payoffs, so a
+# human picks a thumbnail frame from a shortlist. Output publish.md (reviewable)
+# and publish.json (for a project-level compositing script). Uploading, and
+# compositing the final thumbnail, stay manual. Disabled by default (no-op).
+publish:
+  enabled: false   # Enable the publish LLM
+  provider: ollama_chat   # LiteLLM provider prefix: ollama_chat | openai | gemini | anthropic
+  api_base: ""   # Base URL; empty -> Ollama localhost default; leave empty for cloud providers
+  model: "gpt-oss:120b"   # A larger model (passed to LiteLLM as "<provider>/<model>")
+  api_key: ""   # API key for the provider (or set the provider's env var)
+  temperature: 0.7   # Higher than the editing stages: title and hook candidates should differ from each other
+  thinking: false
+  timeout: 300
+  response_format: json
+  max_retries: 2   # Extra attempts on LLM error / unparseable JSON (0 = single attempt)
+  retry_temp_step: 0.2
+  retry_temp_cap: 0.8
+  min_chapter_duration: 10.0   # YouTube ignores a chapter list unless every chapter is at least this long; a shorter one is merged into a neighbour
+  max_frames: 24   # Cap on thumbnail candidate stills (0 = no limit); overlays outrank keeps
+  frame_width: 1280   # Downscale width (px) of the extracted JPEG stills; height is auto
+  # prompt: "..."   # System prompt (has a sensible default)
+
 pipeline:
   input_videos_dir: src_video
   output_dir: output   # Root dir; stage outputs go to per-stage named subdirs
   from_stage: transcription   # Start from this stage; reuses earlier stage outputs
-  to_stage: blender   # Stop after this stage (inclusive). Must not precede from_stage
+  to_stage: publish   # Stop after this stage (inclusive). Must not precede from_stage

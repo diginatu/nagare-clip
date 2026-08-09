@@ -57,18 +57,22 @@ runtime behavior.
   when skipping ..."). Any stage exception other than `PipelineError` is
   wrapped as `PipelineError(f"[{stage.name}] failed: {exc}")` so the CLI's
   top-level handler is the only place that prints and exits non-zero.
-- `stages.py` — `STAGE_NAMES` (the eleven canonical stage names, in order) and
+- `stages.py` — `STAGE_NAMES` (the twelve canonical stage names, in order) and
   `STAGES` (the `Stage` registry consumed by `runner.run_stages`). One adapter
   function per stage translates `PipelineContext` into that stage's typed
   `run()` call (`run_audio_silence`, `run_sentence_split`, `run_gap_context`,
   `run_summary`, `run_text_filter`, `run_plan`, `run_director`,
-  `run_guided_edit`, `run_intervals`) or an external command (`transcription`,
-  `blender`). `transcription`, `summary`, `plan`, and `blender` run once per
-  pipeline invocation; `audio_silence`, `sentence_split`, `gap_context`,
-  `text_filter`, `director`, `guided_edit`, and `intervals` loop per source
-  inside their adapter. Each LLM stage adapter (`sentence_split`,
-  `gap_context`, `summary`, `text_filter`, `plan`, `director`,
-  `guided_edit`) owns its `llm_report.Recorder` lifecycle: it builds one
+  `run_guided_edit`, `run_intervals`, `run_publish`) or an external command
+  (`transcription`, `blender`). `transcription`, `summary`, `plan`, `blender`
+  and `publish` run once per pipeline invocation; `audio_silence`,
+  `sentence_split`, `gap_context`, `text_filter`, `director`, `guided_edit`,
+  and `intervals` loop per source inside their adapter. `publish` runs once
+  but still reads per-source material (its frame shortlist and caption list),
+  which it gathers in the adapter before a single batched Docker call — the
+  same shape as `gap_context`'s extraction. Each LLM stage adapter
+  (`sentence_split`, `gap_context`, `summary`, `text_filter`, `plan`,
+  `director`, `guided_edit`, `publish`) owns its `llm_report.Recorder`
+  lifecycle: it builds one
   recorder via `recorder_from_config(stage, cfg, override_dir=...)`, calls
   `rec.clear()` **once before** its stem loop (so a stage's `output/llm_report/`
   subdir is cleared exactly once per run, not once per source), then
@@ -118,8 +122,8 @@ interpreter exit, instead of once per stage subprocess under the old script.
 ## Output layout
 
 Output dirs are one per stage by name, created up front by `cli.main()`:
-`output/transcription|audio_silence|sentence_split|gap_context|summary|text_filter|plan|director|guided_edit|intervals|blender/`.
-`sentence_split`/`gap_context`/`summary`/`plan`/`director`/`guided_edit` all still run
+`output/transcription|audio_silence|sentence_split|gap_context|summary|text_filter|plan|director|guided_edit|intervals|blender|publish/`.
+`sentence_split`/`gap_context`/`summary`/`plan`/`director`/`guided_edit`/`publish` all still run
 unconditionally (cheap no-ops when their stage is disabled in config), exactly
 as under the bash orchestrator — see [AGENTS.md](../../AGENTS.md#pipeline-overview)
 for what each no-op produces.

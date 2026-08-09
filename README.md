@@ -17,8 +17,9 @@ The pipeline creates a rough-cut Blender project for human review and fine-tunin
 9. guided_edit (optional): a small LLM applies the director's ops into `_edits.txt` (deterministically verified)
 10. intervals: Patch application + keep intervals -> `*_intervals.json` keep ranges (audio cuts unioned in)
 11. blender: Blender headless -> `.blend` with VSE strips arranged back-to-back
+12. publish (optional, project-wide): title candidates, a description with chapter timestamps taken from the finished timeline, thumbnail copy and candidate stills -> reviewable `output/publish/publish.md` + `publish.json`
 
-Stages are referenced by name (`--from-stage <name>`); the gap_context/summary/plan/director/guided_edit stages are no-ops unless enabled in config.
+Stages are referenced by name (`--from-stage <name>`); the gap_context/summary/plan/director/guided_edit/publish stages are no-ops unless enabled in config.
 
 ## Human Editing Workflow
 
@@ -55,9 +56,46 @@ The `<overlay text="..." duration="3.0"/>` marker places an on-screen TEXT strip
 
 The `<cut>...</cut>` tag deletes the wrapped text. It is a shorthand for `{{wrapped->}}` deletion patches (and can span multiple lines — open on the first, close on the last), so use it to drop whole sentences or sections. There is no separate "cut this time range" mechanism: removing the words opens a gap between the surviving neighbours that the word-gap silence detection cuts from the timeline, so `<cut>` is meant for **larger** deletions (a span shorter than the silence threshold may not actually be cut). Because the text is deleted, no caption is shown for it. Do not overlap `<cut>` with `<keep>`/`<speed>` on the same span, or let it swallow an `<overlay/>` marker.
 
+### Publishing material (`output/publish/`)
+
+The optional `publish` stage runs **after** Blender and writes what you would
+otherwise retype by hand for every upload. Enable `publish.enabled` in config;
+it writes files, you upload.
+
+`output/publish/publish.md` is the reviewable file:
+
+- **Title candidates** — several, not one. Hook quality varies a lot between
+  attempts and picking from a list is cheap.
+- **Description** — a short lead written from the whole-video summary and your
+  `project:` brief, followed by the chapter list, ready to paste.
+- **Thumbnail copy** — alternative sets of one to three lines, each tagged
+  `tag` / `hook` / `subtitle`. The count is never padded to fill a template:
+  a punchier video may want just a hook.
+- **Thumbnail frame candidates** — a table of stills extracted at the moments
+  the director marked as payoffs (`overlay` captions, `keep` events, and both
+  boundaries of a `timelapse`), so you pick from a shortlist instead of
+  scrubbing the timeline. The JPEGs are under `output/publish/frames/`.
+
+`output/publish/publish.json` holds the same material as data, for a
+project-level thumbnail script — compositing the chosen frame and copy stays
+yours, since fonts, colours and layout are taste and change from video to
+video. Write that script to take a **variable** number of lines and its styling
+as parameters, and it can read the copy straight out of this file.
+
+**Chapter timestamps come from the finished timeline**, not from the source: a
+part that was cut entirely drops out of the list, and a part inside a timelapse
+gets its compressed position. YouTube only turns a timestamp list into chapters
+when the first entry is exactly `0:00`, there are at least three, they ascend,
+and each runs at least 10 seconds — so the stage forces the first entry to
+`0:00` (your opening is almost always partly cut) and merges any chapter that
+lands under 10 seconds into a neighbour. The list is written either way: YouTube
+auto-links timestamps regardless, so a list of two still lets a viewer jump — it
+just does not draw the segmented progress bar. When the conditions are not met,
+`publish.md` says so and why.
+
 ### LLM report (`output/llm_report/`)
 
-Every LLM stage (`sentence_split`, `gap_context`, `text_filter`, `summary`, `plan`, `director`, `guided_edit`)
+Every LLM stage (`sentence_split`, `gap_context`, `text_filter`, `summary`, `plan`, `director`, `guided_edit`, `publish`)
 writes a per-call record under `output/llm_report/`: an `index.md` table
 (stage, unit, attempts, outcome, reason) linking to per-call detail files under
 `<stage>/<unit>.md` that hold the full prompt and raw response for every attempt,
@@ -180,6 +218,7 @@ This produces outputs under `output/` (or your `--output-dir`), including:
 - `text_filter/myvideo_edits.txt`
 - `intervals/myvideo_intervals.json`
 - `blender/myvideo_edited.blend` (named after the first source file)
+- `publish/publish.md` + `publish/publish.json` (when `publish.enabled`)
 
 ## Configuration
 
@@ -214,11 +253,11 @@ project:
 
 `previous_summary` is how a series carries over: point it at the earlier project's `output/summary/summary.json` and the director learns what "これ" refers to when the cut opens mid-story. A missing or unreadable file just drops that one line (logged), leaving the rest of the brief intact. `target_duration` and `tone` are what stop `plan` from defaulting every part to a conservative "shorten" and let `director` deviate from its default ~1-overlay-per-3-5-minutes density. The mechanical stages (`gap_context`, `sentence_split`, `guided_edit`) are deliberately not briefed.
 
-The config file covers all sections, each named after its stage: `general`, `project`, `transcription`, `audio_silence`, `sentence_split`, `gap_context`, `text_filter`, `summary`, `plan`, `director`, `guided_edit`, `intervals`, `blender`, `pipeline`. See `config.example.yml` for the full list of keys and their defaults.
+The config file covers all sections, each named after its stage: `general`, `project`, `transcription`, `audio_silence`, `sentence_split`, `gap_context`, `text_filter`, `summary`, `plan`, `director`, `guided_edit`, `intervals`, `blender`, `publish`, `pipeline`. See `config.example.yml` for the full list of keys and their defaults.
 
 ### Choosing an LLM provider
 
-Every LLM stage (`sentence_split`, `gap_context`, `text_filter`, `summary`, `plan`, `director`, `guided_edit`) routes through a unified transport backed by the [LiteLLM](https://github.com/BerriAI/litellm) library, so you can point any stage at a local or cloud provider. On a stage's config block, set `provider:` to one of `ollama_chat` (default, local Ollama), `openai`, `gemini`, or `anthropic`, and set `model:` to that provider's model name — LiteLLM receives the combined `"<provider>/<model>"`. Supply credentials with `api_key:` (or the provider's standard environment variable, e.g. `OPENAI_API_KEY`, `GEMINI_API_KEY`, `ANTHROPIC_API_KEY`). Leave `api_base:` empty for cloud providers; for `ollama_chat` an empty `api_base` falls back to local Ollama (`http://localhost:11434`). Each stage chooses its provider independently, so you can mix (e.g. a cloud model for `director` and local Ollama for `guided_edit`).
+Every LLM stage (`sentence_split`, `gap_context`, `text_filter`, `summary`, `plan`, `director`, `guided_edit`, `publish`) routes through a unified transport backed by the [LiteLLM](https://github.com/BerriAI/litellm) library, so you can point any stage at a local or cloud provider. On a stage's config block, set `provider:` to one of `ollama_chat` (default, local Ollama), `openai`, `gemini`, or `anthropic`, and set `model:` to that provider's model name — LiteLLM receives the combined `"<provider>/<model>"`. Supply credentials with `api_key:` (or the provider's standard environment variable, e.g. `OPENAI_API_KEY`, `GEMINI_API_KEY`, `ANTHROPIC_API_KEY`). Leave `api_base:` empty for cloud providers; for `ollama_chat` an empty `api_base` falls back to local Ollama (`http://localhost:11434`). Each stage chooses its provider independently, so you can mix (e.g. a cloud model for `director` and local Ollama for `guided_edit`).
 
 ```yaml
 director:
@@ -339,8 +378,8 @@ Options:
 - `--source FILE` — source video file (may be repeated for multiple sources); when omitted, all videos in `--input-videos-dir` are processed alphabetically.
 - `--config FILE` — path to a YAML config file; config values fill in between CLI overrides and built-in defaults.
 - `--language LANG` — ISO 639-1 language code passed to WhisperX (default: `ja`). Also settable via `transcription.language` in config.
-- `--from-stage NAME` — start from stage `NAME`, reusing earlier stage outputs. `NAME` is a stage name: `transcription`, `audio_silence`, `sentence_split`, `gap_context`, `summary`, `text_filter`, `plan`, `director`, `guided_edit`, `intervals`, `blender`. Also settable via `pipeline.from_stage` in config.
-- `--to-stage NAME` — stop **after** stage `NAME` (inclusive); later stages are skipped. Same stage names as `--from-stage`, and must not precede it. Defaults to `blender` (run to the end). Also settable via `pipeline.to_stage` in config. Combine with `--from-stage` to run a window of stages, e.g. `--from-stage summary --to-stage director`.
+- `--from-stage NAME` — start from stage `NAME`, reusing earlier stage outputs. `NAME` is a stage name: `transcription`, `audio_silence`, `sentence_split`, `gap_context`, `summary`, `text_filter`, `plan`, `director`, `guided_edit`, `intervals`, `blender`, `publish`. Also settable via `pipeline.from_stage` in config.
+- `--to-stage NAME` — stop **after** stage `NAME` (inclusive); later stages are skipped. Same stage names as `--from-stage`, and must not precede it. Defaults to `publish` (run to the end). Also settable via `pipeline.to_stage` in config. Combine with `--from-stage` to run a window of stages, e.g. `--from-stage summary --to-stage director`.
 - Defaults: input videos under `src_video/`, outputs under `output/`.
 - If `--source` contains `/`, it is treated as the exact path; otherwise it is resolved inside `--input-videos-dir`.
 - `silence_threshold` and `min_keep` default to `1.5` and `1.0` (overridable via config).
@@ -425,6 +464,18 @@ blender --background --factory-startup --python-exit-code 1 --python src/nagare_
   --output output/blender/myvideo_edited.blend \
   --config my_project.yml
 ```
+
+### publish only (title, description, chapters, thumbnail material)
+
+```bash
+./scripts/run_pipeline.sh --from-stage publish --to-stage publish --config my_project.yml
+```
+
+Reuses `output/summary/summary.json`, `output/plan/plan.json`, each source's
+`output/director/{stem}_director.json` and `output/intervals/{stem}_intervals.json`,
+so it can be re-run on its own to get a different set of title/thumbnail
+candidates without touching the cut. Any of those inputs missing degrades just
+the part that needed it (no intervals → no chapter timestamps).
 
 ## Operational Notes
 
