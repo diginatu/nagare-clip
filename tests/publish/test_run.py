@@ -7,7 +7,8 @@ from __future__ import annotations
 import json
 
 import nagare_clip.publish.run as publish_run
-from nagare_clip.publish.publish_llm import PublishCopy, ThumbLine
+from nagare_clip.publish.publish_llm import PublishCopy, ThumbLine, ThumbSet
+from nagare_clip.publish.thumbnail import ThumbRender
 from nagare_clip.publish.thumbs import ThumbShot
 from nagare_clip.summary.summarize import PartSummary, ProjectSummary, summary_to_dict
 
@@ -47,7 +48,9 @@ def _copy(**kwargs) -> PublishCopy:
         "titles": ["候補1", "候補2"],
         "lead": "リード文。",
         "chapter_titles": {1: "おさらい", 2: "取り付け", 3: "テスト"},
-        "thumbnail_copy": [[ThumbLine("tag", "水槽DIY"), ThumbLine("hook", "水浸し！")]],
+        "thumbnail_copy": [
+            ThumbSet(lines=[ThumbLine("tag", "水槽DIY"), ThumbLine("hook", "水浸し！")], style={})
+        ],
     }
     base.update(kwargs)
     return PublishCopy(**base)
@@ -75,6 +78,7 @@ def test_disabled_writes_an_empty_artifact(tmp_path):
         "chapter_issues": [],
         "thumbnail_copy": [],
         "thumbnails": [],
+        "renders": [],
     }
     assert "disabled" in md.read_text(encoding="utf-8")
 
@@ -93,7 +97,7 @@ def test_enabled_writes_titles_and_description_with_chapters(tmp_path, monkeypat
     assert data["chapters_qualify"] is True
     assert data["chapter_issues"] == []
     assert data["thumbnail_copy"] == [
-        [{"role": "tag", "text": "水槽DIY"}, {"role": "hook", "text": "水浸し！"}]
+        {"lines": [{"role": "tag", "text": "水槽DIY"}, {"role": "hook", "text": "水浸し！"}]}
     ]
     text = md.read_text(encoding="utf-8")
     assert "候補1" in text and "0:00 おさらい" in text
@@ -252,3 +256,86 @@ def test_missing_intervals_file_still_writes_the_copy(tmp_path, monkeypatch):
     data = json.loads(out.read_text(encoding="utf-8"))
     assert data["titles"] == ["候補1", "候補2"]
     assert data["chapters"] == []
+
+
+def _sets():
+    return [
+        ThumbSet(lines=[ThumbLine("tag", "水槽DIY"), ThumbLine("hook", "水浸し！")], style={}),
+        ThumbSet(lines=[ThumbLine("hook", "穴あけ不要。")], style={"gravity": "southwest"}),
+    ]
+
+
+def test_disabled_artifact_has_an_empty_renders_array(tmp_path):
+    data, _ = _write(tmp_path, {"publish": {"enabled": False}})
+    assert data["renders"] == []
+
+
+def test_the_renders_are_recorded_in_the_artifact(tmp_path, monkeypatch):
+    _fake_generate(monkeypatch, _copy(thumbnail_copy=_sets()))
+
+    def render(sets, thumbs):
+        return [ThumbRender(1, "thumbnails/set1.jpg", "frames/a/1.000.jpg")]
+
+    data, _ = _write(tmp_path, {"publish": {"enabled": True}}, render=render)
+    assert data["renders"] == [
+        {"set": 1, "path": "thumbnails/set1.jpg", "background": "frames/a/1.000.jpg"}
+    ]
+
+
+def test_the_renderer_receives_the_sets_and_the_shortlist(tmp_path, monkeypatch):
+    _fake_generate(monkeypatch, _copy(thumbnail_copy=_sets()))
+    seen = {}
+
+    def render(sets, thumbs):
+        seen["sets"] = sets
+        seen["thumbs"] = thumbs
+        return []
+
+    shots = [ThumbShot("a", 12.0, "overlay", "l", "frames/a/12.000.jpg")]
+    _write(tmp_path, {"publish": {"enabled": True}}, render=render, thumbs=shots)
+    assert len(seen["sets"]) == 2
+    assert seen["thumbs"] == shots
+
+
+def test_each_rendered_thumbnail_appears_under_its_copy_set(tmp_path, monkeypatch):
+    _fake_generate(monkeypatch, _copy(thumbnail_copy=_sets()))
+
+    def render(sets, thumbs):
+        return [
+            ThumbRender(1, "thumbnails/set1.jpg", "b.jpg"),
+            ThumbRender(2, "thumbnails/set2.jpg", "b.jpg"),
+        ]
+
+    _, md = _write(tmp_path, {"publish": {"enabled": True}}, render=render)
+    text = md.read_text(encoding="utf-8")
+    first = text.index("### Set 1")
+    second = text.index("### Set 2")
+    assert first < text.index('<img src="thumbnails/set1.jpg"') < second
+    assert second < text.index('<img src="thumbnails/set2.jpg"')
+
+
+def test_a_set_without_a_render_still_shows_its_copy(tmp_path, monkeypatch):
+    _fake_generate(monkeypatch, _copy(thumbnail_copy=_sets()))
+
+    def render(sets, thumbs):
+        return [ThumbRender(2, "thumbnails/set2.jpg", "b.jpg")]
+
+    _, md = _write(tmp_path, {"publish": {"enabled": True}}, render=render)
+    text = md.read_text(encoding="utf-8")
+    assert "水浸し！" in text
+    assert "thumbnails/set1.jpg" not in text
+
+
+def test_no_renderer_leaves_the_markdown_without_images(tmp_path, monkeypatch):
+    _fake_generate(monkeypatch, _copy(thumbnail_copy=_sets()))
+    _, md = _write(tmp_path, {"publish": {"enabled": True}})
+    assert "<img" not in md.read_text(encoding="utf-8").split("## Thumbnail frame")[0]
+
+
+def test_the_candidate_table_shows_the_still_not_its_path(tmp_path, monkeypatch):
+    _fake_generate(monkeypatch, _copy())
+    shots = [ThumbShot("a", 12.0, "overlay", "水浸し！", "frames/a/12.000.jpg")]
+    _, md = _write(tmp_path, {"publish": {"enabled": True}}, thumbs=shots)
+    text = md.read_text(encoding="utf-8")
+    assert '<img src="frames/a/12.000.jpg" width="240">' in text
+    assert "`frames/a/12.000.jpg`" not in text

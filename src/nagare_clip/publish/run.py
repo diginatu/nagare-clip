@@ -25,7 +25,7 @@ from __future__ import annotations
 
 import json
 import logging
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from pathlib import Path
 from typing import Any
 
@@ -43,9 +43,11 @@ from nagare_clip.publish.chapters import (
 )
 from nagare_clip.publish.publish_llm import (
     PublishCopy,
+    ThumbSet,
     generate_publish_copy,
     thumbnail_copy_to_dict,
 )
+from nagare_clip.publish.thumbnail import ThumbRender
 from nagare_clip.publish.thumbs import ThumbShot
 from nagare_clip.publish.timeline import (
     Placement,
@@ -67,6 +69,7 @@ def empty_publish() -> dict[str, Any]:
         "chapter_issues": [],
         "thumbnail_copy": [],
         "thumbnails": [],
+        "renders": [],
     }
 
 
@@ -165,10 +168,13 @@ def _render_markdown(data: dict[str, Any], enabled: bool) -> str:
     lines.append("")
 
     lines += ["## Thumbnail copy", ""]
+    by_index = {r["set"]: r["path"] for r in data["renders"]}
     if data["thumbnail_copy"]:
-        for i, thumb_set in enumerate(data["thumbnail_copy"]):
-            lines.append(f"### Set {i + 1}")
-            lines += [f"- {line['role']}: {line['text']}" for line in thumb_set]
+        for i, thumb_set in enumerate(data["thumbnail_copy"], start=1):
+            lines.append(f"### Set {i}")
+            lines += [f"- {line['role']}: {line['text']}" for line in thumb_set["lines"]]
+            if i in by_index:
+                lines += ["", f'<img src="{by_index[i]}" width="480">']
             lines.append("")
     else:
         lines += ["_(none)_", ""]
@@ -184,7 +190,7 @@ def _render_markdown(data: dict[str, Any], enabled: bool) -> str:
             )
             lines.append(
                 f"| {at} | {thumb['source_time']:.1f}s | {thumb['kind']} | "
-                f"{thumb['label']} | `{thumb['path']}` |"
+                f'{thumb["label"]} | <img src="{thumb["path"]}" width="240"> |'
             )
     else:
         lines.append("_(none)_")
@@ -203,6 +209,7 @@ def run_publish(
     thumbs: Sequence[ThumbShot] | None = None,
     markdown: Path | None = None,
     recorder: Recorder = NULL_RECORDER,
+    render: Callable[[Sequence[ThumbSet], Sequence[ThumbShot]], list[ThumbRender]] | None = None,
 ) -> None:
     publish_cfg = cfg["publish"]
     enabled = bool(publish_cfg.get("enabled", False))
@@ -232,6 +239,7 @@ def run_publish(
         chapter_lines = render_chapter_lines(chapters)
         issues = chapter_issues(chapters, total, min_duration=min_chapter)
         description = "\n\n".join(part for part in (copy.lead, "\n".join(chapter_lines)) if part)
+        renders = list(render(copy.thumbnail_copy, thumbs or [])) if render else []
 
         data = {
             "titles": copy.titles,
@@ -245,13 +253,18 @@ def run_publish(
             "chapter_issues": issues,
             "thumbnail_copy": thumbnail_copy_to_dict(copy),
             "thumbnails": _thumbnail_entries(thumbs or [], placements),
+            "renders": [
+                {"set": r.index, "path": r.path, "background": r.background} for r in renders
+            ],
         }
         logging.info(
-            "publish: %d title(s), %d chapter(s), %d thumbnail copy set(s), %d frame(s)",
+            "publish: %d title(s), %d chapter(s), %d thumbnail copy set(s), %d frame(s), "
+            "%d thumbnail render(s)",
             len(data["titles"]),
             len(data["chapters"]),
             len(data["thumbnail_copy"]),
             len(data["thumbnails"]),
+            len(data["renders"]),
         )
 
     output.parent.mkdir(parents=True, exist_ok=True)
