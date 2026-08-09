@@ -10,7 +10,9 @@ from __future__ import annotations
 
 import json
 import logging
+from collections.abc import Sequence
 from pathlib import Path
+from typing import Any
 
 from nagare_clip.audio_silence.cuts_file import read_cuts
 from nagare_clip.audio_silence.run import run_audio_silence
@@ -34,12 +36,14 @@ from nagare_clip.pipeline.external import (
     build_snapshot_batch_cmd,
     build_transcription_cmd,
     run_command,
+    run_magick,
 )
 from nagare_clip.pipeline.runner import PipelineContext, Stage
 from nagare_clip.pipeline.sources import SourceMedia
 from nagare_clip.plan.run import run_plan
 from nagare_clip.publish.publish_llm import collect_overlay_texts
 from nagare_clip.publish.run import run_publish
+from nagare_clip.publish.thumbnail import ThumbRender, render_sets
 from nagare_clip.publish.thumbs import (
     ThumbCandidate,
     ThumbShot,
@@ -544,6 +548,15 @@ def _extract_thumb_frames(
     return shots
 
 
+def _render_thumbnails(
+    ctx: PipelineContext, sets: Sequence[Any], thumbs: Sequence[ThumbShot]
+) -> list[ThumbRender]:
+    """Composite each copy set over the chosen still (host ImageMagick)."""
+    return render_sets(
+        sets, thumbs, ctx.cfg["publish"]["thumbnail"], ctx.stage_dir("publish"), run_magick
+    )
+
+
 def _publish_run(ctx: PipelineContext) -> None:
     print("[publish] Title, description, chapters, thumbnail material")
     rec = _recorder(ctx, "publish")
@@ -574,6 +587,7 @@ def _publish_run(ctx: PipelineContext) -> None:
             thumbs=thumbs,
             markdown=d / "publish.md",
             recorder=rec,
+            render=lambda sets, shots: _render_thumbnails(ctx, sets, shots),
         )
     finally:
         rec.rebuild_index()
