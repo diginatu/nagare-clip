@@ -494,14 +494,15 @@ def _runner() -> Callable[[list[str]], str]:
     return run_magick
 
 
-def _shots_from_dict(data: Any, stage_dir: Path) -> list[Any]:
+def _shots_from_dict(data: Any) -> list[Any]:
     """``thumbnails`` read back out of publish.json, as real ``ThumbShot``s.
 
     Tolerant like ``sets_from_dict``: a missing/malformed field falls back to
-    a sensible default, and an entry with no usable ``path`` is dropped --
-    ``resolve_background``/``render_sets`` only need ``.path`` to exist on
-    disk, but a real dataclass beats an anonymous stand-in for anything that
-    later touches ``.stem``/``.time``/``.kind``/``.label``.
+    a sensible default, and an entry with no usable ``path`` is dropped. Path
+    existence is not checked here -- ``resolve_background``/``render_sets``
+    do that against the stage dir -- but a real dataclass beats an anonymous
+    stand-in for anything that later touches ``.stem``/``.time``/``.kind``/
+    ``.label``.
     """
     from nagare_clip.publish.thumbs import ThumbShot
 
@@ -571,7 +572,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         thumbnail_cfg["background"] = args.background
     thumbnail_cfg["enabled"] = True
 
-    shots = _shots_from_dict(data, stage_dir)
+    shots = _shots_from_dict(data)
     renders = render_sets(sets_from_dict(data), shots, thumbnail_cfg, stage_dir, _runner())
     for render in renders:
         print(f"set {render.index}: {stage_dir / render.path}")

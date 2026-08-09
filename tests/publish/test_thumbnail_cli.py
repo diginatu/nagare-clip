@@ -9,6 +9,7 @@ import pytest
 
 from nagare_clip.publish import thumbnail
 from nagare_clip.publish.publish_llm import ThumbLine, ThumbSet
+from nagare_clip.publish.thumbs import ThumbShot
 
 PUBLISH_JSON = {
     "titles": ["A"],
@@ -43,6 +44,53 @@ def test_sets_are_read_back_out_of_publish_json():
 @pytest.mark.parametrize("data", [{}, {"thumbnail_copy": "x"}, {"thumbnail_copy": [1, None]}])
 def test_a_file_with_no_usable_sets_reads_as_empty(data):
     assert thumbnail.sets_from_dict(data) == []
+
+
+def test_a_well_formed_thumbnail_entry_maps_every_field():
+    data = {
+        "thumbnails": [
+            {
+                "stem": "a",
+                "source_time": 12.5,
+                "kind": "overlay",
+                "label": "the reveal",
+                "path": "frames/a/12.500.jpg",
+            }
+        ]
+    }
+    shots = thumbnail._shots_from_dict(data)
+    assert shots == [
+        ThumbShot(
+            stem="a", time=12.5, kind="overlay", label="the reveal", path="frames/a/12.500.jpg"
+        )
+    ]
+    assert isinstance(shots[0].time, float)
+
+
+@pytest.mark.parametrize("bad_time", [None, "not-a-number", "", {}, [1, 2]])
+def test_a_non_numeric_or_missing_source_time_falls_back_without_raising(bad_time):
+    data = {"thumbnails": [{"stem": "a", "source_time": bad_time, "path": "frames/a/1.jpg"}]}
+    shots = thumbnail._shots_from_dict(data)
+    assert shots == [ThumbShot(stem="a", time=0.0, kind="", label="", path="frames/a/1.jpg")]
+
+
+@pytest.mark.parametrize(
+    "raw",
+    [
+        {"stem": "a", "source_time": 1.0},
+        {"stem": "a", "source_time": 1.0, "path": ""},
+        {"stem": "a", "source_time": 1.0, "path": "   "},
+    ],
+)
+def test_an_entry_with_no_usable_path_is_dropped(raw):
+    assert thumbnail._shots_from_dict({"thumbnails": [raw]}) == []
+
+
+@pytest.mark.parametrize(
+    "data", [{}, {"thumbnails": "x"}, {"thumbnails": None}, {"thumbnails": [1, None]}]
+)
+def test_a_non_list_thumbnails_value_reads_as_empty(data):
+    assert thumbnail._shots_from_dict(data) == []
 
 
 def _project(tmp_path):
