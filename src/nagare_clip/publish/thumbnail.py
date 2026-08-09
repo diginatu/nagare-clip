@@ -454,3 +454,129 @@ def render_sets(
         renders.append(ThumbRender(index=index, path=rel, background=bg_name))
     logger.info("publish: rendered %d thumbnail(s)", len(renders))
     return renders
+
+
+def sets_from_dict(data: Any) -> list[Any]:
+    """``thumbnail_copy`` read back out of publish.json.
+
+    Lenient, like every hand-editable intermediate in this pipeline: a
+    malformed set is dropped, never raised.
+    """
+    from nagare_clip.publish.publish_llm import ThumbLine, ThumbSet
+
+    raw_sets = data.get("thumbnail_copy") if isinstance(data, Mapping) else None
+    out = []
+    for raw in raw_sets if isinstance(raw_sets, list) else []:
+        if not isinstance(raw, Mapping):
+            continue
+        lines = []
+        for entry in raw.get("lines") if isinstance(raw.get("lines"), list) else []:
+            if not isinstance(entry, Mapping):
+                continue
+            role = str(entry.get("role", "")).strip().lower()
+            text = str(entry.get("text", "")).strip()
+            if not text:
+                continue
+            lines.append(
+                ThumbLine(
+                    role=role, text=text, style={k: entry[k] for k in LINE_KEYS if k in entry}
+                )
+            )
+        if lines:
+            out.append(ThumbSet(lines=lines, style={k: raw[k] for k in SET_KEYS if k in raw}))
+    return out
+
+
+def _runner() -> Callable[[list[str]], str]:
+    """The subprocess runner, indirected so tests never shell out."""
+    from nagare_clip.pipeline.external import run_magick
+
+    return run_magick
+
+
+def _shots_from_dict(data: Any, stage_dir: Path) -> list[Any]:
+    """``thumbnails`` read back out of publish.json, as real ``ThumbShot``s.
+
+    Tolerant like ``sets_from_dict``: a missing/malformed field falls back to
+    a sensible default, and an entry with no usable ``path`` is dropped --
+    ``resolve_background``/``render_sets`` only need ``.path`` to exist on
+    disk, but a real dataclass beats an anonymous stand-in for anything that
+    later touches ``.stem``/``.time``/``.kind``/``.label``.
+    """
+    from nagare_clip.publish.thumbs import ThumbShot
+
+    raw_thumbs = data.get("thumbnails") if isinstance(data, Mapping) else None
+    out = []
+    for raw in raw_thumbs if isinstance(raw_thumbs, list) else []:
+        if not isinstance(raw, Mapping):
+            continue
+        path = str(raw.get("path", "")).strip()
+        if not path:
+            continue
+        try:
+            time = float(raw.get("source_time", 0.0))
+        except (TypeError, ValueError):
+            time = 0.0
+        out.append(
+            ThumbShot(
+                stem=str(raw.get("stem", "")),
+                time=time,
+                kind=str(raw.get("kind", "")),
+                label=str(raw.get("label", "")),
+                path=path,
+            )
+        )
+    return out
+
+
+def main(argv: Sequence[str] | None = None) -> int:
+    """Re-render the thumbnails from an existing publish.json.
+
+    Picking the background and nudging a colour is iterative; re-running the
+    stage would re-run the LLM and change the copy being judged.  So this CLI
+    makes no model call at all -- it only re-reads ``publish.json`` (the
+    hand-editable contract for the look) and re-runs ImageMagick.
+    """
+    import argparse
+    import json
+    import sys
+
+    from nagare_clip.config import get_effective_config
+
+    parser = argparse.ArgumentParser(description="Re-render publish thumbnails")
+    parser.add_argument(
+        "--publish-dir",
+        default="output/publish",
+        help="directory holding publish.json (default: output/publish)",
+    )
+    parser.add_argument("--config", default=None, help="config YAML")
+    parser.add_argument(
+        "--background",
+        default=None,
+        help="still to composite onto (overrides publish.thumbnail.background)",
+    )
+    args = parser.parse_args(argv)
+
+    logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
+    stage_dir = Path(args.publish_dir)
+    publish_json = stage_dir / "publish.json"
+    if not publish_json.is_file():
+        print(f"error: no publish.json at {publish_json}", file=sys.stderr)
+        return 1
+    data = json.loads(publish_json.read_text(encoding="utf-8"))
+
+    cfg = get_effective_config(Path(args.config) if args.config else None, {})
+    thumbnail_cfg = dict(cfg["publish"]["thumbnail"])
+    if args.background:
+        thumbnail_cfg["background"] = args.background
+    thumbnail_cfg["enabled"] = True
+
+    shots = _shots_from_dict(data, stage_dir)
+    renders = render_sets(sets_from_dict(data), shots, thumbnail_cfg, stage_dir, _runner())
+    for render in renders:
+        print(f"set {render.index}: {stage_dir / render.path}")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
