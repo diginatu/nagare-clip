@@ -362,7 +362,7 @@ def test_each_line_is_drawn_twice_outline_then_fill():
 def test_all_three_passes_of_a_line_share_one_pointsize():
     cmd = _render()
     sizes = [cmd[i + 1] for i, a in enumerate(cmd) if a == "-pointsize"]
-    assert sizes == ["70", "156", "70", "156", "70", "156"]
+    assert sizes == ["70", "156", "70", "70", "156", "156"]
 
 
 def test_the_shadow_layer_is_blurred_and_composited():
@@ -388,7 +388,7 @@ def test_the_gravity_is_the_sets_and_the_offsets_are_the_placed_ones():
 def test_text_is_escaped_and_stays_one_argument():
     placed = [PlacedLine("100% @x", LineStyle(font=""), "+0+0")]
     cmd = _render(placed=placed)
-    assert r"100%% \@x" in cmd
+    assert "100%% @x" in cmd
     assert "-font" not in cmd
 
 

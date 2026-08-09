@@ -352,7 +352,6 @@ def build_render_cmd(
             stroke=line.style.stroke,
             strokewidth=line.style.strokewidth,
         )
-    for line in placed:
         cmd += _annotate(line, fill=line.style.fill, stroke="none", strokewidth=0)
     cmd += ["-quality", "92", str(out_path)]
     return cmd
