@@ -7,10 +7,14 @@ import json
 
 from nagare_clip.plan.plan_llm import PartDirection
 from nagare_clip.publish.publish_llm import (
+    PublishCopy,
     ThumbLine,
+    ThumbSet,
     collect_overlay_texts,
+    font_slot_note,
     format_publish_context,
     generate_publish_copy,
+    thumbnail_copy_to_dict,
     try_parse_publish_response,
 )
 from nagare_clip.summary.summarize import PartSummary, ProjectSummary
@@ -52,8 +56,8 @@ def test_full_response_round_trips():
     assert copy.lead == "前回作った装置を実際の水槽で試します。"
     assert copy.chapter_titles == {1: "前回のおさらい", 2: "取り付け"}
     assert copy.thumbnail_copy == [
-        [ThumbLine("tag", "水槽DIY"), ThumbLine("hook", "水浸し！")],
-        [ThumbLine("hook", "穴あけ不要。")],
+        ThumbSet(lines=[ThumbLine("tag", "水槽DIY"), ThumbLine("hook", "水浸し！")], style={}),
+        ThumbSet(lines=[ThumbLine("hook", "穴あけ不要。")], style={}),
     ]
 
 
@@ -104,13 +108,14 @@ def test_thumbnail_set_of_one_to_three_lines_is_kept_verbatim():
     }
     copy = try_parse_publish_response(json.dumps(data), num_parts=2)
     assert copy is not None
-    assert [len(s) for s in copy.thumbnail_copy] == [1, 3]
+    assert [len(s.lines) for s in copy.thumbnail_copy] == [1, 3]
 
 
 def test_thumbnail_set_is_never_padded_to_three_lines():
     data = {"titles": ["A"], "thumbnail_copy": [{"lines": [{"role": "hook", "text": "one"}]}]}
     copy = try_parse_publish_response(json.dumps(data), num_parts=2)
-    assert copy is not None and copy.thumbnail_copy == [[ThumbLine("hook", "one")]]
+    assert copy is not None
+    assert copy.thumbnail_copy == [ThumbSet(lines=[ThumbLine("hook", "one")], style={})]
 
 
 def test_unknown_role_drops_only_that_line():
@@ -122,7 +127,8 @@ def test_unknown_role_drops_only_that_line():
     }
     drops: list[str] = []
     copy = try_parse_publish_response(json.dumps(data), num_parts=2, drops=drops)
-    assert copy is not None and copy.thumbnail_copy == [[ThumbLine("hook", "h")]]
+    assert copy is not None
+    assert copy.thumbnail_copy == [ThumbSet(lines=[ThumbLine("hook", "h")], style={})]
     assert drops
 
 
@@ -143,7 +149,7 @@ def test_thumbnail_set_longer_than_three_lines_is_trimmed():
     drops: list[str] = []
     copy = try_parse_publish_response(json.dumps(data), num_parts=2, drops=drops)
     assert copy is not None
-    assert [line.text for line in copy.thumbnail_copy[0]] == ["1", "2", "3"]
+    assert [line.text for line in copy.thumbnail_copy[0].lines] == ["1", "2", "3"]
     assert drops
 
 
@@ -229,3 +235,153 @@ def test_generate_without_parts_makes_no_call():
     copy = generate_publish_copy(ProjectSummary("", []), {"prompt": "P"}, call_llm=fake_call)
     assert called["n"] == 0
     assert copy.titles == []
+
+
+# --- thumbnail style ---------------------------------------------------------
+
+
+def test_line_style_keys_are_carried_through():
+    data = {
+        "titles": ["A"],
+        "thumbnail_copy": [
+            {
+                "lines": [
+                    {
+                        "role": "hook",
+                        "text": "h",
+                        "font": "serif-black",
+                        "pointsize": 156,
+                        "fill": "#B08D3E",
+                        "stroke": "white",
+                        "strokewidth": 12,
+                    }
+                ]
+            }
+        ],
+    }
+    copy = try_parse_publish_response(json.dumps(data), num_parts=1)
+    assert copy is not None
+    assert copy.thumbnail_copy[0].lines[0].style == {
+        "font": "serif-black",
+        "pointsize": 156,
+        "fill": "#B08D3E",
+        "stroke": "white",
+        "strokewidth": 12,
+    }
+
+
+def test_set_style_keys_are_carried_through():
+    data = {
+        "titles": ["A"],
+        "thumbnail_copy": [
+            {
+                "lines": [{"role": "hook", "text": "h"}],
+                "gravity": "southwest",
+                "offset": "+56+62",
+                "shadow": {"color": "rgba(0,0,0,0.8)", "blur": "0x8"},
+            }
+        ],
+    }
+    copy = try_parse_publish_response(json.dumps(data), num_parts=1)
+    assert copy is not None
+    assert copy.thumbnail_copy[0].style == {
+        "gravity": "southwest",
+        "offset": "+56+62",
+        "shadow": {"color": "rgba(0,0,0,0.8)", "blur": "0x8"},
+    }
+
+
+def test_unknown_style_keys_never_reach_the_artifact():
+    """Validation lives in thumbnail.py, but an operator-shaped key has no
+    business being carried at all."""
+    data = {
+        "titles": ["A"],
+        "thumbnail_copy": [
+            {"lines": [{"role": "hook", "text": "h", "-write": "/tmp/x"}], "-delete": "0"}
+        ],
+    }
+    copy = try_parse_publish_response(json.dumps(data), num_parts=1)
+    assert copy is not None
+    assert copy.thumbnail_copy[0].lines[0].style == {}
+    assert copy.thumbnail_copy[0].style == {}
+
+
+def test_a_set_with_no_style_still_parses():
+    data = {"titles": ["A"], "thumbnail_copy": [{"lines": [{"role": "hook", "text": "h"}]}]}
+    copy = try_parse_publish_response(json.dumps(data), num_parts=1)
+    assert copy is not None
+    assert copy.thumbnail_copy == [ThumbSet(lines=[ThumbLine("hook", "h")], style={})]
+
+
+def test_thumbnail_copy_to_dict_flattens_style_beside_the_text():
+    copy = PublishCopy(
+        titles=["A"],
+        thumbnail_copy=[
+            ThumbSet(
+                lines=[ThumbLine("hook", "h", {"fill": "#B08D3E", "pointsize": 156})],
+                style={"gravity": "southwest"},
+            )
+        ],
+    )
+    assert thumbnail_copy_to_dict(copy) == [
+        {
+            "lines": [{"role": "hook", "text": "h", "fill": "#B08D3E", "pointsize": 156}],
+            "gravity": "southwest",
+        }
+    ]
+
+
+def test_the_prompts_own_thumbnail_example_parses():
+    """A stale example in the prompt must fail loudly, not quietly mislead."""
+    from nagare_clip.config import DEFAULTS
+
+    prompt = DEFAULTS["publish"]["prompt"]
+    start = prompt.index("{\n")
+    shape = prompt[start : prompt.index("\n}\n", start) + 3]
+    copy = try_parse_publish_response(shape, num_parts=3)
+    assert copy is not None
+    assert copy.thumbnail_copy and copy.thumbnail_copy[0].lines
+
+
+def test_the_prompt_tells_the_model_the_sets_must_look_different():
+    from nagare_clip.config import DEFAULTS
+
+    assert "differ" in DEFAULTS["publish"]["prompt"]
+
+
+def test_font_slot_note_lists_the_configured_slots():
+    note = font_slot_note({"serif-black": "X", "sans-bold": "Y"})
+    assert "sans-bold" in note and "serif-black" in note
+
+
+def test_the_system_prompt_is_unchanged_when_no_fonts_are_configured(monkeypatch):
+    """Regression guard: a project without font slots gets the prompt it had."""
+    seen = []
+
+    def fake_call(messages, cfg):
+        seen.append(messages[0]["content"])
+        return json.dumps({"titles": ["A"]})
+
+    project = ProjectSummary("s", [PartSummary("a", (1, 2), "p")])
+    generate_publish_copy(project, {"prompt": "BASE"}, call_llm=fake_call)
+    generate_publish_copy(
+        project, {"prompt": "BASE", "thumbnail": {"fonts": {}}}, call_llm=fake_call
+    )
+    assert seen == ["BASE", "BASE"]
+
+
+def test_the_font_slots_are_appended_to_the_system_prompt(monkeypatch):
+    seen = []
+
+    def fake_call(messages, cfg):
+        seen.append(messages[0]["content"])
+        return json.dumps({"titles": ["A"]})
+
+    project = ProjectSummary("s", [PartSummary("a", (1, 2), "p")])
+    generate_publish_copy(
+        project,
+        {"prompt": "BASE", "thumbnail": {"fonts": {"sans-bold": "X"}}},
+        call_llm=fake_call,
+    )
+    assert seen[0].startswith("BASE\n\n")
+    assert "sans-bold" in seen[0]

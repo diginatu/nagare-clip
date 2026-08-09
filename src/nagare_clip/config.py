@@ -306,8 +306,12 @@ PUBLISH_PROMPT = (
     '  "lead": "two or three sentences opening the description",\n'
     '  "chapters": [{"index": 1, "title": "short chapter title"}],\n'
     '  "thumbnail_copy": [\n'
-    '    {"lines": [{"role": "tag", "text": "..."}, {"role": "hook", "text": "..."}]},\n'
-    '    {"lines": [{"role": "hook", "text": "..."}]}\n'
+    '    {"lines": [{"role": "tag", "text": "...", "font": "<slot>", "pointsize": 70,\n'
+    '                "fill": "white", "stroke": "rgba(30,30,30,1)", "strokewidth": 8},\n'
+    '               {"role": "hook", "text": "...", "font": "<slot>", "pointsize": 156,\n'
+    '                "fill": "#B08D3E", "stroke": "rgba(250,250,250,1)", "strokewidth": 12}],\n'
+    '     "gravity": "northwest", "offset": "+56+62",\n'
+    '     "shadow": {"color": "rgba(0,0,0,0.8)", "blur": "0x8"}}\n'
     "  ]\n"
     "}\n"
     "\n"
@@ -328,6 +332,16 @@ PUBLISH_PROMPT = (
     "thumbnail is built around, a `subtitle` adds the one detail that makes "
     "the hook land. Only the roles you need — a punchy video may want a hook "
     "alone. Never pad a set to three lines.\n"
+    "- Each thumbnail set also carries its own LOOK, as ImageMagick options "
+    'on a 1280x720 canvas: per line "fill" and "stroke" colours '
+    '(#RRGGBB or rgba(r,g,b,a)), "strokewidth" (0-40, the outline that '
+    'keeps text readable over a photo), "pointsize" (8-400; a hook is '
+    'large, a tag small); per set "gravity" (northwest / north / … / '
+    'southeast), "offset" (+x+y from that corner) and "shadow". The sets '
+    "must DIFFER visibly from each other in colour and placement, not only "
+    "in wording — they are alternatives a human chooses between. Line "
+    "positions are computed, so give the block anchor, not a position per "
+    "line.\n"
     "- Prefer the concrete moments the captions and part summaries name "
     "(a failure, a fix, a result) over generic phrasing.\n"
     "- Output only the JSON object, no other text."
