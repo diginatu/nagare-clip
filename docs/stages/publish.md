@@ -11,9 +11,10 @@ uploads.
 
 | Path | What it is |
 |------|------------|
-| `output/publish/publish.md` | The reviewable file: title candidates, a copy-pasteable description, thumbnail copy, the frame shortlist |
-| `output/publish/publish.json` | The same material as data, for a project-level thumbnail script |
+| `output/publish/publish.md` | The reviewable file: title candidates, a copy-pasteable description, thumbnail copy + renders, the frame shortlist |
+| `output/publish/publish.json` | The same material as data — including the model-authored look, the hand-editable contract the re-render CLI reads |
 | `output/publish/frames/{stem}/{t:.3f}.jpg` | Candidate stills at the director's payoff moments |
+| `output/publish/thumbnails/set{N}.jpg` | One rendered thumbnail per copy set (`N` matches `publish.md`'s `### Set N`) |
 
 Disabled by default (`publish.enabled: false`) → `publish.json` holds the full
 shape with nothing in it, `publish.md` says the stage is off, and no LLM or
@@ -152,18 +153,132 @@ init against ~30ms of actual ffmpeg work per still. A failed batch is logged
 and the shortlist comes back empty — it never aborts the run — and a candidate
 whose file was not written is dropped individually.
 
+## Thumbnail rendering
+
+The predecessor of this stage was a hand-written ImageMagick script with the
+copy hardcoded into it (`-annotate +56+62 "水槽DIY"` and two more lines that
+restated what `summary.json` already said). The argument for keeping
+compositing out of the pipeline was that fonts, colours and layout are taste —
+true, and not a reason: `blender.caption_style`/`overlay_style`/`speed_mark`
+already hold exactly that kind of taste and the blender stage renders from
+them. What changes per project is the *values*, not the *procedure* — run
+ImageMagick once per copy set, stack one to three lines, shrink text that
+overruns the frame — so `thumbnail.py` (`render_sets()`) now does that
+procedure itself, once per copy set from `publish_llm.py`.
+
+**The look is model-authored, in ImageMagick's own vocabulary.** The same LLM
+call that writes a set's copy also writes that copy's style, as magick flags
+with magick's own value syntax — the model reasons about the tool it already
+knows rather than an abstraction over it:
+
+| key | flag | scope | accepted |
+|---|---|---|---|
+| `font` | `-font` | line | a key of `publish.thumbnail.fonts` (a config *slot name*, never a path — the model cannot know what is installed) |
+| `pointsize` | `-pointsize` | line | int 8–400 |
+| `fill` | `-fill` | line | `#RGB`/`#RRGGBB`/`#RRGGBBAA`, `rgb(…)`/`rgba(…)`, or a named-colour allowlist |
+| `stroke` | `-stroke` | line | as `fill` |
+| `strokewidth` | `-strokewidth` | line | int 0–40 |
+| `gravity` | `-gravity` | set | one of the nine gravity names |
+| `offset` | `-annotate +x+y` | set | `[+-]N[+-]N`, within the canvas |
+| `shadow` | (an inline blurred layer) | set | `{color, blur}`, `blur` as `RxS` |
+
+`resolve_line_style()`/`resolve_set_style()` validate and clamp every value
+against that table; an unknown key is dropped with a log line, and a rejected
+value falls back to a preset's value **per key** — one bad colour does not
+cost the set the rest of the style the model chose for it. A set with *no*
+usable style at all gets a whole preset, chosen **round-robin** by set index
+(`preset_for()`) rather than randomly, so a rerun of the same pipeline
+produces the same images and four sets still read as four options.
+
+**Line positions are computed, never the model's.** The model gives the block
+anchor (`gravity` + `offset`) and each line's point size; it cannot measure a
+rendered glyph run, and that is exactly where overlap and overflow come from.
+`render_sets()` makes **two** `magick` calls per set:
+
+1. **measure** (`build_measure_cmd()`) — every line as a parenthesised
+   `label:`, one call, `-format '%w %h\n' info:` reading back each line's
+   natural width/height (`parse_metrics()`; a partial/unparseable result falls
+   back to an estimate from point size rather than mislaying a line);
+2. **render** (`build_render_cmd()`) — the background `-resize …^ -gravity
+   center -extent …`, an inline blurred shadow layer covering every line in
+   one composite, then each line drawn twice (`-stroke` pass, `-fill` pass) —
+   following `make_thumb.sh`, the predecessor script.
+
+`layout_lines()` stacks the measured lines from the anchor by height + a
+config gap (`publish.thumbnail.line_gap`, default `12`px), reversed for
+`south*` gravities since a larger `+y` there moves text *up*. An over-wide
+line has its **pointsize** scaled down — never its rendered layer resized —
+because the shadow/outline/fill passes of one line must share a single point
+size to stay in register; `MIN_POINTSIZE` (`8`) floors the shrink so a very
+wide line does not vanish.
+
+**Escaping is not optional**, verified against ImageMagick 7.1.2 on both
+`label:` and `-annotate`: `%w` expands to the image width (`%%` renders a
+literal `%`); a backslash is an escape (`\n` becomes a real newline); and a
+**leading** `@` makes ImageMagick read a *file* — `label:@secret.txt` rendered
+that file's contents into the image. The copy is LLM-written and may contain
+any of the three, so `escape_magick_text()` applies all three rules, in this
+order — `\` → `\\`, then `%` → `%%`, then a leading `@` → `\@` — so the
+backslash added last is not re-escaped by the first rule.
+
+**Every command is an argument list, never a shell string.** The publish
+prompt is fed the summaries, the plan directions and the director's captions —
+all derived from the video's transcript — so anything said on camera reaches
+the model that would author a `magick` invocation, and `magick` reads and
+writes files (`@`, `-write`, MSL). With an allowlisted operator set and argv
+construction the worst a bad generation can do is an ugly image.
+
+**Degrading**: a missing `magick`, a non-zero exit, unusable metrics, or no
+background still each drop that render with a warning and the run continues —
+`publish.json` is written either way, exactly as a failed frame batch behaves
+today. `resolve_background()` picks the still every set is composited onto:
+`publish.thumbnail.background` if set (relative to the stage dir, or
+absolute), else the first entry of the frame shortlist, else no rendering at
+all for the whole stage.
+
+`publish.json` gains a `renders` array beside `thumbnails` —
+`{set, path, background}` — and `publish.md` embeds
+`<img src="thumbnails/set1.jpg" width="480">` under each `### Set N`. The
+candidate table's frame column is likewise an `<img>` now, not a backticked
+path: reviewing a shortlist of stills means looking at them, not opening files
+by hand.
+
+### Re-rendering without re-running the LLM
+
+Picking a background still and nudging a colour is iterative, and re-running
+the `publish` stage would call the LLM again and hand you different copy than
+the one you were just judging. `publish.json`'s `thumbnail_copy` is therefore
+the hand-editable contract for the look — the same pattern as `_director.json`
+for the edit — and `python -m nagare_clip.publish.thumbnail` (`main()`) reads
+it back with `sets_from_dict()`/`_shots_from_dict()` and calls `render_sets()`
+again with **no model call at all**:
+
+```bash
+uv run python -m nagare_clip.publish.thumbnail \
+  --publish-dir output/publish \
+  --background frames/myvideo/2528.021.jpg
+```
+
+`--background` overrides `publish.thumbnail.background` for that run only;
+omit it to use whatever is already configured or the first shortlist entry.
+Hand-edit a set's `fill`/`stroke`/`gravity`/… in `publish.json` first, then
+re-run the CLI to see the change without touching the copy.
+
+### ImageMagick runs on the host
+
+`magick` is called on the host, like the `blender` stage already is — a
+deliberate exception to AGENTS.md's "route media tooling through the whisperx
+Docker image" constraint (see Hard Constraints there). That constraint is
+about ffmpeg; this is a different tool, and the decision is explicit: the
+whisperx image has neither ImageMagick nor CJK fonts, and font slots resolve
+through *host* fontconfig, which is what makes a CJK font slot work at all.
+
 ## What stays manual
 
-Compositing the chosen frame and copy into the final image is a
-project-level script: fonts, colours, shadows and layout are taste, and they
-change from video to video, not just from channel to channel. The predecessor
-of this stage was a hand-written ImageMagick script with the copy hardcoded
-into it (`-annotate +56+62 "水槽DIY"` and two more lines that restated what
-`summary.json` already said). What this stage owes such a script is the copy
-and the shortlist in `publish.json`; the script's job is to take a **variable**
-number of lines and its styling as parameters.
-
-Uploading stays manual too.
+Uploading. Compositing itself is no longer manual — the stage renders a real
+thumbnail per copy set — but the choice of which set to ship, and any taste
+adjustment beyond what a config key or a hand-edited `publish.json` covers,
+is still a human call.
 
 ## Every input is optional
 
@@ -183,6 +298,17 @@ the chapters simply come back empty.
 | `max_frames` | `24` | Cap on candidate stills (`0` = no limit) |
 | `frame_width` | `1280` | Downscale width of the extracted JPEGs |
 | `temperature` | `0.7` | Deliberately higher than the editing stages |
+
+`publish.thumbnail:` (needs `magick` on PATH; `enabled: false` skips
+rendering, not the copy):
+
+| Key | Default | Meaning |
+|-----|---------|---------|
+| `enabled` | `true` | Render one thumbnail per copy set |
+| `background` | `""` | Still to composite onto — relative to `output/publish/`, or absolute; empty = the first frame-shortlist candidate |
+| `width` / `height` | `1280` / `720` | Canvas size in px |
+| `line_gap` | `12` | Vertical gap between stacked lines, in px |
+| `fonts` | `{}` | Slot name → ImageMagick font name/path; the *only* names the model may put in a `font` value, since it cannot know what is installed |
 
 The `project:` brief is appended to the prompt like the other briefed stages
 (`apply_brief`), so the copy knows the audience and tone.
