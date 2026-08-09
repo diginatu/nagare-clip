@@ -9,7 +9,10 @@ import pytest
 
 from nagare_clip.publish.thumbnail import (
     PRESETS,
+    LineStyle,
+    build_measure_cmd,
     escape_magick_text,
+    parse_metrics,
     preset_for,
     resolve_line_style,
     resolve_set_style,
@@ -205,3 +208,43 @@ def test_presets_differ_from_each_other():
 def test_preset_for_is_round_robin_and_one_based():
     assert preset_for(1) is PRESETS[0]
     assert preset_for(len(PRESETS) + 1) is PRESETS[0]
+
+
+def test_measure_puts_every_line_in_one_call():
+    cmd = build_measure_cmd(
+        [("A", LineStyle(font="F", pointsize=70)), ("B", LineStyle(font="", pointsize=156))]
+    )
+    assert cmd[0] == "magick"
+    assert cmd.count("(") == 2 and cmd.count(")") == 2
+    assert cmd[-2:] == ["-format", "%w %h\n"] or cmd[-1] == "info:"
+    assert cmd[-1] == "info:"
+
+
+def test_measure_omits_the_font_flag_when_no_face_is_configured():
+    cmd = build_measure_cmd([("A", LineStyle(font="", pointsize=70))])
+    assert "-font" not in cmd
+
+
+def test_measure_escapes_the_text_and_passes_it_as_one_argument():
+    cmd = build_measure_cmd([("100% @x", LineStyle())])
+    assert r"label:100%% \@x" in cmd
+
+
+def test_parse_metrics_reads_width_and_height_per_line():
+    assert parse_metrics("120 42\n980 190\n", expected=2) == [(120, 42), (980, 190)]
+
+
+@pytest.mark.parametrize("out", ["", "120 42\n", "nonsense\n", "120\n980 190\n"])
+def test_parse_metrics_rejects_output_it_cannot_trust(out):
+    assert parse_metrics(out, expected=2) is None
+
+
+@pytest.mark.skipif(not HAS_MAGICK, reason="ImageMagick not installed")
+def test_the_measure_command_actually_runs():
+    cmd = build_measure_cmd(
+        [("あ", LineStyle(font="", pointsize=40)), ("いい", LineStyle(font="", pointsize=40))]
+    )
+    out = subprocess.run(cmd, check=True, capture_output=True, text=True).stdout
+    metrics = parse_metrics(out, expected=2)
+    assert metrics is not None
+    assert metrics[1][0] > metrics[0][0]  # two glyphs are wider than one

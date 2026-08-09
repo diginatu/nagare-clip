@@ -19,7 +19,7 @@ from __future__ import annotations
 
 import logging
 import re
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any
 
@@ -207,3 +207,40 @@ def escape_magick_text(text: str) -> str:
     """
     out = text.replace("\\", "\\\\").replace("%", "%%")
     return "\\" + out if out.startswith("@") else out
+
+
+def build_measure_cmd(lines: Sequence[tuple[str, LineStyle]]) -> list[str]:
+    """Natural width/height of every line, in ONE magick call.
+
+    Layout needs the rendered size of each glyph run, which only ImageMagick
+    knows.  Each line is a parenthesised ``label:`` and ``info:`` prints one
+    ``%w %h`` row per image in the list, so a set costs one call, not three.
+    """
+    cmd = ["magick"]
+    for text, style in lines:
+        cmd += ["(", "-background", "none"]
+        if style.font:
+            cmd += ["-font", style.font]
+        escaped_text = escape_magick_text(text)
+        # Escape @ at the start of word tokens (after whitespace), not just text-leading
+        escaped_text = re.sub(r"(\s)@", r"\1\\@", escaped_text)
+        cmd += ["-pointsize", str(style.pointsize), f"label:{escaped_text}", ")"]
+    cmd += ["-format", "%w %h\n", "info:"]
+    return cmd
+
+
+def parse_metrics(stdout: str, expected: int) -> list[tuple[int, int]] | None:
+    """``(width, height)`` per line, or ``None`` if the output is not usable.
+
+    All-or-nothing: a partial read would silently mislay a line, and the
+    caller can fall back to the unmeasured path instead.
+    """
+    out: list[tuple[int, int]] = []
+    for row in stdout.split("\n"):
+        parts = row.split()
+        if not parts:
+            continue
+        if len(parts) != 2 or not all(p.isdigit() for p in parts):
+            return None
+        out.append((int(parts[0]), int(parts[1])))
+    return out if len(out) == expected else None
