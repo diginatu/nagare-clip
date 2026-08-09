@@ -221,10 +221,7 @@ def build_measure_cmd(lines: Sequence[tuple[str, LineStyle]]) -> list[str]:
         cmd += ["(", "-background", "none"]
         if style.font:
             cmd += ["-font", style.font]
-        escaped_text = escape_magick_text(text)
-        # Escape @ at the start of word tokens (after whitespace), not just text-leading
-        escaped_text = re.sub(r"(\s)@", r"\1\\@", escaped_text)
-        cmd += ["-pointsize", str(style.pointsize), f"label:{escaped_text}", ")"]
+        cmd += ["-pointsize", str(style.pointsize), f"label:{escape_magick_text(text)}", ")"]
     cmd += ["-format", "%w %h\n", "info:"]
     return cmd
 

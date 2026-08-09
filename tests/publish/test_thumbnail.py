@@ -227,7 +227,7 @@ def test_measure_omits_the_font_flag_when_no_face_is_configured():
 
 def test_measure_escapes_the_text_and_passes_it_as_one_argument():
     cmd = build_measure_cmd([("100% @x", LineStyle())])
-    assert r"label:100%% \@x" in cmd
+    assert "label:100%% @x" in cmd
 
 
 def test_parse_metrics_reads_width_and_height_per_line():
