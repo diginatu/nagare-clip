@@ -244,6 +244,57 @@ def test_place_strips_no_intervals_leaves_no_strips(blender_result):
     assert blender_result["empty"]["cursor"] == 1
 
 
+def _movies(case: dict) -> list[dict]:
+    return sorted((s for s in case["strips"] if s["type"] == "MOVIE"), key=lambda s: s["name"])
+
+
+def _sounds(case: dict) -> list[dict]:
+    return sorted((s for s in case["strips"] if s["type"] == "SOUND"), key=lambda s: s["name"])
+
+
+def test_place_strips_half_frame_quotient_matches_blenders_rounding(blender_result):
+    """132 source frames at 8x is 16.5 — Blender makes it 17, so must we.
+
+    Python's round() rounds half to even (16) and the cursor would then be one
+    frame short of the strip Blender actually built.
+    """
+    half = blender_result["half_round"]
+    assert _movies(half)[0]["frame_final_duration"] == 17
+    assert half["cursor"] == 1 + 17 + 30  # 17 retimed frames + a 1s interval
+
+
+def test_place_strips_half_frame_quotient_keeps_next_strip_on_its_channel(blender_result):
+    """The strip after an over-long one must not be shunted off channel 1.
+
+    A cursor one frame short places the next strip inside its predecessor;
+    Blender resolves that overlap by moving it to a free channel — onto the
+    channels reserved for the speed badge and the captions.
+    """
+    half = blender_result["half_round"]
+    assert [s["channel"] for s in _movies(half)] == [1, 1]
+    assert [s["channel"] for s in _sounds(half)] == [2, 2]
+
+
+def test_place_strips_half_frame_quotient_runs_clean(blender_result):
+    assert blender_result["half_round"]["warnings"] == []
+
+
+def test_place_strips_warns_when_a_strip_lands_on_another_channel(blender_result):
+    """A displaced strip must be reported; this was found by hand in the .blend.
+
+    The case under-reports every strip's real duration by a frame, standing in
+    for any cause of an under-advanced cursor other than the rounding one.
+    """
+    displaced = blender_result["displaced"]
+    off_channel = [s["name"] for s in _movies(displaced) if s["channel"] != 1]
+    assert off_channel, "scenario no longer displaces anything"
+    warnings = displaced["warnings"]
+    for name in off_channel:
+        assert any("channel" in w and name in w for w in warnings), (
+            f"{name} was displaced silently; warnings: {warnings}"
+        )
+
+
 def test_place_strips_sound_pitch_correction_preserved(blender_result):
     """Source sound strip in sped interval keeps pitch_correction=True (Blender auto-pitch)."""
     sound_by_name = {s["name"]: s for s in blender_result["strips"] if s["type"] == "SOUND"}

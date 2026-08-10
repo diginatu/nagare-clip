@@ -7,12 +7,16 @@ import os
 
 import bpy
 
-from nagare_clip.blender.frames import clamp_frames
+from nagare_clip.blender.frames import clamp_frames, retimed_frame_count
 
 # Re-exported (explicit `as` alias) so blender_cli and the existing tests keep
 # importing it from here: it lives in `frames` because it is bpy-free and the
 # publish stage reuses it to place chapter timestamps on the same timeline.
 from nagare_clip.blender.frames import split_intervals_by_speed as split_intervals_by_speed
+
+# Media channels: one video and one sound channel, the same for every source.
+VIDEO_CHANNEL = 1
+SOUND_CHANNEL = 2
 
 # Text-strip channels (higher channel renders on top in Blender VSE).
 # The speed-mark badge sits on the LOWEST text channel so captions and
@@ -86,7 +90,12 @@ def build_timeline_map(
       src_start, src_end: original source seconds
       tl_start: first frame on the output timeline (1-based)
       tl_end:   last frame (exclusive) on the output timeline
-    This must mirror the strip placement loop exactly.
+
+    This must mirror the strip placement loop exactly, so the retimed length
+    comes from the shared ``retimed_frame_count()`` both use.  The placement
+    loop then advances by the duration Blender really built, and warns when
+    that differs from this prediction — which is the only thing that can pull
+    the two apart.
     """
     mapping = []
     cursor = start_cursor
@@ -103,7 +112,7 @@ def build_timeline_map(
         # an upper bound — clamping only matters at the very end of the
         # source clip and will not affect most captions
         src_frames = src_end_frame - src_start_frame
-        keep_frame_count = max(1, round(src_frames / speed))
+        keep_frame_count = retimed_frame_count(src_frames, speed)
         mapping.append(
             {
                 "src_start": start_sec,
@@ -115,6 +124,16 @@ def build_timeline_map(
         )
         cursor += keep_frame_count
     return mapping
+
+
+def _strip_duration(strip: object) -> int:
+    """Frames the strip really occupies, as Blender computed them.
+
+    Read back instead of predicted: ``retiming_segment_speed_set`` derives the
+    retimed duration itself, and a cursor advanced by a number that disagrees
+    with it places the next strip inside this one.
+    """
+    return max(1, int(strip.duration))
 
 
 def _get_sequencer_context():
@@ -363,7 +382,7 @@ def place_strips(
         new_video.content_start = timeline_cursor - bounded_start
         new_video.left_handle_offset = bounded_start
         new_video.right_handle_offset = full_duration - bounded_end
-        new_video.channel = 1
+        new_video.channel = VIDEO_CHANNEL
 
         # Configure the duplicated sound strip
         new_sound.name = f"keep_{idx:04d}_audio"
@@ -373,18 +392,9 @@ def place_strips(
         new_sound.right_handle_offset = sound_full_duration - (bounded_start + keep_frame_count)
         if new_sound.right_handle_offset < 0:
             new_sound.right_handle_offset = 0
-        new_sound.channel = 2
+        new_sound.channel = SOUND_CHANNEL
 
-        if new_video.duration != keep_frame_count:
-            logging.warning(
-                "%sStrip %d: duration=%d differs from keep_frame_count=%d",
-                src_tag,
-                idx,
-                new_video.duration,
-                keep_frame_count,
-            )
-
-        adjusted_frame_count = max(1, round(keep_frame_count / speed))
+        predicted_frame_count = retimed_frame_count(keep_frame_count, speed)
 
         if speed != 1.0:
             # Blender 5.1 retiming via sequencer operators.
@@ -405,6 +415,28 @@ def place_strips(
                 )
                 strip.show_retiming_keys = False
                 strip.select = False
+
+        # Advance by the length Blender built, never by the prediction: the
+        # retiming operator computes the duration itself, and a cursor that
+        # falls short of it puts the next strip inside this one (which Blender
+        # then resolves by moving that strip off its channel). A disagreement
+        # also means the timeline map — built from the prediction, before any
+        # strip exists — is now off by that much for captions and overlays, so
+        # it is worth a warning rather than a silent correction.
+        adjusted_frame_count = _strip_duration(new_video)
+        if adjusted_frame_count != predicted_frame_count:
+            logging.warning(
+                "%sStrip %d: Blender built %d frames where %d were predicted "
+                "(keep_frames=%d speed=%.3f); text strips in this range are "
+                "laid out against the prediction and may be off by %d frame(s)",
+                src_tag,
+                idx,
+                adjusted_frame_count,
+                predicted_frame_count,
+                keep_frame_count,
+                speed,
+                abs(adjusted_frame_count - predicted_frame_count),
+            )
 
         logging.debug(
             "%sStrip %d: frame_start=%d frame_offset_start=%d frame_offset_end=%d "
@@ -444,13 +476,29 @@ def place_strips(
     # position it was placed at. Idempotent for uncorrupted strips — so once
     # Blender places retimed strips correctly, this pass becomes a no-op and can
     # be deleted along with its regression test.
+    #
+    # The same pass reports any strip Blender moved off the channel it was
+    # assigned. Blender shunts an overlapping strip to the first free channel
+    # instead of refusing the assignment, so a placement bug lands media on the
+    # channels reserved for the speed badge and the captions — silently, and
+    # without changing the timeline's length. It was found by opening a .blend
+    # by hand; it should be readable in the run log.
     for video, sound, intended_start in placed:
-        for strip in (video, sound):
+        for strip, intended_channel in ((video, VIDEO_CHANNEL), (sound, SOUND_CHANNEL)):
             if strip is None:
                 continue
             desired_content_start = intended_start - strip.left_handle_offset
             if strip.content_start != desired_content_start:
                 strip.content_start = desired_content_start
+            if strip.channel != intended_channel:
+                logging.warning(
+                    "%sStrip %s sits on channel %d, not %d: Blender moved it to "
+                    "resolve an overlap with a neighbouring strip",
+                    src_tag,
+                    strip.name,
+                    strip.channel,
+                    intended_channel,
+                )
 
     return timeline_cursor
 

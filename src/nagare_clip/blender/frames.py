@@ -10,6 +10,23 @@ disagree about what a speed range does.
 
 from __future__ import annotations
 
+import math
+
+
+def retimed_frame_count(keep_frame_count: int, speed: float) -> int:
+    """Frames a strip of *keep_frame_count* occupies once retimed to *speed*.
+
+    Blender rounds a half frame **away from zero** (``round_fl_to_int``) while
+    Python's ``round()`` rounds half to even, so ``132 / 8 = 16.5`` is 17
+    frames in the scene and would be 16 here.  A prediction one frame short
+    leaves the placement cursor inside the strip Blender actually built: the
+    next strip overlaps its predecessor and Blender resolves that by moving it
+    to a free channel — onto the channels reserved for the speed badge and the
+    captions.  Shared by ``build_timeline_map`` and the placement loop so the
+    timeline map and the strips cannot disagree about a length.
+    """
+    return max(1, math.floor(keep_frame_count / speed + 0.5))
+
 
 def clamp_frames(src_start: int, src_end: int, full_duration: int) -> tuple[int, int, bool]:
     """Clamp a strip's source frame range to the clip length.

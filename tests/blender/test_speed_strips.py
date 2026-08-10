@@ -75,6 +75,28 @@ def test_build_timeline_map_speed_advances_cursor_correctly_for_subsequent_inter
     assert tl_map[1]["tl_start"] == tl_map[0]["tl_end"]
 
 
+def test_build_timeline_map_half_frame_rounds_like_blender():
+    """A quotient landing exactly on .5 must round the way Blender rounds it.
+
+    The map is the prediction the caption/overlay placement is laid out
+    against, and the strip loop advances its cursor by the same helper — so a
+    Python round-half-to-even here would put text one frame off *and* leave
+    the next strip overlapping its predecessor.
+    """
+    fps = 30.0
+    # 4.4s * 30fps = 132 source frames; 132 / 8 = 16.5 -> 17 in Blender
+    tl_map = build_timeline_map(
+        [
+            {"start": 0.0, "end": 4.4, "speed_factor": 8.0},
+            {"start": 5.0, "end": 6.0},
+        ],
+        effective_fps=fps,
+        source_fps=fps,
+    )
+    assert tl_map[0]["tl_end"] - tl_map[0]["tl_start"] == 17
+    assert tl_map[1]["tl_start"] == 18
+
+
 def _place_captions_with_speed(speed_factor: float):
     """Helper: place one caption inside a speed-modified interval and return
     the kwargs passed to seq.new_effect()."""

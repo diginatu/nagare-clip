@@ -1,8 +1,8 @@
-"""Host-side tests for the pure frame-clamp helper (no bpy, no Blender)."""
+"""Host-side tests for the pure frame helpers (no bpy, no Blender)."""
 
 from __future__ import annotations
 
-from nagare_clip.blender.frames import clamp_frames
+from nagare_clip.blender.frames import clamp_frames, retimed_frame_count
 
 
 class TestClampFrames:
@@ -25,3 +25,37 @@ class TestClampFrames:
     def test_end_forced_after_start(self):
         # degenerate zero/negative-length request still yields >= 1 frame
         assert clamp_frames(50, 50, 200)[:2] == (50, 51)
+
+
+class TestRetimedFrameCount:
+    def test_exact_quotient(self):
+        assert retimed_frame_count(120, 2.0) == 60
+
+    def test_speed_one_is_identity(self):
+        assert retimed_frame_count(133, 1.0) == 133
+
+    def test_slow_motion_lengthens(self):
+        assert retimed_frame_count(60, 0.5) == 120
+
+    def test_rounds_down_below_half(self):
+        assert retimed_frame_count(131, 8.0) == 16  # 16.375
+
+    def test_rounds_up_above_half(self):
+        assert retimed_frame_count(133, 8.0) == 17  # 16.625
+
+    def test_half_rounds_away_from_zero_not_to_even(self):
+        """Blender rounds .5 away from zero; Python's round() rounds to even.
+
+        The real water_pump_3 cases: these five strips came out one frame
+        longer than the placement loop predicted, so the cursor under-advanced
+        and the next strip was shunted off channel 1 by the overlap.
+        """
+        assert retimed_frame_count(132, 8.0) == 17  # round() -> 16
+        assert retimed_frame_count(308, 8.0) == 39  # round() -> 38
+        assert retimed_frame_count(196, 8.0) == 25  # round() -> 24
+        # the other side of half-to-even: these already agreed
+        assert retimed_frame_count(140, 8.0) == 18
+        assert retimed_frame_count(204, 8.0) == 26
+
+    def test_never_shorter_than_one_frame(self):
+        assert retimed_frame_count(1, 8.0) == 1

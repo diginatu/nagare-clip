@@ -9,6 +9,7 @@ Produces a JSON file with strip data for the pytest wrapper to assert on.
 from __future__ import annotations
 
 import json
+import logging
 import sys
 from pathlib import Path
 
@@ -18,8 +19,20 @@ sys.path.insert(0, str(_SRC))
 
 import bpy
 
+from nagare_clip.blender import timeline as timeline_mod
 from nagare_clip.blender.scene import reset_scene
 from nagare_clip.blender.timeline import place_strips
+
+
+class _WarningCollector(logging.Handler):
+    """Collect WARNING-level messages so the pytest wrapper can assert on them."""
+
+    def __init__(self) -> None:
+        super().__init__(level=logging.WARNING)
+        self.messages: list[str] = []
+
+    def emit(self, record: logging.LogRecord) -> None:
+        self.messages.append(record.getMessage())
 
 
 def run_case(video_path: str, intervals: list[dict]) -> dict:
@@ -41,7 +54,13 @@ def run_case(video_path: str, intervals: list[dict]) -> dict:
         seq_col = sequence_editor.strips
     effective_fps = scene.render.fps / scene.render.fps_base
 
-    cursor = place_strips(intervals, video_path, seq_col, effective_fps)
+    collector = _WarningCollector()
+    root_logger = logging.getLogger()
+    root_logger.addHandler(collector)
+    try:
+        cursor = place_strips(intervals, video_path, seq_col, effective_fps)
+    finally:
+        root_logger.removeHandler(collector)
 
     # Collect strip info
     strips = []
@@ -70,6 +89,7 @@ def run_case(video_path: str, intervals: list[dict]) -> dict:
         "effective_fps": effective_fps,
         "strip_count": len(strips),
         "strips": strips,
+        "warnings": collector.messages,
     }
 
 
@@ -111,6 +131,32 @@ def main() -> None:
 
     # No intervals at all: no strips, and the templates are still cleaned up.
     result["empty"] = run_case(video_path, [])
+
+    # A retimed length that lands exactly on .5 frames: 4.4s * 30fps = 132
+    # source frames, 132 / 8 = 16.5.  Blender rounds that half away from zero
+    # (17); Python's round() would say 16 and under-advance the cursor, leaving
+    # the next strip overlapping and shunted off channel 1.
+    result["half_round"] = run_case(
+        video_path,
+        [
+            {"start": 0.0, "end": 4.4, "speed_factor": 8.0},
+            {"start": 5.0, "end": 6.0},
+        ],
+    )
+
+    # Simulate any *other* cause of a cursor that under-advances (a Blender
+    # duration this code cannot predict) by under-reporting every strip's
+    # length by one frame.  Every strip after the first then overlaps its
+    # predecessor, and the placement must say so instead of running clean.
+    original_strip_duration = timeline_mod._strip_duration
+    timeline_mod._strip_duration = lambda strip: max(1, original_strip_duration(strip) - 1)
+    try:
+        result["displaced"] = run_case(
+            video_path,
+            [{"start": float(i), "end": i + 1.0} for i in range(3)],
+        )
+    finally:
+        timeline_mod._strip_duration = original_strip_duration
 
     Path(output_json).write_text(json.dumps(result, indent=2))
 
