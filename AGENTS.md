@@ -159,6 +159,7 @@ See [`docs/stages/publish.md`](docs/stages/publish.md) for the timeline mapping,
 - Route media tooling (ffmpeg) through the existing whisperx Docker image; do not add host binaries or new Python audio deps. ImageMagick (`magick`, `publish/thumbnail.py`) is a deliberate, documented exception: it runs on the **host**, like the `blender` stage already does, because the whisperx image has neither ImageMagick nor CJK fonts, and font slots resolve through host fontconfig (which is what makes a CJK font slot work at all).
 - Preserve the interval JSON (`intervals/` package) as the human-editable contract for the Blender stage.
 - The Blender stage must reference original media; do not re-encode/copy source media.
+- Commit straight to `main` in this repository — do **not** create a branch for a change, and do not offer to. This overrides any default "branch before committing" behaviour.
 
 ## Project Structure
 
