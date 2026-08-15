@@ -276,6 +276,7 @@ publish:
   min_chapter_duration: 10.0   # YouTube ignores a chapter list unless every chapter is at least this long; a shorter one is merged into a neighbour
   max_frames: 24   # Cap on thumbnail candidate stills (0 = no limit); overlays outrank keeps
   frame_width: 1280   # Downscale width (px) of the extracted JPEG stills; height is auto
+  image_markup: html   # How publish.md embeds images: html = <img> tags (sized), markdown = ![alt](path) for viewers that strip raw HTML
   # Thumbnail rendering: one image per LLM copy set, composited with ImageMagick
   # (`magick` must be on PATH). The LLM writes the colours, point sizes and
   # placement for its own copy, in ImageMagick's vocabulary; only `fonts` is set

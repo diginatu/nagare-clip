@@ -25,7 +25,7 @@ import logging
 import re
 import sys
 from pathlib import Path
-from typing import Any, ClassVar
+from typing import Any, ClassVar, Literal
 
 import yaml
 from pydantic import BaseModel, ConfigDict, Field
@@ -964,6 +964,13 @@ class PublishConfig(BaseModel):
     )
     frame_width: int = Field(
         1280, description="Downscale width (px) of the extracted JPEG stills; height is auto"
+    )
+    image_markup: Literal["html", "markdown"] = Field(
+        "html",
+        description=(
+            "How publish.md embeds images: html = <img> tags (sized), "
+            "markdown = ![alt](path) for viewers that strip raw HTML"
+        ),
     )
     thumbnail: ThumbnailConfig = Field(default_factory=ThumbnailConfig)
     prompt: str = _commented(

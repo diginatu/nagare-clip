@@ -271,6 +271,16 @@ class TestGetEffectiveConfig:
         with pytest.raises(ValidationError):
             get_effective_config(cfg_file)
 
+    def test_publish_image_markup_default_is_html(self):
+        cfg = get_effective_config(None)
+        assert cfg["publish"]["image_markup"] == "html"
+
+    def test_publish_image_markup_rejects_unknown_value(self, tmp_path: Path):
+        cfg_file = tmp_path / "cfg.yml"
+        cfg_file.write_text(yaml.dump({"publish": {"image_markup": "rst"}}))
+        with pytest.raises(ValidationError):
+            get_effective_config(cfg_file)
+
     def test_gap_context_context_lines_default_is_one(self):
         cfg = get_effective_config(None)
         assert cfg["gap_context"]["context_lines"] == 1

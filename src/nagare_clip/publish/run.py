@@ -147,7 +147,19 @@ def _thumbnail_entries(
     return out
 
 
-def _render_markdown(data: dict[str, Any], enabled: bool) -> str:
+def _image(path: str, alt: str, width: int, markup: str) -> str:
+    """One embedded image, in whichever markup the config asked for.
+
+    ``html`` (default) keeps the sized ``<img>`` — a shortlist of stills is
+    unreviewable at full width.  ``markdown`` is for viewers that strip raw
+    HTML; the size hint has no markdown equivalent, so it is simply dropped.
+    """
+    if markup == "markdown":
+        return f"![{alt}]({path})"
+    return f'<img src="{path}" width="{width}">'
+
+
+def _render_markdown(data: dict[str, Any], enabled: bool, markup: str = "html") -> str:
     """The reviewable file: copy-pasteable description, everything else beside it."""
     if not enabled:
         return "# publish\n\nThe publish stage is disabled (`publish.enabled: false`).\n"
@@ -177,7 +189,7 @@ def _render_markdown(data: dict[str, Any], enabled: bool) -> str:
             lines.append(f"### Set {i}")
             lines += [f"- {line['role']}: {line['text']}" for line in thumb_set["lines"]]
             if i in by_index:
-                lines += ["", f'<img src="{by_index[i]}" width="480">']
+                lines += ["", _image(by_index[i], f"Set {i}", 480, markup)]
             lines.append("")
     else:
         lines += ["_(none)_", ""]
@@ -191,9 +203,10 @@ def _render_markdown(data: dict[str, Any], enabled: bool) -> str:
                 if thumb["timeline_time"] is not None
                 else "—"
             )
+            still = _image(thumb["path"], thumb["label"], 240, markup)
             lines.append(
                 f"| {at} | {thumb['source_time']:.1f}s | {thumb['kind']} | "
-                f'{thumb["label"]} | <img src="{thumb["path"]}" width="240"> |'
+                f"{thumb['label']} | {still} |"
             )
     else:
         lines.append("_(none)_")
@@ -275,5 +288,6 @@ def run_publish(
     logging.info("publish: wrote %s", output)
     if markdown is not None:
         markdown.parent.mkdir(parents=True, exist_ok=True)
-        markdown.write_text(_render_markdown(data, enabled), encoding="utf-8")
+        markup = str(publish_cfg.get("image_markup", "html"))
+        markdown.write_text(_render_markdown(data, enabled, markup), encoding="utf-8")
         logging.info("publish: wrote %s", markdown)

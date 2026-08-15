@@ -339,3 +339,37 @@ def test_the_candidate_table_shows_the_still_not_its_path(tmp_path, monkeypatch)
     text = md.read_text(encoding="utf-8")
     assert '<img src="frames/a/12.000.jpg" width="240">' in text
     assert "`frames/a/12.000.jpg`" not in text
+
+
+def _markup_md(tmp_path, monkeypatch, markup):
+    """publish.md rendered with a render, a still and the given image_markup."""
+    _fake_generate(monkeypatch, _copy(thumbnail_copy=_sets()))
+    cfg = {"publish": {"enabled": True}}
+    if markup is not None:
+        cfg["publish"]["image_markup"] = markup
+
+    def render(sets, thumbs):
+        return [ThumbRender(1, "thumbnails/set1.jpg", "b.jpg")]
+
+    shots = [ThumbShot("a", 12.0, "overlay", "水浸し！", "frames/a/12.000.jpg")]
+    _, md = _write(tmp_path, cfg, render=render, thumbs=shots)
+    return md.read_text(encoding="utf-8")
+
+
+def test_markdown_image_markup_uses_markdown_images(tmp_path, monkeypatch):
+    """Renderers that don't allow raw HTML (plain markdown viewers) still show
+    the images when image_markup is markdown; the width hint is HTML-only."""
+    text = _markup_md(tmp_path, monkeypatch, "markdown")
+    assert "![Set 1](thumbnails/set1.jpg)" in text
+    assert "![水浸し！](frames/a/12.000.jpg)" in text
+    assert "<img" not in text
+
+
+def test_html_image_markup_is_the_default(tmp_path, monkeypatch):
+    """Unset behaves exactly as before: <img> tags with a width."""
+    default = _markup_md(tmp_path, monkeypatch, None)
+    explicit = _markup_md(tmp_path, monkeypatch, "html")
+    assert default == explicit
+    assert '<img src="thumbnails/set1.jpg" width="480">' in default
+    assert '<img src="frames/a/12.000.jpg" width="240">' in default
+    assert "![" not in default

@@ -257,6 +257,13 @@ candidate table's frame column is likewise an `<img>` now, not a backticked
 path: reviewing a shortlist of stills means looking at them, not opening files
 by hand.
 
+Both embeds go through `run._image(path, alt, width, markup)`, which
+`publish.image_markup` selects: `html` (default) keeps the sized `<img>` — a
+24-still shortlist is unreviewable at full width — and `markdown` emits
+`![alt](path)` for viewers that strip raw HTML. Markdown has no width syntax,
+so the size hint is dropped rather than faked; the alt text is `Set N` for a
+render and the candidate's label in the table.
+
 ### Re-rendering without re-running the LLM
 
 Picking a background still and nudging a colour is iterative, and re-running
@@ -320,6 +327,7 @@ the chapters simply come back empty.
 | `min_chapter_duration` | `10.0` | YouTube's threshold; a shorter chapter is merged into a neighbour |
 | `max_frames` | `24` | Cap on candidate stills (`0` = no limit) |
 | `frame_width` | `1280` | Downscale width of the extracted JPEGs |
+| `image_markup` | `html` | How `publish.md` embeds images: `html` = sized `<img>`, `markdown` = `![alt](path)` |
 | `temperature` | `0.7` | Deliberately higher than the editing stages |
 
 `publish.thumbnail:` (needs `magick` on PATH; `enabled: false` skips

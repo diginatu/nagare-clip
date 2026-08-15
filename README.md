@@ -92,6 +92,11 @@ for the edit; see [`docs/stages/publish.md`](docs/stages/publish.md) for the
 full style-key table and escaping rules, and the "Re-rendering" note below for
 iterating on a background/colour without calling the LLM again.
 
+Those images are embedded as sized `<img>` tags by default. If you read
+`publish.md` in a viewer that strips raw HTML, set `publish.image_markup:
+markdown` and they become plain `![alt](path)` images instead (markdown has no
+width syntax, so they render full width).
+
 `output/publish/publish.json` holds the same material as data, including the
 `renders` array (`{set, path, background}`), for anything reading it
 programmatically.
