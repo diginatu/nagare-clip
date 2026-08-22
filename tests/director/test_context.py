@@ -201,3 +201,39 @@ class TestPriorCaptions:
             max_prior_captions=0,
         )
         assert "- one\n- two\n- three" in ctx
+
+
+class TestSplitDirections:
+    """A plan direction may cover only part of a summary part (a split part)."""
+
+    def test_narrow_direction_renders_under_its_part_with_its_range(self):
+        ctx = build_director_context(
+            _project(),
+            [
+                PartDirection("a", (5, 6), "digression — remove"),
+                PartDirection("a", (7, 9), "the demo itself — feature"),
+            ],
+            "a",
+        )
+        line = next(ln for ln in ctx.splitlines() if ln.startswith("- lines 5-9"))
+        assert "direction" in line
+        assert "lines 5-6: digression — remove" in ctx
+        assert "lines 7-9: the demo itself — feature" in ctx
+
+    def test_a_lone_narrow_direction_still_states_its_range(self):
+        ctx = build_director_context(
+            _project(), [PartDirection("a", (7, 9), "the demo itself")], "a"
+        )
+        assert "lines 7-9: the demo itself" in ctx
+        assert "- lines 5-9: demo → direction: the demo itself" not in ctx
+
+    def test_whole_part_direction_renders_as_before(self):
+        ctx = build_director_context(_project(), _directions(), "a")
+        assert "- lines 1-4: intro → direction: keep" in ctx
+
+    def test_direction_of_another_part_is_not_attached(self):
+        ctx = build_director_context(
+            _project(), [PartDirection("a", (1, 2), "only the opening")], "a"
+        )
+        demo = next(ln for ln in ctx.splitlines() if ln.startswith("- lines 5-9"))
+        assert "only the opening" not in demo

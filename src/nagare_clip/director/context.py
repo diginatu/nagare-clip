@@ -27,6 +27,31 @@ def _sibling_entry(index: int, stem: str, project_summary: ProjectSummary) -> st
     return f"- {index}. {stem}: {text}" if text else f"- {index}. {stem}"
 
 
+def _directions_by_part(
+    own: list, directions: list[PartDirection]
+) -> dict[int, list[PartDirection]]:
+    """Group this video's directions under the part each one covers.
+
+    ``plan`` may split a summary part into several narrower directions, so a
+    direction is matched by line overlap rather than by an exact range; each is
+    attached to the part it overlaps most (ties -> the earlier part).
+    """
+    grouped: dict[int, list[PartDirection]] = {}
+    for d in directions:
+        best_idx, best_overlap = -1, 0
+        for i, p in enumerate(own):
+            if p.stem != d.stem:
+                continue
+            overlap = min(p.lines[1], d.lines[1]) - max(p.lines[0], d.lines[0]) + 1
+            if overlap > best_overlap:
+                best_idx, best_overlap = i, overlap
+        if best_idx >= 0:
+            grouped.setdefault(best_idx, []).append(d)
+    for entries in grouped.values():
+        entries.sort(key=lambda d: d.lines)
+    return grouped
+
+
 def build_director_context(
     project_summary: ProjectSummary,
     directions: list[PartDirection],
@@ -72,7 +97,7 @@ def build_director_context(
     if not project_summary.summary and not own and not positioned and not captions:
         return ""
 
-    dir_by_key = {(d.stem, d.lines): d.direction for d in directions}
+    dirs_by_part = _directions_by_part(own, directions)
 
     out: list[str] = ["Project context (all videos):"]
     if project_summary.summary:
@@ -96,12 +121,19 @@ def build_director_context(
         own_summary = video_summaries.get(stem, "")
         if own_summary:
             out.append(f"Summary: {own_summary}")
-        for p in own:
+        for i, p in enumerate(own):
             line = f"- lines {p.lines[0]}-{p.lines[1]}: {p.summary}"
-            direction = dir_by_key.get((p.stem, p.lines), "")
-            if direction:
-                line += f" → direction: {direction}"
-            out.append(line)
+            part_dirs = dirs_by_part.get(i, [])
+            if len(part_dirs) == 1 and part_dirs[0].lines == p.lines:
+                out.append(line + f" → direction: {part_dirs[0].direction}")
+                continue
+            if part_dirs:
+                # plan split this part: each direction states the lines it covers.
+                out.append(line + " → directions:")
+                for d in part_dirs:
+                    out.append(f"    - lines {d.lines[0]}-{d.lines[1]}: {d.direction}")
+            else:
+                out.append(line)
 
     if positioned:
         earlier = [
