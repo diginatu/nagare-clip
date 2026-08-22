@@ -1022,16 +1022,15 @@ class CutReportConfig(BaseModel):
             "on-screen time again, which is how a real run shipped 0.2s captions"
         ),
     )
-    timelapse_min_screen: float = Field(
-        30.0,
-        description=(
-            "Flag a timelapse that plays for less than this many seconds on screen; "
-            "the director prompt asks for 'about a minute' and a shorter one costs "
-            "the viewer the audio for almost nothing"
-        ),
-    )
     timelapse_max_screen: float = Field(
-        180.0, description="Flag a timelapse that plays for more than this many seconds on screen"
+        180.0,
+        description=(
+            "Flag a timelapse that plays for more than this many seconds on screen -- "
+            "a factor picked too low leaves a sustained fast-forward, a failure mode "
+            "this pipeline hits repeatedly. There is deliberately NO floor: a short "
+            "timelapse is ordinary, and its on-screen length is reported as a "
+            "measurement instead"
+        ),
     )
     min_keep_fragment: float = Field(
         1.0,

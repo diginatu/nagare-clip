@@ -60,20 +60,39 @@ class TestMeasurementsAlwaysPrint:
         assert "keep-gap" in text
 
 
+class TestTimelapsesAreAMeasurement:
+    """The on-screen table prints every timelapse, flagged or not.
+
+    Dropping the floor must not drop the number with it: how long a timelapse
+    plays for is exactly the sort of figure the regression table is for.
+    """
+
+    def test_a_short_timelapse_still_appears_in_the_table(self, two_sources):
+        text = build_cut_report(two_sources, _cfg())
+        assert "| source | span | factor | on screen |" in text
+        assert "| one | 80.0s | 8.0 | 10.0s |" in text
+        assert "timelapse-short" not in text
+
+    def test_a_project_with_no_timelapse_prints_no_table(self):
+        srcs = [intervals("one", 600.0, [(0.0, 300.0)])]
+        assert "on screen" not in build_cut_report(srcs, _cfg())
+
+
 class TestFindingsPrintTheirThreshold:
     def test_the_breaches_are_named_with_their_numbers(self, two_sources):
         text = build_cut_report(two_sources, _cfg())
         assert "caption-compressed" in text
-        assert "timelapse-short" in text
         assert "8.0" in text
         assert "はやい" in text
 
     def test_config_thresholds_reach_the_checks(self, two_sources):
-        text = build_cut_report(
-            two_sources, _cfg(caption_chars_per_sec=99.0, timelapse_min_screen=1.0)
-        )
+        text = build_cut_report(two_sources, _cfg(caption_chars_per_sec=99.0))
         assert "caption-compressed" not in text
-        assert "timelapse-short" not in text
+
+    def test_the_timelapse_ceiling_reaches_the_checks(self):
+        srcs = [intervals("one", 3000.0, [(0.0, 2000.0)], speed_ranges=[(0.0, 2000.0, 4.0)])]
+        assert "timelapse-long" in build_cut_report(srcs, _cfg())
+        assert "timelapse-long" not in build_cut_report(srcs, _cfg(timelapse_max_screen=600.0))
 
     def test_blender_warnings_are_surfaced(self, two_sources):
         text = build_cut_report(two_sources, _cfg(), blender_warnings=["Strip 109: clamped"])

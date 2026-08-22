@@ -124,7 +124,6 @@ def build_cut_report(
         blender_warnings = read_blender_warnings(blender_warnings_path)
     thresholds = {
         "caption_cps": conf.get("caption_chars_per_sec", 18.0),
-        "timelapse_min": conf.get("timelapse_min_screen", 30.0),
         "timelapse_max": conf.get("timelapse_max_screen", 180.0),
         "gap_threshold": cfg.get("intervals", {}).get("min_cut", 0.4),
         "fragment_threshold": conf.get("min_keep_fragment", 1.0),

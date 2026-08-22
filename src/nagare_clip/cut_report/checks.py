@@ -26,7 +26,13 @@ from nagare_clip.cut_report.metrics import (
 )
 
 DEFAULT_CAPTION_CPS = 18.0
-DEFAULT_TIMELAPSE_MIN_SCREEN = 30.0
+# No floor, deliberately.  A 6x fast-forward running 15.5s on screen is
+# ordinary vlog grammar -- the viewer loses 93s of audio and nothing else --
+# and the director prompt's "about a minute on screen" target exists to stop a
+# factor picked too LOW from leaving a long fast-forward on screen.  A floor
+# caught exactly one span on the run this was built from, and that span was
+# fine; a check that flags nothing real is the same as no check.  How long each
+# timelapse plays for is still reported, as a measurement.
 DEFAULT_TIMELAPSE_MAX_SCREEN = 180.0
 
 # Most-severe first: a caption nobody can read is a defect, a timelapse that is
@@ -34,7 +40,6 @@ DEFAULT_TIMELAPSE_MAX_SCREEN = 180.0
 KIND_ORDER = (
     "caption-compressed",
     "caption-fast",
-    "timelapse-short",
     "timelapse-long",
     "keep-gap",
     "keep-fragment",
@@ -104,27 +109,28 @@ def _caption_findings(sources: Sources, threshold: float) -> list[Finding]:
     return out
 
 
-def _timelapse_findings(metrics: CutMetrics, minimum: float, maximum: float) -> list[Finding]:
-    out: list[Finding] = []
-    for span in metrics.speed_spans:
-        if span.screen < minimum:
-            kind, bound = "timelapse-short", f"under the {minimum:.1f}s floor"
-        elif span.screen > maximum:
-            kind, bound = "timelapse-long", f"over the {maximum:.1f}s ceiling"
-        else:
-            continue
-        out.append(
-            Finding(
-                kind=kind,
-                stem=span.stem,
-                detail=(
-                    f"[{span.start:.1f}-{span.end:.1f}s] factor {span.factor:.1f} over "
-                    f"{span.kept:.1f}s of kept footage = {span.screen:.1f}s on screen, "
-                    f"{bound} (the director prompt asks for about a minute)"
-                ),
-            )
+def _timelapse_findings(metrics: CutMetrics, maximum: float) -> list[Finding]:
+    """A timelapse left too long on screen -- the long side only.
+
+    ``docs/operator-prompt.md`` names the failure this catches: "A sustained
+    mild fast-forward (1.3-2.0x) over a large share of the video is a failure
+    mode this pipeline hits repeatedly."  A factor picked too low turns a long
+    span into a long fast-forward instead of a real timelapse.
+    """
+    return [
+        Finding(
+            kind="timelapse-long",
+            stem=span.stem,
+            detail=(
+                f"[{span.start:.1f}-{span.end:.1f}s] factor {span.factor:.1f} over "
+                f"{span.kept:.1f}s of kept footage = {span.screen:.1f}s on screen, "
+                f"over the {maximum:.1f}s ceiling (the director prompt asks for "
+                "about a minute)"
+            ),
         )
-    return out
+        for span in metrics.speed_spans
+        if span.screen > maximum
+    ]
 
 
 def _keep_findings(metrics: CutMetrics) -> list[Finding]:
@@ -158,7 +164,6 @@ def find_issues(
     metrics: CutMetrics,
     *,
     caption_cps: float = DEFAULT_CAPTION_CPS,
-    timelapse_min: float = DEFAULT_TIMELAPSE_MIN_SCREEN,
     timelapse_max: float = DEFAULT_TIMELAPSE_MAX_SCREEN,
     gap_threshold: float = DEFAULT_GAP_THRESHOLD,  # noqa: ARG001 - metrics owns it
     fragment_threshold: float = DEFAULT_FRAGMENT_THRESHOLD,  # noqa: ARG001
@@ -171,7 +176,7 @@ def find_issues(
     against them when *metrics* was measured.
     """
     found = _caption_findings(sources, caption_cps)
-    found += _timelapse_findings(metrics, timelapse_min, timelapse_max)
+    found += _timelapse_findings(metrics, timelapse_max)
     found += _keep_findings(metrics)
     found += [Finding(kind="blender-warning", stem="", detail=w) for w in blender_warnings]
     found.sort(key=lambda f: KIND_ORDER.index(f.kind) if f.kind in KIND_ORDER else len(KIND_ORDER))

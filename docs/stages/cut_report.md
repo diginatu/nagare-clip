@@ -23,8 +23,9 @@ JSON for twenty minutes:
   each on screen**. Correctly *placed*, merely unreadable. `docs/operator-prompt.md`
   in the project repo already records this exact failure as a cautionary tale
   from an earlier run, so it has now happened at least twice.
-- a 92.8s timelapse at factor 6.0 — **15.5s on screen**, over before it
-  registers, and it breached an instruction that is in the prompt today.
+(An earlier draft also flagged a 92.8s timelapse at factor 6.0 — 15.5s on
+screen — for falling short of the prompt's "about a minute". That check was
+**removed**: see below.)
 
 ## When it runs
 
@@ -69,8 +70,7 @@ the number is arguable rather than hidden — the rule the divergence note follo
 |---|---|---|
 | `caption-compressed` | a caption at/above the reading rate whose start falls inside a `speed_range` | `cut_report.caption_chars_per_sec` (18.0) |
 | `caption-fast` | the same rate, outside any `speed_range` | same |
-| `timelapse-short` | a `speed_range` playing for less than the floor on screen | `cut_report.timelapse_min_screen` (30.0s) |
-| `timelapse-long` | …or more than the ceiling | `cut_report.timelapse_max_screen` (180.0s) |
+| `timelapse-long` | a `speed_range` playing for more than the ceiling on screen | `cut_report.timelapse_max_screen` (180.0s) |
 | `keep-gap` | an inter-keep gap shorter than the merge threshold | `intervals.min_cut` (0.4s) |
 | `keep-fragment` | a keep interval shorter than the floor | `cut_report.min_keep_fragment` (1.0s) |
 | `blender-warning` | one of Blender's own WARNING lines | — |
@@ -93,6 +93,26 @@ many captions start inside a speed range at all — is a measurement, not a flag
 `screen = kept / factor`, where `kept` is the source seconds of keep intervals
 inside the range — not `span / factor`. A range half of which was cut plays for
 half as long, and "about a minute on screen" is about what plays.
+
+### Why there is no floor on a timelapse's on-screen time
+
+There deliberately is none — not a configurable one either, so nothing can
+switch it back on by accident.
+
+The check exists for the long side only, and `docs/operator-prompt.md` names
+the failure it catches: "A sustained mild fast-forward (1.3-2.0x) over a large
+share of the video is a failure mode this pipeline hits repeatedly." A factor
+picked too **low** turns a long span into a long fast-forward instead of a real
+timelapse. That is what "about a minute on screen" is guarding.
+
+The short side has no such failure. A 6x fast-forward running 15.5s is ordinary
+vlog grammar; the viewer loses 93 seconds of audio and nothing else. A 30s floor
+caught exactly one span on the run this was built from and that span was fine —
+i.e. it was a flag that never fires on a real defect, which is the same
+mistake in the other direction as a flag that fires on everything.
+
+How long each timelapse plays for is still reported, as a **measurement**: the
+on-screen table prints every `speed_range`, flagged or not.
 
 ### Deliberately out of scope
 

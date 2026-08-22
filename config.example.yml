@@ -299,8 +299,7 @@ publish:
 cut_report:
   enabled: true   # Write the finished-cut section into the LLM report
   caption_chars_per_sec: 18.0   # Flag a caption authored at or above this many characters per second. One inside a speed_range is flagged separately: the factor divides its on-screen time again, which is how a real run shipped 0.2s captions
-  timelapse_min_screen: 30.0   # Flag a timelapse that plays for less than this many seconds on screen; the director prompt asks for 'about a minute' and a shorter one costs the viewer the audio for almost nothing
-  timelapse_max_screen: 180.0   # Flag a timelapse that plays for more than this many seconds on screen
+  timelapse_max_screen: 180.0   # Flag a timelapse that plays for more than this many seconds on screen -- a factor picked too low leaves a sustained fast-forward, a failure mode this pipeline hits repeatedly. There is deliberately NO floor: a short timelapse is ordinary, and its on-screen length is reported as a measurement instead
   min_keep_fragment: 1.0   # Flag a keep interval shorter than this (seconds). Inter-keep GAPS are checked against intervals.min_cut instead -- that is the pass that owns them
 
 pipeline:

@@ -193,10 +193,14 @@ The **findings print only on a breach**, each naming the threshold it breached:
 |---|---|---|
 | `caption-compressed` | a caption already too dense to read, *and* inside a `speed_range` that divides its screen time again | `cut_report.caption_chars_per_sec` (18.0) |
 | `caption-fast` | the same density outside any speed range | same |
-| `timelapse-short` / `timelapse-long` | a timelapse far off the director prompt's "about a minute on screen" | `cut_report.timelapse_min_screen` (30.0s) / `timelapse_max_screen` (180.0s) |
+| `timelapse-long` | a timelapse left on screen far past the director prompt's "about a minute" — a factor picked too low leaves a sustained fast-forward | `cut_report.timelapse_max_screen` (180.0s) |
 | `keep-gap` | a cut too short to be worth the jump | `intervals.min_cut` |
 | `keep-fragment` | a keep interval too short to register | `cut_report.min_keep_fragment` (1.0s) |
 | `blender-warning` | one of Blender's clamp/overlap notices, lifted out of its startup noise |  |
+
+There is deliberately **no floor** on a timelapse's on-screen time: a short
+fast-forward is ordinary, so how long each one plays for is printed in the
+on-screen table as a measurement rather than flagged.
 
 It deliberately does **not** compare against `project.target_duration` or the
 brief's caption-density sentence: those are free text, and a wrong parse would
