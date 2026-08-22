@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import re
+
 from nagare_clip.director.context import (
     SEAM_NOTE,
     Seam,
@@ -248,26 +250,31 @@ class TestSplitDirections:
 
 
 class TestSeamLines:
-    """The neighbour's lines to show, taken straight off its _edits.txt."""
+    """The neighbour's lines to show, taken straight off its _edits.txt.
 
-    def test_before_seam_takes_the_last_lines_with_their_numbers(self):
+    Text only: a line number here would be the NEIGHBOUR's coordinate, and every
+    op the director emits addresses its own transcript — a number it could copy
+    would silently edit an unrelated line of this video.
+    """
+
+    def test_before_seam_takes_the_last_lines(self):
         lines = ["one", "two", "three", "four", "five"]
-        assert seam_lines(lines, 2, last=True) == [(4, "four"), (5, "five")]
+        assert seam_lines(lines, 2, last=True) == ["four", "five"]
 
     def test_after_seam_takes_the_first_lines(self):
         lines = ["one", "two", "three"]
-        assert seam_lines(lines, 2, last=False) == [(1, "one"), (2, "two")]
+        assert seam_lines(lines, 2, last=False) == ["one", "two"]
 
-    def test_blank_lines_are_skipped_but_numbering_is_absolute(self):
+    def test_blank_lines_are_skipped(self):
         lines = ["one", "  ", "three", ""]
-        assert seam_lines(lines, 2, last=True) == [(1, "one"), (3, "three")]
+        assert seam_lines(lines, 2, last=True) == ["one", "three"]
 
     def test_editing_markers_are_stripped(self):
         lines = ["<keep>{{ほんじつ->本日}}は</keep>"]
-        assert seam_lines(lines, 1, last=True) == [(1, "本日は")]
+        assert seam_lines(lines, 1, last=True) == ["本日は"]
 
     def test_a_count_beyond_the_file_yields_every_line(self):
-        assert seam_lines(["one"], 5, last=True) == [(1, "one")]
+        assert seam_lines(["one"], 5, last=True) == ["one"]
 
     def test_a_non_positive_count_yields_nothing(self):
         assert seam_lines(["one", "two"], 0, last=True) == []
@@ -280,11 +287,11 @@ class TestSeamContext:
             [],
             "b",
             all_stems=["a", "b"],
-            seam_before=Seam("a", [(74, "また続きになります"), (75, "今日は終わりじゃあねー")]),
+            seam_before=Seam("a", ["また続きになります", "今日は終わりじゃあねー"]),
         )
         assert "Immediately BEFORE this video in the finished video (a, its last lines):" in ctx
-        assert "- 74: また続きになります" in ctx
-        assert "- 75: 今日は終わりじゃあねー" in ctx
+        assert "- また続きになります" in ctx
+        assert "- 今日は終わりじゃあねー" in ctx
 
     def test_after_seam_renders_the_neighbours_opening_lines(self):
         ctx = build_director_context(
@@ -292,14 +299,28 @@ class TestSeamContext:
             [],
             "a",
             all_stems=["a", "b"],
-            seam_after=Seam("b", [(1, "こんにちはデジナです")]),
+            seam_after=Seam("b", ["こんにちはデジナです"]),
         )
         assert "Immediately AFTER this video (b, its first lines):" in ctx
-        assert "- 1: こんにちはデジナです" in ctx
+        assert "- こんにちはデジナです" in ctx
+
+    def test_no_line_number_is_rendered_beside_a_seam_line(self):
+        """A number here is the neighbour's coordinate; copied into an op it would
+        land on this video's line of that number instead."""
+        ctx = build_director_context(
+            _project(),
+            [],
+            "b",
+            all_stems=["a", "b", "c"],
+            seam_before=Seam("a", ["じゃあねー"]),
+            seam_after=Seam("c", ["こんにちは"]),
+        )
+        seam = ctx[ctx.index(SEAM_NOTE) :]
+        assert not any(re.match(r"- ?\d+[:.]", line) for line in seam.splitlines())
 
     def test_the_first_video_renders_only_the_after_side(self):
         ctx = build_director_context(
-            _project(), [], "a", all_stems=["a", "b"], seam_after=Seam("b", [(1, "つづき")])
+            _project(), [], "a", all_stems=["a", "b"], seam_after=Seam("b", ["つづき"])
         )
         assert "Immediately AFTER this video" in ctx
         assert "Immediately BEFORE this video" not in ctx
@@ -310,8 +331,8 @@ class TestSeamContext:
             [],
             "b",
             all_stems=["a", "b", "c"],
-            seam_before=Seam("a", [(9, "じゃあねー")]),
-            seam_after=Seam("c", [(1, "こんにちは")]),
+            seam_before=Seam("a", ["じゃあねー"]),
+            seam_after=Seam("c", ["こんにちは"]),
         )
         assert ctx.count(SEAM_NOTE) == 1
 
@@ -330,13 +351,15 @@ class TestSeamContext:
     def test_a_seam_alone_still_renders_a_block(self):
         """A project with no summary at all still gets the seam context."""
         ctx = build_director_context(
-            ProjectSummary("", []), [], "a", seam_after=Seam("b", [(1, "こんにちは")])
+            ProjectSummary("", []), [], "a", seam_after=Seam("b", ["こんにちは"])
         )
-        assert "- 1: こんにちは" in ctx
+        assert "- こんにちは" in ctx
 
 
-def test_the_seam_note_forbids_addressing_the_neighbours_line_numbers():
-    """The neighbour's lines carry ITS numbering, printed beside this video's own
-    numbered transcript; without a rule an op could be aimed at the wrong video."""
-    assert "not part of your transcript" in SEAM_NOTE.lower()
-    assert "never" in SEAM_NOTE.lower()
+def test_the_seam_note_says_the_lines_are_not_op_addressable():
+    """The seam text sits beside this video's numbered transcript; the director
+    must read it as context it cannot aim an op at."""
+    note = SEAM_NOTE.lower()
+    assert "not part of your transcript" in note
+    # ops address this video's own numbering, which the seam text has no place in
+    assert "your own numbered lines" in note

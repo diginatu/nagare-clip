@@ -21,7 +21,8 @@ SEAM_NOTE = (
     "video, and the lines below are what the viewer hears immediately before and "
     "after it. An opening greeting or a closing sign-off in your footage is "
     "addressing an audience that is already mid-video. They are NOT part of your "
-    "transcript — never emit an op on their line numbers."
+    "transcript and carry no numbering — every op you emit refers to your own "
+    "numbered lines only."
 )
 
 
@@ -29,30 +30,28 @@ SEAM_NOTE = (
 class Seam:
     """A neighbouring video's lines at the join with this one.
 
-    *lines* are ``(1-based line number, clean text)`` pairs of that video's own
-    transcript — its last ones on the BEFORE side, its first ones on the AFTER
-    side.
+    *lines* is that video's own text — its last lines on the BEFORE side, its
+    first ones on the AFTER side.  Text only, deliberately: a line number here
+    would be the NEIGHBOUR's coordinate, and every op the director emits
+    addresses its own transcript, so a number it copied out of the seam would
+    silently edit an unrelated line of this video.
     """
 
     stem: str
-    lines: list[tuple[int, str]]
+    lines: list[str]
 
 
-def seam_lines(edit_lines: list[str], count: int, *, last: bool) -> list[tuple[int, str]]:
+def seam_lines(edit_lines: list[str], count: int, *, last: bool) -> list[str]:
     """The *count* lines at one end of a neighbour's ``_edits.txt``.
 
     Editing markers and ``{{old->new}}`` patches are stripped (the same view the
-    director gets of its own transcript) and blank lines are skipped, but the
-    numbers stay absolute so the pair reads as the real end/start of that video.
+    director gets of its own transcript) and blank lines are skipped.  Line
+    numbers are deliberately dropped — see :class:`Seam`.
     """
     if count <= 0:
         return []
-    numbered = [
-        (i + 1, text.strip())
-        for i, text in enumerate(clean_for_display(edit_lines))
-        if text.strip()
-    ]
-    return numbered[-count:] if last else numbered[:count]
+    lines = [text.strip() for text in clean_for_display(edit_lines) if text.strip()]
+    return lines[-count:] if last else lines[:count]
 
 
 def _seam_block(before: Seam | None, after: Seam | None) -> list[str]:
@@ -64,10 +63,10 @@ def _seam_block(before: Seam | None, after: Seam | None) -> list[str]:
         out.append(
             f"Immediately BEFORE this video in the finished video ({before.stem}, its last lines):"
         )
-        out.extend(f"- {n}: {text}" for n, text in before.lines)
+        out.extend(f"- {text}" for text in before.lines)
     if after and after.lines:
         out.append(f"Immediately AFTER this video ({after.stem}, its first lines):")
-        out.extend(f"- {n}: {text}" for n, text in after.lines)
+        out.extend(f"- {text}" for text in after.lines)
     return out
 
 
