@@ -12,7 +12,7 @@ from __future__ import annotations
 import json
 import logging
 import re
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -96,8 +96,12 @@ def keep_limit_note(max_keep_lines: int) -> str:
     )
 
 
-def _coerce_lines(value: Any, num_lines: int) -> tuple[int, int] | None:
-    """Validate a ``lines`` value into a 1-based inclusive (start, end) range."""
+def _coerce_lines(value: Any, num_lines: int | None) -> tuple[int, int] | None:
+    """Validate a ``lines`` value into a 1-based inclusive (start, end) range.
+
+    ``num_lines`` of ``None`` drops the upper bound, for reading a *different*
+    video's ``_director.json`` (whose transcript is not at hand).
+    """
     if isinstance(value, bool):  # bool is an int subclass; reject explicitly
         return None
     if isinstance(value, int):
@@ -110,14 +114,16 @@ def _coerce_lines(value: Any, num_lines: int) -> tuple[int, int] | None:
             return None
     else:
         return None
-    if not (1 <= start <= end <= num_lines):
+    if not (1 <= start <= end):
+        return None
+    if num_lines is not None and end > num_lines:
         return None
     return (start, end)
 
 
 def _parse_op(
     raw: Any,
-    num_lines: int,
+    num_lines: int | None,
     drops: list[str] | None = None,
 ) -> DirectorOp | None:
     def _drop(msg: str) -> None:
@@ -309,11 +315,12 @@ def parse_director_response(
     return try_parse_director_response(response, num_lines, max_keep_lines=max_keep_lines) or []
 
 
-def ops_from_dict(data: Any, num_lines: int) -> list[DirectorOp]:
+def ops_from_dict(data: Any, num_lines: int | None) -> list[DirectorOp]:
     """Load validated ops from a parsed ``_director.json`` dict.
 
     Same validation as :func:`parse_director_response`; invalid/out-of-range
-    ops are skipped.  The ``max_keep_lines`` cap is deliberately NOT applied
+    ops are skipped.  ``num_lines=None`` skips the range check, for reading
+    another video's file where the transcript length is unknown.  The ``max_keep_lines`` cap is deliberately NOT applied
     here: ``_director.json`` is a hand-editable intermediate, so a human who
     writes a wide ``keep`` into it means it.  The cap guards the LLM's output
     only, at generation time.
@@ -326,6 +333,23 @@ def ops_from_dict(data: Any, num_lines: int) -> list[DirectorOp]:
         if op is not None:
             ops.append(op)
     return ops
+
+
+def collect_overlay_texts(ops: Sequence[DirectorOp]) -> list[str]:
+    """The captions the director placed, in order, deduped.
+
+    These are the moments the edit itself calls out — a mishap, a result, a
+    conclusion — which is exactly the register a title or a thumbnail hook
+    wants, so they are handed to the LLM verbatim.
+    """
+    out: list[str] = []
+    for op in ops:
+        if op.type not in ("overlay", "timelapse"):
+            continue
+        text = (op.text or "").strip()
+        if text and text not in out:
+            out.append(text)
+    return out
 
 
 def clean_for_display(edit_lines: list[str]) -> list[str]:

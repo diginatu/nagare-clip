@@ -159,18 +159,7 @@ def test_director_adapter_passes_context_paths(tmp_path, monkeypatch):
     monkeypatch.setattr(
         st,
         "run_director",
-        lambda edits, out, cfg, *, summary=None, plan=None, stem=None, json_path=None, gaps=None, cuts_txt=None, recorder=None: (
-            seen.update(
-                edits=edits,
-                out=out,
-                summary=summary,
-                plan=plan,
-                stem=stem,
-                json_path=json_path,
-                gaps=gaps,
-                cuts_txt=cuts_txt,
-            )
-        ),
+        lambda edits, out, cfg, **kw: seen.update(edits=edits, out=out, **kw),
     )
     by_name = {s.name: s for s in st.STAGES}
     by_name["director"].run(_ctx(tmp_path, stems=("a",)))
@@ -824,3 +813,64 @@ def test_extract_gap_frames_unparseable_stats_content_excluded_from_min(gap_ctx,
     result = stages_mod._extract_gap_frames(gap_ctx, [(src, [(10.0, 20.0)])])
 
     assert result["talk1"][0].ssim == pytest.approx(0.81)
+
+
+def test_director_adapter_passes_timeline_position_and_prior_ops(tmp_path, monkeypatch):
+    """Video n is told the whole concatenation order and handed the _director.json
+    of every video playing before it (already written by this same loop)."""
+    seen = []
+    monkeypatch.setattr(st, "recorder_from_config", lambda *a, **k: _NullRec())
+    monkeypatch.setattr(
+        st,
+        "run_director",
+        lambda edits, out, cfg, **kw: seen.append(
+            (kw["stem"], kw["all_stems"], kw["prior_director_paths"])
+        ),
+    )
+    in_dir = tmp_path / "in"
+    in_dir.mkdir()
+    for s in ("a", "b", "c"):
+        (in_dir / f"{s}.mp4").touch()
+
+    by_name = {s.name: s for s in st.STAGES}
+    by_name["director"].run(_ctx(tmp_path, stems=("a", "b", "c")))
+
+    out = tmp_path / "out" / "director"
+    assert [s[0] for s in seen] == ["a", "b", "c"]
+    assert all(s[1] == ["a", "b", "c"] for s in seen)
+    assert [s[2] for s in seen] == [
+        [],
+        [out / "a_director.json"],
+        [out / "a_director.json", out / "b_director.json"],
+    ]
+
+
+def test_director_adapter_recovers_the_order_for_a_single_source_run(tmp_path, monkeypatch):
+    """`--source b.mp4` narrows what is processed, not what the finished video
+    contains: the position and the earlier videos' ops still come from the input
+    directory, so a re-run of one source sees what a full run saw."""
+    seen = {}
+    monkeypatch.setattr(st, "recorder_from_config", lambda *a, **k: _NullRec())
+    monkeypatch.setattr(st, "run_director", lambda edits, out, cfg, **kw: seen.update(kw))
+    in_dir = tmp_path / "in"
+    in_dir.mkdir()
+    for s in ("a", "b", "c"):
+        (in_dir / f"{s}.mp4").touch()
+
+    by_name = {s.name: s for s in st.STAGES}
+    by_name["director"].run(_ctx(tmp_path, stems=("b",)))
+
+    out = tmp_path / "out" / "director"
+    assert seen["all_stems"] == ["a", "b", "c"]
+    assert seen["prior_director_paths"] == [out / "a_director.json"]
+
+
+def test_director_adapter_falls_back_to_the_processed_stems(tmp_path, monkeypatch):
+    """No readable input dir (sources given by absolute path elsewhere): degrade
+    to the sources this run knows about rather than failing."""
+    seen = {}
+    monkeypatch.setattr(st, "recorder_from_config", lambda *a, **k: _NullRec())
+    monkeypatch.setattr(st, "run_director", lambda edits, out, cfg, **kw: seen.update(kw))
+    by_name = {s.name: s for s in st.STAGES}
+    by_name["director"].run(_ctx(tmp_path, stems=("a",)))
+    assert seen["all_stems"] == ["a"]

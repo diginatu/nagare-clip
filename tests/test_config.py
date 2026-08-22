@@ -762,6 +762,14 @@ def test_director_max_keep_lines_default():
     assert cfg["director"]["max_keep_lines"] == 8
 
 
+def test_director_max_prior_captions_default():
+    """How many of the captions already shown earlier in the finished video the
+    director is handed. Generous by default — a modern context window swallows
+    100 short lines — but tunable for long projects."""
+    cfg = get_effective_config(None, {})
+    assert cfg["director"]["max_prior_captions"] == 100
+
+
 def test_text_filter_prompt_repeated_phrase_example_is_valid_patch_syntax():
     """Real-run failure mode: told to de-duplicate repeated phrases but shown
     no marker example, the filter LLM rewrites the line bare and the safety

@@ -29,6 +29,20 @@ def discover_sources(input_dir: Path) -> list[Path]:
     return sorted(found)
 
 
+def project_stems(input_dir: Path) -> list[str]:
+    """Every source stem of the project, in the order the videos are concatenated.
+
+    This is what :func:`discover_sources` returns, i.e. plain name order, and it
+    is independent of ``--source``: narrowing a run to one video changes what is
+    processed, not what the finished video contains.  Returns ``[]`` when the
+    directory holds no videos (or does not exist) so a caller can degrade.
+    """
+    try:
+        return [p.stem for p in discover_sources(input_dir)]
+    except (PipelineError, OSError):
+        return []
+
+
 def resolve_cli_sources(cli_sources: list[str], input_dir: Path) -> list[Path]:
     """Resolve explicit --source values; bare names live under *input_dir*."""
     paths: list[Path] = []

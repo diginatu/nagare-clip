@@ -103,6 +103,19 @@ Stage-name validation (`resolve_window`) happens **after** source discovery in
 found (or resolvable) in the input directory; with an empty input directory
 you'll see the "No video files found" `PipelineError` instead.
 
+`sources.project_stems(input_dir)` is a second, non-raising read of that same
+discovery: the stems of every video in the input directory, in name order — the
+order the `blender` stage concatenates, since `_blender_run` just hands it
+`ctx.sources`. It exists because `ctx.sources` answers "what is this run
+processing", which `--source` narrows, while the `director` stage needs "what
+does the finished video contain", which `--source` does not change. So
+`_director_run` positions each video with `project_stems(...) or ctx.stems` and
+passes the earlier videos' `_director.json` paths alongside; a `--source b.mp4
+--from-stage director` re-run therefore still sees `video 2 of 3` and videos
+1's captions. An input directory holding videos outside the project would
+mis-state the count — but it is exactly the set a full run would concatenate,
+so the two never disagree with each other.
+
 ## Environment: `NAGARE_RUN_ID` / `NAGARE_LANGFUSE`
 
 The pipeline CLI is a **single process** for the whole run (unlike the old

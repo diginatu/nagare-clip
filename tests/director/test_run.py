@@ -292,3 +292,132 @@ def test_project_brief_appended_to_director_prompt(monkeypatch, tmp_path):
         stem="v",
     )
     assert seen["system"] == "P"
+
+
+# --- timeline position + captions already committed upstream ------------------
+
+
+def _summary_file(tmp_path, stems=("a", "b", "c")):
+    path = tmp_path / "summary.json"
+    path.write_text(
+        json.dumps(
+            {
+                "summary": "Project overview text",
+                "parts": [{"stem": s, "lines": [1, 2], "summary": f"part of {s}"} for s in stems],
+            }
+        ),
+        encoding="utf-8",
+    )
+    return path
+
+
+def _director_file(tmp_path, stem, *ops):
+    path = tmp_path / f"{stem}_director.json"
+    path.write_text(json.dumps({"ops": list(ops)}), encoding="utf-8")
+    return path
+
+
+def _capture_ctx(monkeypatch):
+    captured = {}
+
+    def fake(lines, c, overview_context="", **kw):
+        captured["ctx"] = overview_context
+        return []
+
+    monkeypatch.setattr(director_run, "generate_director_ops", fake)
+    return captured
+
+
+def _run(tmp_path, cfg_extra=None, **kwargs):
+    edits = tmp_path / "b_edits.txt"
+    edits.write_text("あい\nうえ\n", encoding="utf-8")
+    cfg = {"director": {"enabled": True, **(cfg_extra or {})}}
+    director_run.run_director(
+        edits_txt=edits,
+        output=tmp_path / "b_director.json",
+        cfg=cfg,
+        summary=_summary_file(tmp_path),
+        stem="b",
+        **kwargs,
+    )
+
+
+def test_all_stems_puts_the_video_in_the_finished_timeline(monkeypatch, tmp_path):
+    captured = _capture_ctx(monkeypatch)
+    _run(tmp_path, all_stems=["a", "b", "c"])
+    assert 'This video ("b") — video 2 of 3:' in captured["ctx"]
+    assert "Earlier in the finished video (already edited):\n- 1. a" in captured["ctx"]
+
+
+def test_prior_director_files_supply_the_captions_already_shown(monkeypatch, tmp_path):
+    captured = _capture_ctx(monkeypatch)
+    prior = _director_file(
+        tmp_path,
+        "a",
+        {"type": "overlay", "lines": [900, 900], "text": "前回の装置", "duration": 3.0},
+        {"type": "timelapse", "lines": [901, 950], "factor": 8.0, "text": "配管作業"},
+        {"type": "cut", "lines": [960, 970]},
+    )
+    _run(tmp_path, all_stems=["a", "b", "c"], prior_director_paths=[prior])
+    assert (
+        "Captions already shown earlier in the finished video:\n- 前回の装置\n- 配管作業"
+        in captured["ctx"]
+    )
+
+
+def test_a_missing_prior_file_degrades_to_the_rest(monkeypatch, tmp_path):
+    """A single-source re-run may have only some of the earlier files on disk."""
+    captured = _capture_ctx(monkeypatch)
+    prior = _director_file(
+        tmp_path, "a", {"type": "overlay", "lines": [1, 1], "text": "残った", "duration": 2.0}
+    )
+    _run(
+        tmp_path,
+        all_stems=["a", "b", "c"],
+        prior_director_paths=[tmp_path / "nope_director.json", prior],
+    )
+    assert "- 残った" in captured["ctx"]
+
+
+def test_an_unreadable_prior_file_is_skipped(monkeypatch, tmp_path):
+    captured = _capture_ctx(monkeypatch)
+    broken = tmp_path / "broken_director.json"
+    broken.write_text("{not json", encoding="utf-8")
+    good = _director_file(
+        tmp_path, "a", {"type": "overlay", "lines": [1, 1], "text": "生き残り", "duration": 2.0}
+    )
+    _run(tmp_path, all_stems=["a", "b", "c"], prior_director_paths=[broken, good])
+    assert "- 生き残り" in captured["ctx"]
+
+
+def test_no_prior_files_renders_no_caption_block(monkeypatch, tmp_path):
+    captured = _capture_ctx(monkeypatch)
+    _run(tmp_path, all_stems=["a", "b", "c"], prior_director_paths=[])
+    assert "Captions already shown" not in captured["ctx"]
+
+
+def test_max_prior_captions_config_caps_the_list(monkeypatch, tmp_path):
+    captured = _capture_ctx(monkeypatch)
+    prior = _director_file(
+        tmp_path,
+        "a",
+        {"type": "overlay", "lines": [1, 1], "text": "古い", "duration": 2.0},
+        {"type": "overlay", "lines": [2, 2], "text": "新しい", "duration": 2.0},
+    )
+    _run(
+        tmp_path,
+        cfg_extra={"max_prior_captions": 1},
+        all_stems=["a", "b", "c"],
+        prior_director_paths=[prior],
+    )
+    assert "- 新しい" in captured["ctx"]
+    assert "- 古い" not in captured["ctx"]
+
+
+def test_captions_are_deduped_across_videos(monkeypatch, tmp_path):
+    captured = _capture_ctx(monkeypatch)
+    same = {"type": "overlay", "lines": [1, 1], "text": "同じ", "duration": 2.0}
+    first = _director_file(tmp_path, "a", same)
+    second = _director_file(tmp_path, "z", same)
+    _run(tmp_path, all_stems=["a", "z", "b"], prior_director_paths=[first, second])
+    assert captured["ctx"].count("- 同じ") == 1

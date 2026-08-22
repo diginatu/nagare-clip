@@ -664,6 +664,13 @@ class DirectorConfig(BaseModel):
             "continuous on-screen event, but one this wide is marking talking, not an event"
         ),
     )
+    max_prior_captions: int = Field(
+        100,
+        description=(
+            "How many captions already shown earlier in the finished video the director "
+            "is told about (0 = no limit); the most recent ones are kept"
+        ),
+    )
     prompt: str = _commented(
         DIRECTOR_PROMPT, sample='"..."', description="System prompt (has a sensible default)"
     )

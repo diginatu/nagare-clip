@@ -16,7 +16,7 @@ from typing import Any
 
 from nagare_clip.audio_silence.cuts_file import read_cuts
 from nagare_clip.audio_silence.run import run_audio_silence
-from nagare_clip.director.director_llm import DirectorOp, ops_from_dict
+from nagare_clip.director.director_llm import DirectorOp, collect_overlay_texts, ops_from_dict
 from nagare_clip.director.run import run_director
 from nagare_clip.gap_context.describe import GapFrames
 from nagare_clip.gap_context.run import run_gap_context
@@ -39,9 +39,8 @@ from nagare_clip.pipeline.external import (
     run_magick,
 )
 from nagare_clip.pipeline.runner import PipelineContext, Stage
-from nagare_clip.pipeline.sources import SourceMedia
+from nagare_clip.pipeline.sources import SourceMedia, project_stems
 from nagare_clip.plan.run import run_plan
-from nagare_clip.publish.publish_llm import collect_overlay_texts
 from nagare_clip.publish.run import run_publish
 from nagare_clip.publish.thumbnail import ThumbRender, render_sets
 from nagare_clip.publish.thumbs import (
@@ -379,9 +378,22 @@ def _plan_required(ctx: PipelineContext) -> list[Path]:
 def _director_run(ctx: PipelineContext) -> None:
     rec = _recorder(ctx, "director")
     rec.clear()
+    # The concatenation order of the whole project, not just of this run: a
+    # `--source` re-run still edits one slice of the same finished video, and the
+    # director is told which slice.  Falls back to the processed sources when the
+    # input dir yields nothing readable.
+    timeline_stems = project_stems(ctx.input_videos_dir) or ctx.stems
+    director_dir = ctx.stage_dir("director")
     try:
         for src in ctx.sources:
             print(f"[director] Edit operations: {src.stem}")
+            # Every video playing earlier already has its ops on disk (this loop
+            # writes them in order), so their captions can be read back.
+            earlier = (
+                timeline_stems[: timeline_stems.index(src.stem)]
+                if src.stem in timeline_stems
+                else []
+            )
             run_director(
                 ctx.stage_dir("text_filter") / f"{src.stem}_edits.txt",
                 ctx.stage_dir("director") / f"{src.stem}_director.json",
@@ -392,6 +404,8 @@ def _director_run(ctx: PipelineContext) -> None:
                 json_path=ctx.stage_dir("sentence_split") / f"{src.stem}.json",
                 gaps=ctx.stage_dir("gap_context") / f"{src.stem}_gaps.json",
                 cuts_txt=ctx.stage_dir("audio_silence") / f"{src.stem}_cuts.txt",
+                all_stems=timeline_stems,
+                prior_director_paths=[director_dir / f"{s}_director.json" for s in earlier],
                 recorder=rec,
             )
     finally:

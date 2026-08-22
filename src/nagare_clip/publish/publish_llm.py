@@ -24,7 +24,7 @@ from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from typing import Any
 
-from nagare_clip.director.director_llm import _FENCE_RE, DirectorOp
+from nagare_clip.director.director_llm import _FENCE_RE
 from nagare_clip.llm_client import call_llm as _call_llm
 from nagare_clip.llm_client import with_trace_meta
 from nagare_clip.llm_report import (
@@ -71,23 +71,6 @@ class PublishCopy:
     lead: str = ""
     chapter_titles: dict[int, str] = field(default_factory=dict)  # 1-based part index -> title
     thumbnail_copy: list[ThumbSet] = field(default_factory=list)
-
-
-def collect_overlay_texts(ops: Sequence[DirectorOp]) -> list[str]:
-    """The captions the director placed, in order, deduped.
-
-    These are the moments the edit itself calls out — a mishap, a result, a
-    conclusion — which is exactly the register a title or a thumbnail hook
-    wants, so they are handed to the LLM verbatim.
-    """
-    out: list[str] = []
-    for op in ops:
-        if op.type not in ("overlay", "timelapse"):
-            continue
-        text = (op.text or "").strip()
-        if text and text not in out:
-            out.append(text)
-    return out
 
 
 def format_publish_context(

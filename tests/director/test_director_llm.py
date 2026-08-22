@@ -753,3 +753,54 @@ class TestSpeedIsOffTheDirectorsMenu:
         data = {"ops": [{"type": "speed", "lines": [10, 21], "factor": 1.5}]}
         ops = ops_from_dict(data, num_lines=40)
         assert [(o.type, o.factor) for o in ops] == [("speed", 1.5)]
+
+
+class TestOpsFromDictWithoutLineBound:
+    """Reading ANOTHER video's `_director.json` (the director stage does this to
+    list the captions already committed upstream) has no transcript to validate
+    line numbers against, so `num_lines=None` skips the range check."""
+
+    def test_none_bound_keeps_lines_beyond_any_known_length(self):
+        data = {"ops": [{"type": "overlay", "lines": [900, 900], "text": "T", "duration": 2.0}]}
+        assert [o.lines for o in ops_from_dict(data, num_lines=None)] == [(900, 900)]
+
+    def test_none_bound_still_rejects_a_malformed_range(self):
+        data = {"ops": [{"type": "cut", "lines": [9, 3]}, {"type": "cut", "lines": [0, 2]}]}
+        assert ops_from_dict(data, num_lines=None) == []
+
+    def test_integer_bound_still_enforces_the_range(self):
+        data = {"ops": [{"type": "cut", "lines": [900, 900]}]}
+        assert ops_from_dict(data, num_lines=40) == []
+
+
+class TestCollectOverlayTextsLivesInDirectorLlm:
+    """`collect_overlay_texts` reads DirectorOps only, so it belongs beside them:
+    the director stage needs it too, and director importing publish would invert
+    the stage layering."""
+
+    def test_importable_from_director_llm(self):
+        from nagare_clip.director.director_llm import collect_overlay_texts
+
+        ops = ops_from_dict(
+            {
+                "ops": [
+                    {"type": "overlay", "lines": [1, 1], "text": "A", "duration": 2.0},
+                    {"type": "timelapse", "lines": [2, 3], "factor": 8.0, "text": "B"},
+                    {"type": "cut", "lines": [4, 4]},
+                ]
+            },
+            num_lines=None,
+        )
+        assert collect_overlay_texts(ops) == ["A", "B"]
+
+
+def test_collect_overlay_texts_takes_overlay_and_timelapse_captions():
+    from nagare_clip.director.director_llm import DirectorOp, collect_overlay_texts
+
+    ops = [
+        DirectorOp(type="overlay", lines=(1, 1), text="水浸し！", duration=3.0),
+        DirectorOp(type="timelapse", lines=(2, 4), factor=8.0, text="配管作業"),
+        DirectorOp(type="cut", lines=(5, 6)),
+        DirectorOp(type="overlay", lines=(7, 7), text="水浸し！", duration=3.0),
+    ]
+    assert collect_overlay_texts(ops) == ["水浸し！", "配管作業"]

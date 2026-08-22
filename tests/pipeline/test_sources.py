@@ -6,6 +6,7 @@ from nagare_clip.pipeline.errors import PipelineError
 from nagare_clip.pipeline.sources import (
     SourceMedia,
     discover_sources,
+    project_stems,
     resolve_cli_sources,
     stage_sources,
 )
@@ -64,3 +65,28 @@ def test_stage_sources_outside_dir_copies_but_keeps_original_abs(tmp_path):
     assert sources[0].abs_path == outside.resolve()
     assert sources[0].relative == "clip.mp4"
     assert sources[0].stem == "clip"
+
+
+class TestProjectStems:
+    """The finished-timeline order is the input dir's name order — the same list
+    a full run concatenates — so it can be recovered even when only one source
+    is being processed."""
+
+    def _dir(self, tmp_path, *names):
+        d = tmp_path / "in"
+        d.mkdir(exist_ok=True)
+        for n in names:
+            (d / n).write_bytes(b"")
+        return d
+
+    def test_returns_video_stems_in_name_order(self, tmp_path):
+        d = self._dir(tmp_path, "c.mp4", "a.mkv", "b.mp4", "notes.txt")
+        assert project_stems(d) == ["a", "b", "c"]
+
+    def test_matches_the_order_discover_sources_gives(self, tmp_path):
+        d = self._dir(tmp_path, "PXL_2.mp4", "PXL_10.mp4", "PXL_1.mp4")
+        assert project_stems(d) == [p.stem for p in discover_sources(d)]
+
+    def test_empty_or_missing_dir_gives_an_empty_list(self, tmp_path):
+        assert project_stems(tmp_path / "nope") == []
+        assert project_stems(self._dir(tmp_path, "notes.txt")) == []

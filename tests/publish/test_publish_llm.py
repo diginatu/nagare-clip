@@ -10,7 +10,6 @@ from nagare_clip.publish.publish_llm import (
     PublishCopy,
     ThumbLine,
     ThumbSet,
-    collect_overlay_texts,
     font_slot_note,
     format_publish_context,
     generate_publish_copy,
@@ -179,18 +178,6 @@ def test_context_without_optional_material_still_lists_the_parts():
     doc = format_publish_context(_ps(), directions=None, overlay_texts=None)
     assert "2: talk1 [13-40] — 水槽に取り付ける" in doc
     assert "feature" not in doc
-
-
-def test_collect_overlay_texts_takes_overlay_and_timelapse_captions():
-    from nagare_clip.director.director_llm import DirectorOp
-
-    ops = [
-        DirectorOp(type="overlay", lines=(1, 1), text="水浸し！", duration=3.0),
-        DirectorOp(type="timelapse", lines=(2, 4), factor=8.0, text="配管作業"),
-        DirectorOp(type="cut", lines=(5, 6)),
-        DirectorOp(type="overlay", lines=(7, 7), text="水浸し！", duration=3.0),
-    ]
-    assert collect_overlay_texts(ops) == ["水浸し！", "配管作業"]
 
 
 # --- generation ------------------------------------------------------------

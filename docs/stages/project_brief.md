@@ -58,6 +58,25 @@ already-merged `cfg` dict and no LLM module gained a new parameter:
 | `text_filter` | `prompt` | brief first, then `build_enhanced_prompt`'s per-video summary/keyword context (which stays closest to the transcript) |
 | `publish` | `prompt` | — (the audience/tone the title, lead and thumbnail copy are written for) |
 
+## Whole-project instructions on a per-source prompt
+
+The brief is whole-project text appended to a **per-source** prompt, so an
+instruction phrased about the *finished* video ("冒頭で…", "最後に…", "一度だけ…")
+reaches every source's LLM call independently and each one obeys it from its own
+vantage point. A real 7-source run put the same "explain the rig early on" recap
+caption on four of the videos, each op individually correct.
+
+Nothing in the brief mechanism prevents that — the fix lives in the `director`
+stage's context block, which states the video's position in the finished
+timeline (`video 3 of 7`, FIRST/LAST marked, siblings split into earlier/later)
+and lists the captions already committed on the earlier videos. So a START/END
+instruction is readable as being about one particular video rather than about
+each one. Deliberately no rule was added to `director.prompt` saying so: the
+position is a fact the model can reason from, and this prompt anchors hard on
+whatever examples it carries. `summary`, `plan`, `text_filter` and `publish`
+have no equivalent — `summary`/`plan`/`publish` already run once project-wide,
+and `text_filter` makes no editorial placement decisions.
+
 `gap_context`, `sentence_split` and `guided_edit` are deliberately **not**
 briefed: they are mechanical (describe frames / split sentences / apply an op
 verbatim), and editorial framing there is noise at best and a licence to

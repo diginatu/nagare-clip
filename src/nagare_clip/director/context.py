@@ -11,13 +11,47 @@ from nagare_clip.plan.plan_llm import PartDirection
 from nagare_clip.summary.summarize import ProjectSummary
 
 
+def _sibling_text(stem: str, project_summary: ProjectSummary) -> str:
+    """One line about another video: its own summary, else its first part's."""
+    own = project_summary.video_summaries.get(stem)
+    if own:
+        return own
+    for p in project_summary.parts:
+        if p.stem == stem:
+            return p.summary
+    return ""
+
+
+def _sibling_entry(index: int, stem: str, project_summary: ProjectSummary) -> str:
+    text = _sibling_text(stem, project_summary)
+    return f"- {index}. {stem}: {text}" if text else f"- {index}. {stem}"
+
+
 def build_director_context(
     project_summary: ProjectSummary,
     directions: list[PartDirection],
     stem: str,
+    *,
+    all_stems: list[str] | None = None,
+    prior_captions: list[str] | None = None,
+    max_prior_captions: int = 0,
 ) -> str:
     """Render the context for one video: global summary + this video's parts
-    (line ranges, summaries, rough directions) + one-line sibling entries.
+    (line ranges, summaries, rough directions) + the sibling videos.
+
+    ``all_stems`` is the order the sources are concatenated in (the orchestrator's
+    source order, which is what the blender stage lays out).  When it is given and
+    contains *stem* — and the project has more than one video — the siblings are
+    split into what plays BEFORE and AFTER this one and this video's header states
+    its index, so a whole-project instruction in the editorial brief ("explain the
+    rig early on") is readable as being about one particular video rather than
+    about every video independently.  Without it the flat ``Other videos:`` list is
+    rendered exactly as before.
+
+    ``prior_captions`` are the captions the director already committed on the
+    videos playing earlier (their ``_director.json`` is written before this call),
+    so an explanation is not repeated in every video.  ``max_prior_captions``
+    keeps only that many of the most recent ones (``0`` = no limit).
 
     Returns ``""`` when there is nothing to inject (so the director prompt is
     unchanged when the overview is empty).
@@ -25,7 +59,17 @@ def build_director_context(
     parts = project_summary.parts
     video_summaries = project_summary.video_summaries
     own = [p for p in parts if p.stem == stem]
-    if not project_summary.summary and not own:
+
+    # A single-video project has no timeline order worth explaining.
+    stems = list(all_stems or [])
+    positioned = len(stems) > 1 and stem in stems
+    index = stems.index(stem) + 1 if positioned else 0
+    total = len(stems)
+    captions = list(prior_captions or [])
+    if max_prior_captions > 0:
+        captions = captions[-max_prior_captions:]
+
+    if not project_summary.summary and not own and not positioned and not captions:
         return ""
 
     dir_by_key = {(d.stem, d.lines): d.direction for d in directions}
@@ -34,8 +78,21 @@ def build_director_context(
     if project_summary.summary:
         out.append(f"Overall: {project_summary.summary}")
 
-    if own:
-        out.append(f'This video ("{stem}"):')
+    if positioned:
+        out.append(
+            "All videos below are concatenated into ONE finished video in this "
+            f"order; you are editing only video {index} of them."
+        )
+
+    if own or positioned:
+        header = f'This video ("{stem}")'
+        if positioned:
+            header += f" — video {index} of {total}"
+            if index == 1:
+                header += ", the FIRST in the finished timeline"
+            elif index == total:
+                header += ", the LAST in the finished timeline"
+        out.append(header + ":")
         own_summary = video_summaries.get(stem, "")
         if own_summary:
             out.append(f"Summary: {own_summary}")
@@ -46,14 +103,32 @@ def build_director_context(
                 line += f" → direction: {direction}"
             out.append(line)
 
-    # One line per other source video (its video summary, else first part's summary).
-    seen: dict[str, str] = {}
-    for p in parts:
-        if p.stem != stem and p.stem not in seen:
-            seen[p.stem] = video_summaries.get(p.stem) or p.summary
-    if seen:
-        out.append("Other videos:")
-        for s, summary in seen.items():
-            out.append(f"- {s}: {summary}")
+    if positioned:
+        earlier = [
+            _sibling_entry(i + 1, s, project_summary) for i, s in enumerate(stems[: index - 1])
+        ]
+        later = [
+            _sibling_entry(index + 1 + i, s, project_summary) for i, s in enumerate(stems[index:])
+        ]
+        out.append("")
+        out.append("Earlier in the finished video (already edited):")
+        out.extend(earlier or ["- (none)"])
+        out.append("Later in the finished video:")
+        out.extend(later or ["- (none)"])
+    else:
+        # One line per other source video (its video summary, else first part's summary).
+        seen: dict[str, str] = {}
+        for p in parts:
+            if p.stem != stem and p.stem not in seen:
+                seen[p.stem] = video_summaries.get(p.stem) or p.summary
+        if seen:
+            out.append("Other videos:")
+            for s, summary in seen.items():
+                out.append(f"- {s}: {summary}")
+
+    if captions:
+        out.append("")
+        out.append("Captions already shown earlier in the finished video:")
+        out.extend(f"- {c}" for c in captions)
 
     return "\n".join(out)
