@@ -95,8 +95,16 @@ Validate a hand-edited `_edits.txt` before resuming with `python -m nagare_clip.
 
 A larger LLM (config `plan:`, disabled by default) runs once project-wide after `summary`, reading all per-part summaries plus the overall summary to emit a coarse **cross-video** direction per part (`plan_llm.generate_plan()`, `{"directions":[{"index":N,"direction":...}]}` mapped back by 1-based index) — e.g. flagging a part that repeats an earlier video as "remove". Context lines render each part's duration + gap-to-next (`N: stem [a-b] [12.4s, gap 1.5s] — summary`, gap shown only within the same video and omitted when negligible/would render 0.0s; no JSON is read at this stage, times come from `summary.json`); when the part's `summary.json` entry also carries `silence` (audio_silence overlap inside the part, computed at summary time), the bracket splits into a speech/silence form instead — `[12.9s speech, 62.9s silence]`, duration now the speech-only figure — the default `plan.prompt` documents both bracket forms (a test pins the documented examples to `timing.format_dur_gap`'s output). `_format_parts_for_plan()` also prints a `Video "<stem>": <video_summary>` header above each video's first part when that video has a `summary.json` `video_summaries` entry; byte-identical to before when absent. The plan vocabulary deliberately avoids the word **keep**: `keep` is a director *op* with a mechanical cost (it restores every silence in its range), and `plan.json` is fed to the director as context, so the default `plan.prompt` offers `feature`/`retain`/`emphasise` instead and carries an explicit rule forbidding `keep` in a direction (a test asserts every occurrence of the word in the prompt is that rule, and that no example direction verb is a `director_llm.VALID_TYPES` op name). Out-of-range/malformed entries are dropped (logged); parse/LLM failure retries via `llm_retry`, then degrades to empty. `plan.json` (`{directions:[{stem,lines,direction}]}`, self-contained) feeds `director`. Disabled → `{"directions":[]}` no-op.
 
-- **Inputs:** `output/summary/summary.json`
-- **Outputs:** `output/plan/plan.json`
+`plan` is the one stage that holds a **conversation with the human** (`plan/dialogue.py`, `output/plan_dialogue/history.md`). Per run it also receives its own previous `plan.json` and the whole history, and returns a free-text `"message"` that is appended to the history as a `## plan` turn (empty/missing message appends nothing; the file is still created when the stage is enabled, so a human can find where to reply). A human appends a sentence with `./scripts/plan_say.sh "…"` (a shim over `python -m nagare_clip.plan.dialogue`; stdin also works, as does typing into the file) and re-runs `--from-stage plan --to-stage plan` — **one** LLM call — instead of hand-editing `plan.json` (61 director ops once cost an operator most of a session to edit by hand; the calls that saved were worth cents). The history format is forgiving markdown: `## human`/`## plan` headings at any level, text before the first heading read as a human turn, `<!-- … -->` stripped (which is how the file's own header explains itself without being read as an instruction), blank turns dropped, nothing raises. It lives in its own output subdir — not `plan/`, so "a stage rewrites its own directory wholesale" stays true; not beside the config, because every turn refers to line ranges only this `summary` run defines; and deliberately **not** in the `project:` brief, which reaches more stages than intended (a word used there once travelled `summary` → `summary.json` → `text_filter` and rewrote what the speaker actually said). Feeding the previous plan back is what makes round two an **edit** rather than a re-roll — the previous directions render inline under the part each belongs to (`    your last direction [31-59]: …`, matched by largest line overlap; an orphan is dropped) and the default `plan.prompt` states the contract: change only what the conversation calls for, repeat every other direction unchanged, word for word.
+
+A direction may also carry its own **`"lines": [a, b]`** inside its part's range, and several directions may share one `index` — so `plan` can **split** a part `summary` got wrong (a real 53-line part was directed "climactic demonstration … give it full length" when only 24 of its lines were the demonstration). Without this the conversation could hear the problem and do nothing about it. The range must be a 2-int pair with `a <= b` inside the part's own range; outside it the entry is dropped (logged) rather than clamped, since it names lines the part does not cover. Omitting `lines` means the whole part (today's behaviour). Directions come back ordered by part then by line; a repeated `(index, lines)` keeps the last. Only `plan` is conversational: `summary` stays fixed **because** that is what keeps stored turns valid (its part indices and line numbers are what every turn refers to), and `director` reads `plan.json` only and must not read `plan_dialogue/` — two channels of editorial intent into one stage would contradict each other.
+
+After `director` runs, `plan/divergence.py` compares each direction against the ops that landed in its line range (**no LLM call**) and writes `llm_report/notes/plan_divergence.md`, which `llm_report.rebuild_index()` inlines into `index.md` (it lives in `notes/` so it survives later stages' index rebuilds; an empty result deletes a stale note). Three kinds, each reporting its number so the threshold is arguable: `cut-over-feature` (a `feature`/`retain`/`emphasise` direction ≥ `DEFAULT_CUT_SHARE` = 0.5 covered by `cut` ops), `protected-over-remove` (a `remove`/`cut`/`drop` direction that received `keep`/`overlay`/`timelapse`), `no-timelapse` (a `timelapse`/`speed` direction with no `timelapse` op). Each carries the director's own `note` — the argument for the override. The director is deliberately **not** made to obey the plan: in the case that motivated this the override was substantially correct, and the defect was silence, not disobedience. The verb is read from the direction's leading clause (before the first dash/colon), so a keyword in the reason does not change the reading; a clause with no known verb is ignored.
+
+See [`docs/stages/plan.md`](docs/stages/plan.md) for the conversation file, the split contract and the divergence rules in detail.
+
+- **Inputs:** `output/summary/summary.json`; optionally `output/plan_dialogue/history.md`, passed as `history` (the conversation), and its own previous `output/plan/plan.json` (read before it is overwritten)
+- **Outputs:** `output/plan/plan.json`; an appended turn in `output/plan_dialogue/history.md`
 
 ### director — LLM High-Level Edit Operations (Pass A)
 
@@ -204,8 +212,10 @@ src/nagare_clip/          # Main Python package (src layout)
     summarize.py              # PartSummary/ProjectSummary(+keywords), segment_video(), build_summary()
     run.py                    # run_summary() (repeated sentence_split txt/json paths -> summary.json)
   plan/                       # plan stage (project-wide): cross-video rough directions
-    plan_llm.py               # PartDirection, generate_plan(), plan_to/from_dict()
-    run.py                    # run_plan() (summary.json -> plan.json)
+    plan_llm.py               # PartDirection/ParsedPlan, generate_plan(), plan_to/from_dict()
+    dialogue.py               # plan_dialogue/history.md: parse/append turns + the plan_say CLI
+    divergence.py             # plan vs. director ops: deterministic conflict report (no LLM)
+    run.py                    # run_plan() (summary.json + history -> plan.json + a reply turn)
   director/                   # director stage (Pass A): high-level edit ops
     director_llm.py           # DirectorOp, parse/validate JSON ops, generate via LLM
     context.py                # build_director_context(): summary+plan -> prompt overview block
@@ -238,6 +248,7 @@ src/nagare_clip/          # Main Python package (src layout)
     run.py                    # run_publish() (writes publish.json + publish.md)
 scripts/
   run_pipeline.sh             # Shim: exec uv run python -m nagare_clip.pipeline "$@"
+  plan_say.sh                 # Shim: append a human turn to plan_dialogue/history.md
 docs/
   stages/                     # Deep per-stage runtime notes (loaded on demand)
 Makefile                      # Canonical dev commands (make help / check / validate / test)
@@ -250,7 +261,7 @@ tests/
   gap_context/                # gap_context (snapshot / gaps / describe / context / run) unit tests
   text_filter/                # text-editing checkpoint unit tests
   summary/                    # summary segment/build + run() tests
-  plan/                       # plan generate/parse + run() tests
+  plan/                       # plan generate/parse + dialogue + divergence + run() tests
   director/                   # director op parsing/generation + context + run() tests
   guided_edit/                # guided_edit apply/reconcile + run() tests
   intervals/                  # interval-stage unit tests (incl. <keep>/<cut> markers, cuts_txt union)
@@ -307,6 +318,7 @@ the [Documentation Policy](#documentation-policy)):
 - audio_silence → [`docs/stages/audio_silence.md`](docs/stages/audio_silence.md)
 - sentence_split (re-segmentation, windowing/carry-over, force-split) → [`docs/stages/sentence_split.md`](docs/stages/sentence_split.md)
 - gap_context (gap selection, frame sampling/extraction, vision-call contract, summary/director consumption) → [`docs/stages/gap_context.md`](docs/stages/gap_context.md)
+- plan (human conversation, part splitting, divergence note) → [`docs/stages/plan.md`](docs/stages/plan.md)
 - text_filter (+ summary-stage filter context) → [`docs/stages/text_filter.md`](docs/stages/text_filter.md)
 - intervals (`<keep>`/`<speed>`/`<overlay/>`/`<cut>` markers, margins, captions) → [`docs/stages/intervals.md`](docs/stages/intervals.md)
 - blender (VSE layout, text styling, retiming) → [`docs/stages/blender.md`](docs/stages/blender.md)

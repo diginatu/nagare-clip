@@ -36,6 +36,52 @@ A director `keep` op protects a span from cutting **including its silences**, an
 
 The optional `summary` + `plan` stages run **once over all source videos** (project-wide) and give downstream stages cross-video context. Enable `summary.enabled`/`plan.enabled` in config: `summary` runs before `text_filter`, segments each sentence_split transcript into line-range parts with a summary each, lists per-video misspelling-prone keywords, generates a whole-video summary per video, and writes one all-videos summary to `output/summary/summary.json` (`{summary, parts, keywords, video_summaries}`) — its per-video summary/part summaries/keywords also prime the `text_filter` LLM's prompt; `plan` still runs before `director`, reading those summaries and writing a coarse, cross-video rough direction per part (e.g. "remove — repeats an earlier part", "shorten — trim the setup") to `output/plan/plan.json`. Both files are human-reviewable/editable. Note the plan's vocabulary avoids the word "keep" on purpose — in the `director` stage `keep` is an *op* that also restores every silence in its range, and a direction reading "keep — …" was being copied across as one, inflating the finished runtime; write "feature", "retain" or "emphasise" instead when hand-editing `plan.json`. When enabled, the `director` for each video receives the overall summary plus that video's whole-video summary, its parts (line ranges, summaries, rough directions), and one-line context for the other videos (preferring each sibling's own whole-video summary), so its precise per-line ops follow the project-wide plan. They share the same `max_retries`/`retry_temp_step`/`retry_temp_cap` retry knobs.
 
+#### Talking to `plan`
+
+`plan` is the one stage you can argue with. It reads a conversation file —
+`output/plan_dialogue/history.md` — alongside the summaries and **its own
+previous `plan.json`**, and appends its reply to the same file. So instead of
+hand-editing JSON you write one sentence and re-run a single stage:
+
+```bash
+./scripts/plan_say.sh "PXL_1234 [31,83] は 60-83 だけがデモ本体、33-59 は脱線"
+./scripts/run_pipeline.sh --from-stage plan --to-stage plan   # 1 LLM call
+```
+
+The first run needs no interaction at all: it writes today's `plan.json` plus a
+short message saying what it was unsure about and which directions it would like
+confirmed. Every later run reads the whole history, so a correction keeps
+applying. Because it is given its previous plan, round two is an *edit* — the
+prompt tells it to change only what the conversation asks for and repeat the
+rest unchanged.
+
+`plan_say.sh` is a convenience: the file is plain markdown with `## human` /
+`## plan` headings and opening it in an editor and typing works just as well
+(text before the first heading counts as yours). It is stored under `output/`
+because every turn refers to line ranges that this `summary` run defines —
+delete `output/` and the conversation goes with it. Do **not** put per-run
+corrections in the `project:` brief instead: that reaches `summary` and
+`text_filter` too, and has been observed rewriting what the speaker actually
+said.
+
+A direction may also cover **part** of a summary part (`"lines": [60, 83]`), and
+several directions may share one part — so `plan` can split a part `summary` got
+wrong, which is what makes "that part is really two things" actionable rather
+than merely heard. The range must sit inside its part's own range. Only `plan`
+works this way: `summary` deliberately stays non-conversational so the line
+numbers your turns refer to never move under them, and `director` reads
+`plan.json` only.
+
+After `director` runs, the pipeline also notes — with no LLM call — where the
+ops that landed **argue with** the plan: a part directed `feature` that got
+mostly cut, a part directed `remove` that got a `keep`/`overlay`/`timelapse`, a
+part directed `timelapse` that got none. The share and the threshold are printed
+so the call is arguable, along with the director's own note explaining itself.
+It appears at the bottom of `output/llm_report/index.md`. The director is *not*
+made to obey the plan — it is the first stage that reads the actual lines and
+its override is often right; what was missing was any record that they
+disagreed.
+
 The director is also told **where its video sits in the finished video**. The sources are concatenated in input-directory name order, so that order is known before any op is written: the context block states `video 3 of 7` (marking the FIRST and the LAST explicitly) and splits the sibling videos into what plays *earlier* and what plays *later*, numbered. Without it, a whole-project instruction in the editorial brief decomposes into N independent obediences — "add a caption early on explaining the rig" produced the same recap caption on four of seven sources in a real run, each individually correct. Alongside it the director receives the **captions already committed on the earlier videos** (their `_director.json` is written before this one runs), so an explanation placed once is visible as already placed; `director.max_prior_captions` (default `100`, `0` = no limit) keeps only that many of the most recent. Both survive a single-source re-run (`--source b.mp4 --from-stage director`): `--source` narrows what is processed, not what the finished video contains, so the order is re-read from the input directory and the earlier `_director.json` files are read off disk — delete them and the caption list simply renders shorter.
 
 To help the LLMs reason about pacing, the `plan` and `director` stages now also see **calculated durations and in-between gaps**: the `director`'s numbered transcript annotates each line with `[4.2s, gap 0.8s]` (per-sentence duration + gap to the next line) and the `plan`'s per-part context shows each part's duration and gap. Both stages' default prompts explain the bracket notation (what the duration is, that the gap is the silence before the next line/part, and that a negligible gap — or the last line/part — shows no gap at all), so the LLM can act on it. These times come from the WhisperX `{stem}.json`; the orchestrator feeds each stage the sentence_split `{stem}.json` automatically, so there's nothing to wire up yourself. When the audio_silence `{stem}_cuts.txt` is also available, `director` reads it live and splits that duration into speech vs. already-cut silence, e.g. `[12.9s speech, 62.9s silence]` — so a long span that's mostly detected silence doesn't read as "long, keep as-is"; `plan` never reads `_cuts.txt` itself — it renders the same split only when `summary` ran with the cuts file available and persisted a per-part `silence` value into `summary.json`. Both fall back to the plain `[Ns, gap Ns]` form when no silence overlaps or the cuts file is unavailable. Because of this, hand-editing `_cuts.txt` (an explicitly supported human step) silently stales `summary.json`'s persisted `silence` — `director` recomputes it live, so the two can briefly disagree until `summary` is re-run; harmless in the documented workflow, which resumes at `--from-stage intervals` and never re-reads `summary.json`'s stale `silence` for anything but display. To run a single stage on its own (reusing its inputs from a previous pipeline run), use `./scripts/run_pipeline.sh --from-stage X --to-stage X`.
@@ -124,6 +170,9 @@ including retries. Outcomes: `ok`, `ok-empty`, `llm-error`, `unparseable`,
 `verify-fail`, `dropped-items` (a call that parsed but discarded some items).
 Re-running a stage refreshes only that stage's section. Toggle with
 `general.llm_report` (default `true`) and relocate with `general.llm_report_dir`.
+Deterministic findings that cost no LLM call live in `notes/*.md` and are inlined
+at the bottom of `index.md` — currently the plan/director divergence report
+(see above).
 
 ### Langfuse tracing (optional)
 
