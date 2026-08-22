@@ -138,15 +138,35 @@ PLAN_PROMPT = (
     "result arrives), say so in the direction — a later stage decides how "
     "to preserve them.\n"
     "\n"
+    "A part's line range may hold more than one thread — an announcement, a "
+    "digression, and the event itself. When it does, SPLIT it: emit several "
+    'directions for that part, each with its own "lines" range inside the '
+    "part's range, so each thread gets the direction it deserves.\n"
+    "\n"
+    "You may also receive a conversation with the human editor, and your own "
+    "previous directions shown under the part they belong to. Treat that as an "
+    "EDIT of the existing plan, not a fresh start: change only the directions "
+    "the conversation calls for, and repeat every other direction unchanged, "
+    'word for word. Use "message" to say what you were unsure about, which '
+    "directions you would like confirmed, and what you did with the human's "
+    "last instruction. The human reads that message and may reply.\n"
+    "\n"
     "JSON shape:\n"
     '{"directions": [\n'
     '  {"index": 1, "direction": "feature — the product\'s operating noise '
     'is the point"},\n'
-    '  {"index": 2, "direction": "remove — repeats part 1"}\n'
-    "]}\n"
+    '  {"index": 2, "direction": "remove — repeats part 1"},\n'
+    '  {"index": 3, "lines": [12, 20], "direction": "emphasise — the '
+    'demonstration itself"}\n'
+    "],\n"
+    ' "message": "part 3 mixed an announcement with the demonstration, so I '
+    'split it — is that right?"}\n'
     "\n"
     "Rules:\n"
     '- "index" must be one of the given part numbers.\n'
+    '- "lines" is optional: omit it to direct the whole part, or give a range '
+    "inside that part's own range to direct only some of it. Several "
+    "directions may share one index.\n"
     "- One short, actionable phrase per direction.\n"
     '- Never use the word "keep" in a direction: a later stage reads it as '
     "a mechanical instruction to restore every silent second of the part. "

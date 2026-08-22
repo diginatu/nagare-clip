@@ -40,6 +40,9 @@ from nagare_clip.pipeline.external import (
 )
 from nagare_clip.pipeline.runner import PipelineContext, Stage
 from nagare_clip.pipeline.sources import SourceMedia, project_stems
+from nagare_clip.plan.dialogue import history_path
+from nagare_clip.plan.divergence import find_divergences, format_divergences
+from nagare_clip.plan.plan_llm import plan_from_dict
 from nagare_clip.plan.run import run_plan
 from nagare_clip.publish.run import run_publish
 from nagare_clip.publish.thumbnail import ThumbRender, render_sets
@@ -362,6 +365,7 @@ def _plan_run(ctx: PipelineContext) -> None:
             ctx.stage_dir("summary") / "summary.json",
             ctx.stage_dir("plan") / "plan.json",
             ctx.cfg,
+            history=history_path(ctx.output_dir),
             recorder=rec,
         )
     finally:
@@ -409,7 +413,41 @@ def _director_run(ctx: PipelineContext) -> None:
                 recorder=rec,
             )
     finally:
+        _write_divergence_note(ctx)
         rec.rebuild_index()
+
+
+def _write_divergence_note(ctx: PipelineContext) -> None:
+    """Record where the ops that landed argue with plan.json (no LLM call).
+
+    Written into the LLM report's notes/ dir so it survives later stages'
+    index rebuilds.  Best-effort: every input is optional and a failure here
+    must never fail the director stage.
+    """
+    note = ctx.llm_report_dir / "notes" / "plan_divergence.md"
+    try:
+        plan_json = ctx.stage_dir("plan") / "plan.json"
+        directions = (
+            plan_from_dict(json.loads(plan_json.read_text(encoding="utf-8")))
+            if plan_json.is_file()
+            else []
+        )
+        ops_by_stem = {}
+        for stem in ctx.stems:
+            path = ctx.stage_dir("director") / f"{stem}_director.json"
+            if path.is_file():
+                ops_by_stem[stem] = ops_from_dict(
+                    json.loads(path.read_text(encoding="utf-8")), None
+                )
+        text = format_divergences(find_divergences(directions, ops_by_stem))
+        if text:
+            note.parent.mkdir(parents=True, exist_ok=True)
+            note.write_text(text, encoding="utf-8")
+            print(f"[director] plan/director divergence: see {note}")
+        elif note.is_file():
+            note.unlink()
+    except (OSError, ValueError) as e:
+        logging.warning("director: could not write the divergence note: %s", e)
 
 
 def _director_required(ctx: PipelineContext) -> list[Path]:

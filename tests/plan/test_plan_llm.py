@@ -5,6 +5,7 @@ from __future__ import annotations
 import yaml as _yaml
 
 from nagare_clip.llm_report import Recorder
+from nagare_clip.plan.dialogue import DialogueTurn
 from nagare_clip.plan.plan_llm import (
     PartDirection,
     _format_parts_for_plan,
@@ -46,29 +47,95 @@ class TestParse:
         out = try_parse_plan_response(
             '{"directions": [{"index": 1, "direction": "keep"},'
             ' {"index": 3, "direction": "remove"}]}',
-            num_parts=3,
+            _project().parts,
         )
-        assert out == {1: "keep", 3: "remove"}
+        assert out.directions == [
+            PartDirection("a", (1, 4), "keep"),
+            PartDirection("b", (1, 3), "remove"),
+        ]
 
     def test_out_of_range_index_dropped(self):
         out = try_parse_plan_response(
             '{"directions": [{"index": 9, "direction": "x"}, {"index": 1, "direction": "ok"}]}',
-            num_parts=3,
+            _project().parts,
         )
-        assert out == {1: "ok"}
+        assert out.directions == [PartDirection("a", (1, 4), "ok")]
 
     def test_empty_direction_dropped(self):
         out = try_parse_plan_response(
-            '{"directions": [{"index": 1, "direction": ""}]}', num_parts=3
+            '{"directions": [{"index": 1, "direction": ""}]}', _project().parts
         )
-        assert out == {}
+        assert out.directions == []
 
     def test_hard_failure_returns_none(self):
-        assert try_parse_plan_response("not json", num_parts=3) is None
-        assert try_parse_plan_response('{"foo": 1}', num_parts=3) is None
+        assert try_parse_plan_response("not json", _project().parts) is None
+        assert try_parse_plan_response('{"foo": 1}', _project().parts) is None
 
-    def test_valid_empty_returns_empty_dict(self):
-        assert try_parse_plan_response('{"directions": []}', num_parts=3) == {}
+    def test_valid_empty_returns_no_directions(self):
+        out = try_parse_plan_response('{"directions": []}', _project().parts)
+        assert out.directions == []
+        assert out.message == ""
+
+
+class TestParseSplitAndMessage:
+    def test_own_lines_narrow_the_direction(self):
+        out = try_parse_plan_response(
+            '{"directions": [{"index": 2, "lines": [7, 9], "direction": "demo body"}]}',
+            _project().parts,
+        )
+        assert out.directions == [PartDirection("a", (7, 9), "demo body")]
+
+    def test_one_part_splits_into_several_directions(self):
+        out = try_parse_plan_response(
+            '{"directions": ['
+            '{"index": 2, "lines": [7, 9], "direction": "demo body"},'
+            '{"index": 2, "lines": [5, 6], "direction": "digression — cut"}'
+            "]}",
+            _project().parts,
+        )
+        assert out.directions == [
+            PartDirection("a", (5, 6), "digression — cut"),
+            PartDirection("a", (7, 9), "demo body"),
+        ]
+
+    def test_lines_outside_the_part_dropped(self):
+        drops: list[str] = []
+        out = try_parse_plan_response(
+            '{"directions": [{"index": 1, "lines": [3, 9], "direction": "x"}]}',
+            _project().parts,
+            drops,
+        )
+        assert out.directions == []
+        assert drops and "range" in drops[0]
+
+    def test_malformed_lines_dropped(self):
+        out = try_parse_plan_response(
+            '{"directions": [{"index": 1, "lines": [4, 1], "direction": "x"},'
+            ' {"index": 3, "lines": "nope", "direction": "y"}]}',
+            _project().parts,
+        )
+        assert out.directions == []
+
+    def test_message_is_read(self):
+        out = try_parse_plan_response(
+            '{"directions": [], "message": "part 2 looks mixed"}', _project().parts
+        )
+        assert out.message == "part 2 looks mixed"
+
+    def test_missing_message_is_empty(self):
+        out = try_parse_plan_response('{"directions": []}', _project().parts)
+        assert out.message == ""
+
+    def test_non_string_message_ignored(self):
+        out = try_parse_plan_response('{"directions": [], "message": 7}', _project().parts)
+        assert out.message == ""
+
+    def test_same_range_twice_keeps_the_last(self):
+        out = try_parse_plan_response(
+            '{"directions": [{"index": 1, "direction": "a"}, {"index": 1, "direction": "b"}]}',
+            _project().parts,
+        )
+        assert out.directions == [PartDirection("a", (1, 4), "b")]
 
 
 class TestGeneratePlan:
@@ -80,10 +147,15 @@ class TestGeneratePlan:
             "]}"
         )
         out = generate_plan(_project(), {"prompt": "P"}, call_llm=lambda m, c: resp)
-        assert out == [
+        assert out.directions == [
             PartDirection("a", (1, 4), "keep"),
             PartDirection("b", (1, 3), "remove"),
         ]
+
+    def test_returns_the_message(self):
+        resp = '{"directions": [], "message": "is part 2 one topic?"}'
+        out = generate_plan(_project(), {"prompt": "P"}, call_llm=lambda m, c: resp)
+        assert out.message == "is part 2 one topic?"
 
     def test_empty_parts_no_call(self):
         called = {"n": 0}
@@ -92,20 +164,85 @@ class TestGeneratePlan:
             called["n"] += 1
             return '{"directions": []}'
 
-        assert generate_plan(ProjectSummary("", []), {"prompt": "P"}, call_llm=fake) == []
+        out = generate_plan(ProjectSummary("", []), {"prompt": "P"}, call_llm=fake)
+        assert out.directions == [] and out.message == ""
         assert called["n"] == 0
 
     def test_llm_failure_returns_empty(self):
         def boom(m, c):
             raise ConnectionError("x")
 
-        assert generate_plan(_project(), {"prompt": "P"}, call_llm=boom) == []
+        out = generate_plan(_project(), {"prompt": "P"}, call_llm=boom)
+        assert out.directions == [] and out.message == ""
 
     def test_retries_then_succeeds(self):
         fake = _seq_llm(["junk", '{"directions": [{"index": 1, "direction": "keep"}]}'])
         out = generate_plan(_project(), {"prompt": "P", "max_retries": 2}, call_llm=fake)
         assert fake.calls["i"] == 2
-        assert out == [PartDirection("a", (1, 4), "keep")]
+        assert out.directions == [PartDirection("a", (1, 4), "keep")]
+
+
+class TestGeneratePlanConversation:
+    def _capture(self, **kwargs):
+        seen: dict = {}
+
+        def fake(messages, _cfg):
+            seen["user"] = messages[-1]["content"]
+            return '{"directions": []}'
+
+        generate_plan(_project(), {"prompt": "P"}, call_llm=fake, **kwargs)
+        return seen["user"]
+
+    def test_previous_directions_are_shown(self):
+        user = self._capture(
+            previous=[PartDirection("a", (5, 6), "cut the digression")],
+        )
+        assert "cut the digression" in user
+        assert "[5-6]" in user
+
+    def test_history_is_shown(self):
+        user = self._capture(
+            history=[
+                DialogueTurn("human", "part 2 is mixed"),
+                DialogueTurn("plan", "which lines?"),
+            ]
+        )
+        assert "part 2 is mixed" in user
+        assert "which lines?" in user
+
+    def test_user_message_unchanged_without_conversation(self):
+        assert self._capture() == self._capture(previous=[], history=[])
+        assert self._capture() == _format_parts_for_plan(_project())
+
+
+class TestFormatPreviousDirections:
+    def test_renders_under_its_part(self):
+        ps = _project()
+        out = _format_parts_for_plan(ps, previous=[PartDirection("a", (1, 4), "feature")])
+        lines = out.splitlines()
+        i = next(n for n, ln in enumerate(lines) if ln.startswith("1: a [1-4]"))
+        assert "feature" in lines[i + 1]
+        assert lines[i + 1].startswith(" ")
+
+    def test_split_previous_directions_both_render(self):
+        ps = _project()
+        out = _format_parts_for_plan(
+            ps,
+            previous=[
+                PartDirection("a", (5, 6), "cut"),
+                PartDirection("a", (7, 9), "feature"),
+            ],
+        )
+        assert "[5-6]" in out and "[7-9]" in out
+
+    def test_previous_matching_no_part_is_dropped(self):
+        ps = _project()
+        out = _format_parts_for_plan(ps, previous=[PartDirection("zzz", (1, 2), "orphan")])
+        assert "orphan" not in out
+
+    def test_no_previous_is_byte_identical(self):
+        ps = _project()
+        assert _format_parts_for_plan(ps, previous=[]) == _format_parts_for_plan(ps)
 
 
 class TestRoundTrip:
@@ -248,7 +385,7 @@ class TestPlanRecorder:
             return resp
 
         out = generate_plan(_ps(), {"max_retries": 0}, call_llm=fake, recorder=rec)
-        assert len(out) == 2
+        assert len(out.directions) == 2
         assert _outcome(tmp_path, "plan") == "ok"
 
     def test_records_dropped_items(self, tmp_path):
@@ -259,5 +396,5 @@ class TestPlanRecorder:
             return resp
 
         out = generate_plan(_ps(), {"max_retries": 0}, call_llm=fake, recorder=rec)
-        assert len(out) == 1
+        assert len(out.directions) == 1
         assert _outcome(tmp_path, "plan") == "dropped-items"

@@ -874,3 +874,64 @@ def test_director_adapter_falls_back_to_the_processed_stems(tmp_path, monkeypatc
     by_name = {s.name: s for s in st.STAGES}
     by_name["director"].run(_ctx(tmp_path, stems=("a",)))
     assert seen["all_stems"] == ["a"]
+
+
+def test_plan_adapter_passes_history_path(tmp_path, monkeypatch):
+    seen = {}
+    monkeypatch.setattr(st, "recorder_from_config", lambda *a, **k: _NullRec())
+    monkeypatch.setattr(
+        st,
+        "run_plan",
+        lambda summary, out, cfg, **kw: seen.update(summary=summary, out=out, **kw),
+    )
+    by_name = {s.name: s for s in st.STAGES}
+    by_name["plan"].run(_ctx(tmp_path, stems=("a",)))
+    out = tmp_path / "out"
+    assert seen["summary"] == out / "summary" / "summary.json"
+    assert seen["out"] == out / "plan" / "plan.json"
+    assert seen["history"] == out / "plan_dialogue" / "history.md"
+
+
+def _plan_and_ops(tmp_path, direction, ops):
+    out = tmp_path / "out"
+    (out / "plan").mkdir(parents=True, exist_ok=True)
+    (out / "director").mkdir(parents=True, exist_ok=True)
+    (out / "plan" / "plan.json").write_text(
+        json.dumps({"directions": [{"stem": "a", "lines": [1, 10], "direction": direction}]}),
+        encoding="utf-8",
+    )
+    (out / "director" / "a_director.json").write_text(json.dumps({"ops": ops}), encoding="utf-8")
+    return out / "llm_report" / "notes" / "plan_divergence.md"
+
+
+def test_director_adapter_writes_plan_divergence_note(tmp_path, monkeypatch):
+    monkeypatch.setattr(st, "recorder_from_config", lambda *a, **k: _NullRec())
+    monkeypatch.setattr(st, "run_director", lambda *a, **kw: None)
+    note = _plan_and_ops(
+        tmp_path,
+        "feature — the payoff",
+        [{"type": "cut", "lines": [1, 9], "note": "a long digression"}],
+    )
+    by_name = {s.name: s for s in st.STAGES}
+    by_name["director"].run(_ctx(tmp_path, stems=("a",)))
+    text = note.read_text(encoding="utf-8")
+    assert "a [1-10]" in text
+    assert "a long digression" in text
+
+
+def test_director_adapter_clears_a_stale_divergence_note(tmp_path, monkeypatch):
+    monkeypatch.setattr(st, "recorder_from_config", lambda *a, **k: _NullRec())
+    monkeypatch.setattr(st, "run_director", lambda *a, **kw: None)
+    note = _plan_and_ops(tmp_path, "feature — the payoff", [])
+    note.parent.mkdir(parents=True, exist_ok=True)
+    note.write_text("stale", encoding="utf-8")
+    by_name = {s.name: s for s in st.STAGES}
+    by_name["director"].run(_ctx(tmp_path, stems=("a",)))
+    assert not note.exists()
+
+
+def test_director_adapter_survives_a_missing_plan(tmp_path, monkeypatch):
+    monkeypatch.setattr(st, "recorder_from_config", lambda *a, **k: _NullRec())
+    monkeypatch.setattr(st, "run_director", lambda *a, **kw: None)
+    by_name = {s.name: s for s in st.STAGES}
+    by_name["director"].run(_ctx(tmp_path, stems=("a",)))  # no plan.json, no ops on disk

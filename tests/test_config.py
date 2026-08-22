@@ -811,3 +811,42 @@ def test_an_unknown_thumbnail_key_is_rejected(tmp_path):
     path.write_text("publish:\n  thumbnail:\n    colour: red\n", encoding="utf-8")
     with pytest.raises(ValidationError):
         get_effective_config(path, {})
+
+
+def _plan_prompt() -> str:
+    return get_effective_config(None, {})["plan"]["prompt"]
+
+
+def test_plan_prompt_examples_survive_the_parser():
+    """Every documented direction example must parse, or the prompt teaches a
+    shape the parser drops."""
+    from nagare_clip.plan.plan_llm import try_parse_plan_response
+    from nagare_clip.summary.summarize import PartSummary
+
+    parts = [PartSummary("v", (1, 40), f"part {i}") for i in range(1, 4)]
+    examples = [ln.strip().rstrip(",") for ln in _plan_prompt().splitlines() if '"index": ' in ln]
+    assert examples
+    for example in examples:
+        parsed = try_parse_plan_response('{"directions": [' + example + "]}", parts)
+        assert parsed is not None and parsed.directions, f"prompt example dropped: {example}"
+
+
+def test_plan_prompt_asks_for_an_edit_not_a_re_roll():
+    """Round two must change only what the conversation calls for: without this
+    the directions the human was happy with are silently rewritten."""
+    prompt = _plan_prompt().lower()
+    assert "unchanged" in prompt
+    assert "conversation" in prompt
+
+
+def test_plan_prompt_documents_the_line_range_split():
+    """A direction may narrow to part of its part — that is what makes the
+    human's "[31,83] is really two things" actionable rather than merely heard."""
+    prompt = _plan_prompt()
+    assert '"lines"' in prompt
+    assert "split" in prompt.lower()
+
+
+def test_plan_prompt_documents_the_message_field():
+    prompt = _plan_prompt()
+    assert '"message"' in prompt
