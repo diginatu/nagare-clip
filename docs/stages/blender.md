@@ -17,3 +17,22 @@ Retiming/speed-strip behaviour is documented alongside the `<speed>` marker in
 - **The placement cursor advances by the duration Blender really built**, read back off the strip (`timeline._strip_duration`) after retiming — never by a predicted one. `retiming_segment_speed_set` computes the retimed length itself, and a cursor that falls short of it starts the next strip *inside* its predecessor; Blender resolves that overlap by shunting the strip to a free channel (onto the speed-badge/caption channels) rather than refusing the assignment, and the timeline's total length is unaffected because Phase D re-pins every strip to its intended start — which is how it goes unnoticed. `build_timeline_map()` still needs a prediction (it runs before any strip exists), so both it and the placement loop use the shared `frames.retimed_frame_count()`, which rounds a half frame **away from zero** the way Blender's `round_fl_to_int` does. Python's `round()` rounds half to even, making `132 / 8 = 16.5` sixteen frames against Blender's seventeen: in a real 3-region 8x run, 11 of 260 strips landed on `.5`, the 5 that rounded down each left the following video+audio pair on channels 3 and 4, and nothing was logged. A built duration that still disagrees with the prediction is warned about — the timeline map, and so every caption/overlay in that range, is laid out against the prediction and would be off by the difference.
 - Phase D also warns for any strip not on the channel it was assigned (`VIDEO_CHANNEL = 1` / `SOUND_CHANNEL = 2`), whatever the cause: a displaced strip is otherwise visible only by opening the `.blend` by hand.
 - `blender.default_fps` is the fallback FPS when source metadata is unavailable. Multiple sources concatenate onto one timeline via repeated `--source`/`--intervals` and `start_cursor`/`idx_offset`.
+
+## Its own warnings (`blender_warnings.json`)
+
+The clamp and build-length warnings this stage logs are the only sign that a
+requested interval did not fit the clip, or that Blender built a strip a
+different length than `retimed_frame_count` predicted (which means the captions
+in that range were laid out against the wrong map). They print into the same
+stream as Blender's unrelated `bl_pkg`/`cattrs` extension tracebacks that the
+operator prompt tells the operator to ignore, so in practice they scroll past.
+
+`blender/warnings_file.py` (no bpy import) therefore captures them:
+`main()` wraps the whole build in `capture_warnings()` — a WARNING-level
+handler on the root logger, so it catches the module-level `logging.warning(...)`
+calls `blender.timeline` makes throughout — and writes
+`output/blender/blender_warnings.json` (`{"warnings": [...]}`) in a `finally`,
+so a failed build still leaves what preceded it. The list is written **even when
+empty**: a stale file from a previous run would otherwise report warnings this
+scene never produced. The finished-cut report reads it back
+(see [cut_report.md](cut_report.md)).

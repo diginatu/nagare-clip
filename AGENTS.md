@@ -19,6 +19,8 @@ Maintain and improve a multi-stage rough-cut pipeline:
 11. Blender VSE auto-layout in headless mode
 12. publish — title candidates, a description with chapter timestamps taken from the finished timeline, thumbnail copy and candidate stills (disabled by default)
 
+Plus `cut_report` — not a stage but a deterministic report (no LLM call) that measures the finished cut after `intervals`/`blender` and writes a section into `llm_report/index.md`.
+
 Final deliverable is a `.blend` project for human editing, plus a reviewable
 `publish.md` of the material needed to upload it.
 
@@ -131,8 +133,25 @@ Applies `{{old->new}}` patches from `_edits.txt`, syncs corrected text back into
 
 Auto-assembles the rough cut in headless Blender. References original media in-place (no re-encoding). Concatenates all sources onto a single timeline. Strip placement opens the source once as a template video+sound pair, connects that pair **once** (every duplicate inherits a connection to its own audio copy), and grows the copies by **doubling** (`allocate_pairs()`, `ceil(log2(N)) + 1` duplicate ops instead of one per interval) — `sequencer.duplicate`/`connect` both cost more per call the fuller the scene gets, so per-interval operator calls made placement quadratic (1600 intervals: 41.8s → 2.6s; 4000: >10min → 15.3s). Everything else per interval is plain property assignment. The cursor advances by the duration Blender **really built** (read back off the strip after retiming), not by a predicted one — a cursor one frame short puts the next strip inside its predecessor and Blender silently shunts it to a free channel, i.e. onto the caption/badge channels, without changing the timeline's length. `build_timeline_map()` must still predict (it runs before any strip exists), so both share `frames.retimed_frame_count()`, which rounds a half frame away from zero as Blender does (Python's `round()` rounds half to even: `132 / 8 = 16.5` → 16 vs. Blender's 17). A built duration that disagrees with the prediction warns (captions in that range are laid out against the prediction), and so does any strip that ends up off its assigned channel.
 
+The stage also records **its own** WARNING lines to `output/blender/blender_warnings.json` (`blender/warnings_file.py`: `capture_warnings()` attaches a WARNING-level root handler for the whole build, `write_warnings()` writes in a `finally` so a failed build still leaves what preceded it, and always writes — an empty list overwrites a stale file rather than letting it report warnings this scene never produced). The clamp/overlap notices are the only sign that a requested interval did not fit, and they print into the same stream as Blender's unrelated `bl_pkg`/`cattrs` extension tracebacks the operator is told to ignore, so in practice they scroll past unread; `cut_report` reads them back out of the file.
+
 - **Inputs:** source video files, `{stem}_intervals.json` for each source
-- **Outputs:** `{stem}_edited.blend` — ready for human editing
+- **Outputs:** `{stem}_edited.blend` — ready for human editing; `blender_warnings.json`
+
+### cut_report — Finished-Cut Metrics + Checks (deterministic, no LLM)
+
+**Not a stage** — a report, like `plan/divergence.py`: no `output/cut_report/` dir, no entry in `STAGE_NAMES`, nothing downstream depends on it. `pipeline.stages.write_cut_report(ctx)` runs at the end of the `intervals` adapter and again at the end of the `blender` one, writing `llm_report/notes/cut_report.md`, which `llm_report.rebuild_index()` inlines into `index.md` beside the plan/director divergence section. `intervals` owns every number — even the **strip count**, which `blender_cli` itself derives from the intervals JSON (`split_intervals_by_speed` per source), so a `--to-stage intervals` run gets a full report; the second pass exists only to pick up `output/blender/blender_warnings.json`. The report describes `ctx.stems` (what this run actually concatenated into the `.blend`), not the whole project.
+
+Two kinds of content and the distinction is the point. **Measurements print every run**, breach or no breach — source/finished duration and share, the 1x vs. under-timelapse split of on-screen time, keep-interval count, strip count, caption count (plus how many start inside a speed range), overlay count and per-finished-minute density, one summary line each for inter-keep gaps and keep fragments (count, min, median, how many are under threshold), and a table row per `speed_range`. They are the per-run regression table `docs/operator-prompt.md` asks a human to maintain by hand; prompt changes regress about as often as they improve, and a report that only speaks on failure cannot serve that purpose. **Findings print only on a breach**, each carrying the threshold it breached so the number is arguable — the divergence note's rule. Kinds, most severe first (`checks.KIND_ORDER`): `caption-compressed`, `caption-fast`, `timelapse-short`, `timelapse-long`, `keep-gap`, `keep-fragment`, `blender-warning`.
+
+The caption check fires on the caption's **authored** density (`len(text) / (end - start)` in source seconds, `cut_report.caption_chars_per_sec`, default 18.0), not on merely being inside a speed range: 148 perfectly readable captions rode inside one 8x range on the run this was built from, and a check that flags everything is the same as no check. The *report* then states what the factor did (`0.21s on screen, 272.9 chars/s`) — that is what makes the defect legible. How many captions start inside a speed range at all is a **measurement**, not a flag. A timelapse's on-screen time is `kept / factor` where `kept` is the source seconds of keep intervals inside the range, never `span / factor`: a range half of which was cut plays for half as long, and the director prompt's "about a minute on screen" is about what plays (`cut_report.timelapse_min_screen` 30.0s / `timelapse_max_screen` 180.0s). Gaps are checked against `intervals.min_cut` — the pass that owns them — and are computed strictly **within** one source, since the seam between two sources is a concatenation boundary, not a cut; a zero-length gap between touching intervals is dropped rather than reported as a sub-threshold cut nobody made. Fragments use `cut_report.min_keep_fragment` (1.0s).
+
+Deliberately **not** in scope: comparing against `project.target_duration` or the brief's caption-density sentence. Those are free text by design, a wrong parse would be worse than none, and the useful part is the number — so the finished duration and the overlay density are stated plainly and the human compares. The finished-timeline arithmetic is not a second copy either: `metrics.measure()` calls `publish.timeline.build_placements()`, which already reproduces the blender concatenation in seconds so the two cannot disagree. Every input is optional and nothing here can fail a run: a missing/unparseable `{stem}_intervals.json` skips that source (logged); no readable intervals at all, or `cut_report.enabled: false`, deletes a stale note and writes nothing.
+
+See [`docs/stages/cut_report.md`](docs/stages/cut_report.md) for the thresholds, the Blender-warning capture and the failure modes in detail.
+
+- **Inputs:** every `{stem}_intervals.json`; optionally `output/blender/blender_warnings.json`
+- **Outputs:** `output/llm_report/notes/cut_report.md` (inlined into `index.md`)
 
 ### publish — Title, Description + Chapters, Thumbnail Material
 
@@ -239,6 +258,11 @@ src/nagare_clip/          # Main Python package (src layout)
     scene.py                  # Blender scene setup
     timeline.py               # Strip and caption placement
     frames.py                 # Pure placement helpers, no bpy (clamp_frames + split_intervals_by_speed, shared with publish)
+    warnings_file.py          # capture_warnings()/write_warnings(): blender_warnings.json for cut_report
+  cut_report/                 # finished-cut metrics + checks (no LLM; NOT a stage)
+    metrics.py                # CutMetrics/SpeedSpan/SpanStats + measure() (pure)
+    checks.py                 # Finding + find_issues() + read_blender_warnings()
+    report.py                 # format_cut_report() / build_cut_report(sources, cfg)
   publish/                    # publish stage (project-wide, after blender)
     timeline.py               # source seconds -> finished-timeline seconds (build_placements/first_surviving_time)
     chapters.py               # YouTube chapter rules: 0:00 anchor, 10s merge, ascending, M:SS
@@ -267,6 +291,7 @@ tests/
   intervals/                  # interval-stage unit tests (incl. <keep>/<cut> markers, cuts_txt union)
   blender/                    # Blender-stage tests
   publish/                    # publish (timeline / chapters / thumbs / publish_llm / run / stage wiring) tests
+  cut_report/                 # finished-cut metrics / checks / report / stage-wiring tests
 ```
 
 ## Configuration System
@@ -323,6 +348,7 @@ the [Documentation Policy](#documentation-policy)):
 - intervals (`<keep>`/`<speed>`/`<overlay/>`/`<cut>` markers, margins, captions) → [`docs/stages/intervals.md`](docs/stages/intervals.md)
 - blender (VSE layout, text styling, retiming) → [`docs/stages/blender.md`](docs/stages/blender.md)
 - publish (finished-timeline mapping, chapter rules, thumbnail material) → [`docs/stages/publish.md`](docs/stages/publish.md)
+- cut_report (finished-cut metrics + checks, Blender-warning capture) → [`docs/stages/cut_report.md`](docs/stages/cut_report.md)
 - pipeline orchestration (`nagare_clip.pipeline`) → [`docs/stages/pipeline.md`](docs/stages/pipeline.md)
 - observability (LLM report + Langfuse tracing) → [`docs/stages/observability.md`](docs/stages/observability.md)
 

@@ -28,6 +28,7 @@ from nagare_clip.blender.timeline import (
     place_strips,
     split_intervals_by_speed,
 )
+from nagare_clip.blender.warnings_file import capture_warnings, write_warnings
 from nagare_clip.config import get_effective_config
 from nagare_clip.logging_setup import setup_logging
 
@@ -75,8 +76,23 @@ def resolve_speed_mark_style(caption_style: dict, speed_mark_cfg: dict) -> dict:
 
 
 def main() -> None:
-    args = parse_blender_args(sys.argv)
+    """Build the scene, and record Blender's own warnings beside the .blend.
 
+    The clamp/overlap notices are the only sign a requested interval did not
+    fit, and they print among Blender's unrelated startup tracebacks; the
+    finished-cut report reads them back out of the file.  Written in a
+    ``finally`` so a failed build still leaves the warnings that preceded it.
+    """
+    args = parse_blender_args(sys.argv)
+    output_dir = Path(args.output).expanduser().resolve().parent
+    with capture_warnings() as warnings:
+        try:
+            _build(args)
+        finally:
+            write_warnings(output_dir, warnings)
+
+
+def _build(args: argparse.Namespace) -> None:
     config_path = Path(args.config_path) if args.config_path else None
     cfg = get_effective_config(config_path)
 

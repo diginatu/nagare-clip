@@ -172,7 +172,38 @@ Re-running a stage refreshes only that stage's section. Toggle with
 `general.llm_report` (default `true`) and relocate with `general.llm_report_dir`.
 Deterministic findings that cost no LLM call live in `notes/*.md` and are inlined
 at the bottom of `index.md` — currently the plan/director divergence report
-(see above).
+(see above) and the finished-cut report (below).
+
+### Finished-cut report (`cut_report`)
+
+After `intervals` (and again after `blender`, which adds Blender's own
+warnings), the pipeline measures the cut it just produced and writes a
+`## finished cut` section into `output/llm_report/index.md`. **No LLM call.**
+
+Two kinds of content. The **measurements always print**, breach or no breach —
+finished duration, the 1x / timelapse split, keep-interval, strip, caption and
+overlay counts, overlay density per finished minute, and one summary line each
+for keep-interval gaps and fragments. That is the per-run regression table you
+would otherwise keep by hand, and it is how you notice a prompt change that
+regressed.
+
+The **findings print only on a breach**, each naming the threshold it breached:
+
+| finding | what it means | threshold |
+|---|---|---|
+| `caption-compressed` | a caption already too dense to read, *and* inside a `speed_range` that divides its screen time again | `cut_report.caption_chars_per_sec` (18.0) |
+| `caption-fast` | the same density outside any speed range | same |
+| `timelapse-short` / `timelapse-long` | a timelapse far off the director prompt's "about a minute on screen" | `cut_report.timelapse_min_screen` (30.0s) / `timelapse_max_screen` (180.0s) |
+| `keep-gap` | a cut too short to be worth the jump | `intervals.min_cut` |
+| `keep-fragment` | a keep interval too short to register | `cut_report.min_keep_fragment` (1.0s) |
+| `blender-warning` | one of Blender's clamp/overlap notices, lifted out of its startup noise |  |
+
+It deliberately does **not** compare against `project.target_duration` or the
+brief's caption-density sentence: those are free text, and a wrong parse would
+be worse than none. The numbers are stated; you compare.
+
+Turn it off with `cut_report.enabled: false`. See
+[`docs/stages/cut_report.md`](docs/stages/cut_report.md).
 
 ### Langfuse tracing (optional)
 

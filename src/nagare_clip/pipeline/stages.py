@@ -16,6 +16,8 @@ from typing import Any
 
 from nagare_clip.audio_silence.cuts_file import read_cuts
 from nagare_clip.audio_silence.run import run_audio_silence
+from nagare_clip.blender.warnings_file import WARNINGS_FILENAME
+from nagare_clip.cut_report.report import build_cut_report
 from nagare_clip.director.director_llm import DirectorOp, collect_overlay_texts, ops_from_dict
 from nagare_clip.director.run import run_director
 from nagare_clip.gap_context.describe import GapFrames
@@ -494,6 +496,60 @@ def _intervals_run(ctx: PipelineContext) -> None:
             ctx.cfg,
             cuts_txt=ctx.stage_dir("audio_silence") / f"{src.stem}_cuts.txt",
         )
+    write_cut_report(ctx)
+
+
+CUT_REPORT_NOTE = "cut_report.md"
+
+
+def _load_intervals(ctx: PipelineContext) -> list[tuple[str, dict]]:
+    """Every source's intervals JSON, in the order blender concatenates them.
+
+    Each file is optional: the report is a courtesy, not a gate, so a source
+    whose JSON is missing or unreadable is skipped with a warning rather than
+    failing the stage that just succeeded.
+    """
+    out: list[tuple[str, dict]] = []
+    for stem in ctx.stems:
+        path = ctx.stage_dir("intervals") / f"{stem}_intervals.json"
+        if not path.is_file():
+            continue
+        try:
+            out.append((stem, json.loads(path.read_text(encoding="utf-8"))))
+        except (OSError, ValueError) as e:
+            logging.warning("cut_report: could not read %s: %s", path, e)
+    return out
+
+
+def write_cut_report(ctx: PipelineContext) -> None:
+    """Measure the finished cut and write the LLM report's note (no LLM call).
+
+    Called after `intervals` (which owns every number but Blender's own
+    warnings) and again after `blender`, which adds them.  Like the
+    plan/director divergence note it lives in the report's notes/ dir so it
+    survives a later stage's rebuild of index.md.  Best-effort throughout: a
+    failure here must never fail the stage that produced the cut.
+    """
+    note = ctx.llm_report_dir / "notes" / CUT_REPORT_NOTE
+    try:
+        sources = _load_intervals(ctx)
+        text = (
+            build_cut_report(
+                sources,
+                ctx.cfg,
+                blender_warnings_path=ctx.stage_dir("blender") / WARNINGS_FILENAME,
+            )
+            if sources
+            else ""
+        )
+        if text:
+            note.parent.mkdir(parents=True, exist_ok=True)
+            note.write_text(text, encoding="utf-8")
+            print(f"[cut_report] finished-cut metrics: see {note}")
+        elif note.is_file():
+            note.unlink()
+    except (OSError, ValueError) as e:
+        logging.warning("cut_report: could not write the finished-cut note: %s", e)
 
 
 def _intervals_required(ctx: PipelineContext) -> list[Path]:
@@ -518,6 +574,8 @@ def _blender_run(ctx: PipelineContext) -> None:
             ctx.log_file,
         )
     )
+    # Re-written now that Blender has recorded its own clamp/overlap warnings.
+    write_cut_report(ctx)
 
 
 # --- publish -----------------------------------------------------------------

@@ -1005,6 +1005,43 @@ class PublishConfig(BaseModel):
     )
 
 
+class CutReportConfig(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    section_comment: ClassVar[str] = (
+        "cut_report: deterministic metrics + checks on the FINISHED cut (no LLM call).\n"
+        "Runs after intervals (again after blender, with Blender's own warnings) and\n"
+        "writes a section into llm_report/index.md next to the plan/director divergence.\n"
+        "The measurements always print; only a breached threshold is flagged."
+    )
+    enabled: bool = Field(True, description="Write the finished-cut section into the LLM report")
+    caption_chars_per_sec: float = Field(
+        18.0,
+        description=(
+            "Flag a caption authored at or above this many characters per second. "
+            "One inside a speed_range is flagged separately: the factor divides its "
+            "on-screen time again, which is how a real run shipped 0.2s captions"
+        ),
+    )
+    timelapse_min_screen: float = Field(
+        30.0,
+        description=(
+            "Flag a timelapse that plays for less than this many seconds on screen; "
+            "the director prompt asks for 'about a minute' and a shorter one costs "
+            "the viewer the audio for almost nothing"
+        ),
+    )
+    timelapse_max_screen: float = Field(
+        180.0, description="Flag a timelapse that plays for more than this many seconds on screen"
+    )
+    min_keep_fragment: float = Field(
+        1.0,
+        description=(
+            "Flag a keep interval shorter than this (seconds). Inter-keep GAPS are "
+            "checked against intervals.min_cut instead -- that is the pass that owns them"
+        ),
+    )
+
+
 class PipelineConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
     input_videos_dir: str = Field("src_video")
@@ -1040,6 +1077,7 @@ class NagareClipConfig(BaseModel):
     intervals: IntervalsConfig = Field(default_factory=IntervalsConfig)
     blender: BlenderConfig = Field(default_factory=BlenderConfig)
     publish: PublishConfig = Field(default_factory=PublishConfig)
+    cut_report: CutReportConfig = Field(default_factory=CutReportConfig)
     pipeline: PipelineConfig = Field(default_factory=PipelineConfig)
 
 

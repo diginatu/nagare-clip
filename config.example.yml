@@ -292,6 +292,17 @@ publish:
     # fonts: {sans-bold: "Noto-Sans-CJK-JP-Bold", serif-black: "Noto-Serif-CJK-JP-Black"}   # Font slots the LLM may choose from: slot name -> ImageMagick font name or path
   # prompt: "..."   # System prompt (has a sensible default)
 
+# cut_report: deterministic metrics + checks on the FINISHED cut (no LLM call).
+# Runs after intervals (again after blender, with Blender's own warnings) and
+# writes a section into llm_report/index.md next to the plan/director divergence.
+# The measurements always print; only a breached threshold is flagged.
+cut_report:
+  enabled: true   # Write the finished-cut section into the LLM report
+  caption_chars_per_sec: 18.0   # Flag a caption authored at or above this many characters per second. One inside a speed_range is flagged separately: the factor divides its on-screen time again, which is how a real run shipped 0.2s captions
+  timelapse_min_screen: 30.0   # Flag a timelapse that plays for less than this many seconds on screen; the director prompt asks for 'about a minute' and a shorter one costs the viewer the audio for almost nothing
+  timelapse_max_screen: 180.0   # Flag a timelapse that plays for more than this many seconds on screen
+  min_keep_fragment: 1.0   # Flag a keep interval shorter than this (seconds). Inter-keep GAPS are checked against intervals.min_cut instead -- that is the pass that owns them
+
 pipeline:
   input_videos_dir: src_video
   output_dir: output   # Root dir; stage outputs go to per-stage named subdirs

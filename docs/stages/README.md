@@ -17,4 +17,5 @@ the hard constraints live in the top-level [`AGENTS.md`](../../AGENTS.md).
 | Blender VSE layout, text styling, retiming | [blender.md](blender.md) |
 | Publish material: titles, description + chapters, thumbnail copy/frames | [publish.md](publish.md) |
 | Pipeline orchestration (`run_pipeline.sh`) | [pipeline.md](pipeline.md) |
+| Finished-cut metrics + checks (deterministic, no LLM) | [cut_report.md](cut_report.md) |
 | Observability: LLM report + Langfuse tracing | [observability.md](observability.md) |
