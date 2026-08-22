@@ -300,3 +300,29 @@ class TestDeterministicRecords:
         rec.flush_unit("u", outcome=OK)
         text = (tmp_path / "guided_edit" / "u.md").read_text(encoding="utf-8")
         assert "model: m1" in text
+
+
+class TestIndexNotes:
+    """notes/*.md hold deterministic findings (no LLM call) that must survive
+    the next stage's rebuild of the index."""
+
+    def test_note_is_inlined_after_the_table(self, tmp_path):
+        (tmp_path / "notes").mkdir(parents=True)
+        (tmp_path / "notes" / "plan_divergence.md").write_text(
+            "## plan/director divergence\n\n- v [1-10] argued with\n", encoding="utf-8"
+        )
+        rebuild_index(tmp_path)
+        index = (tmp_path / "index.md").read_text(encoding="utf-8")
+        assert "## plan/director divergence" in index
+        assert index.index("| Stage |") < index.index("## plan/director divergence")
+
+    def test_notes_are_not_listed_as_calls(self, tmp_path):
+        (tmp_path / "notes").mkdir(parents=True)
+        (tmp_path / "notes" / "plan_divergence.md").write_text("## x\n", encoding="utf-8")
+        rebuild_index(tmp_path)
+        index = (tmp_path / "index.md").read_text(encoding="utf-8")
+        assert "0 call(s)" in index
+
+    def test_no_notes_dir_is_unchanged(self, tmp_path):
+        rebuild_index(tmp_path)
+        assert "## " not in (tmp_path / "index.md").read_text(encoding="utf-8").split("\n", 1)[1]

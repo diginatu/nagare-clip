@@ -310,6 +310,16 @@ def rebuild_index(report_dir: Any) -> None:
                 link=str(rel).replace("\\", "/"),
             )
         )
+    # Deterministic findings (no LLM call) live in notes/ so they survive the
+    # next stage's rebuild of this index.
+    for note in sorted(report_dir.glob("notes/*.md")):
+        try:
+            body = note.read_text(encoding="utf-8").strip()
+        except OSError:
+            continue
+        if body:
+            lines.extend(["", body])
+
     try:
         report_dir.mkdir(parents=True, exist_ok=True)
         (report_dir / "index.md").write_text("\n".join(lines) + "\n", encoding="utf-8")
