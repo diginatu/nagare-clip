@@ -37,6 +37,7 @@ STAGE_ORDER = [
     "gap_context",
     "summary",
     "plan",
+    "plan_revise",
     "director",
     "guided_edit",
     "publish",

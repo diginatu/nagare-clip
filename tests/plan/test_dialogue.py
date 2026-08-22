@@ -2,10 +2,17 @@
 
 from __future__ import annotations
 
+from datetime import datetime
+
 from nagare_clip.plan.dialogue import (
     DialogueTurn,
+    active_turns,
+    append_divider,
     append_turn,
+    format_divider,
+    has_unanswered_human,
     parse_history,
+    read_active_history,
     read_history,
     render_history,
 )
@@ -108,3 +115,80 @@ class TestCli:
         monkeypatch.setattr("sys.stdin", io.StringIO("   \n"))
         assert main(["--output-dir", str(tmp_path)]) == 1
         assert not (tmp_path / "plan_dialogue" / "history.md").exists()
+
+
+class TestDivider:
+    """A `plan` re-run divides the conversation instead of clearing it."""
+
+    def test_active_turns_are_those_after_the_last_divider(self):
+        text = (
+            "## human\n\nold instruction\n\n"
+            "## plan\n\nold reply\n\n" + format_divider() + "\n\n## human\n\nnew instruction\n"
+        )
+        assert parse_history(text) == [
+            DialogueTurn("human", "old instruction"),
+            DialogueTurn("plan", "old reply"),
+            DialogueTurn("human", "new instruction"),
+        ]
+        assert active_turns(text) == [DialogueTurn("human", "new instruction")]
+
+    def test_only_the_last_divider_counts(self):
+        text = f"## human\n\na\n\n{format_divider()}\n\n## human\n\nb\n\n{format_divider()}\n"
+        assert active_turns(text) == []
+
+    def test_no_divider_means_every_turn_is_active(self):
+        text = "## human\n\na\n"
+        assert active_turns(text) == parse_history(text)
+
+    def test_divider_records_when_it_happened(self):
+        line = format_divider(datetime(2026, 8, 22, 19, 4))
+        assert line.startswith("---") and line.endswith("---")
+        assert "2026-08-22T19:04" in line
+        assert "no longer apply" in line
+
+    def test_append_divider_creates_the_file_with_a_place_to_reply(self, tmp_path):
+        path = tmp_path / "plan_dialogue" / "history.md"
+        append_turn(path, "human", "a")
+        append_turn(path, "plan", "b")
+        append_divider(path)
+        text = path.read_text(encoding="utf-8")
+        assert active_turns(text) == []
+        assert parse_history(text) == [DialogueTurn("human", "a"), DialogueTurn("plan", "b")]
+        # a heading is left for the human to type under
+        assert text.rstrip().endswith("## human")
+
+    def test_append_divider_on_an_empty_history_writes_nothing_new(self, tmp_path):
+        path = tmp_path / "plan_dialogue" / "history.md"
+        append_divider(path)
+        assert path.is_file()  # created, so a human can find where to reply
+        first = path.read_text(encoding="utf-8")
+        append_divider(path)
+        # nothing was said since the last divider: no second divider piles up
+        assert path.read_text(encoding="utf-8") == first
+        assert first.count("no longer apply") <= 1
+
+    def test_append_divider_after_a_turn_divides_again(self, tmp_path):
+        path = tmp_path / "plan_dialogue" / "history.md"
+        append_turn(path, "human", "a")
+        append_divider(path)
+        append_turn(path, "human", "b")
+        append_divider(path)
+        assert path.read_text(encoding="utf-8").count("no longer apply") == 2
+        assert active_turns(path.read_text(encoding="utf-8")) == []
+
+    def test_read_active_history_reads_the_file(self, tmp_path):
+        path = tmp_path / "history.md"
+        path.write_text(f"## human\n\na\n\n{format_divider()}\n\n## human\n\nb\n", encoding="utf-8")
+        assert read_active_history(path) == [DialogueTurn("human", "b")]
+        assert read_active_history(tmp_path / "nope.md") == []
+        assert read_active_history(None) == []
+
+
+class TestUnansweredHuman:
+    def test_last_turn_human_is_unanswered(self):
+        assert has_unanswered_human([DialogueTurn("human", "a")])
+        assert has_unanswered_human([DialogueTurn("plan", "a"), DialogueTurn("human", "b")])
+
+    def test_answered_or_empty_is_not(self):
+        assert not has_unanswered_human([])
+        assert not has_unanswered_human([DialogueTurn("human", "a"), DialogueTurn("plan", "b")])

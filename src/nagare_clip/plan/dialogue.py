@@ -1,8 +1,12 @@
-"""The ``plan`` stage's conversation with the human editor.
+"""The ``plan_revise`` stage's conversation with the human editor.
 
 A single append-only markdown file — ``output/plan_dialogue/history.md`` — holds
-alternating turns.  ``plan`` reads the whole file every run and appends its own
-reply, so a correction written once keeps applying on every later re-run.
+alternating turns.  ``plan_revise`` reads the turns since the last divider and
+appends its own reply; it fires only while a human turn is unanswered.
+
+``plan`` writes into the file too, but only a **divider**: a plan re-run rebuilds
+the directions the turns above it refer to, so those turns stop being applied —
+divided, not deleted, because the record is often still worth copying down.
 
 The on-disk format is deliberately forgiving: role headings (``## human`` /
 ``## plan``) in plain markdown, so opening the file in an editor and typing
@@ -15,6 +19,7 @@ from __future__ import annotations
 import logging
 import re
 from dataclasses import dataclass
+from datetime import datetime
 from pathlib import Path
 
 logger = logging.getLogger(__name__)
@@ -31,16 +36,30 @@ HISTORY_NAME = "history.md"
 _COMMENT_RE = re.compile(r"<!--.*?-->", re.DOTALL)
 _HEADING_RE = re.compile(rf"^\s{{0,3}}#{{1,6}}\s*({HUMAN}|{PLAN})\b.*$", re.IGNORECASE)
 
+# A ``plan`` re-run divides the conversation rather than clearing it: the turns
+# above the last divider refer to directions that run may no longer have
+# produced, so they stop being applied — but they stay readable, and a still
+# valid instruction can be copied down instead of being reconstructed.
+_DIVIDER_RE = re.compile(r"^\s{0,3}-{3,}\s*plan re-ran\b.*$", re.IGNORECASE)
+
 FILE_HEADER = (
     "<!--\n"
-    "plan_dialogue/history.md — the plan stage's conversation with you.\n"
+    "plan_dialogue/history.md — the plan_revise stage's conversation with you.\n"
     "\n"
     "Append a turn under a '## human' heading and re-run\n"
-    "  ./scripts/run_pipeline.sh --from-stage plan --to-stage plan\n"
-    "(one LLM call).  plan reads the whole file, updates only the directions\n"
-    "the conversation calls for, and appends its own '## plan' reply.\n"
+    "  ./scripts/run_pipeline.sh --from-stage plan_revise --to-stage plan_revise\n"
+    "(one LLM call).  plan_revise revises only the directions the conversation\n"
+    "calls for and appends its own '## plan' reply.  With nothing unanswered it\n"
+    "makes no call at all.\n"
+    "\n"
+    "Do NOT re-run the plan stage to apply a turn: plan rebuilds the whole plan\n"
+    "from the summaries and retires the turns above it (see the divider below).\n"
     "\n"
     "Refer to parts by source stem and line range, e.g. 'foo [31,83]'.\n"
+    "\n"
+    "A '--- plan re-ran ... ---' line divides the log: only the turns below\n"
+    "the last one are still applied.  Copy an older instruction down if it\n"
+    "still holds.\n"
     "-->\n"
 )
 
@@ -69,6 +88,8 @@ def parse_history(text: str) -> list[DialogueTurn]:
         buf.clear()
 
     for line in body.splitlines():
+        if _DIVIDER_RE.match(line):
+            continue
         match = _HEADING_RE.match(line)
         if match:
             flush()
@@ -88,6 +109,41 @@ def read_history(path: Path | None) -> list[DialogueTurn]:
         return []
 
 
+def format_divider(when: datetime | None = None) -> str:
+    """The line a ``plan`` re-run writes to retire the turns above it."""
+    stamp = (when or datetime.now()).strftime("%Y-%m-%dT%H:%M")
+    return f"--- plan re-ran {stamp} — turns above this line no longer apply ---"
+
+
+def active_turns(text: str) -> list[DialogueTurn]:
+    """The turns after the last divider — what ``plan_revise`` still applies."""
+    body = _COMMENT_RE.sub("", text or "")
+    lines = body.splitlines()
+    last = -1
+    for i, line in enumerate(lines):
+        if _DIVIDER_RE.match(line):
+            last = i
+    return parse_history("\n".join(lines[last + 1 :]))
+
+
+def read_active_history(path: Path | None) -> list[DialogueTurn]:
+    if path is None:
+        return []
+    try:
+        return active_turns(Path(path).read_text(encoding="utf-8"))
+    except OSError:
+        return []
+
+
+def has_unanswered_human(turns: list[DialogueTurn]) -> bool:
+    """Whether the human spoke last — the structural firing condition.
+
+    ``plan_revise`` answers every turn it acts on, so "the last turn is the
+    human's" is exactly "there is something not yet answered".
+    """
+    return bool(turns) and turns[-1].role == HUMAN
+
+
 def format_turn(role: str, text: str) -> str:
     return f"## {role}\n\n{text.strip()}\n"
 
@@ -104,6 +160,30 @@ def append_turn(path: Path, role: str, text: str) -> None:
         sep = "" if existing.endswith("\n") or not existing else "\n"
         with path.open("a", encoding="utf-8") as fh:
             fh.write(f"{sep}\n{body}")
+    except OSError as e:
+        logger.warning("plan: could not append to %s: %s", path, e)
+
+
+def append_divider(path: Path, when: datetime | None = None) -> None:
+    """Retire the turns written so far, leaving a heading to reply under.
+
+    Nothing is appended when nothing has been said since the last divider, so
+    repeated ``plan`` runs do not pile dividers up.  The file is still created,
+    so a human can always find where to write.
+    """
+    path = Path(path)
+    ensure_history(path)
+    try:
+        existing = path.read_text(encoding="utf-8")
+    except OSError as e:
+        logger.warning("plan: could not read %s: %s", path, e)
+        return
+    if not active_turns(existing):
+        return
+    try:
+        sep = "" if existing.endswith("\n") or not existing else "\n"
+        with path.open("a", encoding="utf-8") as fh:
+            fh.write(f"{sep}\n{format_divider(when)}\n\n## {HUMAN}\n")
     except OSError as e:
         logger.warning("plan: could not append to %s: %s", path, e)
 
@@ -131,10 +211,10 @@ def main(argv: list[str] | None = None) -> int:
 
     parser = argparse.ArgumentParser(
         prog="nagare-clip plan-say",
-        description="Append a turn to the plan stage's conversation, then re-run "
-        "the plan stage to have it applied.",
+        description="Append a turn to the plan conversation, then re-run the "
+        "plan_revise stage to have it applied.",
     )
-    parser.add_argument("text", nargs="*", help="What to tell plan (default: read stdin)")
+    parser.add_argument("text", nargs="*", help="What to tell plan_revise (default: read stdin)")
     parser.add_argument("--config", default=None, help="Path to YAML config file")
     parser.add_argument("--output-dir", default=None, dest="output_dir")
     parser.add_argument(
@@ -160,7 +240,7 @@ def main(argv: list[str] | None = None) -> int:
     path = history_path(output_dir)
     append_turn(path, args.role, text)
     print(f"Appended a {args.role} turn to {path}")
-    print("Re-run: ./scripts/run_pipeline.sh --from-stage plan --to-stage plan")
+    print("Re-run: ./scripts/run_pipeline.sh --from-stage plan_revise --to-stage plan_revise")
     return 0
 
 

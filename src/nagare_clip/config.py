@@ -143,14 +143,6 @@ PLAN_PROMPT = (
     'directions for that part, each with its own "lines" range inside the '
     "part's range, so each thread gets the direction it deserves.\n"
     "\n"
-    "You may also receive a conversation with the human editor, and your own "
-    "previous directions shown under the part they belong to. Treat that as an "
-    "EDIT of the existing plan, not a fresh start: change only the directions "
-    "the conversation calls for, and repeat every other direction unchanged, "
-    'word for word. Use "message" to say what you were unsure about, which '
-    "directions you would like confirmed, and what you did with the human's "
-    "last instruction. The human reads that message and may reply.\n"
-    "\n"
     "JSON shape:\n"
     '{"directions": [\n'
     '  {"index": 1, "direction": "feature — the product\'s operating noise '
@@ -158,9 +150,7 @@ PLAN_PROMPT = (
     '  {"index": 2, "direction": "remove — repeats part 1"},\n'
     '  {"index": 3, "lines": [12, 20], "direction": "emphasise — the '
     'demonstration itself"}\n'
-    "],\n"
-    ' "message": "part 3 mixed an announcement with the demonstration, so I '
-    'split it — is that right?"}\n'
+    "]}\n"
     "\n"
     "Rules:\n"
     '- "index" must be one of the given part numbers.\n'
@@ -173,6 +163,63 @@ PLAN_PROMPT = (
     'Say "feature", "retain" or "emphasise" instead.\n'
     "- Output only the JSON object, no other text."
 )
+
+PLAN_REVISE_PROMPT = (
+    "You are a video editor revising an existing rough-cut plan together with "
+    "the human editor. You receive the numbered PARTS of the project (source "
+    "video, line range, summary) with the CURRENT directions listed under the "
+    "part each belongs to, every one tagged with a short id in square "
+    "brackets, plus the conversation with the human editor (oldest first). "
+    "Output ONLY a JSON object.\n"
+    "\n"
+    "State only what changes. Every direction you do not name stays exactly as "
+    "it is — you never restate one to preserve it. Change nothing the "
+    "conversation does not ask about.\n"
+    "\n"
+    "Timing: a part may carry a bracket after its line range — "
+    "[4.2s, gap 0.8s] means the part has a duration of 4.2 seconds and is "
+    "followed by a 0.8-second silent gap before the next part of the same "
+    "video. A part containing long internal silences splits its duration — "
+    "[13.0s speech, 62.9s silence] means only 13.0 seconds are spoken; the "
+    "silent seconds are dropped by default. Judge pacing from the speech "
+    "figure.\n"
+    "\n"
+    "Operations:\n"
+    '- "delete": the ids of directions that should stop existing.\n'
+    '- "add": new directions — the part "index" it belongs to, an optional '
+    '"lines" range inside that part, and its "direction" text. There is no '
+    "insertion position: a direction sits where its part and lines put it.\n"
+    '- "update": an existing direction\'s id plus its new "direction" text; '
+    "its line range is unchanged. To move a boundary, delete it and add.\n"
+    '- "message": your reply to the human — what you did with the last '
+    "instruction, and what you were unsure about. The human reads it and may "
+    "reply.\n"
+    "\n"
+    "To SPLIT a part the human says holds several threads: delete the "
+    "direction covering it and add one per thread, each with its own "
+    '"lines".\n'
+    "\n"
+    "JSON shape:\n"
+    '{"delete": ["k7f2"],\n'
+    ' "add": [{"index": 21, "lines": [60, 83], "direction": "feature — the '
+    'demonstration itself"}],\n'
+    ' "update": [{"id": "m3q8", "direction": "shorten heavily — the setup '
+    'drags"}],\n'
+    ' "message": "part 21 was one direction over two threads, so I split it '
+    'at line 60 — is that the right boundary?"}\n'
+    "\n"
+    "Rules:\n"
+    "- Use only ids shown in the parts document; never invent one.\n"
+    '- "index" must be one of the given part numbers, and "lines" must sit '
+    "inside that part's own range.\n"
+    "- One short, actionable phrase per direction.\n"
+    '- Never use the word "keep" in a direction: a later stage reads it as '
+    "a mechanical instruction to restore every silent second of the part. "
+    'Say "feature", "retain" or "emphasise" instead.\n'
+    "- Every key is optional: answer a question with a message alone.\n"
+    "- Output only the JSON object, no other text."
+)
+
 
 DIRECTOR_PROMPT = (
     "You are a video editor. You receive a Japanese transcript as "
@@ -648,6 +695,43 @@ class PlanConfig(BaseModel):
     )
 
 
+class PlanReviseConfig(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    section_comment: ClassVar[str] = (
+        "plan_revise stage: runs once project-wide between plan and director. It reads\n"
+        "plan/plan.json and the conversation in plan_dialogue/history.md and revises the\n"
+        "directions as operations (delete/add/update), writing plan_revise/plan.json --\n"
+        "which director prefers over plan/plan.json. It makes NO LLM call unless a human\n"
+        "turn is unanswered, and a plan re-run invalidates its output. Disabled by\n"
+        "default (no-op)."
+    )
+    enabled: bool = Field(False, description="Enable the plan_revise LLM")
+    provider: str = Field(
+        "ollama_chat",
+        description="LiteLLM provider prefix: ollama_chat | openai | gemini | anthropic",
+    )
+    api_base: str = Field(
+        "",
+        description="Base URL; empty -> Ollama localhost default; leave empty for cloud providers",
+    )
+    model: str = Field(
+        "gpt-oss:120b", description='A larger model (passed to LiteLLM as "<provider>/<model>")'
+    )
+    api_key: str = Field("", description="API key for the provider (or set the provider's env var)")
+    temperature: float = Field(0.3)
+    thinking: bool | str = Field(False)
+    timeout: int = Field(300)
+    response_format: str = Field("json")
+    max_retries: int = Field(
+        2, description="Extra attempts on LLM error / unparseable JSON (0 = single attempt)"
+    )
+    retry_temp_step: float = Field(0.2)
+    retry_temp_cap: float = Field(0.8)
+    prompt: str = _commented(
+        PLAN_REVISE_PROMPT, sample='"..."', description="System prompt (has a sensible default)"
+    )
+
+
 class DirectorConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
     section_comment: ClassVar[str] = (
@@ -1071,6 +1155,7 @@ class NagareClipConfig(BaseModel):
     summary: SummaryConfig = Field(default_factory=SummaryConfig)
     text_filter: TextFilterConfig = Field(default_factory=TextFilterConfig)
     plan: PlanConfig = Field(default_factory=PlanConfig)
+    plan_revise: PlanReviseConfig = Field(default_factory=PlanReviseConfig)
     director: DirectorConfig = Field(default_factory=DirectorConfig)
     guided_edit: GuidedEditConfig = Field(default_factory=GuidedEditConfig)
     intervals: IntervalsConfig = Field(default_factory=IntervalsConfig)

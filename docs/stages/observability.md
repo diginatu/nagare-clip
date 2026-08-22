@@ -21,7 +21,7 @@ produced with **no LLM call**:
 
 | file | written by | covers |
 |---|---|---|
-| `plan_divergence.md` | `pipeline.stages._write_divergence_note` after `director` | directions the ops that landed argue with ([plan.md](plan.md)) |
+| `plan_divergence.md` | `pipeline.stages._write_divergence_note` after `director` | directions (of the plan the director was given — see [plan_revise.md](plan_revise.md)) the ops that landed argue with ([plan.md](plan.md)) |
 | `cut_report.md` | `pipeline.stages.write_cut_report` after `intervals`, again after `blender` | the finished cut's measurements + threshold breaches ([cut_report.md](cut_report.md)) |
 
 Both follow the same rule: state the number that was breached, so the threshold

@@ -196,6 +196,18 @@ class TestIndex:
         assert "director/vid_b.md" in index
         assert "guided_edit/vid_a.md" in index
 
+    def test_plan_revise_is_listed_between_plan_and_director(self, tmp_path):
+        """It runs between them, so an index that sorted it last (an unknown
+        stage falls to the end) would read out of pipeline order."""
+        self._write_unit(tmp_path, "director", "vid_a", OK)
+        self._write_unit(tmp_path, "plan_revise", "plan_revise", OK)
+        self._write_unit(tmp_path, "plan", "plan", OK)
+
+        rebuild_index(tmp_path)
+        index = (tmp_path / "index.md").read_text(encoding="utf-8")
+        assert index.index("| plan ") < index.index("| plan_revise ")
+        assert index.index("| plan_revise ") < index.index("| director ")
+
     def test_index_is_regenerated_not_appended(self, tmp_path):
         self._write_unit(tmp_path, "director", "vid_a", OK)
         rebuild_index(tmp_path)

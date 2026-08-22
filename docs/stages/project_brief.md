@@ -1,9 +1,9 @@
 # project brief — runtime notes
 
 The `project:` config section is not a stage: it is a project-wide **editorial
-brief** appended to the system prompts of the five LLM stages that make
-editorial judgements — `summary`, `plan`, `director`, `text_filter` and
-`publish`. It
+brief** appended to the system prompts of the six LLM stages that make
+editorial judgements — `summary`, `plan`, `plan_revise`, `director`,
+`text_filter` and `publish`. It
 carries what no transcript can state: who the video is for, how long it should
 be, how it should feel, and what happened in a previous episode of a series.
 
@@ -54,6 +54,7 @@ already-merged `cfg` dict and no LLM module gained a new parameter:
 |-------|----------------------|----------|
 | `summary` | `prompt`, `overall_prompt` | both the per-video map call and the all-videos reduce call |
 | `plan` | `prompt` | — |
+| `plan_revise` | `prompt` | — (it edits directions, so it judges by the same brief `plan` wrote them under) |
 | `director` | `prompt` | brief first, then the summary/plan overview block appended by `generate_director_ops` |
 | `text_filter` | `prompt` | brief first, then `build_enhanced_prompt`'s per-video summary/keyword context (which stays closest to the transcript) |
 | `publish` | `prompt` | — (the audience/tone the title, lead and thumbnail copy are written for) |
@@ -73,9 +74,10 @@ and lists the captions already committed on the earlier videos. So a START/END
 instruction is readable as being about one particular video rather than about
 each one. Deliberately no rule was added to `director.prompt` saying so: the
 position is a fact the model can reason from, and this prompt anchors hard on
-whatever examples it carries. `summary`, `plan`, `text_filter` and `publish`
-have no equivalent — `summary`/`plan`/`publish` already run once project-wide,
-and `text_filter` makes no editorial placement decisions.
+whatever examples it carries. `summary`, `plan`, `plan_revise`, `text_filter`
+and `publish` have no equivalent — `summary`/`plan`/`plan_revise`/`publish`
+already run once project-wide, and `text_filter` makes no editorial placement
+decisions.
 
 `gap_context`, `sentence_split` and `guided_edit` are deliberately **not**
 briefed: they are mechanical (describe frames / split sentences / apply an op

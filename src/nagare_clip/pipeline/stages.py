@@ -46,6 +46,7 @@ from nagare_clip.plan.dialogue import history_path
 from nagare_clip.plan.divergence import find_divergences, format_divergences
 from nagare_clip.plan.plan_llm import plan_from_dict
 from nagare_clip.plan.run import run_plan
+from nagare_clip.plan_revise.run import run_plan_revise
 from nagare_clip.publish.run import run_publish
 from nagare_clip.publish.thumbnail import ThumbRender, render_sets
 from nagare_clip.publish.thumbs import (
@@ -70,6 +71,7 @@ STAGE_NAMES = [
     "summary",
     "text_filter",
     "plan",
+    "plan_revise",
     "director",
     "guided_edit",
     "intervals",
@@ -368,6 +370,7 @@ def _plan_run(ctx: PipelineContext) -> None:
             ctx.stage_dir("plan") / "plan.json",
             ctx.cfg,
             history=history_path(ctx.output_dir),
+            revised=_revised_plan_json(ctx),
             recorder=rec,
         )
     finally:
@@ -376,6 +379,42 @@ def _plan_run(ctx: PipelineContext) -> None:
 
 def _plan_required(ctx: PipelineContext) -> list[Path]:
     return [ctx.stage_dir("plan") / "plan.json"]
+
+
+# --- plan_revise -------------------------------------------------------------
+
+
+def _revised_plan_json(ctx: PipelineContext) -> Path:
+    return ctx.stage_dir("plan_revise") / "plan.json"
+
+
+def _effective_plan_json(ctx: PipelineContext) -> Path:
+    """The plan the downstream stages read: the revised one when it exists.
+
+    ``plan_revise`` writes its own directory rather than into ``plan/``, so
+    ``diff plan/plan.json plan_revise/plan.json`` is exactly the human's
+    influence on the edit.  A ``plan`` re-run deletes the revised file, which is
+    what makes this fall back rather than go stale.
+    """
+    revised = _revised_plan_json(ctx)
+    return revised if revised.is_file() else ctx.stage_dir("plan") / "plan.json"
+
+
+def _plan_revise_run(ctx: PipelineContext) -> None:
+    print("[plan_revise] Revising the plan with the human editor")
+    rec = _recorder(ctx, "plan_revise")
+    rec.clear()
+    try:
+        run_plan_revise(
+            ctx.stage_dir("summary") / "summary.json",
+            ctx.stage_dir("plan") / "plan.json",
+            _revised_plan_json(ctx),
+            ctx.cfg,
+            history=history_path(ctx.output_dir),
+            recorder=rec,
+        )
+    finally:
+        rec.rebuild_index()
 
 
 # --- director ----------------------------------------------------------------
@@ -405,7 +444,7 @@ def _director_run(ctx: PipelineContext) -> None:
                 ctx.stage_dir("director") / f"{src.stem}_director.json",
                 ctx.cfg,
                 summary=ctx.stage_dir("summary") / "summary.json",
-                plan=ctx.stage_dir("plan") / "plan.json",
+                plan=_effective_plan_json(ctx),
                 stem=src.stem,
                 json_path=ctx.stage_dir("sentence_split") / f"{src.stem}.json",
                 gaps=ctx.stage_dir("gap_context") / f"{src.stem}_gaps.json",
@@ -428,7 +467,7 @@ def _write_divergence_note(ctx: PipelineContext) -> None:
     """
     note = ctx.llm_report_dir / "notes" / "plan_divergence.md"
     try:
-        plan_json = ctx.stage_dir("plan") / "plan.json"
+        plan_json = _effective_plan_json(ctx)
         directions = (
             plan_from_dict(json.loads(plan_json.read_text(encoding="utf-8")))
             if plan_json.is_file()
@@ -692,7 +731,7 @@ def _publish_run(ctx: PipelineContext) -> None:
             ctx.cfg,
             stems=ctx.stems,
             intervals_paths=[ctx.stage_dir("intervals") / f"{s}_intervals.json" for s in ctx.stems],
-            plan_json=ctx.stage_dir("plan") / "plan.json",
+            plan_json=_effective_plan_json(ctx),
             overlay_texts=overlay_texts,
             thumbs=thumbs,
             markdown=d / "publish.md",
@@ -715,6 +754,7 @@ STAGES = [
     Stage("summary", _summary_run, _summary_required),
     Stage("text_filter", _text_filter_run, _text_filter_required),
     Stage("plan", _plan_run, _plan_required),
+    Stage("plan_revise", _plan_revise_run),
     Stage("director", _director_run, _director_required),
     Stage("guided_edit", _guided_edit_run, _guided_edit_required),
     Stage("intervals", _intervals_run, _intervals_required),

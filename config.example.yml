@@ -151,6 +151,27 @@ plan:
   retry_temp_cap: 0.8
   # prompt: "..."   # System prompt (has a sensible default)
 
+# plan_revise stage: runs once project-wide between plan and director. It reads
+# plan/plan.json and the conversation in plan_dialogue/history.md and revises the
+# directions as operations (delete/add/update), writing plan_revise/plan.json --
+# which director prefers over plan/plan.json. It makes NO LLM call unless a human
+# turn is unanswered, and a plan re-run invalidates its output. Disabled by
+# default (no-op).
+plan_revise:
+  enabled: false   # Enable the plan_revise LLM
+  provider: ollama_chat   # LiteLLM provider prefix: ollama_chat | openai | gemini | anthropic
+  api_base: ""   # Base URL; empty -> Ollama localhost default; leave empty for cloud providers
+  model: "gpt-oss:120b"   # A larger model (passed to LiteLLM as "<provider>/<model>")
+  api_key: ""   # API key for the provider (or set the provider's env var)
+  temperature: 0.3
+  thinking: false
+  timeout: 300
+  response_format: json
+  max_retries: 2   # Extra attempts on LLM error / unparseable JSON (0 = single attempt)
+  retry_temp_step: 0.2
+  retry_temp_cap: 0.8
+  # prompt: "..."   # System prompt (has a sensible default)
+
 # director stage (Pass A): a larger LLM reads the whole numbered transcript and
 # emits high-level edit operations as {stem}_director.json. It never re-outputs
 # the transcript text. Disabled by default (writes an empty op list = no-op).

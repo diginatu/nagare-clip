@@ -2,9 +2,15 @@
 
 Runs once project-wide after ``summary``.  Reads the per-part summaries (with
 line ranges) of all videos and asks a larger LLM for a rough editorial direction
-per part (remove / shorten / speed / keep …), decided with the whole project in
-view.  The result is written to ``plan.json`` for human review and consumed by
+per part (remove / shorten / speed / feature …), decided with the whole project
+in view.  The result is written to ``plan.json`` for human review and consumed by
 the per-video ``director`` stage.
+
+It is a **pure function of the summaries**: same ``summary.json`` in, same
+directions out.  Revising a plan against what the human said is a separate job
+with an opposite shape (name what changes, leave the rest alone) and lives in
+the ``plan_revise`` stage — putting both in one prompt puts instructions about
+deleting existing directions in front of a first run that has none.
 
 Graceful by design: any LLM/parse failure degrades to an empty direction list.
 """
@@ -29,7 +35,6 @@ from nagare_clip.llm_report import (
     Recorder,
 )
 from nagare_clip.llm_retry import cfg_for_attempt, retry_attempts
-from nagare_clip.plan.dialogue import DialogueTurn, render_history
 from nagare_clip.summary.summarize import PartSummary, ProjectSummary
 from nagare_clip.text_filter.llm_filter import _call_llm
 from nagare_clip.timing import format_dur_gap
@@ -37,8 +42,6 @@ from nagare_clip.timing import format_dur_gap
 logger = logging.getLogger(__name__)
 
 CallLLM = Callable[[list[dict[str, str]], dict[str, Any]], str]
-
-CONVERSATION_HEADER = "Conversation with the human editor (oldest first):"
 
 
 @dataclass
@@ -48,18 +51,10 @@ class PartDirection:
     direction: str
 
 
-@dataclass
-class ParsedPlan:
-    """One plan response: the directions it stated plus its note to the human."""
-
-    directions: list[PartDirection]
-    message: str = ""
-
-
-def _assign_previous(
-    parts: list[PartSummary], previous: list[PartDirection]
+def assign_to_parts(
+    parts: list[PartSummary], directions: list[PartDirection]
 ) -> dict[int, list[PartDirection]]:
-    """Group the previous run's directions under the part each belongs to.
+    """Group directions under the part each belongs to.
 
     A direction may cover only part of its part (a split), so it is matched by
     largest line overlap rather than by an exact range — a hand-edited range that
@@ -67,7 +62,7 @@ def _assign_previous(
     A direction overlapping no part of its own video is dropped.
     """
     grouped: dict[int, list[PartDirection]] = {}
-    for d in previous:
+    for d in directions:
         best_idx, best_overlap = -1, 0
         for i, part in enumerate(parts):
             if part.stem != d.stem:
@@ -76,22 +71,33 @@ def _assign_previous(
             if overlap > best_overlap:
                 best_idx, best_overlap = i, overlap
         if best_idx < 0:
-            logger.warning("plan: previous direction %s %s matches no part", d.stem, d.lines)
+            logger.warning("plan: direction %s %s matches no part", d.stem, d.lines)
             continue
         grouped.setdefault(best_idx, []).append(d)
     return grouped
 
 
-def _format_parts_for_plan(
-    project_summary: ProjectSummary, previous: list[PartDirection] | None = None
+def format_parts_for_plan(
+    project_summary: ProjectSummary,
+    directions: list[PartDirection] | None = None,
+    ids: list[str] | None = None,
 ) -> str:
+    """The parts document both plan and plan_revise show the model.
+
+    With no *directions* this is exactly what ``plan`` sends.  ``plan_revise``
+    passes the existing directions with their (abbreviated) ids, which render
+    under the part each belongs to — the only place an id is ever shown.
+    """
     lines: list[str] = []
     if project_summary.summary:
         lines.append(f"Overall: {project_summary.summary}")
         lines.append("")
     parts = project_summary.parts
     video_summaries = project_summary.video_summaries
-    prev_by_part = _assign_previous(parts, previous or [])
+    by_part = assign_to_parts(parts, directions or [])
+    id_of = {
+        id(d): (ids[i] if ids and i < len(ids) else "") for i, d in enumerate(directions or [])
+    }
     current: str | None = None
     for i, p in enumerate(parts):
         if p.stem != current:
@@ -111,28 +117,13 @@ def _format_parts_for_plan(
         prefix = f"{i + 1}: {p.stem} [{p.lines[0]}-{p.lines[1]}]"
         head = f"{prefix} {bracket}" if bracket else prefix
         lines.append(f"{head} — {p.summary}")
-        for d in sorted(prev_by_part.get(i, []), key=lambda d: d.lines):
-            lines.append(f"    your last direction [{d.lines[0]}-{d.lines[1]}]: {d.direction}")
+        for d in sorted(by_part.get(i, []), key=lambda d: d.lines):
+            tag = f"[{id_of.get(id(d), '')}] " if id_of.get(id(d)) else ""
+            lines.append(f"    {tag}lines {d.lines[0]}-{d.lines[1]}: {d.direction}")
     return "\n".join(lines)
 
 
-def _build_user_content(
-    project_summary: ProjectSummary,
-    previous: list[PartDirection] | None,
-    history: list[DialogueTurn] | None,
-) -> str:
-    """The parts document, plus the conversation when there is one.
-
-    With no previous plan and no history this is byte-identical to a run before
-    the conversation existed, so a first run needs no interaction at all.
-    """
-    content = _format_parts_for_plan(project_summary, previous)
-    if history:
-        content += "\n\n" + CONVERSATION_HEADER + "\n\n" + render_history(history)
-    return content
-
-
-def _coerce_lines(value: Any, part: PartSummary) -> tuple[int, int] | None:
+def coerce_lines(value: Any, part: PartSummary) -> tuple[int, int] | None:
     """A direction's own line range, validated against its part's range.
 
     ``None``/absent means "the whole part" (today's behaviour).  A range must be
@@ -151,12 +142,11 @@ def _coerce_lines(value: Any, part: PartSummary) -> tuple[int, int] | None:
 
 def try_parse_plan_response(
     response: str, parts: list[PartSummary], drops: list[str] | None = None
-) -> ParsedPlan | None:
-    """Parse ``{"directions": [{"index": N, "lines"?: [a, b], "direction": "…"}],
-    "message"?: "…"}``.
+) -> list[PartDirection] | None:
+    """Parse ``{"directions": [{"index": N, "lines"?: [a, b], "direction": "…"}]}``.
 
     Returns ``None`` on a hard parse failure (invalid JSON / no ``directions``
-    array) so the caller can retry; otherwise a (possibly empty) ``ParsedPlan``
+    array) so the caller can retry; otherwise a (possibly empty) direction list
     with malformed/out-of-range entries dropped (logged).
 
     An entry's optional ``lines`` narrows the direction to part of its part, so
@@ -202,7 +192,7 @@ def try_parse_plan_response(
             continue
         lines = part.lines
         if raw.get("lines") is not None:
-            narrowed = _coerce_lines(raw.get("lines"), part)
+            narrowed = coerce_lines(raw.get("lines"), part)
             if narrowed is None:
                 _drop(
                     f"direction dropped, lines {raw.get('lines')!r} outside "
@@ -212,14 +202,10 @@ def try_parse_plan_response(
             lines = narrowed
         out[(idx, lines)] = direction
 
-    message = data.get("message")
-    return ParsedPlan(
-        directions=[
-            PartDirection(stem=parts[idx - 1].stem, lines=lines, direction=direction)
-            for (idx, lines), direction in sorted(out.items())
-        ],
-        message=message if isinstance(message, str) else "",
-    )
+    return [
+        PartDirection(stem=parts[idx - 1].stem, lines=lines, direction=direction)
+        for (idx, lines), direction in sorted(out.items())
+    ]
 
 
 def generate_plan(
@@ -229,21 +215,14 @@ def generate_plan(
     call_llm: CallLLM = _call_llm,
     recorder: Recorder = NULL_RECORDER,
     unit: str = "plan",
-    previous: list[PartDirection] | None = None,
-    history: list[DialogueTurn] | None = None,
-) -> ParsedPlan:
-    """Run the plan LLM and return its directions plus its message to the human.
-
-    ``previous`` is the plan.json this run is about to overwrite and ``history``
-    the conversation so far: together they turn a re-run into an edit of the
-    existing plan rather than a re-roll of it.
-    """
+) -> list[PartDirection]:
+    """Run the plan LLM and return one rough direction per part."""
     parts = project_summary.parts
     if not parts:
-        return ParsedPlan([], "")
+        return []
     messages = [
         {"role": "system", "content": cfg.get("prompt", "")},
-        {"role": "user", "content": _build_user_content(project_summary, previous, history)},
+        {"role": "user", "content": format_parts_for_plan(project_summary)},
     ]
     recorder.begin(unit)
     cfg = with_trace_meta(cfg, stage=recorder.stage, unit=unit)
@@ -287,7 +266,7 @@ def generate_plan(
             continue
         if drops:
             outcome, reason = DROPPED_ITEMS, f"{len(drops)} dropped: " + "; ".join(drops)
-        elif not parsed.directions:
+        elif not parsed:
             outcome, reason = OK_EMPTY, ""
         else:
             outcome, reason = OK, ""
@@ -305,7 +284,7 @@ def generate_plan(
         return parsed
     recorder.flush_unit(unit, outcome=LLM_ERROR, reason=f"all {attempts} attempt(s) failed")
     logger.warning("plan: all %d attempt(s) failed; no directions", attempts)
-    return ParsedPlan([], "")
+    return []
 
 
 def plan_to_dict(directions: list[PartDirection]) -> dict[str, Any]:

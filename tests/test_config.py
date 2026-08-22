@@ -828,15 +828,17 @@ def test_plan_prompt_examples_survive_the_parser():
     assert examples
     for example in examples:
         parsed = try_parse_plan_response('{"directions": [' + example + "]}", parts)
-        assert parsed is not None and parsed.directions, f"prompt example dropped: {example}"
+        assert parsed, f"prompt example dropped: {example}"
 
 
-def test_plan_prompt_asks_for_an_edit_not_a_re_roll():
-    """Round two must change only what the conversation calls for: without this
-    the directions the human was happy with are silently rewritten."""
+def test_plan_prompt_says_nothing_about_the_conversation():
+    """plan is a pure function of the summaries; revising against what the human
+    said is plan_revise's job.  An edit vocabulary in this prompt would put
+    instructions about deleting existing directions in front of a first run that
+    has none, and everything added competes with the editorial brief."""
     prompt = _plan_prompt().lower()
-    assert "unchanged" in prompt
-    assert "conversation" in prompt
+    for word in ("conversation", "previous", "human editor", "message"):
+        assert word not in prompt, f"plan prompt still talks about the {word}"
 
 
 def test_plan_prompt_documents_the_line_range_split():
@@ -847,6 +849,51 @@ def test_plan_prompt_documents_the_line_range_split():
     assert "split" in prompt.lower()
 
 
-def test_plan_prompt_documents_the_message_field():
-    prompt = _plan_prompt()
+def _revise_prompt() -> str:
+    return get_effective_config(None, {})["plan_revise"]["prompt"]
+
+
+def test_revise_prompt_examples_survive_the_parser():
+    """The documented JSON shape must parse as written, or the prompt teaches a
+    shape the parser drops."""
+    from nagare_clip.plan.plan_llm import PartDirection
+    from nagare_clip.plan_revise.revise_llm import try_parse_revision
+    from nagare_clip.summary.summarize import PartSummary
+
+    parts = [PartSummary("v", (1, 100), f"part {i}") for i in range(1, 26)]
+    lines = _revise_prompt().splitlines()
+    start = next(i for i, ln in enumerate(lines) if ln.startswith('{"delete"'))
+    end = next(i for i in range(start, len(lines)) if lines[i].rstrip().endswith("}"))
+    ops = try_parse_revision("\n".join(lines[start : end + 1]), parts)
+    assert ops is not None, "the prompt's own JSON shape does not parse"
+    assert ops.delete and ops.update and ops.message
+    assert ops.add == [PartDirection("v", (60, 83), "feature — the demonstration itself")], (
+        "the prompt's add example is dropped by the parser"
+    )
+
+
+def test_revise_prompt_states_the_carry_through_contract():
+    """Output must be proportional to the change: a restated plan grows with the
+    project and invites the model to economise, and an omitted direction is then
+    indistinguishable from a deletion."""
+    prompt = _revise_prompt().lower()
+    assert "conversation" in prompt
+    assert "do not name" in prompt or "not named" in prompt
+    for op in ("delete", "add", "update", "message"):
+        assert f'"{op}"' in _revise_prompt()
+
+
+def test_revise_prompt_never_offers_keep_as_a_direction_word():
+    """Same trap as the plan prompt: `keep` is a director op with a mechanical
+    cost, and these directions are fed to the director as context."""
+    prompt = _revise_prompt()
+    assert 'Never use the word "keep" in a direction' in prompt
+    remainder = [ln for ln in prompt.splitlines() if 'Never use the word "keep"' not in ln]
+    assert not [ln for ln in remainder if "keep" in ln.lower()]
+
+
+def test_revise_prompt_documents_the_ids_and_the_split():
+    prompt = _revise_prompt()
+    assert "id" in prompt.lower()
+    assert "split" in prompt.lower()
     assert '"message"' in prompt
