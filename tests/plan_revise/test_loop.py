@@ -9,7 +9,7 @@ import nagare_clip.plan.plan_llm as plan_llm
 import nagare_clip.plan.run as plan_run
 import nagare_clip.plan_revise.revise_llm as revise_llm
 import nagare_clip.plan_revise.run as revise_run
-from nagare_clip.plan.dialogue import append_turn, read_active_history
+from nagare_clip.plan.dialogue import DialogueTurn, append_turn, read_active_history
 from nagare_clip.plan_revise.ids import assign_ids
 from nagare_clip.summary.summarize import PartSummary, ProjectSummary, summary_to_dict
 
@@ -19,13 +19,16 @@ PARTS = [
     PartSummary("v2", (1, 20), "the wrap-up"),
 ]
 
+PLAN_ACCOUNT = "the demonstration is the payoff; the setup and the wrap-up carry it"
+
 PLAN_RESPONSE = json.dumps(
     {
         "directions": [
             {"index": 1, "direction": "shorten — the setup drags"},
             {"index": 2, "direction": "feature — the climactic demonstration"},
             {"index": 3, "direction": "remove — repeats part 1"},
-        ]
+        ],
+        "message": PLAN_ACCOUNT,
     }
 )
 
@@ -99,6 +102,9 @@ def test_the_conversation_loop(tmp_path, monkeypatch):
     assert loop.calls == {"plan": 1, "revise": 0}
     assert len(loop.directions(loop.plan_json)) == 3
     assert not loop.revised.exists()  # director reads plan/plan.json
+    # plan explained itself even though there was no conversation to reply to,
+    # and its account is not mistaken for an unanswered turn
+    assert read_active_history(loop.history) == [DialogueTurn("plan", PLAN_ACCOUNT)]
 
     # 2. one human turn: one revise call, and only the named direction changes
     before = loop.directions(loop.plan_json)
@@ -129,10 +135,12 @@ def test_the_conversation_loop(tmp_path, monkeypatch):
     # 3. plan re-runs: the revision is invalidated and the turns are retired
     loop.plan()
     assert not loop.revised.exists()
-    assert read_active_history(loop.history) == []
+    # the human's instruction and the reply to it are retired; the new plan's
+    # own account is what is left standing
+    assert read_active_history(loop.history) == [DialogueTurn("plan", PLAN_ACCOUNT)]
     assert "31,83" in loop.history.read_text(encoding="utf-8")  # divided, not deleted
     loop.revise()
-    assert loop.calls["revise"] == 1  # nothing follows the divider
+    assert loop.calls["revise"] == 1  # no human turn follows the divider
 
     # 4. ids are the same short prefixes across two plan runs over one summary
     assert (

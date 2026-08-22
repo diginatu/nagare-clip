@@ -6,6 +6,7 @@ import yaml as _yaml
 
 from nagare_clip.llm_report import Recorder
 from nagare_clip.plan.plan_llm import (
+    ParsedPlan,
     PartDirection,
     format_parts_for_plan,
     generate_plan,
@@ -48,7 +49,7 @@ class TestParse:
             ' {"index": 3, "direction": "remove"}]}',
             _project().parts,
         )
-        assert out == [
+        assert out.directions == [
             PartDirection("a", (1, 4), "keep"),
             PartDirection("b", (1, 3), "remove"),
         ]
@@ -58,20 +59,20 @@ class TestParse:
             '{"directions": [{"index": 9, "direction": "x"}, {"index": 1, "direction": "ok"}]}',
             _project().parts,
         )
-        assert out == [PartDirection("a", (1, 4), "ok")]
+        assert out.directions == [PartDirection("a", (1, 4), "ok")]
 
     def test_empty_direction_dropped(self):
         out = try_parse_plan_response(
             '{"directions": [{"index": 1, "direction": ""}]}', _project().parts
         )
-        assert out == []
+        assert out.directions == []
 
     def test_hard_failure_returns_none(self):
         assert try_parse_plan_response("not json", _project().parts) is None
         assert try_parse_plan_response('{"foo": 1}', _project().parts) is None
 
     def test_valid_empty_returns_no_directions(self):
-        assert try_parse_plan_response('{"directions": []}', _project().parts) == []
+        assert try_parse_plan_response('{"directions": []}', _project().parts).directions == []
 
 
 class TestParseSplit:
@@ -80,7 +81,7 @@ class TestParseSplit:
             '{"directions": [{"index": 2, "lines": [7, 9], "direction": "demo body"}]}',
             _project().parts,
         )
-        assert out == [PartDirection("a", (7, 9), "demo body")]
+        assert out.directions == [PartDirection("a", (7, 9), "demo body")]
 
     def test_one_part_splits_into_several_directions(self):
         out = try_parse_plan_response(
@@ -90,7 +91,7 @@ class TestParseSplit:
             "]}",
             _project().parts,
         )
-        assert out == [
+        assert out.directions == [
             PartDirection("a", (5, 6), "digression — cut"),
             PartDirection("a", (7, 9), "demo body"),
         ]
@@ -102,7 +103,7 @@ class TestParseSplit:
             _project().parts,
             drops,
         )
-        assert out == []
+        assert out.directions == []
         assert drops and "range" in drops[0]
 
     def test_malformed_lines_dropped(self):
@@ -111,21 +112,36 @@ class TestParseSplit:
             ' {"index": 3, "lines": "nope", "direction": "y"}]}',
             _project().parts,
         )
-        assert out == []
+        assert out.directions == []
 
-    def test_a_message_key_is_ignored(self):
-        # plan no longer talks to the human; a stray key must not break parsing.
+    def test_the_message_is_read(self):
         out = try_parse_plan_response(
-            '{"directions": [{"index": 1, "direction": "x"}], "message": "hi"}', _project().parts
+            '{"directions": [{"index": 1, "direction": "x"}], '
+            '"message": "the build is the throughline"}',
+            _project().parts,
         )
-        assert out == [PartDirection("a", (1, 4), "x")]
+        assert out.directions == [PartDirection("a", (1, 4), "x")]
+        assert out.message == "the build is the throughline"
+
+    def test_a_missing_message_keeps_the_directions(self):
+        """An unexplained plan is a defect, not a parse failure: retrying would
+        re-roll every direction to recover one paragraph."""
+        out = try_parse_plan_response(
+            '{"directions": [{"index": 1, "direction": "x"}]}', _project().parts
+        )
+        assert out.directions == [PartDirection("a", (1, 4), "x")]
+        assert out.message == ""
+
+    def test_a_non_string_message_is_empty(self):
+        out = try_parse_plan_response('{"directions": [], "message": 7}', _project().parts)
+        assert out.message == ""
 
     def test_same_range_twice_keeps_the_last(self):
         out = try_parse_plan_response(
             '{"directions": [{"index": 1, "direction": "a"}, {"index": 1, "direction": "b"}]}',
             _project().parts,
         )
-        assert out == [PartDirection("a", (1, 4), "b")]
+        assert out.directions == [PartDirection("a", (1, 4), "b")]
 
 
 class TestGeneratePlan:
@@ -137,7 +153,7 @@ class TestGeneratePlan:
             "]}"
         )
         out = generate_plan(_project(), {"prompt": "P"}, call_llm=lambda m, c: resp)
-        assert out == [
+        assert out.directions == [
             PartDirection("a", (1, 4), "keep"),
             PartDirection("b", (1, 3), "remove"),
         ]
@@ -150,7 +166,7 @@ class TestGeneratePlan:
             return '{"directions": []}'
 
         out = generate_plan(ProjectSummary("", []), {"prompt": "P"}, call_llm=fake)
-        assert out == []
+        assert out.directions == []
         assert called["n"] == 0
 
     def test_llm_failure_returns_empty(self):
@@ -158,13 +174,34 @@ class TestGeneratePlan:
             raise ConnectionError("x")
 
         out = generate_plan(_project(), {"prompt": "P"}, call_llm=boom)
-        assert out == []
+        assert out.directions == []
 
     def test_retries_then_succeeds(self):
         fake = _seq_llm(["junk", '{"directions": [{"index": 1, "direction": "keep"}]}'])
         out = generate_plan(_project(), {"prompt": "P", "max_retries": 2}, call_llm=fake)
         assert fake.calls["i"] == 2
-        assert out == [PartDirection("a", (1, 4), "keep")]
+        assert out.directions == [PartDirection("a", (1, 4), "keep")]
+
+    def test_generate_returns_a_parsed_plan(self):
+        out = generate_plan(
+            _project(), {"prompt": "P"}, call_llm=lambda m, c: '{"directions": [], "message": "m"}'
+        )
+        assert isinstance(out, ParsedPlan)
+
+    def test_returns_the_account_of_the_plan(self):
+        resp = (
+            '{"directions": [{"index": 1, "direction": "keep"}],'
+            ' "message": "the build is the throughline; the sign-off is filler"}'
+        )
+        out = generate_plan(_project(), {"prompt": "P"}, call_llm=lambda m, c: resp)
+        assert out.message == "the build is the throughline; the sign-off is filler"
+
+    def test_a_missing_message_is_not_retried(self):
+        """One call, kept: the plan is usable, only its explanation is missing."""
+        fake = _seq_llm(['{"directions": [{"index": 1, "direction": "keep"}]}', "unused"])
+        out = generate_plan(_project(), {"prompt": "P", "max_retries": 2}, call_llm=fake)
+        assert fake.calls["i"] == 1
+        assert out.directions and out.message == ""
 
 
 class TestGeneratePlanIsPure:
@@ -359,7 +396,7 @@ class TestPlanRecorder:
             return resp
 
         out = generate_plan(_ps(), {"max_retries": 0}, call_llm=fake, recorder=rec)
-        assert len(out) == 2
+        assert len(out.directions) == 2
         assert _outcome(tmp_path, "plan") == "ok"
 
     def test_records_dropped_items(self, tmp_path):
@@ -370,5 +407,5 @@ class TestPlanRecorder:
             return resp
 
         out = generate_plan(_ps(), {"max_retries": 0}, call_llm=fake, recorder=rec)
-        assert len(out) == 1
+        assert len(out.directions) == 1
         assert _outcome(tmp_path, "plan") == "dropped-items"

@@ -7,6 +7,10 @@ The stage is a **pure function of ``summary.json``**: it reads neither its own
 previous output nor the conversation.  Revising a plan against what the human
 said is the ``plan_revise`` stage's job.
 
+It does *write* to the conversation, though: every run appends its own account
+of the plan it just made (``ParsedPlan.message``) below the divider, so a human
+can take in the intent behind two dozen directions without reading them all.
+
 A run therefore invalidates what was built on the plan it replaces:
 
 - ``plan_revise/plan.json`` is deleted — it revises directions that no longer
@@ -26,7 +30,7 @@ from pathlib import Path
 
 from nagare_clip.brief import apply_brief
 from nagare_clip.llm_report import NULL_RECORDER, Recorder
-from nagare_clip.plan.dialogue import append_divider
+from nagare_clip.plan.dialogue import PLAN, append_divider, append_reply_slot, append_turn
 from nagare_clip.plan.plan_llm import generate_plan, plan_to_dict
 from nagare_clip.summary.summarize import summary_from_dict
 
@@ -59,15 +63,22 @@ def run_plan(
     else:
         project_summary = summary_from_dict(json.loads(summary_json.read_text(encoding="utf-8")))
         logging.info("plan: directing %d part(s) with LLM", len(project_summary.parts))
-        directions = generate_plan(
+        result = generate_plan(
             project_summary,
             apply_brief(plan_cfg, cfg),
             recorder=recorder,
         )
+        directions = result.directions
         logging.info("plan: %d direction(s)", len(directions))
         if history is not None:
-            # Created even with nothing to say, so a human can find where to reply.
+            # The divider retires the turns about the plan being replaced; the
+            # account of the new plan goes *below* it, because it is what still
+            # holds — and it is what plan_revise and the human read next.
             append_divider(history)
+            if result.message:
+                append_turn(history, PLAN, result.message)
+                logging.info("plan: wrote its account of the plan to %s", history)
+            append_reply_slot(history)
 
     _invalidate_revision(revised)
 

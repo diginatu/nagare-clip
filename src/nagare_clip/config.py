@@ -143,6 +143,13 @@ PLAN_PROMPT = (
     'directions for that part, each with its own "lines" range inside the '
     "part's range, so each thread gets the direction it deserves.\n"
     "\n"
+    'Always write a "message" — every run, without exception. It is a short '
+    "account of the plan you have just made: how you read the project as a "
+    "whole, what you decided to compress and what you gave room to, and where "
+    "you were unsure. A human reads it instead of reading every direction, so "
+    "it must stand on its own. It explains this plan; it is NOT a reply and is "
+    "not addressed to anyone.\n"
+    "\n"
     "JSON shape:\n"
     '{"directions": [\n'
     '  {"index": 1, "direction": "feature — the product\'s operating noise '
@@ -150,7 +157,9 @@ PLAN_PROMPT = (
     '  {"index": 2, "direction": "remove — repeats part 1"},\n'
     '  {"index": 3, "lines": [12, 20], "direction": "emphasise — the '
     'demonstration itself"}\n'
-    "]}\n"
+    "],\n"
+    ' "message": "how you read the project, what you compressed and what you '
+    'gave room to, and where you were unsure"}\n'
     "\n"
     "Rules:\n"
     '- "index" must be one of the given part numbers.\n'
@@ -161,6 +170,7 @@ PLAN_PROMPT = (
     '- Never use the word "keep" in a direction: a later stage reads it as '
     "a mechanical instruction to restore every silent second of the part. "
     'Say "feature", "retain" or "emphasise" instead.\n'
+    '- "message" is required and never empty.\n'
     "- Output only the JSON object, no other text."
 )
 
@@ -191,9 +201,10 @@ PLAN_REVISE_PROMPT = (
     "insertion position: a direction sits where its part and lines put it.\n"
     '- "update": an existing direction\'s id plus its new "direction" text; '
     "its line range is unchanged. To move a boundary, delete it and add.\n"
-    '- "message": your reply to the human — what you did with the last '
-    "instruction, and what you were unsure about. The human reads it and may "
-    "reply.\n"
+    '- "message": your REPLY to the human — how you read the last instruction, '
+    "what you changed because of it, and what you would like confirmed. It "
+    "answers a person, so it is not a summary of the plan (the plan stage "
+    "already wrote one); the human reads it and may reply again.\n"
     "\n"
     "To SPLIT a part the human says holds several threads: delete the "
     "direction covering it and add one per thread, each with its own "

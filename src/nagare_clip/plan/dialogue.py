@@ -4,9 +4,11 @@ A single append-only markdown file — ``output/plan_dialogue/history.md`` — h
 alternating turns.  ``plan_revise`` reads the turns since the last divider and
 appends its own reply; it fires only while a human turn is unanswered.
 
-``plan`` writes into the file too, but only a **divider**: a plan re-run rebuilds
-the directions the turns above it refer to, so those turns stop being applied —
-divided, not deleted, because the record is often still worth copying down.
+``plan`` writes into the file too: a **divider** (a plan re-run rebuilds the
+directions the turns above it refer to, so those turns stop being applied —
+divided, not deleted, because the record is often still worth copying down)
+followed by its own **account of the plan it just wrote**, which is what a human
+reads instead of two dozen directions.
 
 The on-disk format is deliberately forgiving: role headings (``## human`` /
 ``## plan``) in plain markdown, so opening the file in an editor and typing
@@ -59,7 +61,9 @@ FILE_HEADER = (
     "\n"
     "A '--- plan re-ran ... ---' line divides the log: only the turns below\n"
     "the last one are still applied.  Copy an older instruction down if it\n"
-    "still holds.\n"
+    "still holds.  The '## plan' turn just under a divider is the plan stage's\n"
+    "own account of the plan it has just written -- read it instead of all of\n"
+    "plan.json, and reply to it.\n"
     "-->\n"
 )
 
@@ -165,11 +169,12 @@ def append_turn(path: Path, role: str, text: str) -> None:
 
 
 def append_divider(path: Path, when: datetime | None = None) -> None:
-    """Retire the turns written so far, leaving a heading to reply under.
+    """Retire the turns written so far.
 
     Nothing is appended when nothing has been said since the last divider, so
     repeated ``plan`` runs do not pile dividers up.  The file is still created,
-    so a human can always find where to write.
+    so a human can always find where to write.  ``plan`` appends its account of
+    the new plan below this line, then an ``append_reply_slot()`` heading.
     """
     path = Path(path)
     ensure_history(path)
@@ -183,7 +188,31 @@ def append_divider(path: Path, when: datetime | None = None) -> None:
     try:
         sep = "" if existing.endswith("\n") or not existing else "\n"
         with path.open("a", encoding="utf-8") as fh:
-            fh.write(f"{sep}\n{format_divider(when)}\n\n## {HUMAN}\n")
+            fh.write(f"{sep}\n{format_divider(when)}\n")
+    except OSError as e:
+        logger.warning("plan: could not append to %s: %s", path, e)
+
+
+def append_reply_slot(path: Path) -> None:
+    """Leave a ``## human`` heading at the end, so there is somewhere to type.
+
+    An empty heading is not a turn (blank turns are dropped), so it never looks
+    like an unanswered human turn.  Appending it twice is a no-op.
+    """
+    path = Path(path)
+    ensure_history(path)
+    try:
+        existing = path.read_text(encoding="utf-8")
+    except OSError as e:
+        logger.warning("plan: could not read %s: %s", path, e)
+        return
+    lines = [ln for ln in existing.splitlines() if ln.strip()]
+    if lines and _HEADING_RE.match(lines[-1]) and lines[-1].strip().lower().endswith(HUMAN):
+        return
+    try:
+        sep = "" if existing.endswith("\n") or not existing else "\n"
+        with path.open("a", encoding="utf-8") as fh:
+            fh.write(f"{sep}\n## {HUMAN}\n")
     except OSError as e:
         logger.warning("plan: could not append to %s: %s", path, e)
 

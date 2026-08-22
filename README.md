@@ -12,7 +12,7 @@ The pipeline creates a rough-cut Blender project for human review and fine-tunin
 4. gap_context (optional): a vision LLM snapshots+describes long silent gaps (from `_cuts.txt`) so summary/director can see what the transcript can't -> reviewable `output/gap_context/{stem}_gaps.json` + JPEG frames; disabled by default (no-op)
 5. summary (optional, project-wide): a larger LLM segments every video into line-range parts + summaries, a whole-video summary, and misspelling-prone keywords, and writes one all-videos summary -> reviewable `output/summary/summary.json`; the per-video summary and keywords are used by text_filter/plan/director
 6. text_filter: Text editing checkpoint -> `_edits.txt` (copy of `.txt`, or LLM-corrected with `{{old->new}}` markers), optionally primed with summary-stage context
-7. plan (optional, project-wide): a larger LLM gives a coarse, cross-video rough direction per part -> reviewable `output/plan/plan.json`
+7. plan (optional, project-wide): a larger LLM gives a coarse, cross-video rough direction per part -> reviewable `output/plan/plan.json`, plus a plain-language account of the plan in `output/plan_dialogue/history.md`
 8. plan_revise (optional, project-wide): a larger LLM applies your conversation to those directions as delete/add/update operations -> `output/plan_revise/plan.json` (no LLM call unless you left a turn unanswered)
 9. director (optional): a larger LLM proposes high-level edits -> reviewable `_director.json` op list (fed the summary/plan overview context, and gap_context's described gaps)
 10. guided_edit (optional): a small LLM applies the director's ops into `_edits.txt` (deterministically verified)
@@ -49,9 +49,17 @@ write one sentence and re-run a single stage:
 ./scripts/run_pipeline.sh --from-stage plan_revise --to-stage plan_revise   # 1 LLM call
 ```
 
-It answers under a `## plan` heading, saying what it did and what it was unsure
-about — and you can reply again. **With nothing unanswered it makes no LLM call
-at all**, so leaving the stage enabled costs nothing on an ordinary run.
+It answers under a `## plan` heading, saying how it read your instruction and
+what it changed — and you can reply again. **With nothing unanswered it makes no
+LLM call at all**, so leaving the stage enabled costs nothing on an ordinary run.
+
+`plan` writes to the same file even though it never reads it: **every** run it
+appends its own account of the plan it just made — how it read the project, what
+it compressed, what it gave room to, where it was unsure — so you can take in
+two dozen directions without reading them one by one. That account is the
+`## plan` turn just below the divider, and it is what you reply to. (Before
+this, the message was defined only as a reply to a conversation, so the run that
+built the whole plan from scratch said nothing about it at all.)
 
 The revision goes to `output/plan_revise/plan.json`, never into `plan/`, and
 `director` prefers it when it exists. `diff output/plan/plan.json

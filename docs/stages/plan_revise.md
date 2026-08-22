@@ -84,6 +84,11 @@ the change rather than to the project.
   is keyed by `(stem, lines)` — the same rule `plan` parses by).
 - `update` changes only the text; to move a boundary, `delete` and `add`.
 - **Splitting** a part is one `delete` plus one `add` per thread.
+- `message` here is a **reply to a person**: how the last instruction was read,
+  what changed because of it, what wants confirming. It is not a summary of the
+  plan — `plan` writes one of those every run ([plan.md](plan.md)), and it is
+  the first active turn `plan_revise` reads below the divider, so the two are
+  visible side by side in the history.
 - Unknown ids are dropped and logged through the same `_drop()` path malformed
   entries use, so a hallucinated id degrades one operation rather than the run.
 - Hard parse failure (invalid JSON, or none of the four keys) retries via
@@ -141,9 +146,14 @@ instead:
 
 --- plan re-ran 2026-08-22T19:04 — turns above this line no longer apply ---
 
+## plan
+実演が payoff。前半の組み立ては圧縮し、テスト走行は full length で残した…
+
 ## human
 ```
 
+`plan` then appends its own account of the new plan below the divider and a
+`## human` heading to reply under, so the log always ends somewhere to type.
 `plan_revise` reads only the turns after the last divider. What a human sees is
 the same as clearing — nothing old is re-applied — but the record survives, a
 still-valid instruction can be copied down rather than reconstructed, and the

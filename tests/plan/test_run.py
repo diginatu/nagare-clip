@@ -12,10 +12,11 @@ from nagare_clip.plan.dialogue import (
     DialogueTurn,
     active_turns,
     append_turn,
+    has_unanswered_human,
     parse_history,
     read_history,
 )
-from nagare_clip.plan.plan_llm import PartDirection
+from nagare_clip.plan.plan_llm import ParsedPlan, PartDirection
 from nagare_clip.summary.summarize import PartSummary, ProjectSummary, summary_to_dict
 
 
@@ -47,7 +48,9 @@ def test_enabled_writes_directions(monkeypatch, tmp_path):
     def fake_generate(project_summary, cfg, **kwargs):
         # confirms the loaded summary round-tripped into the stage
         assert [p.stem for p in project_summary.parts] == ["a", "b"]
-        return [PartDirection("a", (1, 2), "keep"), PartDirection("b", (1, 1), "remove")]
+        return ParsedPlan(
+            [PartDirection("a", (1, 2), "keep"), PartDirection("b", (1, 1), "remove")]
+        )
 
     monkeypatch.setattr(plan_run, "generate_plan", fake_generate)
     data = _run(monkeypatch, tmp_path, {"plan": {"enabled": True}}, ps)
@@ -65,7 +68,7 @@ def test_project_brief_appended_to_plan_prompt(monkeypatch, tmp_path):
 
     def fake_generate(project_summary, cfg, **kwargs):
         seen["prompt"] = cfg["prompt"]
-        return []
+        return ParsedPlan([])
 
     monkeypatch.setattr(plan_run, "generate_plan", fake_generate)
     _run(
@@ -93,7 +96,7 @@ class TestPlanIsPure:
 
         def fake_generate(project_summary, cfg, **kwargs):
             seen["kwargs"] = kwargs
-            return [PartDirection("a", (1, 4), "second")]
+            return ParsedPlan([PartDirection("a", (1, 4), "second")])
 
         monkeypatch.setattr(plan_run, "generate_plan", fake_generate)
         (tmp_path / "plan.json").write_text(
@@ -111,8 +114,10 @@ class TestReRunInvalidates:
     def _ps(self):
         return ProjectSummary("all", [PartSummary("a", (1, 4), "x")])
 
-    def _enabled(self, monkeypatch):
-        monkeypatch.setattr(plan_run, "generate_plan", lambda ps, cfg, **kw: [])
+    def _enabled(self, monkeypatch, message=""):
+        monkeypatch.setattr(
+            plan_run, "generate_plan", lambda ps, cfg, **kw: ParsedPlan([], message)
+        )
 
     def test_divider_retires_the_turns_written_so_far(self, monkeypatch, tmp_path):
         self._enabled(monkeypatch)
@@ -165,3 +170,45 @@ class TestReRunInvalidates:
             self._ps(),
             revised=tmp_path / "plan_revise" / "plan.json",
         )
+
+
+class TestPlanExplainsItself:
+    """The run that builds the whole plan is the one a human most needs
+    explained — and it is the run with no conversation to reply to."""
+
+    def _ps(self):
+        return ProjectSummary("all", [PartSummary("a", (1, 4), "x")])
+
+    def _run_with(self, monkeypatch, tmp_path, message, history):
+        monkeypatch.setattr(
+            plan_run,
+            "generate_plan",
+            lambda ps, cfg, **kw: ParsedPlan([PartDirection("a", (1, 4), "feature")], message),
+        )
+        return _run(monkeypatch, tmp_path, {"plan": {"enabled": True}}, self._ps(), history=history)
+
+    def test_the_account_is_written_below_the_divider(self, monkeypatch, tmp_path):
+        history = tmp_path / "plan_dialogue" / "history.md"
+        append_turn(history, "human", "an old instruction")
+        self._run_with(monkeypatch, tmp_path, "the build is the throughline", history)
+        # it describes the plan this run just made, so it is not retired with the
+        # turns above the divider — and plan_revise sees it as context
+        assert active_turns(history.read_text(encoding="utf-8")) == [
+            DialogueTurn("plan", "the build is the throughline")
+        ]
+
+    def test_it_does_not_look_like_an_unanswered_turn(self, monkeypatch, tmp_path):
+        history = tmp_path / "plan_dialogue" / "history.md"
+        self._run_with(monkeypatch, tmp_path, "an account", history)
+        assert not has_unanswered_human(active_turns(history.read_text(encoding="utf-8")))
+
+    def test_the_file_ends_where_a_human_can_reply(self, monkeypatch, tmp_path):
+        history = tmp_path / "plan_dialogue" / "history.md"
+        self._run_with(monkeypatch, tmp_path, "an account", history)
+        assert history.read_text(encoding="utf-8").rstrip().endswith("## human")
+
+    def test_no_message_appends_no_turn(self, monkeypatch, tmp_path):
+        history = tmp_path / "plan_dialogue" / "history.md"
+        self._run_with(monkeypatch, tmp_path, "", history)
+        assert active_turns(history.read_text(encoding="utf-8")) == []
+        assert history.read_text(encoding="utf-8").rstrip().endswith("## human")

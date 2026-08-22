@@ -8,6 +8,7 @@ from nagare_clip.plan.dialogue import (
     DialogueTurn,
     active_turns,
     append_divider,
+    append_reply_slot,
     append_turn,
     format_divider,
     has_unanswered_human,
@@ -146,7 +147,7 @@ class TestDivider:
         assert "2026-08-22T19:04" in line
         assert "no longer apply" in line
 
-    def test_append_divider_creates_the_file_with_a_place_to_reply(self, tmp_path):
+    def test_append_divider_retires_what_came_before(self, tmp_path):
         path = tmp_path / "plan_dialogue" / "history.md"
         append_turn(path, "human", "a")
         append_turn(path, "plan", "b")
@@ -154,8 +155,8 @@ class TestDivider:
         text = path.read_text(encoding="utf-8")
         assert active_turns(text) == []
         assert parse_history(text) == [DialogueTurn("human", "a"), DialogueTurn("plan", "b")]
-        # a heading is left for the human to type under
-        assert text.rstrip().endswith("## human")
+        # the divider alone: plan appends its account of the new plan below it
+        assert text.rstrip().endswith("---")
 
     def test_append_divider_on_an_empty_history_writes_nothing_new(self, tmp_path):
         path = tmp_path / "plan_dialogue" / "history.md"
@@ -192,3 +193,37 @@ class TestUnansweredHuman:
     def test_answered_or_empty_is_not(self):
         assert not has_unanswered_human([])
         assert not has_unanswered_human([DialogueTurn("human", "a"), DialogueTurn("plan", "b")])
+
+
+class TestReplySlot:
+    """The file must end somewhere a human can type, whatever was appended last."""
+
+    def test_appends_a_human_heading(self, tmp_path):
+        path = tmp_path / "history.md"
+        append_turn(path, "plan", "here is the plan")
+        append_reply_slot(path)
+        text = path.read_text(encoding="utf-8")
+        assert text.rstrip().endswith("## human")
+        # an empty heading is not a turn, so it does not fire plan_revise
+        assert active_turns(text) == [DialogueTurn("plan", "here is the plan")]
+        assert not has_unanswered_human(active_turns(text))
+
+    def test_does_not_pile_up(self, tmp_path):
+        path = tmp_path / "history.md"
+        append_turn(path, "plan", "x")
+        append_reply_slot(path)
+        first = path.read_text(encoding="utf-8")
+        append_reply_slot(path)
+        assert path.read_text(encoding="utf-8") == first
+
+    def test_creates_the_file(self, tmp_path):
+        path = tmp_path / "plan_dialogue" / "history.md"
+        append_reply_slot(path)
+        assert path.is_file() and path.read_text(encoding="utf-8").rstrip().endswith("## human")
+
+    def test_a_written_turn_still_reads_after_the_slot(self, tmp_path):
+        path = tmp_path / "history.md"
+        append_turn(path, "plan", "x")
+        append_reply_slot(path)
+        append_turn(path, "human", "split part 2")
+        assert has_unanswered_human(active_turns(path.read_text(encoding="utf-8")))

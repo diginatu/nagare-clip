@@ -25,6 +25,35 @@ Both are described in [`plan_revise.md`](plan_revise.md). The practical
 consequence: **do not re-run `plan` to apply a conversation turn** — re-run
 `--from-stage plan_revise --to-stage plan_revise` instead.
 
+## The plan's own account (`message`)
+
+Every response carries a `"message"`: a short account of the plan just made —
+how the project was read as a whole, what was compressed and what was given
+room, and where the model was unsure. `run_plan` appends it to
+`plan_dialogue/history.md` as a `## plan` turn, **below** the divider (it
+describes the plan that now exists, so it is not retired with the turns about
+the plan being replaced), and then leaves a `## human` heading to reply under
+(`dialogue.append_reply_slot`).
+
+It is written on **every** run, with or without a conversation. The run that
+builds two dozen directions from nothing is the one a human most needs
+explained, and it is exactly the run with nothing to reply to: when `message`
+was defined only as "your reply to the human", a real 22-part run answered *"No
+changes requested since last plan; repeating all directions unchanged."* about a
+plan it had just built from scratch. The same model, asked a question, wrote a
+perfectly serviceable paragraph — the gap was the instruction, not the ability.
+
+`plan_revise`'s `message` is a different thing (a reply to a person), and the
+two prompts define them separately.
+
+A missing or empty `message` is **not** a parse failure: the plan is usable
+without its account, and retrying would re-roll every direction to recover one
+paragraph. It logs a warning and appends no turn — which a human sees
+immediately, since the history then holds nothing to read. The default prompt's
+JSON shape shows the key with an instruction as its value (`"message": "how you
+read the project, …"`) rather than a sample sentence, because in this pipeline
+an example anchors harder than an instruction.
+
 ## Splitting a part
 
 `summary` owns the part boundaries and is deliberately **not** conversational:
@@ -113,6 +142,7 @@ is English (what the default prompt produces).
 Every part degrades independently and nothing here can fail a run:
 
 - LLM/parse failure → retried via `llm_retry`, then empty directions
+- a response with no `message` → logged warning, no turn appended, directions kept
 - an un-writable history file → logged warning, the plan is still written
 - a `plan_revise/plan.json` that cannot be removed → logged warning, the plan is
   still written (the revision then wins until it is deleted by hand)

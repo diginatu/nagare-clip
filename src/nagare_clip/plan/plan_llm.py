@@ -51,6 +51,21 @@ class PartDirection:
     direction: str
 
 
+@dataclass
+class ParsedPlan:
+    """One plan response: the directions, plus the account of them.
+
+    ``message`` is written on **every** run and is not a reply to anybody — it
+    is how a human takes in the plan's intent without reading every direction.
+    The run that builds the whole plan from nothing is the one that most needs
+    explaining, and it is exactly the run that has no conversation to answer, so
+    a message defined only as "your reply" was not written there at all.
+    """
+
+    directions: list[PartDirection]
+    message: str = ""
+
+
 def assign_to_parts(
     parts: list[PartSummary], directions: list[PartDirection]
 ) -> dict[int, list[PartDirection]]:
@@ -142,12 +157,15 @@ def coerce_lines(value: Any, part: PartSummary) -> tuple[int, int] | None:
 
 def try_parse_plan_response(
     response: str, parts: list[PartSummary], drops: list[str] | None = None
-) -> list[PartDirection] | None:
-    """Parse ``{"directions": [{"index": N, "lines"?: [a, b], "direction": "…"}]}``.
+) -> ParsedPlan | None:
+    """Parse ``{"directions": [{"index": N, "lines"?: [a, b], "direction": "…"}],
+    "message": "…"}``.
 
     Returns ``None`` on a hard parse failure (invalid JSON / no ``directions``
-    array) so the caller can retry; otherwise a (possibly empty) direction list
-    with malformed/out-of-range entries dropped (logged).
+    array) so the caller can retry; otherwise a (possibly empty) ``ParsedPlan``
+    with malformed/out-of-range entries dropped (logged).  A missing ``message``
+    is **not** a hard failure: the plan is usable without its account, and
+    retrying would re-roll every direction to recover one paragraph.
 
     An entry's optional ``lines`` narrows the direction to part of its part, so
     one summary part can yield several directions (a mixed part split into its
@@ -202,10 +220,17 @@ def try_parse_plan_response(
             lines = narrowed
         out[(idx, lines)] = direction
 
-    return [
-        PartDirection(stem=parts[idx - 1].stem, lines=lines, direction=direction)
-        for (idx, lines), direction in sorted(out.items())
-    ]
+    message = data.get("message")
+    if not isinstance(message, str) or not message.strip():
+        logger.warning("plan: response carried no message; this plan is unexplained")
+        message = ""
+    return ParsedPlan(
+        directions=[
+            PartDirection(stem=parts[idx - 1].stem, lines=lines, direction=direction)
+            for (idx, lines), direction in sorted(out.items())
+        ],
+        message=message.strip(),
+    )
 
 
 def generate_plan(
@@ -215,11 +240,11 @@ def generate_plan(
     call_llm: CallLLM = _call_llm,
     recorder: Recorder = NULL_RECORDER,
     unit: str = "plan",
-) -> list[PartDirection]:
-    """Run the plan LLM and return one rough direction per part."""
+) -> ParsedPlan:
+    """Run the plan LLM: one rough direction per part, plus its own account."""
     parts = project_summary.parts
     if not parts:
-        return []
+        return ParsedPlan([], "")
     messages = [
         {"role": "system", "content": cfg.get("prompt", "")},
         {"role": "user", "content": format_parts_for_plan(project_summary)},
@@ -266,7 +291,7 @@ def generate_plan(
             continue
         if drops:
             outcome, reason = DROPPED_ITEMS, f"{len(drops)} dropped: " + "; ".join(drops)
-        elif not parsed:
+        elif not parsed.directions:
             outcome, reason = OK_EMPTY, ""
         else:
             outcome, reason = OK, ""
@@ -284,7 +309,7 @@ def generate_plan(
         return parsed
     recorder.flush_unit(unit, outcome=LLM_ERROR, reason=f"all {attempts} attempt(s) failed")
     logger.warning("plan: all %d attempt(s) failed; no directions", attempts)
-    return []
+    return ParsedPlan([], "")
 
 
 def plan_to_dict(directions: list[PartDirection]) -> dict[str, Any]:

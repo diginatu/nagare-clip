@@ -831,13 +831,39 @@ def test_plan_prompt_examples_survive_the_parser():
         assert parsed, f"prompt example dropped: {example}"
 
 
+def test_plan_prompt_asks_for_a_message_every_run():
+    """The run that builds 22 directions from nothing is the one a human most
+    needs explained, and it is the run with no conversation to reply to.  A
+    message defined only as "your reply to the human" is therefore not written
+    at all on a first run — the real one said "No changes requested since last
+    plan; repeating all directions unchanged." about a plan it had just built
+    from scratch."""
+    prompt = _plan_prompt()
+    assert '"message"' in prompt
+    lowered = prompt.lower()
+    assert "every run" in lowered or "always" in lowered
+    # it explains the plan; it is not addressed to anyone
+    assert "not a reply" in lowered or "not a reply to" in lowered
+
+
+def test_plan_message_example_does_not_assume_a_conversation():
+    """An example anchors harder than an instruction: a message example ending
+    in "is that right?" teaches the model to answer a conversation that, on this
+    stage, no longer exists."""
+    prompt = _plan_prompt()
+    message_lines = [ln for ln in prompt.splitlines() if '"message"' in ln]
+    assert message_lines
+    for line in message_lines:
+        assert "?" not in line, f"plan message example asks the human a question: {line}"
+
+
 def test_plan_prompt_says_nothing_about_the_conversation():
     """plan is a pure function of the summaries; revising against what the human
     said is plan_revise's job.  An edit vocabulary in this prompt would put
     instructions about deleting existing directions in front of a first run that
     has none, and everything added competes with the editorial brief."""
     prompt = _plan_prompt().lower()
-    for word in ("conversation", "previous", "human editor", "message"):
+    for word in ("conversation", "previous", "human editor"):
         assert word not in prompt, f"plan prompt still talks about the {word}"
 
 
@@ -890,6 +916,16 @@ def test_revise_prompt_never_offers_keep_as_a_direction_word():
     assert 'Never use the word "keep" in a direction' in prompt
     remainder = [ln for ln in prompt.splitlines() if 'Never use the word "keep"' not in ln]
     assert not [ln for ln in remainder if "keep" in ln.lower()]
+
+
+def test_revise_prompt_message_is_a_reply_not_a_plan_summary():
+    """Both stages have a "message" and they are different things: plan explains
+    the plan it just made, plan_revise answers the human."""
+    prompt = _revise_prompt()
+    assert '"message"' in prompt
+    lowered = prompt.lower()
+    assert "reply" in lowered
+    assert "the human" in lowered
 
 
 def test_revise_prompt_documents_the_ids_and_the_split():
