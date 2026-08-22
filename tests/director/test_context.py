@@ -2,7 +2,12 @@
 
 from __future__ import annotations
 
-from nagare_clip.director.context import build_director_context
+from nagare_clip.director.context import (
+    SEAM_NOTE,
+    Seam,
+    build_director_context,
+    seam_lines,
+)
 from nagare_clip.plan.plan_llm import PartDirection
 from nagare_clip.summary.summarize import PartSummary, ProjectSummary
 
@@ -237,3 +242,101 @@ class TestSplitDirections:
         )
         demo = next(ln for ln in ctx.splitlines() if ln.startswith("- lines 5-9"))
         assert "only the opening" not in demo
+
+
+# --- seam context: what plays either side of this video -----------------------
+
+
+class TestSeamLines:
+    """The neighbour's lines to show, taken straight off its _edits.txt."""
+
+    def test_before_seam_takes_the_last_lines_with_their_numbers(self):
+        lines = ["one", "two", "three", "four", "five"]
+        assert seam_lines(lines, 2, last=True) == [(4, "four"), (5, "five")]
+
+    def test_after_seam_takes_the_first_lines(self):
+        lines = ["one", "two", "three"]
+        assert seam_lines(lines, 2, last=False) == [(1, "one"), (2, "two")]
+
+    def test_blank_lines_are_skipped_but_numbering_is_absolute(self):
+        lines = ["one", "  ", "three", ""]
+        assert seam_lines(lines, 2, last=True) == [(1, "one"), (3, "three")]
+
+    def test_editing_markers_are_stripped(self):
+        lines = ["<keep>{{ほんじつ->本日}}は</keep>"]
+        assert seam_lines(lines, 1, last=True) == [(1, "本日は")]
+
+    def test_a_count_beyond_the_file_yields_every_line(self):
+        assert seam_lines(["one"], 5, last=True) == [(1, "one")]
+
+    def test_a_non_positive_count_yields_nothing(self):
+        assert seam_lines(["one", "two"], 0, last=True) == []
+
+
+class TestSeamContext:
+    def test_before_seam_renders_the_neighbours_closing_lines(self):
+        ctx = build_director_context(
+            _project(),
+            [],
+            "b",
+            all_stems=["a", "b"],
+            seam_before=Seam("a", [(74, "また続きになります"), (75, "今日は終わりじゃあねー")]),
+        )
+        assert "Immediately BEFORE this video in the finished video (a, its last lines):" in ctx
+        assert "- 74: また続きになります" in ctx
+        assert "- 75: 今日は終わりじゃあねー" in ctx
+
+    def test_after_seam_renders_the_neighbours_opening_lines(self):
+        ctx = build_director_context(
+            _project(),
+            [],
+            "a",
+            all_stems=["a", "b"],
+            seam_after=Seam("b", [(1, "こんにちはデジナです")]),
+        )
+        assert "Immediately AFTER this video (b, its first lines):" in ctx
+        assert "- 1: こんにちはデジナです" in ctx
+
+    def test_the_first_video_renders_only_the_after_side(self):
+        ctx = build_director_context(
+            _project(), [], "a", all_stems=["a", "b"], seam_after=Seam("b", [(1, "つづき")])
+        )
+        assert "Immediately AFTER this video" in ctx
+        assert "Immediately BEFORE this video" not in ctx
+
+    def test_the_rule_states_what_the_seam_is_for_once(self):
+        ctx = build_director_context(
+            _project(),
+            [],
+            "b",
+            all_stems=["a", "b", "c"],
+            seam_before=Seam("a", [(9, "じゃあねー")]),
+            seam_after=Seam("c", [(1, "こんにちは")]),
+        )
+        assert ctx.count(SEAM_NOTE) == 1
+
+    def test_no_seams_leaves_the_block_byte_identical(self):
+        before = build_director_context(_project(), _directions(), "a", all_stems=["a", "b"])
+        after = build_director_context(
+            _project(),
+            _directions(),
+            "a",
+            all_stems=["a", "b"],
+            seam_before=None,
+            seam_after=None,
+        )
+        assert after == before
+
+    def test_a_seam_alone_still_renders_a_block(self):
+        """A project with no summary at all still gets the seam context."""
+        ctx = build_director_context(
+            ProjectSummary("", []), [], "a", seam_after=Seam("b", [(1, "こんにちは")])
+        )
+        assert "- 1: こんにちは" in ctx
+
+
+def test_the_seam_note_forbids_addressing_the_neighbours_line_numbers():
+    """The neighbour's lines carry ITS numbering, printed beside this video's own
+    numbered transcript; without a rule an op could be aimed at the wrong video."""
+    assert "not part of your transcript" in SEAM_NOTE.lower()
+    assert "never" in SEAM_NOTE.lower()

@@ -421,3 +421,70 @@ def test_captions_are_deduped_across_videos(monkeypatch, tmp_path):
     second = _director_file(tmp_path, "z", same)
     _run(tmp_path, all_stems=["a", "z", "b"], prior_director_paths=[first, second])
     assert captured["ctx"].count("- 同じ") == 1
+
+
+# --- seam context: the neighbouring videos' lines at the two joins ------------
+
+
+def _edits_file(tmp_path, stem, *lines):
+    path = tmp_path / f"{stem}_edits.txt"
+    path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    return path
+
+
+def test_the_neighbours_lines_reach_the_context(monkeypatch, tmp_path):
+    captured = _capture_ctx(monkeypatch)
+    before = _edits_file(tmp_path, "a", "また続きになります", "今日は終わりじゃあねー")
+    after = _edits_file(tmp_path, "c", "こんにちはデジナです", "紹介していきます")
+    _run(tmp_path, all_stems=["a", "b", "c"], before_edits=before, after_edits=after)
+    assert (
+        "Immediately BEFORE this video in the finished video (a, its last lines):"
+        in (captured["ctx"])
+    )
+    assert "- 2: 今日は終わりじゃあねー" in captured["ctx"]
+    assert "Immediately AFTER this video (c, its first lines):" in captured["ctx"]
+    assert "- 1: こんにちはデジナです" in captured["ctx"]
+
+
+def test_seam_lines_defaults_to_three(monkeypatch, tmp_path):
+    captured = _capture_ctx(monkeypatch)
+    before = _edits_file(tmp_path, "a", "1行目", "2行目", "3行目", "4行目")
+    _run(tmp_path, all_stems=["a", "b"], before_edits=before)
+    assert "- 1行目" not in captured["ctx"] and "1: 1行目" not in captured["ctx"]
+    assert "- 2: 2行目" in captured["ctx"]
+    assert "- 4: 4行目" in captured["ctx"]
+
+
+def test_seam_lines_config_sets_how_many(monkeypatch, tmp_path):
+    captured = _capture_ctx(monkeypatch)
+    before = _edits_file(tmp_path, "a", "古い行", "最後の行")
+    _run(tmp_path, cfg_extra={"seam_lines": 1}, all_stems=["a", "b"], before_edits=before)
+    assert "- 2: 最後の行" in captured["ctx"]
+    assert "古い行" not in captured["ctx"]
+
+
+def test_seam_lines_zero_disables_the_block(monkeypatch, tmp_path):
+    captured = _capture_ctx(monkeypatch)
+    before = _edits_file(tmp_path, "a", "じゃあねー")
+    _run(tmp_path, cfg_extra={"seam_lines": 0}, all_stems=["a", "b"], before_edits=before)
+    assert "Immediately BEFORE" not in captured["ctx"]
+
+
+def test_a_missing_neighbour_file_degrades_to_nothing(monkeypatch, tmp_path):
+    """A single-source re-run may have no neighbour on disk; that must not fail."""
+    captured = _capture_ctx(monkeypatch)
+    after = _edits_file(tmp_path, "c", "つづきです")
+    _run(
+        tmp_path,
+        all_stems=["a", "b", "c"],
+        before_edits=tmp_path / "nope_edits.txt",
+        after_edits=after,
+    )
+    assert "Immediately BEFORE" not in captured["ctx"]
+    assert "- 1: つづきです" in captured["ctx"]
+
+
+def test_no_neighbours_renders_no_seam_block(monkeypatch, tmp_path):
+    captured = _capture_ctx(monkeypatch)
+    _run(tmp_path, all_stems=["a", "b", "c"])
+    assert "Immediately" not in captured["ctx"]

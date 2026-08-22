@@ -845,6 +845,34 @@ def test_director_adapter_passes_timeline_position_and_prior_ops(tmp_path, monke
     ]
 
 
+def test_director_adapter_passes_the_neighbouring_transcripts(tmp_path, monkeypatch):
+    """Each video is handed the text_filter transcript of the videos playing
+    either side of it; the first has no predecessor and the last no successor."""
+    seen = []
+    monkeypatch.setattr(st, "recorder_from_config", lambda *a, **k: _NullRec())
+    monkeypatch.setattr(
+        st,
+        "run_director",
+        lambda edits, out, cfg, **kw: seen.append(
+            (kw["stem"], kw["before_edits"], kw["after_edits"])
+        ),
+    )
+    in_dir = tmp_path / "in"
+    in_dir.mkdir()
+    for s in ("a", "b", "c"):
+        (in_dir / f"{s}.mp4").touch()
+
+    by_name = {s.name: s for s in st.STAGES}
+    by_name["director"].run(_ctx(tmp_path, stems=("a", "b", "c")))
+
+    tf = tmp_path / "out" / "text_filter"
+    assert seen == [
+        ("a", None, tf / "b_edits.txt"),
+        ("b", tf / "a_edits.txt", tf / "c_edits.txt"),
+        ("c", tf / "b_edits.txt", None),
+    ]
+
+
 def test_director_adapter_recovers_the_order_for_a_single_source_run(tmp_path, monkeypatch):
     """`--source b.mp4` narrows what is processed, not what the finished video
     contains: the position and the earlier videos' ops still come from the input
@@ -863,6 +891,9 @@ def test_director_adapter_recovers_the_order_for_a_single_source_run(tmp_path, m
     out = tmp_path / "out" / "director"
     assert seen["all_stems"] == ["a", "b", "c"]
     assert seen["prior_director_paths"] == [out / "a_director.json"]
+    tf = tmp_path / "out" / "text_filter"
+    assert seen["before_edits"] == tf / "a_edits.txt"
+    assert seen["after_edits"] == tf / "c_edits.txt"
 
 
 def test_director_adapter_falls_back_to_the_processed_stems(tmp_path, monkeypatch):
