@@ -36,6 +36,10 @@ DIALOGUE_DIR = "plan_dialogue"
 HISTORY_NAME = "history.md"
 
 _COMMENT_RE = re.compile(r"<!--.*?-->", re.DOTALL)
+# The same comment, but anchored at the top of the file: only a *leading*
+# comment block is the header this module owns and may rewrite.  A comment a
+# human wrote further down is theirs.
+_HEADER_RE = re.compile(r"\A\s*<!--.*?-->[ \t]*\n?", re.DOTALL)
 _HEADING_RE = re.compile(rf"^\s{{0,3}}#{{1,6}}\s*({HUMAN}|{PLAN})\b.*$", re.IGNORECASE)
 
 # A ``plan`` re-run divides the conversation rather than clearing it: the turns
@@ -66,6 +70,32 @@ FILE_HEADER = (
     "plan.json, and reply to it.\n"
     "-->\n"
 )
+
+
+def refresh_header(path: Path | str) -> None:
+    """Bring an existing file's leading comment up to the current FILE_HEADER.
+
+    The header is advice, and the advice changes: it once told the human to
+    re-run the ``plan`` stage to apply a turn, which is now exactly the wrong
+    thing to do.  Writing it only at creation leaves every existing project
+    reading the old instruction forever, so every write path refreshes it.
+
+    Forgiving like the rest of the module: no leading comment (a hand-started
+    file), an already-current header, or an unreadable path all leave the file
+    as it is.  The turns are never touched.
+    """
+    path = Path(path)
+    try:
+        existing = path.read_text(encoding="utf-8")
+    except OSError:
+        return
+    match = _HEADER_RE.match(existing)
+    if not match or match.group(0) == FILE_HEADER:
+        return
+    try:
+        path.write_text(FILE_HEADER + existing[match.end() :], encoding="utf-8")
+    except OSError as e:
+        logger.warning("plan: could not refresh the header of %s: %s", path, e)
 
 
 def history_path(output_dir: Path | str) -> Path:
@@ -156,10 +186,8 @@ def append_turn(path: Path, role: str, text: str) -> None:
     """Append one turn, creating the file (with its header) if needed."""
     path = Path(path)
     body = format_turn(role, text)
+    ensure_history(path)
     try:
-        path.parent.mkdir(parents=True, exist_ok=True)
-        if not path.is_file():
-            path.write_text(FILE_HEADER, encoding="utf-8")
         existing = path.read_text(encoding="utf-8")
         sep = "" if existing.endswith("\n") or not existing else "\n"
         with path.open("a", encoding="utf-8") as fh:
@@ -218,9 +246,13 @@ def append_reply_slot(path: Path) -> None:
 
 
 def ensure_history(path: Path) -> None:
-    """Create the history file (header only) so a human can find it."""
+    """Create the history file (header only) so a human can find it.
+
+    An existing file has its header refreshed instead — see ``refresh_header``.
+    """
     path = Path(path)
     if path.is_file():
+        refresh_header(path)
         return
     try:
         path.parent.mkdir(parents=True, exist_ok=True)

@@ -164,6 +164,26 @@ not pile dividers up; the trailing `## human` heading is where to type.
 **Do not re-run `plan` to apply a turn** — it retires the turn you just wrote.
 Re-run `--from-stage plan_revise --to-stage plan_revise`.
 
+## The file header is refreshed, not just written once
+
+`history.md` opens with an HTML comment explaining how to use it — stripped when
+the file is parsed (`_COMMENT_RE`), so it is documentation for the human and
+invisible to the LLM. It carries the advice above: **do not re-run `plan` to
+apply a turn.**
+
+That advice changed. An earlier header told the human to re-run
+`--from-stage plan --to-stage plan`, which is now exactly the wrong thing to do.
+Writing the header only at creation left every project made before that change
+reading the old instruction forever — observed on a real project months later.
+
+So `dialogue.refresh_header()` replaces the **leading** comment block with the
+current `FILE_HEADER` whenever it differs, and every write path runs it
+(`ensure_history`, which `append_turn`/`append_divider`/`append_reply_slot` all
+go through). It is forgiving like the rest of the module and never touches the
+turns: a file with no leading comment (someone started it by hand), an
+already-current header, or an unreadable path all leave the file exactly as it
+is, and a comment written further down the file is the human's, not the header.
+
 ## Failure modes
 
 Nothing here can fail a run:

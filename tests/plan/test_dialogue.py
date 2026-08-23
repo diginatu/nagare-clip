@@ -5,16 +5,19 @@ from __future__ import annotations
 from datetime import datetime
 
 from nagare_clip.plan.dialogue import (
+    FILE_HEADER,
     DialogueTurn,
     active_turns,
     append_divider,
     append_reply_slot,
     append_turn,
+    ensure_history,
     format_divider,
     has_unanswered_human,
     parse_history,
     read_active_history,
     read_history,
+    refresh_header,
     render_history,
 )
 
@@ -227,3 +230,78 @@ class TestReplySlot:
         append_reply_slot(path)
         append_turn(path, "human", "split part 2")
         assert has_unanswered_human(active_turns(path.read_text(encoding="utf-8")))
+
+
+# The header is advice, and the advice changed: improvement 23 made
+# "re-run plan to apply a turn" actively wrong.  A project whose history.md
+# predates that change must not keep telling its human the old thing.
+STALE_HEADER = (
+    "<!--\n"
+    "plan_dialogue/history.md — the plan_revise stage's conversation with you.\n"
+    "\n"
+    "Append a turn under a '## human' heading and re-run\n"
+    "  ./scripts/run_pipeline.sh --from-stage plan --to-stage plan\n"
+    "-->\n"
+)
+
+
+class TestHeaderRefresh:
+    def test_stale_header_is_replaced_on_next_write(self, tmp_path):
+        path = tmp_path / "history.md"
+        path.write_text(f"{STALE_HEADER}\n## human\n\nkeep this\n", encoding="utf-8")
+
+        append_turn(path, "plan", "heard")
+
+        text = path.read_text(encoding="utf-8")
+        assert FILE_HEADER.strip() in text
+        assert "--from-stage plan --to-stage plan" not in text
+        # The turns themselves are untouched and not duplicated.
+        assert read_history(path) == [
+            DialogueTurn("human", "keep this"),
+            DialogueTurn("plan", "heard"),
+        ]
+        assert text.count("keep this") == 1
+
+    def test_refresh_is_idempotent(self, tmp_path):
+        path = tmp_path / "history.md"
+        path.write_text(f"{STALE_HEADER}\n## human\n\nkeep this\n", encoding="utf-8")
+        append_turn(path, "plan", "heard")
+        first = path.read_text(encoding="utf-8")
+
+        refresh_header(path)
+        refresh_header(path)
+
+        assert path.read_text(encoding="utf-8") == first
+        assert text_has_one_header(first)
+
+    def test_ensure_history_refreshes_an_existing_file(self, tmp_path):
+        path = tmp_path / "history.md"
+        path.write_text(f"{STALE_HEADER}\n## human\n\nkeep this\n", encoding="utf-8")
+
+        ensure_history(path)
+
+        assert FILE_HEADER.strip() in path.read_text(encoding="utf-8")
+
+    def test_file_without_a_leading_comment_is_left_alone(self, tmp_path):
+        path = tmp_path / "history.md"
+        path.write_text("## human\n\ntyped by hand\n", encoding="utf-8")
+
+        refresh_header(path)
+
+        assert path.read_text(encoding="utf-8") == "## human\n\ntyped by hand\n"
+
+    def test_a_later_comment_is_not_mistaken_for_the_header(self, tmp_path):
+        path = tmp_path / "history.md"
+        path.write_text("## human\n\n<!-- a note -->\nhi\n", encoding="utf-8")
+
+        refresh_header(path)
+
+        assert path.read_text(encoding="utf-8") == "## human\n\n<!-- a note -->\nhi\n"
+
+    def test_missing_or_unreadable_file_does_not_raise(self, tmp_path):
+        refresh_header(tmp_path / "nope.md")
+        refresh_header(tmp_path)  # a directory: OSError on read
+
+
+def text_has_one_header(text: str) -> bool:
+    return text.count("plan_dialogue/history.md — the plan_revise stage's conversation") == 1
