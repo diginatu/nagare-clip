@@ -786,6 +786,14 @@ class DirectorConfig(BaseModel):
             "is told about (0 = no limit); the most recent ones are kept"
         ),
     )
+    seam_lines: int = Field(
+        3,
+        description=(
+            "How many lines of the videos playing immediately before/after this one the "
+            "director is shown at each join (0 = off), so a sign-off or a greeting is "
+            "visible as addressing an audience that is already mid-video"
+        ),
+    )
     prompt: str = _commented(
         DIRECTOR_PROMPT, sample='"..."', description="System prompt (has a sensible default)"
     )

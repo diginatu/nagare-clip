@@ -7,8 +7,67 @@ so ``summary`` can keep importing it without a cycle.
 
 from __future__ import annotations
 
+from dataclasses import dataclass
+
+from nagare_clip.director.director_llm import clean_for_display
 from nagare_clip.plan.plan_llm import PartDirection
 from nagare_clip.summary.summarize import ProjectSummary
+
+#: Why the neighbouring lines are in the prompt.  Deliberately a rule and not a
+#: worked example: an example in this prompt anchors harder than the instruction
+#: around it (improvement 11).
+SEAM_NOTE = (
+    "Your footage is NOT a standalone episode — it plays inside one longer finished "
+    "video, and the lines below are what the viewer hears immediately before and "
+    "after it. An opening greeting or a closing sign-off in your footage is "
+    "addressing an audience that is already mid-video. They are NOT part of your "
+    "transcript and carry no numbering — every op you emit refers to your own "
+    "numbered lines only."
+)
+
+
+@dataclass(frozen=True)
+class Seam:
+    """A neighbouring video's lines at the join with this one.
+
+    *lines* is that video's own text — its last lines on the BEFORE side, its
+    first ones on the AFTER side.  Text only, deliberately: a line number here
+    would be the NEIGHBOUR's coordinate, and every op the director emits
+    addresses its own transcript, so a number it copied out of the seam would
+    silently edit an unrelated line of this video.
+    """
+
+    stem: str
+    lines: list[str]
+
+
+def seam_lines(edit_lines: list[str], count: int, *, last: bool) -> list[str]:
+    """The *count* lines at one end of a neighbour's ``_edits.txt``.
+
+    Editing markers and ``{{old->new}}`` patches are stripped (the same view the
+    director gets of its own transcript) and blank lines are skipped.  Line
+    numbers are deliberately dropped — see :class:`Seam`.
+    """
+    if count <= 0:
+        return []
+    lines = [text.strip() for text in clean_for_display(edit_lines) if text.strip()]
+    return lines[-count:] if last else lines[:count]
+
+
+def _seam_block(before: Seam | None, after: Seam | None) -> list[str]:
+    """Render the seam context; ``[]`` when neither side exists."""
+    if not (before and before.lines) and not (after and after.lines):
+        return []
+    out = ["", SEAM_NOTE]
+    if before and before.lines:
+        out.append(
+            f"Immediately BEFORE this video in the finished video ({before.stem}, its last lines):"
+        )
+        out.extend(f"- {text}" for text in before.lines)
+    if after and after.lines:
+        out.append(f"Immediately AFTER this video ({after.stem}, its first lines):")
+        out.extend(f"- {text}" for text in after.lines)
+    return out
 
 
 def _sibling_text(stem: str, project_summary: ProjectSummary) -> str:
@@ -60,6 +119,8 @@ def build_director_context(
     all_stems: list[str] | None = None,
     prior_captions: list[str] | None = None,
     max_prior_captions: int = 0,
+    seam_before: Seam | None = None,
+    seam_after: Seam | None = None,
 ) -> str:
     """Render the context for one video: global summary + this video's parts
     (line ranges, summaries, rough directions) + the sibling videos.
@@ -78,6 +139,11 @@ def build_director_context(
     so an explanation is not repeated in every video.  ``max_prior_captions``
     keeps only that many of the most recent ones (``0`` = no limit).
 
+    ``seam_before``/``seam_after`` are the neighbouring videos' lines at the two
+    joins (see :class:`Seam`); either side may be absent (the first video has no
+    predecessor, the last no successor, and a neighbour's ``_edits.txt`` may be
+    missing on a re-run), and with neither the block is byte-identical to before.
+
     Returns ``""`` when there is nothing to inject (so the director prompt is
     unchanged when the overview is empty).
     """
@@ -93,8 +159,9 @@ def build_director_context(
     captions = list(prior_captions or [])
     if max_prior_captions > 0:
         captions = captions[-max_prior_captions:]
+    seams = _seam_block(seam_before, seam_after)
 
-    if not project_summary.summary and not own and not positioned and not captions:
+    if not project_summary.summary and not own and not positioned and not captions and not seams:
         return ""
 
     dirs_by_part = _directions_by_part(own, directions)
@@ -162,5 +229,7 @@ def build_director_context(
         out.append("")
         out.append("Captions already shown earlier in the finished video:")
         out.extend(f"- {c}" for c in captions)
+
+    out.extend(seams)
 
     return "\n".join(out)

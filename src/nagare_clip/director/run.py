@@ -14,7 +14,7 @@ from pathlib import Path
 from nagare_clip.audio_silence.cuts_file import read_cuts
 from nagare_clip.brief import apply_brief
 from nagare_clip.director import director_llm as director_llm_mod
-from nagare_clip.director.context import build_director_context
+from nagare_clip.director.context import Seam, build_director_context, seam_lines
 from nagare_clip.director.director_llm import (
     collect_overlay_texts,
     generate_director_ops,
@@ -26,6 +26,37 @@ from nagare_clip.llm_report import NULL_RECORDER, Recorder
 from nagare_clip.plan.plan_llm import plan_from_dict
 from nagare_clip.summary.summarize import ProjectSummary, summary_from_dict
 from nagare_clip.timing import segment_silences, segment_times
+
+#: Lines of a neighbouring video shown at each join when ``director.seam_lines``
+#: says nothing else.  Small on purpose: the prompt is already long, and a
+#: sign-off or a greeting is one or two lines.
+DEFAULT_SEAM_LINES = 3
+
+
+def _seam_line_count(director_cfg: dict) -> int:
+    """Read ``director.seam_lines`` defensively (invalid = the default, ``0`` = off)."""
+    raw = director_cfg.get("seam_lines", DEFAULT_SEAM_LINES)
+    if isinstance(raw, bool) or not isinstance(raw, int) or raw < 0:
+        return DEFAULT_SEAM_LINES
+    return raw
+
+
+def _seam(path: Path | None, count: int, *, last: bool) -> Seam | None:
+    """The neighbouring video's lines at one join, read off its ``_edits.txt``.
+
+    Optional throughout: the first video has no predecessor and the last no
+    successor, and a ``--source`` re-run may have neither file on disk — every
+    one of those degrades to no seam rather than failing the stage.
+    """
+    if not path or count <= 0:
+        return None
+    path = Path(path)
+    try:
+        lines = seam_lines(path.read_text(encoding="utf-8").splitlines(), count, last=last)
+    except OSError:
+        logging.warning("director: no readable seam transcript at %s", path)
+        return None
+    return Seam(path.stem.removesuffix("_edits"), lines) if lines else None
 
 
 def _prior_captions(paths: list[Path] | None) -> list[str]:
@@ -65,6 +96,8 @@ def _build_overview_context(
     all_stems: list[str] | None = None,
     prior_captions: list[str] | None = None,
     max_prior_captions: int = 0,
+    seam_before: Seam | None = None,
+    seam_after: Seam | None = None,
 ) -> str:
     """Load summary/plan artifacts (tolerating missing/empty) and render the
     cross-video context for this video's stem.  Returns ``""`` if unavailable."""
@@ -83,6 +116,8 @@ def _build_overview_context(
         all_stems=all_stems,
         prior_captions=prior_captions,
         max_prior_captions=max_prior_captions,
+        seam_before=seam_before,
+        seam_after=seam_after,
     )
 
 
@@ -99,6 +134,8 @@ def run_director(
     cuts_txt: Path | None = None,
     all_stems: list[str] | None = None,
     prior_director_paths: list[Path] | None = None,
+    before_edits: Path | None = None,
+    after_edits: Path | None = None,
     recorder: Recorder = NULL_RECORDER,
 ) -> None:
     director_cfg = cfg["director"]
@@ -109,6 +146,7 @@ def run_director(
         logging.info("director: disabled, writing empty op list")
         ops = []
     else:
+        seam_count = _seam_line_count(director_cfg)
         overview_context = _build_overview_context(
             summary,
             plan,
@@ -116,6 +154,8 @@ def run_director(
             all_stems=all_stems,
             prior_captions=_prior_captions(prior_director_paths),
             max_prior_captions=_max_prior_captions(director_cfg),
+            seam_before=_seam(before_edits, seam_count, last=True),
+            seam_after=_seam(after_edits, seam_count, last=False),
         )
         seg_times = None
         if json_path and json_path.is_file():

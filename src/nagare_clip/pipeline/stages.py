@@ -429,18 +429,29 @@ def _director_run(ctx: PipelineContext) -> None:
     # input dir yields nothing readable.
     timeline_stems = project_stems(ctx.input_videos_dir) or ctx.stems
     director_dir = ctx.stage_dir("director")
+    text_filter_dir = ctx.stage_dir("text_filter")
+
+    def _neighbour(index: int, offset: int) -> Path | None:
+        """The transcript of the video playing right before/after this one.
+
+        ``text_filter`` has already run for every source by the time the director
+        starts, so both sides can be read off disk — including the one that plays
+        *after* this video, whose ops do not exist yet.
+        """
+        n = index + offset
+        if index < 0 or not 0 <= n < len(timeline_stems):
+            return None
+        return text_filter_dir / f"{timeline_stems[n]}_edits.txt"
+
     try:
         for src in ctx.sources:
             print(f"[director] Edit operations: {src.stem}")
             # Every video playing earlier already has its ops on disk (this loop
             # writes them in order), so their captions can be read back.
-            earlier = (
-                timeline_stems[: timeline_stems.index(src.stem)]
-                if src.stem in timeline_stems
-                else []
-            )
+            index = timeline_stems.index(src.stem) if src.stem in timeline_stems else -1
+            earlier = timeline_stems[:index] if index >= 0 else []
             run_director(
-                ctx.stage_dir("text_filter") / f"{src.stem}_edits.txt",
+                text_filter_dir / f"{src.stem}_edits.txt",
                 ctx.stage_dir("director") / f"{src.stem}_director.json",
                 ctx.cfg,
                 summary=ctx.stage_dir("summary") / "summary.json",
@@ -451,6 +462,8 @@ def _director_run(ctx: PipelineContext) -> None:
                 cuts_txt=ctx.stage_dir("audio_silence") / f"{src.stem}_cuts.txt",
                 all_stems=timeline_stems,
                 prior_director_paths=[director_dir / f"{s}_director.json" for s in earlier],
+                before_edits=_neighbour(index, -1),
+                after_edits=_neighbour(index, 1),
                 recorder=rec,
             )
     finally:
