@@ -100,12 +100,12 @@ class TestApply:
     def test_unnamed_directions_are_carried_through_by_the_code(self):
         ds = _plan()
         ops = try_parse_revision('{"message": "nothing to change"}', _project().parts)
-        assert apply_revision(ds, ops, _project().parts) == ds
+        assert apply_revision(ds, ops, _project().parts).directions == ds
 
     def test_delete_removes_only_the_named_direction(self):
         ds = _plan()
         ops = try_parse_revision(f'{{"delete": ["{_id(ds, 1)}"]}}', _project().parts)
-        assert apply_revision(ds, ops, _project().parts) == [ds[0], ds[2]]
+        assert apply_revision(ds, ops, _project().parts).directions == [ds[0], ds[2]]
 
     def test_update_replaces_the_text_and_keeps_the_range(self):
         ds = _plan()
@@ -113,7 +113,7 @@ class TestApply:
             f'{{"update": [{{"id": "{_id(ds, 1)}", "direction": "shorten heavily"}}]}}',
             _project().parts,
         )
-        out = apply_revision(ds, ops, _project().parts)
+        out = apply_revision(ds, ops, _project().parts).directions
         assert out[1] == PartDirection("a", (5, 9), "shorten heavily")
         assert out[0] == ds[0] and out[2] == ds[2]
 
@@ -122,7 +122,7 @@ class TestApply:
         ops = try_parse_revision(
             '{"add": [{"index": 2, "lines": [5, 6], "direction": "cut"}]}', _project().parts
         )
-        out = apply_revision(ds, ops, _project().parts)
+        out = apply_revision(ds, ops, _project().parts).directions
         assert [(d.stem, d.lines) for d in out] == [
             ("a", (1, 4)),
             ("a", (5, 6)),
@@ -138,7 +138,7 @@ class TestApply:
             '{"index": 2, "lines": [7, 9], "direction": "feature — the demo itself"}]}',
             _project().parts,
         )
-        out = apply_revision(ds, ops, _project().parts)
+        out = apply_revision(ds, ops, _project().parts).directions
         assert out == [
             ds[0],
             PartDirection("a", (5, 6), "remove — digression"),
@@ -151,7 +151,7 @@ class TestApply:
         ops = try_parse_revision(
             '{"add": [{"index": 1, "lines": [1, 4], "direction": "new text"}]}', _project().parts
         )
-        out = apply_revision(ds, ops, _project().parts)
+        out = apply_revision(ds, ops, _project().parts).directions
         assert len(out) == 3 and out[0].direction == "new text"
 
     def test_unknown_id_is_dropped_and_logged(self):
@@ -160,7 +160,7 @@ class TestApply:
         ops = try_parse_revision(
             '{"delete": ["zzzz"], "update": [{"id": "yyyy", "direction": "x"}]}', _project().parts
         )
-        assert apply_revision(ds, ops, _project().parts, drops) == ds
+        assert apply_revision(ds, ops, _project().parts, drops).directions == ds
         assert len(drops) == 2 and all("zzzz" in d or "yyyy" in d for d in drops)
 
     def test_a_direction_over_footage_no_part_covers_survives(self):
@@ -168,7 +168,7 @@ class TestApply:
         # not silently vanish through a revision that never named it.
         ds = _plan() + [PartDirection("gone", (1, 2), "stale")]
         ops = try_parse_revision('{"message": "x"}', _project().parts)
-        assert apply_revision(ds, ops, _project().parts)[-1] == ds[-1]
+        assert apply_revision(ds, ops, _project().parts).directions[-1] == ds[-1]
 
 
 class TestUserContent:

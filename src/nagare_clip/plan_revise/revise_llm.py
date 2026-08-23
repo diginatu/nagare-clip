@@ -41,11 +41,14 @@ from nagare_clip.llm_report import (
     Recorder,
 )
 from nagare_clip.llm_retry import cfg_for_attempt, retry_attempts
+from nagare_clip.order import Segment
 from nagare_clip.plan.dialogue import DialogueTurn, render_history
 from nagare_clip.plan.plan_llm import (
     CallLLM,
     PartDirection,
     coerce_lines,
+    coerce_order,
+    format_order,
     format_parts_for_plan,
 )
 from nagare_clip.plan_revise.ids import assign_ids, resolve
@@ -55,7 +58,7 @@ from nagare_clip.text_filter.llm_filter import _call_llm
 logger = logging.getLogger(__name__)
 
 CONVERSATION_HEADER = "Conversation with the human editor (oldest first):"
-_OP_KEYS = ("delete", "add", "update", "message")
+_OP_KEYS = ("delete", "add", "update", "order", "message")
 
 
 @dataclass
@@ -65,11 +68,20 @@ class ReviseOps:
     delete: list[str] = field(default_factory=list)
     add: list[PartDirection] = field(default_factory=list)
     update: list[tuple[str, str]] = field(default_factory=list)
+    #: ``None`` = the key was absent or its value was rejected, so the current
+    #: order stands.  An order is restated whole rather than edited: the order
+    #: IS the position, so a partial edit would need an insertion point.
+    order: list[Segment] | None = None
     message: str = ""
 
     @property
     def count(self) -> int:
-        return len(self.delete) + len(self.add) + len(self.update)
+        return (
+            len(self.delete)
+            + len(self.add)
+            + len(self.update)
+            + (1 if self.order is not None else 0)
+        )
 
     @property
     def applied(self) -> str:
@@ -81,6 +93,7 @@ class Revision:
     """The merged plan, plus what to say back and whether it may be written."""
 
     directions: list[PartDirection]
+    order: list[Segment] = field(default_factory=list)
     message: str = ""
     applied: str = ""
     ok: bool = False
@@ -91,8 +104,12 @@ def build_user_content(
     directions: list[PartDirection],
     ids: list[str],
     turns: list[DialogueTurn],
+    order: list[Segment] | None = None,
 ) -> str:
     content = format_parts_for_plan(project_summary, directions, ids)
+    rendered = format_order(order or [])
+    if rendered:
+        content += "\n\n" + rendered
     if turns:
         content += "\n\n" + CONVERSATION_HEADER + "\n\n" + render_history(turns)
     return content
@@ -105,7 +122,10 @@ def _entries(data: dict[str, Any], key: str) -> list[Any]:
 
 
 def try_parse_revision(
-    response: str, parts: list[PartSummary], drops: list[str] | None = None
+    response: str,
+    parts: list[PartSummary],
+    drops: list[str] | None = None,
+    line_counts: dict[str, int] | None = None,
 ) -> ReviseOps | None:
     """Parse one revision response, or ``None`` on a hard parse failure."""
 
@@ -155,6 +175,11 @@ def try_parse_revision(
             continue
         ops.update.append((ident.strip(), direction))
 
+    if data.get("order") is not None:
+        # An unusable order leaves ``order`` as None, which the merge reads as
+        # "keep the current one" -- the same rule an unnamed direction gets.
+        ops.order = coerce_order(data.get("order"), line_counts, _drop) or None
+
     return ops
 
 
@@ -198,8 +223,13 @@ def apply_revision(
     ops: ReviseOps,
     parts: list[PartSummary],
     drops: list[str] | None = None,
-) -> list[PartDirection]:
-    """Merge *ops* into *directions*; everything unnamed survives untouched."""
+    current_order: list[Segment] | None = None,
+) -> Revision:
+    """Merge *ops* into *directions*; everything unnamed survives untouched.
+
+    The order follows the same rule: restated whole when the response gives
+    one, otherwise the current one is carried through by the code.
+    """
 
     def _drop(msg: str) -> None:
         logger.warning("plan_revise: %s", msg)
@@ -230,7 +260,13 @@ def apply_revision(
     }
     for added in ops.add:
         merged[(added.stem, added.lines)] = added
-    return sorted(merged.values(), key=_order(parts))
+    return Revision(
+        directions=sorted(merged.values(), key=_order(parts)),
+        order=ops.order if ops.order is not None else list(current_order or []),
+        message=ops.message,
+        applied=ops.applied,
+        ok=True,
+    )
 
 
 def generate_revision(
@@ -242,6 +278,8 @@ def generate_revision(
     call_llm: CallLLM = _call_llm,
     recorder: Recorder = NULL_RECORDER,
     unit: str = "plan_revise",
+    order: list[Segment] | None = None,
+    line_counts: dict[str, int] | None = None,
 ) -> Revision:
     """One call: the conversation applied to *directions* as operations."""
     parts = project_summary.parts
@@ -250,7 +288,7 @@ def generate_revision(
         {
             "role": "user",
             "content": build_user_content(
-                project_summary, directions, assign_ids(directions), turns
+                project_summary, directions, assign_ids(directions), turns, order
             ),
         },
     ]
@@ -277,7 +315,7 @@ def generate_revision(
             )
             continue
         drops: list[str] = []
-        ops = try_parse_revision(response, parts, drops)
+        ops = try_parse_revision(response, parts, drops, line_counts)
         if ops is None:
             recorder.attempt(
                 unit=unit,
@@ -293,7 +331,7 @@ def generate_revision(
                 "plan_revise: response unparseable (attempt %d/%d)", attempt + 1, attempts
             )
             continue
-        revised = apply_revision(directions, ops, parts, drops)
+        revision = apply_revision(directions, ops, parts, drops, order)
         if drops:
             outcome, reason = DROPPED_ITEMS, f"{len(drops)} dropped: " + "; ".join(drops)
         elif ops.count:
@@ -312,7 +350,7 @@ def generate_revision(
         )
         recorder.flush_unit(unit, outcome=outcome, reason=reason)
         logger.info("plan_revise: %s", ops.applied)
-        return Revision(directions=revised, message=ops.message, applied=ops.applied, ok=True)
+        return revision
     recorder.flush_unit(unit, outcome=LLM_ERROR, reason=f"all {attempts} attempt(s) failed")
     logger.warning("plan_revise: all %d attempt(s) failed; the plan is left as it was", attempts)
-    return Revision(directions=list(directions), message="", applied="", ok=False)
+    return Revision(directions=list(directions), order=list(order or []), ok=False)

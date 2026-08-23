@@ -38,6 +38,7 @@ from nagare_clip.llm_retry import cfg_for_attempt, retry_attempts
 from nagare_clip.order import (
     Segment,
     normalise,
+    segment_label,
     segments_from_dict,
     segments_to_dict,
     validate_segments,
@@ -164,6 +165,24 @@ def coerce_lines(value: Any, part: PartSummary) -> tuple[int, int] | None:
     if a > b or a < part.lines[0] or b > part.lines[1]:
         return None
     return (a, b)
+
+
+ORDER_HEADER = "Current order of the finished video (segments in playback order):"
+
+
+def format_order(order: list[Segment]) -> str:
+    """The current playback order, as the revision input shows it.
+
+    Rendered in the same terms the response uses — one segment per line, in
+    playback order — so restating it is transcription rather than invention.
+    An identity order renders as identity rather than being omitted, so "no
+    reorder yet" is a visible state and not an absence.
+    """
+    if not order:
+        return ""
+    lines = [ORDER_HEADER]
+    lines += [f"{i + 1}. {segment_label(s)}" for i, s in enumerate(order)]
+    return "\n".join(lines)
 
 
 def coerce_order(value: Any, line_counts: dict[str, int] | None, drop) -> list[Segment]:

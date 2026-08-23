@@ -143,6 +143,11 @@ PLAN_PROMPT = (
     'directions for that part, each with its own "lines" range inside the '
     "part's range, so each thread gets the direction it deserves.\n"
     "\n"
+    "The finished video is a sequence of SEGMENTS: a segment is one stretch of "
+    "one source video, and they play in the order you give. Omit "
+    '"order" to play the sources whole, in the order they are listed above. '
+    "Include it to state a different one.\n"
+    "\n"
     'Always write a "message" — every run, without exception. It is a short '
     "account of the plan you have just made: how you read the project as a "
     "whole, what you decided to compress and what you gave room to, and where "
@@ -158,6 +163,8 @@ PLAN_PROMPT = (
     '  {"index": 3, "lines": [12, 20], "direction": "emphasise — the '
     'demonstration itself"}\n'
     "],\n"
+    ' "order": [{"stem": "<source A>"}, {"stem": "<source B>", "lines": [1, 30]},'
+    ' {"stem": "<source B>", "lines": [31, 97]}],\n'
     ' "message": "how you read the project, what you compressed and what you '
     'gave room to, and where you were unsure"}\n'
     "\n"
@@ -171,6 +178,17 @@ PLAN_PROMPT = (
     "a mechanical instruction to restore every silent second of the part. "
     'Say "feature", "retain" or "emphasise" instead.\n'
     '- "message" is required and never empty.\n'
+    '- "order" is optional. Omit it and the parts play in the order listed '
+    "above. "
+    "When you give one, its segments must cover every line of every source "
+    "EXACTLY ONCE — no gap, no overlap, no source left out. Dropping footage is "
+    "a later stage's job, so an order that leaves lines out is rejected whole "
+    "and the given order is used instead.\n"
+    '- Each segment is {"stem": ..., "lines": [a, b]}; omit "lines" for a whole '
+    "source. A source may appear more than once, as several segments.\n"
+    '- If your "order" differs from the order the parts are listed in, say so '
+    'and why in "message" — a change to the order of the finished video must '
+    "never arrive unannounced.\n"
     "- Output only the JSON object, no other text."
 )
 
@@ -179,7 +197,8 @@ PLAN_REVISE_PROMPT = (
     "the human editor. You receive the numbered PARTS of the project (source "
     "video, line range, summary) with the CURRENT directions listed under the "
     "part each belongs to, every one tagged with a short id in square "
-    "brackets, plus the conversation with the human editor (oldest first). "
+    "brackets, plus the CURRENT ORDER of the finished video and the "
+    "conversation with the human editor (oldest first). "
     "Output ONLY a JSON object.\n"
     "\n"
     "State only what changes. Every direction you do not name stays exactly as "
@@ -201,6 +220,10 @@ PLAN_REVISE_PROMPT = (
     "insertion position: a direction sits where its part and lines put it.\n"
     '- "update": an existing direction\'s id plus its new "direction" text; '
     "its line range is unchanged. To move a boundary, delete it and add.\n"
+    '- "order": the WHOLE playback order of the finished video, restated. '
+    "Unlike a direction, an order cannot be edited in pieces — the order IS "
+    "the position — so give all of it, or omit the key and the current order "
+    'stands unchanged. Omit "order" to leave it exactly as it is.\n'
     '- "message": your REPLY to the human — how you read the last instruction, '
     "what you changed because of it, and what you would like confirmed. It "
     "answers a person, so it is not a summary of the plan (the plan stage "
@@ -216,6 +239,8 @@ PLAN_REVISE_PROMPT = (
     'demonstration itself"}],\n'
     ' "update": [{"id": "m3q8", "direction": "shorten heavily — the setup '
     'drags"}],\n'
+    ' "order": [{"stem": "<source A>"}, {"stem": "<source B>", "lines": [1, 30]},'
+    ' {"stem": "<source B>", "lines": [31, 97]}],\n'
     ' "message": "part 21 was one direction over two threads, so I split it '
     'at line 60 — is that the right boundary?"}\n'
     "\n"
@@ -227,6 +252,12 @@ PLAN_REVISE_PROMPT = (
     '- Never use the word "keep" in a direction: a later stage reads it as '
     "a mechanical instruction to restore every silent second of the part. "
     'Say "feature", "retain" or "emphasise" instead.\n'
+    '- "order", when given, must cover every line of every source EXACTLY ONCE '
+    "— no gap, no overlap, no source left out. Dropping footage is a later "
+    "stage's job, so an order that leaves lines out is rejected whole and the "
+    'current one stands. Each segment is {"stem": ..., "lines": [a, b]}; omit '
+    '"lines" for a whole source, and a source may appear more than once.\n'
+    '- If you change the order, say what moved and why in "message".\n'
     "- Every key is optional: answer a question with a message alone.\n"
     "- Output only the JSON object, no other text."
 )

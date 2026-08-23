@@ -54,8 +54,10 @@ def run_plan(
     history: Path | None = None,
     revised: Path | None = None,
     recorder: Recorder = NULL_RECORDER,
+    line_counts: dict[str, int] | None = None,
 ) -> None:
     plan_cfg = cfg["plan"]
+    order: list = []
 
     if not plan_cfg.get("enabled", False):
         logging.info("plan: disabled, writing empty plan")
@@ -67,8 +69,12 @@ def run_plan(
             project_summary,
             apply_brief(plan_cfg, cfg),
             recorder=recorder,
+            line_counts=line_counts,
         )
         directions = result.directions
+        order = result.order
+        if order:
+            logging.info("plan: order of %d segment(s)", len(order))
         logging.info("plan: %d direction(s)", len(directions))
         if history is not None:
             # The divider retires the turns about the plan being replaced; the
@@ -84,7 +90,7 @@ def run_plan(
 
     output.parent.mkdir(parents=True, exist_ok=True)
     output.write_text(
-        json.dumps(plan_to_dict(directions), ensure_ascii=False, indent=2) + "\n",
+        json.dumps(plan_to_dict(directions, order), ensure_ascii=False, indent=2) + "\n",
         encoding="utf-8",
     )
     logging.info("plan: wrote %s", output)

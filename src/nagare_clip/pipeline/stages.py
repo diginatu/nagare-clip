@@ -51,6 +51,7 @@ from nagare_clip.order import (
     validate_segments,
     write_manifest,
 )
+from nagare_clip.order_note import format_order_note
 from nagare_clip.pipeline.errors import PipelineError
 from nagare_clip.pipeline.external import (
     build_blender_cmd,
@@ -392,6 +393,7 @@ def _plan_run(ctx: PipelineContext) -> None:
             history=history_path(ctx.output_dir),
             revised=_revised_plan_json(ctx),
             recorder=rec,
+            line_counts=_line_counts(ctx),
         )
     finally:
         rec.rebuild_index()
@@ -440,6 +442,58 @@ def _line_counts(ctx: PipelineContext) -> dict[str, int]:
     return counts
 
 
+def _resolve_order(ctx: PipelineContext) -> tuple[list[Segment], list[str]]:
+    """The playback order plus the problems that made it fall back (if any)."""
+    shooting = identity_segments(project_stems(ctx.input_videos_dir) or ctx.stems)
+    plan_json = _effective_plan_json(ctx)
+    if not plan_json.is_file():
+        return shooting, []
+    try:
+        segments = order_from_dict(json.loads(plan_json.read_text(encoding="utf-8")))
+    except (OSError, ValueError) as e:
+        logging.warning("order: could not read %s: %s", plan_json, e)
+        return shooting, []
+    if not segments:
+        return shooting, []
+
+    counts = _line_counts(ctx)
+    problems = validate_segments(segments, counts)
+    if problems:
+        logging.warning(
+            "order: %s does not cover every line exactly once; falling back to shooting order (%s)",
+            plan_json,
+            "; ".join(problems),
+        )
+        return shooting, problems
+    return normalise(segments, counts), []
+
+
+ORDER_NOTE = "order.md"
+
+
+def write_order_note(ctx: PipelineContext) -> None:
+    """State a reorder plainly, or say that one was rejected (no LLM call).
+
+    A reorder changes the shape of the finished video more than any other single
+    decision, and the failure mode to avoid is a human noticing it only while
+    watching the result.  Nothing is written when the resolved order IS shooting
+    order — including a plan that states it explicitly, which is not a reorder.
+    """
+    note = ctx.llm_report_dir / "notes" / ORDER_NOTE
+    try:
+        segments, problems = _resolve_order(ctx)
+        shooting = identity_segments(project_stems(ctx.input_videos_dir) or ctx.stems)
+        text = format_order_note(segments, shooting, problems)
+        if text:
+            note.parent.mkdir(parents=True, exist_ok=True)
+            note.write_text(text, encoding="utf-8")
+            print(f"[order] the finished video is not in shooting order: see {note}")
+        elif note.is_file():
+            note.unlink()
+    except (OSError, ValueError) as e:
+        logging.warning("order: could not write the order note: %s", e)
+
+
 def _timeline_segments(ctx: PipelineContext) -> list[Segment]:
     """The finished video's playback order — the one point stages consult.
 
@@ -454,28 +508,7 @@ def _timeline_segments(ctx: PipelineContext) -> list[Segment]:
     **whole project** — never a partial repair, which would be a video with a
     scene silently moved.
     """
-    shooting = identity_segments(project_stems(ctx.input_videos_dir) or ctx.stems)
-    plan_json = _effective_plan_json(ctx)
-    if not plan_json.is_file():
-        return shooting
-    try:
-        segments = order_from_dict(json.loads(plan_json.read_text(encoding="utf-8")))
-    except (OSError, ValueError) as e:
-        logging.warning("order: could not read %s: %s", plan_json, e)
-        return shooting
-    if not segments:
-        return shooting
-
-    counts = _line_counts(ctx)
-    problems = validate_segments(segments, counts)
-    if problems:
-        logging.warning(
-            "order: %s does not cover every line exactly once; falling back to shooting order (%s)",
-            plan_json,
-            "; ".join(problems),
-        )
-        return shooting
-    return normalise(segments, counts)
+    return _resolve_order(ctx)[0]
 
 
 def _plan_revise_run(ctx: PipelineContext) -> None:
@@ -490,6 +523,7 @@ def _plan_revise_run(ctx: PipelineContext) -> None:
             ctx.cfg,
             history=history_path(ctx.output_dir),
             recorder=rec,
+            line_counts=_line_counts(ctx),
         )
     finally:
         rec.rebuild_index()
@@ -619,6 +653,7 @@ def _director_run(ctx: PipelineContext) -> None:
         # A note describing ops that are not there is worse than no note.
         if not failed:
             _write_divergence_note(ctx)
+            write_order_note(ctx)
         rec.rebuild_index()
 
 
@@ -699,6 +734,7 @@ def _intervals_run(ctx: PipelineContext) -> None:
             ctx.cfg,
             cuts_txt=ctx.stage_dir("audio_silence") / f"{src.stem}_cuts.txt",
         )
+    write_order_note(ctx)
     _write_manifest(ctx)
     write_cut_report(ctx)
 

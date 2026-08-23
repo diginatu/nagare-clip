@@ -26,7 +26,12 @@ from nagare_clip.plan.dialogue import (
     has_unanswered_human,
     read_active_history,
 )
-from nagare_clip.plan.plan_llm import PartDirection, plan_from_dict, plan_to_dict
+from nagare_clip.plan.plan_llm import (
+    PartDirection,
+    order_from_dict,
+    plan_from_dict,
+    plan_to_dict,
+)
 from nagare_clip.plan_revise.revise_llm import generate_revision
 from nagare_clip.summary.summarize import ProjectSummary, summary_from_dict
 
@@ -57,6 +62,7 @@ def run_plan_revise(
     *,
     history: Path | None = None,
     recorder: Recorder = NULL_RECORDER,
+    line_counts: dict[str, int] | None = None,
 ) -> None:
     revise_cfg = cfg["plan_revise"]
 
@@ -82,7 +88,11 @@ def run_plan_revise(
         return
     project_summary: ProjectSummary = summary_from_dict(data)
 
-    directions: list[PartDirection] = plan_from_dict(_read_json(plan_json, "plan") or {})
+    plan_data = _read_json(plan_json, "plan") or {}
+    directions: list[PartDirection] = plan_from_dict(plan_data)
+    # The order is restated whole or inherited; either way plan_revise/plan.json
+    # carries the effective one, since director reads exactly one plan file.
+    current_order = order_from_dict(plan_data)
     logging.info(
         "plan_revise: revising %d direction(s) against %d conversation turn(s)",
         len(directions),
@@ -94,6 +104,8 @@ def run_plan_revise(
         turns,
         apply_brief(revise_cfg, cfg),
         recorder=recorder,
+        order=current_order,
+        line_counts=line_counts,
     )
     if not revision.ok:
         # Nothing written and nothing answered: the next run tries again.
@@ -102,7 +114,8 @@ def run_plan_revise(
 
     output.parent.mkdir(parents=True, exist_ok=True)
     output.write_text(
-        json.dumps(plan_to_dict(revision.directions), ensure_ascii=False, indent=2) + "\n",
+        json.dumps(plan_to_dict(revision.directions, revision.order), ensure_ascii=False, indent=2)
+        + "\n",
         encoding="utf-8",
     )
     logging.info("plan_revise: wrote %s (%d direction(s))", output, len(revision.directions))
