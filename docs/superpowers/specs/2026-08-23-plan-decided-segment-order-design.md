@@ -282,11 +282,19 @@ build produces 146 strips and `frame_end` 74718, as today.
 Line numbers stay absolute, as the proposal requires:
 `generate_director_ops(..., first_line=a)` renders
 `format_numbered_transcript{,_timed}` from `a`, and `_coerce_lines` / `_parse_op`
-validate ops into `[a, b]`.  `clean_lines`, `seg_times` and `silences` are sliced
-to the segment, so `anchor_gaps` / `annotate_numbered_transcript` — which work on
-positions within the rendered transcript, not on line numbers — need no change at
-all.  `ops_from_dict(data, None)`, which reads another video's ops for prior
-captions, is unaffected.
+validate ops into `[a, b]` — where `b` is the segment's **absolute** last line,
+not the slice length.  `clean_lines`, `seg_times` and `silences` are sliced to
+the segment.  `ops_from_dict(data, None)`, which reads another video's ops for
+prior captions, is unaffected.
+
+**Gap anchoring moves to the caller.**  `anchor_gaps` needs the WHOLE source's
+`seg_times` to know which line a gap follows, and the call is given only a
+slice, so `generate_director_ops` takes `anchored_gaps` (already anchored)
+rather than `gaps`.  `anchor_gaps(gaps, seg_times, lines=(a, b))` restricts and
+rebases onto the segment, keeping one anchoring rule in `gap_context/context.py`
+— which is that module's stated purpose.  A gap the segment does not contain is
+dropped rather than rendered at its edge; the gap *preceding* line `a` belongs
+to this segment, because that is the footage the manifest gives it.
 
 ### The loop, and the merge
 
@@ -295,6 +303,12 @@ is what improvements 19 and 22 need anyway.  Ops accumulate in memory per stem
 and `{stem}_director.json` is written, line-sorted, as soon as that stem's last
 segment in the order completes.  No per-segment files, no new naming convention;
 `_director_required` and `guided_edit` are untouched.
+
+**`run_director` writes nothing at all** — it returns a `DirectorResult` and its
+`output` parameter is gone.  That is stronger than the orchestrator merging
+carefully: a partially edited `{stem}_director.json` cannot reach disk even
+transiently, because the only code that writes one has every segment's ops in
+hand.
 
 Before the loop, every `{stem}_director.json` for a stem in `ctx.stems` is
 deleted — those files are about to be rewritten, and this guarantees a crash
