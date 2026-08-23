@@ -159,7 +159,9 @@ class TestGenerate:
             captured["user"] = messages[1]["content"]
             return '{"ops": [{"type": "cut", "lines": [1, 2]}]}'
 
-        ops = generate_director_ops(["あ{{えー->}}い", "うえ"], {"prompt": "P"}, call_llm=fake_llm)
+        ops = generate_director_ops(
+            ["あ{{えー->}}い", "うえ"], {"prompt": "P"}, call_llm=fake_llm
+        ).ops
         assert captured["user"] == "1: あい\n2: うえ"
         assert ops[0].type == "cut" and ops[0].lines == (1, 2)
 
@@ -167,7 +169,7 @@ class TestGenerate:
         def boom(messages, cfg):
             raise ConnectionError("down")
 
-        assert generate_director_ops(["あ"], {"prompt": "P"}, call_llm=boom) == []
+        assert generate_director_ops(["あ"], {"prompt": "P"}, call_llm=boom).ops == []
 
     def test_empty_overview_context_leaves_system_prompt_unchanged(self):
         captured = {}
@@ -260,12 +262,12 @@ class TestKeepWidthLimit:
         fake = _seq_llm([self._resp(1, 99)])
         ops = generate_director_ops(
             ["あ"] * 140, {"prompt": "P", "max_keep_lines": 4}, call_llm=fake
-        )
+        ).ops
         assert ops == []
 
     def test_generate_without_cfg_key_is_unlimited(self):
         fake = _seq_llm([self._resp(1, 99)])
-        ops = generate_director_ops(["あ"] * 140, {"prompt": "P"}, call_llm=fake)
+        ops = generate_director_ops(["あ"] * 140, {"prompt": "P"}, call_llm=fake).ops
         assert [o.lines for o in ops] == [(1, 99)]
 
     def test_limit_is_stated_in_the_system_prompt(self):
@@ -383,31 +385,31 @@ class TestTryParse:
 class TestRetry:
     def test_retries_on_llm_error_then_succeeds(self):
         fake = _seq_llm([ConnectionError("x"), '{"ops": [{"type": "cut", "lines": [1, 1]}]}'])
-        ops = generate_director_ops(["あ"], {"prompt": "P", "max_retries": 2}, call_llm=fake)
+        ops = generate_director_ops(["あ"], {"prompt": "P", "max_retries": 2}, call_llm=fake).ops
         assert fake.calls["i"] == 2
         assert ops[0].type == "cut"
 
     def test_retries_on_unparseable_then_succeeds(self):
         fake = _seq_llm(["garbage", "still bad", '{"ops": [{"type": "keep", "lines": [1, 1]}]}'])
-        ops = generate_director_ops(["あ"], {"prompt": "P", "max_retries": 2}, call_llm=fake)
+        ops = generate_director_ops(["あ"], {"prompt": "P", "max_retries": 2}, call_llm=fake).ops
         assert fake.calls["i"] == 3
         assert ops[0].type == "keep"
 
     def test_all_attempts_fail_returns_empty(self):
         fake = _seq_llm([ConnectionError("x")] * 3)
-        ops = generate_director_ops(["あ"], {"prompt": "P", "max_retries": 2}, call_llm=fake)
+        ops = generate_director_ops(["あ"], {"prompt": "P", "max_retries": 2}, call_llm=fake).ops
         assert ops == []
         assert fake.calls["i"] == 3
 
     def test_valid_empty_ops_does_not_retry(self):
         fake = _seq_llm(['{"ops": []}'])
-        ops = generate_director_ops(["あ"], {"prompt": "P", "max_retries": 2}, call_llm=fake)
+        ops = generate_director_ops(["あ"], {"prompt": "P", "max_retries": 2}, call_llm=fake).ops
         assert ops == []
         assert fake.calls["i"] == 1
 
     def test_max_retries_zero_is_single_attempt(self):
         fake = _seq_llm([ConnectionError("x")])
-        ops = generate_director_ops(["あ"], {"prompt": "P", "max_retries": 0}, call_llm=fake)
+        ops = generate_director_ops(["あ"], {"prompt": "P", "max_retries": 0}, call_llm=fake).ops
         assert ops == []
         assert fake.calls["i"] == 1
 
@@ -454,7 +456,7 @@ class TestDirectorRecorder:
             call_llm=fake,
             recorder=rec,
             unit="vid",
-        )
+        ).ops
         assert ops == []
         assert _outcome(tmp_path, "director", "vid") == "ok-empty"
         body = (tmp_path / "director" / "vid.md").read_text(encoding="utf-8")
@@ -471,7 +473,7 @@ class TestDirectorRecorder:
             call_llm=fake,
             recorder=rec,
             unit="vid",
-        )
+        ).ops
         assert len(ops) == 1
         assert _outcome(tmp_path, "director", "vid") == "dropped-items"
 
@@ -530,6 +532,7 @@ class TestTimedTranscript:
 
 
 def test_generate_director_ops_annotates_the_transcript_with_gaps():
+    from nagare_clip.gap_context.context import anchor_gaps
     from nagare_clip.gap_context.gaps import Gap
 
     seen = {}
@@ -538,12 +541,17 @@ def test_generate_director_ops_annotates_the_transcript_with_gaps():
         seen["user"] = messages[1]["content"]
         return json.dumps({"ops": []})
 
+    seg_times = [(0.0, 10.0), (20.0, 25.0)]
+    # Anchoring is the caller's job now: it holds the WHOLE source's times, of
+    # which this call may be given only a slice.
     generate_director_ops(
         ["いち", "に"],
         {"prompt": "P", "max_retries": 0},
         call_llm=fake_llm,
-        seg_times=[(0.0, 10.0), (20.0, 25.0)],
-        gaps=[Gap(start=10.0, end=20.0, frames=[], description="ビルドが走る")],
+        seg_times=seg_times,
+        anchored_gaps=anchor_gaps(
+            [Gap(start=10.0, end=20.0, frames=[], description="ビルドが走る")], seg_times
+        ),
     )
     assert seen["user"] == (
         "1: いち  [10.0s, gap 10.0s]\n    [silent gap 10.0s: ビルドが走る]\n2: に  [5.0s]"

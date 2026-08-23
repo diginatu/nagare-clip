@@ -1,8 +1,19 @@
-"""director stage (Pass A): high-level LLM edit operations.
+"""director stage (Pass A): high-level LLM edit operations, one SEGMENT at a time.
 
-When ``director.enabled`` is false (default) it writes an empty op list so the
-downstream guided_edit stage is a no-op and the pipeline behaves exactly as
-before.
+A segment is one stretch of one source, as the plan ordered it.  Running per
+segment rather than per source makes an op crossing a reorder boundary
+unrepresentable, gives improvement 19's position a meaning when one source
+plays at two places, and makes improvement 22's seams the *neighbouring
+segment* rather than the neighbouring source.
+
+Line numbers stay absolute: ``guided_edit`` and ``intervals`` apply ops to the
+whole source file, so a segment starting at line 31 presents its first line as
+``31:`` and emits ops in that numbering.
+
+The stage does not write ``{stem}_director.json`` — the orchestrator merges a
+source's segments and writes it once.  When ``director.enabled`` is false
+(default) every segment returns no ops, which merges to the empty op list the
+downstream guided_edit stage treats as a no-op.
 """
 
 from __future__ import annotations
@@ -14,15 +25,17 @@ from pathlib import Path
 from nagare_clip.audio_silence.cuts_file import read_cuts
 from nagare_clip.brief import apply_brief
 from nagare_clip.director import director_llm as director_llm_mod
-from nagare_clip.director.context import Seam, build_director_context, seam_lines
-from nagare_clip.director.director_llm import (
-    collect_overlay_texts,
-    generate_director_ops,
-    ops_from_dict,
-    ops_to_dict,
+from nagare_clip.director.context import (
+    Neighbour,
+    Seam,
+    build_director_context,
+    seam_lines,
 )
+from nagare_clip.director.director_llm import DirectorResult, generate_director_ops
+from nagare_clip.gap_context.context import anchor_gaps
 from nagare_clip.gap_context.gaps import load_gaps
 from nagare_clip.llm_report import NULL_RECORDER, Recorder
+from nagare_clip.order import Segment, segment_label, segment_unit
 from nagare_clip.plan.plan_llm import plan_from_dict
 from nagare_clip.summary.summarize import ProjectSummary, summary_from_dict
 from nagare_clip.timing import segment_silences, segment_times
@@ -41,43 +54,28 @@ def _seam_line_count(director_cfg: dict) -> int:
     return raw
 
 
-def _seam(path: Path | None, count: int, *, last: bool) -> Seam | None:
-    """The neighbouring video's lines at one join, read off its ``_edits.txt``.
+def _seam(neighbour: Neighbour | None, count: int, *, last: bool) -> Seam | None:
+    """The neighbouring SEGMENT's lines at one join, read off its ``_edits.txt``.
 
-    Optional throughout: the first video has no predecessor and the last no
+    The neighbour is a segment, not a source, so the file is sliced to the lines
+    that segment actually plays — which is what makes a join with another
+    stretch of this very source read correctly.
+
+    Optional throughout: the first segment has no predecessor and the last no
     successor, and a ``--source`` re-run may have neither file on disk — every
     one of those degrades to no seam rather than failing the stage.
     """
-    if not path or count <= 0:
+    if not neighbour or count <= 0:
         return None
-    path = Path(path)
+    path = Path(neighbour.edits)
     try:
-        lines = seam_lines(path.read_text(encoding="utf-8").splitlines(), count, last=last)
+        all_lines = path.read_text(encoding="utf-8").splitlines()
     except OSError:
         logging.warning("director: no readable seam transcript at %s", path)
         return None
-    return Seam(path.stem.removesuffix("_edits"), lines) if lines else None
-
-
-def _prior_captions(paths: list[Path] | None) -> list[str]:
-    """The captions already committed on the videos playing earlier.
-
-    Each earlier source's ``_director.json`` is written before this video's
-    director call, so they can be read straight off disk.  Every file is
-    optional: a single-source re-run may have only some of them (or none), which
-    degrades to a shorter list rather than failing.  ``num_lines=None`` skips the
-    line-range check — those ops belong to another transcript, and only their
-    caption text is wanted.
-    """
-    ops = []
-    for path in paths or []:
-        if not path.is_file():
-            continue
-        try:
-            ops.extend(ops_from_dict(json.loads(path.read_text(encoding="utf-8")), None))
-        except (ValueError, OSError):
-            logging.warning("director: could not read prior ops %s", path)
-    return collect_overlay_texts(ops)
+    first, last_line = neighbour.segment.lines or (1, len(all_lines))
+    lines = seam_lines(all_lines[first - 1 : last_line], count, last=last)
+    return Seam(segment_label(neighbour.segment), lines) if lines else None
 
 
 def _max_prior_captions(director_cfg: dict) -> int:
@@ -91,18 +89,16 @@ def _max_prior_captions(director_cfg: dict) -> int:
 def _build_overview_context(
     summary: Path | None,
     plan: Path | None,
-    stem: str | None,
+    segment: Segment,
     *,
-    all_stems: list[str] | None = None,
+    all_segments: list[Segment] | None = None,
     prior_captions: list[str] | None = None,
     max_prior_captions: int = 0,
     seam_before: Seam | None = None,
     seam_after: Seam | None = None,
 ) -> str:
     """Load summary/plan artifacts (tolerating missing/empty) and render the
-    cross-video context for this video's stem.  Returns ``""`` if unavailable."""
-    if not stem:
-        return ""
+    cross-video context for this segment.  Returns ``""`` if unavailable."""
     project_summary = ProjectSummary(summary="", parts=[])
     if summary and summary.is_file():
         project_summary = summary_from_dict(json.loads(summary.read_text(encoding="utf-8")))
@@ -112,8 +108,8 @@ def _build_overview_context(
     return build_director_context(
         project_summary,
         directions,
-        stem,
-        all_stems=all_stems,
+        segment,
+        all_segments=all_segments,
         prior_captions=prior_captions,
         max_prior_captions=max_prior_captions,
         seam_before=seam_before,
@@ -121,69 +117,79 @@ def _build_overview_context(
     )
 
 
+def _slice(values: list | None, first: int, last: int) -> list | None:
+    return None if values is None else values[first - 1 : last]
+
+
 def run_director(
     edits_txt: Path,
-    output: Path,
     cfg: dict,
     *,
+    segment: Segment,
+    all_segments: list[Segment] | None = None,
     summary: Path | None = None,
     plan: Path | None = None,
-    stem: str | None = None,
     json_path: Path | None = None,
     gaps: Path | None = None,
     cuts_txt: Path | None = None,
-    all_stems: list[str] | None = None,
-    prior_director_paths: list[Path] | None = None,
-    before_edits: Path | None = None,
-    after_edits: Path | None = None,
+    prior_captions: list[str] | None = None,
+    before: Neighbour | None = None,
+    after: Neighbour | None = None,
     recorder: Recorder = NULL_RECORDER,
-) -> None:
+) -> DirectorResult:
+    """One LLM call over one segment.  Returns its ops and whether it succeeded.
+
+    Nothing is written here: a source split across several segments has its ops
+    merged by the orchestrator and written once, so a partially edited
+    ``{stem}_director.json`` can never reach disk.
+    """
     director_cfg = cfg["director"]
-    edit_lines = edits_txt.read_text(encoding="utf-8").splitlines()
-    unit = stem or output.stem.replace("_director", "")
+    all_lines = edits_txt.read_text(encoding="utf-8").splitlines()
+    first, last = segment.lines or (1, len(all_lines))
+    edit_lines = all_lines[first - 1 : last]
+    unit = segment_unit(segment)
 
     if not director_cfg.get("enabled", False):
-        logging.info("director: disabled, writing empty op list")
-        ops = []
-    else:
-        seam_count = _seam_line_count(director_cfg)
-        overview_context = _build_overview_context(
-            summary,
-            plan,
-            stem,
-            all_stems=all_stems,
-            prior_captions=_prior_captions(prior_director_paths),
-            max_prior_captions=_max_prior_captions(director_cfg),
-            seam_before=_seam(before_edits, seam_count, last=True),
-            seam_after=_seam(after_edits, seam_count, last=False),
-        )
-        seg_times = None
-        if json_path and json_path.is_file():
-            try:
-                seg_times = segment_times(json.loads(json_path.read_text(encoding="utf-8")))
-            except (ValueError, OSError):
-                logging.warning("director: could not read --json %s", json_path)
-        silences = None
-        if seg_times and cuts_txt and Path(cuts_txt).is_file():
-            silences = segment_silences(seg_times, read_cuts(Path(cuts_txt)))
-        gap_list = load_gaps(gaps)
-        logging.info("director: analysing %d line(s) with LLM", len(edit_lines))
-        ops = generate_director_ops(
-            edit_lines,
-            apply_brief(director_cfg, cfg),
-            call_llm=director_llm_mod._call_llm,
-            overview_context=overview_context,
-            recorder=recorder,
-            unit=unit,
-            seg_times=seg_times,
-            gaps=gap_list,
-            silences=silences,
-        )
-        logging.info("director: %d operation(s)", len(ops))
+        logging.info("director: disabled, no ops for %s", unit)
+        return DirectorResult([], ok=True)
 
-    output.parent.mkdir(parents=True, exist_ok=True)
-    output.write_text(
-        json.dumps(ops_to_dict(ops), ensure_ascii=False, indent=2) + "\n",
-        encoding="utf-8",
+    seam_count = _seam_line_count(director_cfg)
+    overview_context = _build_overview_context(
+        summary,
+        plan,
+        segment,
+        all_segments=all_segments,
+        prior_captions=prior_captions,
+        max_prior_captions=_max_prior_captions(director_cfg),
+        seam_before=_seam(before, seam_count, last=True),
+        seam_after=_seam(after, seam_count, last=False),
     )
-    logging.info("director: wrote %s", output)
+    seg_times = None
+    if json_path and json_path.is_file():
+        try:
+            seg_times = segment_times(json.loads(json_path.read_text(encoding="utf-8")))
+        except (ValueError, OSError):
+            logging.warning("director: could not read --json %s", json_path)
+    silences = None
+    if seg_times and cuts_txt and Path(cuts_txt).is_file():
+        silences = segment_silences(seg_times, read_cuts(Path(cuts_txt)))
+    # Gaps are anchored against the WHOLE source's times and then restricted to
+    # this segment, so one anchoring rule serves a whole source and a slice of
+    # one alike.
+    gap_list = anchor_gaps(load_gaps(gaps), seg_times or [], segment.lines) if seg_times else []
+
+    logging.info("director: analysing %s (%d line(s)) with LLM", unit, len(edit_lines))
+    result = generate_director_ops(
+        edit_lines,
+        apply_brief(director_cfg, cfg),
+        call_llm=director_llm_mod._call_llm,
+        overview_context=overview_context,
+        recorder=recorder,
+        unit=unit,
+        seg_times=_slice(seg_times, first, last),
+        anchored_gaps=gap_list,
+        silences=_slice(silences, first, last),
+        first_line=first,
+    )
+    logging.info("director: %s -> %d operation(s)", unit, len(result.ops))
+    return result

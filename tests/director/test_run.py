@@ -5,24 +5,20 @@ from __future__ import annotations
 import json
 
 import nagare_clip.director.run as director_run
-from nagare_clip.director.director_llm import generate_director_ops
+from nagare_clip.director.context import Neighbour
+from nagare_clip.director.director_llm import DirectorResult, generate_director_ops, ops_to_dict
+from nagare_clip.order import Segment
 
 
 def test_disabled_writes_empty_ops(tmp_path):
     """When director.enabled is False, write empty ops."""
     edits = tmp_path / "clip_edits.txt"
     edits.write_text("あ\nい\n", encoding="utf-8")
-    out = tmp_path / "clip_director.json"
-
     cfg = {"director": {"enabled": False}}
-    director_run.run_director(
-        edits_txt=edits,
-        output=out,
-        cfg=cfg,
-    )
+    result = director_run.run_director(edits_txt=edits, cfg=cfg, segment=Segment("clip", None))
 
-    data = json.loads(out.read_text(encoding="utf-8"))
-    assert data == {"ops": []}
+    assert result.ops == []
+    assert result.ok is True
 
 
 def test_enabled_writes_parsed_ops(monkeypatch, tmp_path):
@@ -41,17 +37,10 @@ def test_enabled_writes_parsed_ops(monkeypatch, tmp_path):
 
     edits = tmp_path / "clip_edits.txt"
     edits.write_text("あい\nうえ\n", encoding="utf-8")
-    out = tmp_path / "clip_director.json"
-
     cfg = {"director": {"enabled": True}}
-    director_run.run_director(
-        edits_txt=edits,
-        output=out,
-        cfg=cfg,
-    )
+    result = director_run.run_director(edits_txt=edits, cfg=cfg, segment=Segment("clip", None))
 
-    data = json.loads(out.read_text(encoding="utf-8"))
-    assert data["ops"] == [{"type": "cut", "lines": [1, 2], "note": "boring"}]
+    assert ops_to_dict(result.ops)["ops"] == [{"type": "cut", "lines": [1, 2], "note": "boring"}]
 
 
 def test_overview_context_injected_for_stem(monkeypatch, tmp_path):
@@ -77,22 +66,19 @@ def test_overview_context_injected_for_stem(monkeypatch, tmp_path):
 
     def fake(lines, c, overview_context="", **kw):
         captured["ctx"] = overview_context
-        return []
+        return DirectorResult([])
 
     monkeypatch.setattr(director_run, "generate_director_ops", fake)
 
     edits = tmp_path / "clip_edits.txt"
     edits.write_text("あい\nうえ\n", encoding="utf-8")
-    out = tmp_path / "clip_director.json"
-
     cfg = {"director": {"enabled": True}}
     director_run.run_director(
         edits_txt=edits,
-        output=out,
         cfg=cfg,
         summary=summary,
         plan=plan,
-        stem="clip",
+        segment=Segment("clip", None),
     )
 
     assert "Project overview text" in captured["ctx"]
@@ -119,21 +105,18 @@ def test_json_passes_seg_times(monkeypatch, tmp_path):
 
     def fake(lines, c, overview_context="", seg_times=None, **kw):
         captured["seg_times"] = seg_times
-        return []
+        return DirectorResult([])
 
     monkeypatch.setattr(director_run, "generate_director_ops", fake)
 
     edits = tmp_path / "clip_edits.txt"
     edits.write_text("あい\nうえ\n", encoding="utf-8")
-    out = tmp_path / "clip_director.json"
-
     cfg = {"director": {"enabled": True}}
     director_run.run_director(
         edits_txt=edits,
-        output=out,
         cfg=cfg,
         json_path=js,
-        stem="clip",
+        segment=Segment("clip", None),
     )
 
     assert captured["seg_times"] == [(1.0, 3.0), (4.0, 6.5)]
@@ -145,20 +128,14 @@ def test_missing_json_passes_none_seg_times(monkeypatch, tmp_path):
 
     def fake(lines, c, overview_context="", seg_times=None, **kw):
         captured["seg_times"] = seg_times
-        return []
+        return DirectorResult([])
 
     monkeypatch.setattr(director_run, "generate_director_ops", fake)
 
     edits = tmp_path / "clip_edits.txt"
     edits.write_text("あい\nうえ\n", encoding="utf-8")
-    out = tmp_path / "clip_director.json"
-
     cfg = {"director": {"enabled": True}}
-    director_run.run_director(
-        edits_txt=edits,
-        output=out,
-        cfg=cfg,
-    )
+    director_run.run_director(edits_txt=edits, cfg=cfg, segment=Segment("clip", None))
 
     assert captured["seg_times"] is None
 
@@ -190,9 +167,8 @@ def test_run_director_annotates_the_transcript_from_the_gaps_file(tmp_path, monk
     monkeypatch.setattr(dl, "_call_llm", fake_llm)
     director_run.run_director(
         edits,
-        tmp_path / "a_director.json",
         {"director": {"enabled": True, "prompt": "P", "max_retries": 0}},
-        stem="a",
+        segment=Segment("a", None),
         json_path=jsonp,
         gaps=gapsp,
     )
@@ -214,9 +190,8 @@ def test_run_director_without_a_gaps_file_is_unchanged(tmp_path, monkeypatch):
     monkeypatch.setattr(dl, "_call_llm", fake_llm)
     director_run.run_director(
         edits,
-        tmp_path / "a_director.json",
         {"director": {"enabled": True, "prompt": "P", "max_retries": 0}},
-        stem="a",
+        segment=Segment("a", None),
         gaps=tmp_path / "missing_gaps.json",
     )
     assert seen["user"] == "1: いち\n2: に"
@@ -247,9 +222,8 @@ def test_run_director_reads_cuts_txt_for_silence_brackets(tmp_path, monkeypatch)
     monkeypatch.setattr(dl, "_call_llm", fake_llm)
     director_run.run_director(
         edits,
-        tmp_path / "v_director.json",
         {"director": {"enabled": True, "prompt": "p", "max_retries": 0}},
-        stem="v",
+        segment=Segment("v", None),
         json_path=jsn,
         cuts_txt=cuts,
     )
@@ -272,12 +246,11 @@ def test_project_brief_appended_to_director_prompt(monkeypatch, tmp_path):
     monkeypatch.setattr(dl, "_call_llm", fake_llm)
     director_run.run_director(
         edits,
-        tmp_path / "v_director.json",
         {
             "director": {"enabled": True, "prompt": "P", "max_retries": 0},
             "project": {"audience": "DIY viewers"},
         },
-        stem="v",
+        segment=Segment("v", None),
     )
     assert seen["system"] == (
         "P\n\nEditorial brief (applies to the whole project; follow it when deciding "
@@ -287,9 +260,8 @@ def test_project_brief_appended_to_director_prompt(monkeypatch, tmp_path):
     seen.clear()
     director_run.run_director(
         edits,
-        tmp_path / "v_director.json",
         {"director": {"enabled": True, "prompt": "P", "max_retries": 0}},
-        stem="v",
+        segment=Segment("v", None),
     )
     assert seen["system"] == "P"
 
@@ -322,7 +294,7 @@ def _capture_ctx(monkeypatch):
 
     def fake(lines, c, overview_context="", **kw):
         captured["ctx"] = overview_context
-        return []
+        return DirectorResult([])
 
     monkeypatch.setattr(director_run, "generate_director_ops", fake)
     return captured
@@ -334,93 +306,53 @@ def _run(tmp_path, cfg_extra=None, **kwargs):
     cfg = {"director": {"enabled": True, **(cfg_extra or {})}}
     director_run.run_director(
         edits_txt=edits,
-        output=tmp_path / "b_director.json",
         cfg=cfg,
         summary=_summary_file(tmp_path),
-        stem="b",
+        segment=Segment("b", None),
         **kwargs,
     )
 
 
 def test_all_stems_puts_the_video_in_the_finished_timeline(monkeypatch, tmp_path):
     captured = _capture_ctx(monkeypatch)
-    _run(tmp_path, all_stems=["a", "b", "c"])
-    assert 'This video ("b") — video 2 of 3:' in captured["ctx"]
+    _run(tmp_path, all_segments=[Segment("a", None), Segment("b", None), Segment("c", None)])
+    assert 'This segment ("b") — segment 2 of 3:' in captured["ctx"]
     assert "Earlier in the finished video (already edited):\n- 1. a" in captured["ctx"]
 
 
-def test_prior_director_files_supply_the_captions_already_shown(monkeypatch, tmp_path):
+def test_the_captions_already_shown_reach_the_context(monkeypatch, tmp_path):
     captured = _capture_ctx(monkeypatch)
-    prior = _director_file(
+    _run(
         tmp_path,
-        "a",
-        {"type": "overlay", "lines": [900, 900], "text": "前回の装置", "duration": 3.0},
-        {"type": "timelapse", "lines": [901, 950], "factor": 8.0, "text": "配管作業"},
-        {"type": "cut", "lines": [960, 970]},
+        all_segments=[Segment("a", None), Segment("b", None), Segment("c", None)],
+        prior_captions=["前回の装置", "配管作業"],
     )
-    _run(tmp_path, all_stems=["a", "b", "c"], prior_director_paths=[prior])
     assert (
         "Captions already shown earlier in the finished video:\n- 前回の装置\n- 配管作業"
         in captured["ctx"]
     )
 
 
-def test_a_missing_prior_file_degrades_to_the_rest(monkeypatch, tmp_path):
-    """A single-source re-run may have only some of the earlier files on disk."""
+def test_no_prior_captions_renders_no_caption_block(monkeypatch, tmp_path):
     captured = _capture_ctx(monkeypatch)
-    prior = _director_file(
-        tmp_path, "a", {"type": "overlay", "lines": [1, 1], "text": "残った", "duration": 2.0}
-    )
     _run(
         tmp_path,
-        all_stems=["a", "b", "c"],
-        prior_director_paths=[tmp_path / "nope_director.json", prior],
+        all_segments=[Segment("a", None), Segment("b", None), Segment("c", None)],
+        prior_captions=[],
     )
-    assert "- 残った" in captured["ctx"]
-
-
-def test_an_unreadable_prior_file_is_skipped(monkeypatch, tmp_path):
-    captured = _capture_ctx(monkeypatch)
-    broken = tmp_path / "broken_director.json"
-    broken.write_text("{not json", encoding="utf-8")
-    good = _director_file(
-        tmp_path, "a", {"type": "overlay", "lines": [1, 1], "text": "生き残り", "duration": 2.0}
-    )
-    _run(tmp_path, all_stems=["a", "b", "c"], prior_director_paths=[broken, good])
-    assert "- 生き残り" in captured["ctx"]
-
-
-def test_no_prior_files_renders_no_caption_block(monkeypatch, tmp_path):
-    captured = _capture_ctx(monkeypatch)
-    _run(tmp_path, all_stems=["a", "b", "c"], prior_director_paths=[])
     assert "Captions already shown" not in captured["ctx"]
 
 
 def test_max_prior_captions_config_caps_the_list(monkeypatch, tmp_path):
     captured = _capture_ctx(monkeypatch)
-    prior = _director_file(
-        tmp_path,
-        "a",
-        {"type": "overlay", "lines": [1, 1], "text": "古い", "duration": 2.0},
-        {"type": "overlay", "lines": [2, 2], "text": "新しい", "duration": 2.0},
-    )
     _run(
         tmp_path,
         cfg_extra={"max_prior_captions": 1},
-        all_stems=["a", "b", "c"],
-        prior_director_paths=[prior],
+        all_segments=[Segment("a", None), Segment("b", None), Segment("c", None)],
+        prior_captions=["古い", "新しい"],
     )
     assert "- 新しい" in captured["ctx"]
     assert "- 古い" not in captured["ctx"]
-
-
-def test_captions_are_deduped_across_videos(monkeypatch, tmp_path):
-    captured = _capture_ctx(monkeypatch)
-    same = {"type": "overlay", "lines": [1, 1], "text": "同じ", "duration": 2.0}
-    first = _director_file(tmp_path, "a", same)
-    second = _director_file(tmp_path, "z", same)
-    _run(tmp_path, all_stems=["a", "z", "b"], prior_director_paths=[first, second])
-    assert captured["ctx"].count("- 同じ") == 1
 
 
 # --- seam context: the neighbouring videos' lines at the two joins ------------
@@ -436,20 +368,29 @@ def test_the_neighbours_lines_reach_the_context(monkeypatch, tmp_path):
     captured = _capture_ctx(monkeypatch)
     before = _edits_file(tmp_path, "a", "また続きになります", "今日は終わりじゃあねー")
     after = _edits_file(tmp_path, "c", "こんにちはデジナです", "紹介していきます")
-    _run(tmp_path, all_stems=["a", "b", "c"], before_edits=before, after_edits=after)
+    _run(
+        tmp_path,
+        all_segments=[Segment("a", None), Segment("b", None), Segment("c", None)],
+        before=Neighbour(Segment("a", None), before),
+        after=Neighbour(Segment("c", None), after),
+    )
     assert (
-        "Immediately BEFORE this video in the finished video (a, its last lines):"
+        "Immediately BEFORE this segment in the finished video (a, its last lines):"
         in (captured["ctx"])
     )
     assert "- 今日は終わりじゃあねー" in captured["ctx"]
-    assert "Immediately AFTER this video (c, its first lines):" in captured["ctx"]
+    assert "Immediately AFTER this segment (c, its first lines):" in captured["ctx"]
     assert "- こんにちはデジナです" in captured["ctx"]
 
 
 def test_seam_lines_defaults_to_three(monkeypatch, tmp_path):
     captured = _capture_ctx(monkeypatch)
     before = _edits_file(tmp_path, "a", "1行目", "2行目", "3行目", "4行目")
-    _run(tmp_path, all_stems=["a", "b"], before_edits=before)
+    _run(
+        tmp_path,
+        all_segments=[Segment("a", None), Segment("b", None)],
+        before=Neighbour(Segment("a", None), before),
+    )
     assert "1行目" not in captured["ctx"]
     assert "- 2行目" in captured["ctx"]
     assert "- 4行目" in captured["ctx"]
@@ -458,7 +399,12 @@ def test_seam_lines_defaults_to_three(monkeypatch, tmp_path):
 def test_seam_lines_config_sets_how_many(monkeypatch, tmp_path):
     captured = _capture_ctx(monkeypatch)
     before = _edits_file(tmp_path, "a", "古い行", "最後の行")
-    _run(tmp_path, cfg_extra={"seam_lines": 1}, all_stems=["a", "b"], before_edits=before)
+    _run(
+        tmp_path,
+        cfg_extra={"seam_lines": 1},
+        all_segments=[Segment("a", None), Segment("b", None)],
+        before=Neighbour(Segment("a", None), before),
+    )
     assert "- 最後の行" in captured["ctx"]
     assert "古い行" not in captured["ctx"]
 
@@ -466,7 +412,12 @@ def test_seam_lines_config_sets_how_many(monkeypatch, tmp_path):
 def test_seam_lines_zero_disables_the_block(monkeypatch, tmp_path):
     captured = _capture_ctx(monkeypatch)
     before = _edits_file(tmp_path, "a", "じゃあねー")
-    _run(tmp_path, cfg_extra={"seam_lines": 0}, all_stems=["a", "b"], before_edits=before)
+    _run(
+        tmp_path,
+        cfg_extra={"seam_lines": 0},
+        all_segments=[Segment("a", None), Segment("b", None)],
+        before=Neighbour(Segment("a", None), before),
+    )
     assert "Immediately BEFORE" not in captured["ctx"]
 
 
@@ -476,9 +427,9 @@ def test_a_missing_neighbour_file_degrades_to_nothing(monkeypatch, tmp_path):
     after = _edits_file(tmp_path, "c", "つづきです")
     _run(
         tmp_path,
-        all_stems=["a", "b", "c"],
-        before_edits=tmp_path / "nope_edits.txt",
-        after_edits=after,
+        all_segments=[Segment("a", None), Segment("b", None), Segment("c", None)],
+        before=Neighbour(Segment("a", None), tmp_path / "nope_edits.txt"),
+        after=Neighbour(Segment("c", None), after),
     )
     assert "Immediately BEFORE" not in captured["ctx"]
     assert "- つづきです" in captured["ctx"]
@@ -486,5 +437,5 @@ def test_a_missing_neighbour_file_degrades_to_nothing(monkeypatch, tmp_path):
 
 def test_no_neighbours_renders_no_seam_block(monkeypatch, tmp_path):
     captured = _capture_ctx(monkeypatch)
-    _run(tmp_path, all_stems=["a", "b", "c"])
+    _run(tmp_path, all_segments=[Segment("a", None), Segment("b", None), Segment("c", None)])
     assert "Immediately" not in captured["ctx"]

@@ -17,6 +17,8 @@ from nagare_clip.order import (
     manifest_to_dict,
     normalise,
     read_manifest,
+    segment_label,
+    segment_unit,
     segments_from_dict,
     segments_to_dict,
     validate_segments,
@@ -181,3 +183,14 @@ class TestManifest:
         path = tmp_path / MANIFEST_NAME
         path.write_text("{not json", encoding="utf-8")
         assert read_manifest(path) == []
+
+
+class TestLabels:
+    def test_a_whole_source_segment_is_labelled_by_its_stem_alone(self):
+        # Identity keeps today's report filenames and today's prompt wording.
+        assert segment_label(Segment("a", None)) == "a"
+        assert segment_unit(Segment("a", None)) == "a"
+
+    def test_a_partial_segment_carries_its_range(self):
+        assert segment_label(Segment("a", (31, 83))) == "a [31-83]"
+        assert segment_unit(Segment("a", (31, 83))) == "a_31-83"

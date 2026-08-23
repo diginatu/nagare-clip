@@ -55,6 +55,28 @@ class TimelineSegment:
     lines: tuple[int, int] | None = None
 
 
+def segment_label(segment: Segment) -> str:
+    """How a segment is named to a human or an LLM.
+
+    A whole-source segment is its stem alone, so an identity order reads exactly
+    as it did before segments existed; a partial one carries its range.
+    """
+    if segment.lines is None:
+        return segment.stem
+    return f"{segment.stem} [{segment.lines[0]}-{segment.lines[1]}]"
+
+
+def segment_unit(segment: Segment) -> str:
+    """The ``llm_report`` unit name for one segment's call.
+
+    Same rule as :func:`segment_label` in a filename-safe form, so identity runs
+    keep the report filenames they have always had.
+    """
+    if segment.lines is None:
+        return segment.stem
+    return f"{segment.stem}_{segment.lines[0]}-{segment.lines[1]}"
+
+
 def identity_segments(stems: Sequence[str]) -> list[Segment]:
     """Shooting order, expressed as segments: one whole source each."""
     return [Segment(stem, None) for stem in stems]

@@ -16,7 +16,7 @@ from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
 from typing import Any
 
-from nagare_clip.gap_context.context import anchor_gaps, annotate_numbered_transcript
+from nagare_clip.gap_context.context import annotate_numbered_transcript
 from nagare_clip.gap_context.gaps import Gap
 from nagare_clip.intervals.sync_json import (
     CUT_TAG_RE,
@@ -96,11 +96,18 @@ def keep_limit_note(max_keep_lines: int) -> str:
     )
 
 
-def _coerce_lines(value: Any, num_lines: int | None) -> tuple[int, int] | None:
+def _coerce_lines(value: Any, num_lines: int | None, first_line: int = 1) -> tuple[int, int] | None:
     """Validate a ``lines`` value into a 1-based inclusive (start, end) range.
 
     ``num_lines`` of ``None`` drops the upper bound, for reading a *different*
     video's ``_director.json`` (whose transcript is not at hand).
+
+    ``first_line`` is the segment's first line in the SOURCE's numbering.  Line
+    numbers stay absolute across a split source — ``guided_edit`` and
+    ``intervals`` apply ops to the whole source file — so a segment starting at
+    line 31 accepts ops in ``[31, num_lines]`` and nothing outside it: an op
+    crossing a reorder boundary is unrepresentable rather than something to
+    detect and clip.
     """
     if isinstance(value, bool):  # bool is an int subclass; reject explicitly
         return None
@@ -114,7 +121,7 @@ def _coerce_lines(value: Any, num_lines: int | None) -> tuple[int, int] | None:
             return None
     else:
         return None
-    if not (1 <= start <= end):
+    if not (max(1, first_line) <= start <= end):
         return None
     if num_lines is not None and end > num_lines:
         return None
@@ -125,6 +132,7 @@ def _parse_op(
     raw: Any,
     num_lines: int | None,
     drops: list[str] | None = None,
+    first_line: int = 1,
 ) -> DirectorOp | None:
     def _drop(msg: str) -> None:
         logger.warning("Director op dropped: %s", msg)
@@ -137,7 +145,7 @@ def _parse_op(
     if op_type not in VALID_TYPES:
         _drop(f"unknown type {op_type!r}")
         return None
-    lines = _coerce_lines(raw.get("lines"), num_lines)
+    lines = _coerce_lines(raw.get("lines"), num_lines, first_line)
     if lines is None:
         _drop(f"bad lines {raw.get('lines')!r}")
         return None
@@ -268,6 +276,7 @@ def try_parse_director_response(
     num_lines: int,
     drops: list[str] | None = None,
     max_keep_lines: int = 0,
+    first_line: int = 1,
 ) -> list[DirectorOp] | None:
     """Parse the director LLM response, distinguishing failure from empty.
 
@@ -298,7 +307,7 @@ def try_parse_director_response(
 
     ops: list[DirectorOp] = []
     for raw in data["ops"]:
-        op = _parse_op(raw, num_lines, drops)
+        op = _parse_op(raw, num_lines, drops, first_line)
         if op is not None:
             ops.append(op)
     return _apply_keep_cap(_drop_off_menu_ops(ops, drops), max_keep_lines, drops)
@@ -368,15 +377,20 @@ def clean_for_display(edit_lines: list[str]) -> list[str]:
     return apply_patches_to_lines(stripped)
 
 
-def format_numbered_transcript(clean_lines: list[str]) -> str:
-    """Format clean lines as ``N: text`` (1-based), matching the filter LLM."""
-    return "\n".join(f"{i + 1}: {text}" for i, text in enumerate(clean_lines))
+def format_numbered_transcript(clean_lines: list[str], first_line: int = 1) -> str:
+    """Format clean lines as ``N: text``, matching the filter LLM.
+
+    *first_line* is where this slice starts in the source's own numbering, so a
+    segment beginning at line 31 presents its first line as ``31:``.
+    """
+    return "\n".join(f"{i + first_line}: {text}" for i, text in enumerate(clean_lines))
 
 
 def format_numbered_transcript_timed(
     clean_lines: list[str],
     seg_times: list[tuple[float | None, float | None]],
     silences: list[float] | None = None,
+    first_line: int = 1,
 ) -> str:
     """``N: text  [dur, gap]`` (1-based), gap = time to the next line.
 
@@ -401,7 +415,7 @@ def format_numbered_transcript_timed(
             if end is not None and nxt_start is not None:
                 gap = nxt_start - end
         bracket = format_dur_gap(dur, gap, sil)
-        out.append(f"{i + 1}: {text}  {bracket}".rstrip())
+        out.append(f"{i + first_line}: {text}  {bracket}".rstrip())
     return "\n".join(out)
 
 
@@ -425,6 +439,20 @@ def ops_to_dict(ops: list[DirectorOp]) -> dict[str, Any]:
     return {"ops": out}
 
 
+@dataclass(frozen=True)
+class DirectorResult:
+    """One segment's ops, and whether the call actually succeeded.
+
+    The two used to be indistinguishable: a failed call and a deliberate "no
+    edits here" both returned ``[]``, so continuing was the only safe move.
+    Separating them is what lets a settled failure fail the run instead of
+    letting one source pass through unedited into a finished video.
+    """
+
+    ops: list[DirectorOp]
+    ok: bool = True
+
+
 def generate_director_ops(
     edit_lines: list[str],
     cfg: dict[str, Any],
@@ -434,25 +462,32 @@ def generate_director_ops(
     recorder: Recorder = NULL_RECORDER,
     unit: str = "director",
     seg_times: list[tuple[float | None, float | None]] | None = None,
-    gaps: list[Gap] | None = None,
+    anchored_gaps: list[tuple[int, Gap]] | None = None,
     silences: list[float] | None = None,
-) -> list[DirectorOp]:
-    """Run the director LLM over the transcript and return validated ops.
+    first_line: int = 1,
+) -> DirectorResult:
+    """Run the director LLM over one segment's transcript and return its ops.
 
     Retries (config ``max_retries``) on an LLM exception or a hard parse
     failure, nudging temperature up each attempt.  A valid empty op list is
-    accepted without retry.  Returns ``[]`` after all attempts fail (graceful
-    no-op), so the pipeline proceeds with the unedited transcript.
+    accepted without retry and is ``ok`` — "no edits" is a real answer.  After
+    all attempts fail the result is ``ok=False`` with no ops, which the caller
+    treats as fatal.
+
+    ``first_line`` is this segment's first line in the source's own numbering:
+    the transcript is rendered from it and every op must fall inside the
+    segment.
 
     ``overview_context`` (from the summary/plan stages) is appended to the system
     prompt when non-empty; an empty string leaves the prompt unchanged.
 
-    ``gaps`` (from the gap_context stage) are anchored to the timed transcript
-    and inserted as indented, un-numbered ``[silent gap …]`` lines so the
-    director can issue a ``keep`` op over the adjacent lines to rescue a gap
-    worth keeping. Only applies when ``seg_times`` is also present (the
-    annotation needs anchor times); an empty/absent ``gaps`` leaves the user
-    content byte-identical to before this feature existed.
+    ``anchored_gaps`` (from the gap_context stage, already anchored by the
+    caller against the WHOLE source's times and restricted to this segment) are
+    inserted as indented, un-numbered ``[silent gap …]`` lines so the director
+    can issue a ``keep`` op over the adjacent lines to rescue a gap worth
+    keeping. Only applies when ``seg_times`` is also present (the annotation is
+    positional within the rendered transcript); an empty/absent value leaves the
+    user content byte-identical to before this feature existed.
 
     ``silences`` (per-line audio_silence overlap, same length as ``seg_times``)
     splits each bracket into speech/silence; ``None`` keeps the output
@@ -466,11 +501,13 @@ def generate_director_ops(
     if overview_context:
         system_prompt = f"{system_prompt}\n\n{overview_context}"
     if seg_times is not None and len(seg_times) == len(clean_lines):
-        user_content = format_numbered_transcript_timed(clean_lines, seg_times, silences=silences)
-        if gaps:
-            user_content = annotate_numbered_transcript(user_content, anchor_gaps(gaps, seg_times))
+        user_content = format_numbered_transcript_timed(
+            clean_lines, seg_times, silences=silences, first_line=first_line
+        )
+        if anchored_gaps:
+            user_content = annotate_numbered_transcript(user_content, anchored_gaps)
     else:
-        user_content = format_numbered_transcript(clean_lines)
+        user_content = format_numbered_transcript(clean_lines, first_line=first_line)
     messages = [
         {"role": "system", "content": system_prompt},
         {"role": "user", "content": user_content},
@@ -503,9 +540,10 @@ def generate_director_ops(
         drops: list[str] = []
         ops = try_parse_director_response(
             response,
-            num_lines=len(clean_lines),
+            num_lines=first_line + len(clean_lines) - 1,
             drops=drops,
             max_keep_lines=max_keep_lines,
+            first_line=first_line,
         )
         if ops is None:
             recorder.attempt(
@@ -537,7 +575,7 @@ def generate_director_ops(
             cfg=attempt_cfg,
         )
         recorder.flush_unit(unit, outcome=outcome, reason=reason)
-        return ops
+        return DirectorResult(ops, ok=True)
     recorder.flush_unit(unit, outcome=LLM_ERROR, reason=f"all {attempts} attempt(s) failed")
-    logger.warning("Director: all %d attempt(s) failed; proceeding with no ops", attempts)
-    return []
+    logger.error("Director: all %d attempt(s) failed for %r", attempts, unit)
+    return DirectorResult([], ok=False)

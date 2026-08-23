@@ -19,7 +19,13 @@ from nagare_clip.audio_silence.run import run_audio_silence
 from nagare_clip.blender.frames import ordered_sources
 from nagare_clip.blender.warnings_file import WARNINGS_FILENAME
 from nagare_clip.cut_report.report import build_cut_report
-from nagare_clip.director.director_llm import DirectorOp, collect_overlay_texts, ops_from_dict
+from nagare_clip.director.context import Neighbour
+from nagare_clip.director.director_llm import (
+    DirectorOp,
+    collect_overlay_texts,
+    ops_from_dict,
+    ops_to_dict,
+)
 from nagare_clip.director.run import run_director
 from nagare_clip.gap_context.describe import GapFrames
 from nagare_clip.gap_context.run import run_gap_context
@@ -41,9 +47,11 @@ from nagare_clip.order import (
     identity_segments,
     normalise,
     read_manifest,
+    segment_unit,
     validate_segments,
     write_manifest,
 )
+from nagare_clip.pipeline.errors import PipelineError
 from nagare_clip.pipeline.external import (
     build_blender_cmd,
     build_silencedetect_cmd,
@@ -490,54 +498,127 @@ def _plan_revise_run(ctx: PipelineContext) -> None:
 # --- director ----------------------------------------------------------------
 
 
+def _segment_ops(
+    ctx: PipelineContext, segment: Segment, done: dict[Segment, list[DirectorOp]]
+) -> list[DirectorOp]:
+    """One earlier segment's ops: from this run when it ran, else off disk.
+
+    A source this run is not processing still has its whole-source
+    ``_director.json`` on disk from an earlier run; filtering it to the
+    segment's line range is what makes "the captions shown before this point"
+    exact rather than approximate.  ``num_lines=None`` skips the range check —
+    those ops belong to another transcript.
+    """
+    if segment in done:
+        return done[segment]
+    path = ctx.stage_dir("director") / f"{segment.stem}_director.json"
+    if not path.is_file():
+        return []
+    try:
+        ops = ops_from_dict(json.loads(path.read_text(encoding="utf-8")), None)
+    except (ValueError, OSError):
+        logging.warning("director: could not read prior ops %s", path)
+        return []
+    if segment.lines is None:
+        return ops
+    first, last = segment.lines
+    return [op for op in ops if first <= op.lines[0] <= last]
+
+
+def _write_director_ops(ctx: PipelineContext, stem: str, ops: list[DirectorOp]) -> None:
+    """One source's merged ops, line-sorted, written once."""
+    path = ctx.stage_dir("director") / f"{stem}_director.json"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        json.dumps(ops_to_dict(sorted(ops, key=lambda op: op.lines)), ensure_ascii=False, indent=2)
+        + "\n",
+        encoding="utf-8",
+    )
+    logging.info("director: wrote %s (%d operation(s))", path, len(ops))
+
+
 def _director_run(ctx: PipelineContext) -> None:
+    """One LLM call per SEGMENT of the finished video.
+
+    The loop walks the whole project's order even when ``--source`` narrows the
+    run, and calls only for the segments this run owns: narrowing changes what
+    is processed, not what the finished video contains, so every segment keeps
+    its real position and its real neighbours.
+
+    A source's segments are merged in memory and written once, when its last
+    segment in the order completes.  Every file this run is about to rewrite is
+    deleted first, so a failure cannot leave a stale one standing as if it were
+    current.
+    """
     rec = _recorder(ctx, "director")
     rec.clear()
-    # The concatenation order of the whole project, not just of this run: a
-    # `--source` re-run still edits one slice of the same finished video, and the
-    # director is told which slice.  Falls back to the processed sources when the
-    # input dir yields nothing readable.
-    timeline_stems = project_stems(ctx.input_videos_dir) or ctx.stems
+    segments = _timeline_segments(ctx)
     director_dir = ctx.stage_dir("director")
     text_filter_dir = ctx.stage_dir("text_filter")
+    mine = set(ctx.stems)
 
-    def _neighbour(index: int, offset: int) -> Path | None:
-        """The transcript of the video playing right before/after this one.
+    def _edits(stem: str) -> Path:
+        return text_filter_dir / f"{stem}_edits.txt"
 
-        ``text_filter`` has already run for every source by the time the director
-        starts, so both sides can be read off disk — including the one that plays
-        *after* this video, whose ops do not exist yet.
-        """
+    def _neighbour(index: int, offset: int) -> Neighbour | None:
         n = index + offset
-        if index < 0 or not 0 <= n < len(timeline_stems):
+        if not 0 <= n < len(segments):
             return None
-        return text_filter_dir / f"{timeline_stems[n]}_edits.txt"
+        return Neighbour(segments[n], _edits(segments[n].stem))
 
+    # Nothing half-written survives: these are all about to be rewritten, and a
+    # file from a previous run was built under a different segmentation anyway.
+    for stem in mine:
+        path = director_dir / f"{stem}_director.json"
+        if path.is_file():
+            path.unlink()
+
+    # The last position in the order at which each source still has a segment,
+    # so its file is written as soon as it is complete rather than at the end.
+    last_index = {seg.stem: i for i, seg in enumerate(segments) if seg.stem in mine}
+    done: dict[Segment, list[DirectorOp]] = {}
+    pending: dict[str, list[DirectorOp]] = {stem: [] for stem in mine}
+    failed = False
     try:
-        for src in ctx.sources:
-            print(f"[director] Edit operations: {src.stem}")
-            # Every video playing earlier already has its ops on disk (this loop
-            # writes them in order), so their captions can be read back.
-            index = timeline_stems.index(src.stem) if src.stem in timeline_stems else -1
-            earlier = timeline_stems[:index] if index >= 0 else []
-            run_director(
-                text_filter_dir / f"{src.stem}_edits.txt",
-                ctx.stage_dir("director") / f"{src.stem}_director.json",
+        for index, segment in enumerate(segments):
+            if segment.stem not in mine:
+                continue
+            unit = segment_unit(segment)
+            print(f"[director] Edit operations: {unit}")
+            prior = collect_overlay_texts(
+                [op for earlier in segments[:index] for op in _segment_ops(ctx, earlier, done)]
+            )
+            result = run_director(
+                _edits(segment.stem),
                 ctx.cfg,
+                segment=segment,
+                all_segments=segments,
                 summary=ctx.stage_dir("summary") / "summary.json",
                 plan=_effective_plan_json(ctx),
-                stem=src.stem,
-                json_path=ctx.stage_dir("sentence_split") / f"{src.stem}.json",
-                gaps=ctx.stage_dir("gap_context") / f"{src.stem}_gaps.json",
-                cuts_txt=ctx.stage_dir("audio_silence") / f"{src.stem}_cuts.txt",
-                all_stems=timeline_stems,
-                prior_director_paths=[director_dir / f"{s}_director.json" for s in earlier],
-                before_edits=_neighbour(index, -1),
-                after_edits=_neighbour(index, 1),
+                json_path=ctx.stage_dir("sentence_split") / f"{segment.stem}.json",
+                gaps=ctx.stage_dir("gap_context") / f"{segment.stem}_gaps.json",
+                cuts_txt=ctx.stage_dir("audio_silence") / f"{segment.stem}_cuts.txt",
+                prior_captions=prior,
+                before=_neighbour(index, -1),
+                after=_neighbour(index, 1),
                 recorder=rec,
             )
+            if not result.ok:
+                failed = True
+                raise PipelineError(
+                    f"[director] {unit} failed after every retry; "
+                    f"{segment.stem}_director.json not written "
+                    "(re-run with --source "
+                    f"{segment.stem} --from-stage director --to-stage director)"
+                )
+            done[segment] = result.ops
+            pending[segment.stem].extend(result.ops)
+            if index == last_index.get(segment.stem):
+                _write_director_ops(ctx, segment.stem, pending[segment.stem])
     finally:
-        _write_divergence_note(ctx)
+        # A note describing ops that are not there is worse than no note.
+        if not failed:
+            _write_divergence_note(ctx)
         rec.rebuild_index()
 
 

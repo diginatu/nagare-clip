@@ -8,8 +8,10 @@ so ``summary`` can keep importing it without a cycle.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from pathlib import Path
 
 from nagare_clip.director.director_llm import clean_for_display
+from nagare_clip.order import Segment, segment_label
 from nagare_clip.plan.plan_llm import PartDirection
 from nagare_clip.summary.summarize import ProjectSummary
 
@@ -28,17 +30,33 @@ SEAM_NOTE = (
 
 @dataclass(frozen=True)
 class Seam:
-    """A neighbouring video's lines at the join with this one.
+    """A neighbouring SEGMENT's lines at the join with this one.
 
-    *lines* is that video's own text — its last lines on the BEFORE side, its
+    *lines* is that segment's own text — its last lines on the BEFORE side, its
     first ones on the AFTER side.  Text only, deliberately: a line number here
     would be the NEIGHBOUR's coordinate, and every op the director emits
     addresses its own transcript, so a number it copied out of the seam would
     silently edit an unrelated line of this video.
+
+    *label* names the neighbour the way :func:`order.segment_label` does, so a
+    join with another stretch of this very source reads as what it is.
     """
 
-    stem: str
+    label: str
     lines: list[str]
+
+
+@dataclass(frozen=True)
+class Neighbour:
+    """The segment playing next to this one, and where to read its text.
+
+    Both sides are readable because ``text_filter`` has run for every source
+    before ``director`` starts — unlike the prior captions, which can only look
+    backwards.
+    """
+
+    segment: Segment
+    edits: Path
 
 
 def seam_lines(edit_lines: list[str], count: int, *, last: bool) -> list[str]:
@@ -61,29 +79,53 @@ def _seam_block(before: Seam | None, after: Seam | None) -> list[str]:
     out = ["", SEAM_NOTE]
     if before and before.lines:
         out.append(
-            f"Immediately BEFORE this video in the finished video ({before.stem}, its last lines):"
+            "Immediately BEFORE this segment in the finished video "
+            f"({before.label}, its last lines):"
         )
         out.extend(f"- {text}" for text in before.lines)
     if after and after.lines:
-        out.append(f"Immediately AFTER this video ({after.stem}, its first lines):")
+        out.append(f"Immediately AFTER this segment ({after.label}, its first lines):")
         out.extend(f"- {text}" for text in after.lines)
     return out
 
 
-def _sibling_text(stem: str, project_summary: ProjectSummary) -> str:
-    """One line about another video: its own summary, else its first part's."""
-    own = project_summary.video_summaries.get(stem)
-    if own:
-        return own
-    for p in project_summary.parts:
-        if p.stem == stem:
-            return p.summary
+def _overlaps(part, segment: Segment) -> bool:
+    """Does *part* cover any line this segment plays?"""
+    if part.stem != segment.stem:
+        return False
+    if segment.lines is None:
+        return True
+    return part.lines[0] <= segment.lines[1] and part.lines[1] >= segment.lines[0]
+
+
+def _clipped(part_lines: tuple[int, int], segment: Segment) -> tuple[int, int]:
+    """A part's range as this segment sees it — it plays no more than its own."""
+    if segment.lines is None:
+        return part_lines
+    return (max(part_lines[0], segment.lines[0]), min(part_lines[1], segment.lines[1]))
+
+
+def _sibling_text(segment: Segment, project_summary: ProjectSummary) -> str:
+    """One line about another segment.
+
+    A whole-source segment keeps the video summary it always had; a partial one
+    is described by the parts it actually covers, since a video summary would
+    describe footage playing somewhere else in the finished video.
+    """
+    if segment.lines is None:
+        own = project_summary.video_summaries.get(segment.stem)
+        if own:
+            return own
+    covered = [p.summary for p in project_summary.parts if _overlaps(p, segment) and p.summary]
+    if covered:
+        return " / ".join(covered)
     return ""
 
 
-def _sibling_entry(index: int, stem: str, project_summary: ProjectSummary) -> str:
-    text = _sibling_text(stem, project_summary)
-    return f"- {index}. {stem}: {text}" if text else f"- {index}. {stem}"
+def _sibling_entry(index: int, segment: Segment, project_summary: ProjectSummary) -> str:
+    label = segment_label(segment)
+    text = _sibling_text(segment, project_summary)
+    return f"- {index}. {label}: {text}" if text else f"- {index}. {label}"
 
 
 def _directions_by_part(
@@ -114,48 +156,52 @@ def _directions_by_part(
 def build_director_context(
     project_summary: ProjectSummary,
     directions: list[PartDirection],
-    stem: str,
+    segment: Segment,
     *,
-    all_stems: list[str] | None = None,
+    all_segments: list[Segment] | None = None,
     prior_captions: list[str] | None = None,
     max_prior_captions: int = 0,
     seam_before: Seam | None = None,
     seam_after: Seam | None = None,
 ) -> str:
-    """Render the context for one video: global summary + this video's parts
-    (line ranges, summaries, rough directions) + the sibling videos.
+    """Render the context for one SEGMENT: global summary + the parts this
+    segment covers (line ranges, summaries, rough directions) + the sibling
+    segments.
 
-    ``all_stems`` is the order the sources are concatenated in (the orchestrator's
-    source order, which is what the blender stage lays out).  When it is given and
-    contains *stem* — and the project has more than one video — the siblings are
-    split into what plays BEFORE and AFTER this one and this video's header states
-    its index, so a whole-project instruction in the editorial brief ("explain the
-    rig early on") is readable as being about one particular video rather than
-    about every video independently.  Without it the flat ``Other videos:`` list is
-    rendered exactly as before.
+    ``all_segments`` is the finished video's playback order.  When it is given
+    and contains *segment* — and the project has more than one segment — the
+    siblings are split into what plays BEFORE and AFTER this one and the header
+    states its index, so a whole-project instruction in the editorial brief
+    ("explain the rig early on") is readable as being about one particular
+    stretch rather than about every video independently.  The unit is the
+    segment, not the source: "video 3 of 7" stops meaning anything the moment
+    one source plays at two places in the timeline, and another stretch of this
+    very source is a neighbour like any other footage.
 
     ``prior_captions`` are the captions the director already committed on the
-    videos playing earlier (their ``_director.json`` is written before this call),
-    so an explanation is not repeated in every video.  ``max_prior_captions``
-    keeps only that many of the most recent ones (``0`` = no limit).
+    segments playing earlier, so an explanation is not repeated.
+    ``max_prior_captions`` keeps only that many of the most recent ones
+    (``0`` = no limit).
 
-    ``seam_before``/``seam_after`` are the neighbouring videos' lines at the two
-    joins (see :class:`Seam`); either side may be absent (the first video has no
-    predecessor, the last no successor, and a neighbour's ``_edits.txt`` may be
-    missing on a re-run), and with neither the block is byte-identical to before.
+    ``seam_before``/``seam_after`` are the neighbouring segments' lines at the
+    two joins (see :class:`Seam`); either side may be absent (the first segment
+    has no predecessor, the last no successor, and a neighbour's ``_edits.txt``
+    may be missing on a re-run), and with neither the block is byte-identical to
+    before.
 
     Returns ``""`` when there is nothing to inject (so the director prompt is
     unchanged when the overview is empty).
     """
+    stem = segment.stem
     parts = project_summary.parts
     video_summaries = project_summary.video_summaries
-    own = [p for p in parts if p.stem == stem]
+    own = [p for p in parts if _overlaps(p, segment)]
 
-    # A single-video project has no timeline order worth explaining.
-    stems = list(all_stems or [])
-    positioned = len(stems) > 1 and stem in stems
-    index = stems.index(stem) + 1 if positioned else 0
-    total = len(stems)
+    # A single-segment project has no timeline order worth explaining.
+    order = list(all_segments or [])
+    positioned = len(order) > 1 and segment in order
+    index = order.index(segment) + 1 if positioned else 0
+    total = len(order)
     captions = list(prior_captions or [])
     if max_prior_captions > 0:
         captions = captions[-max_prior_captions:]
@@ -164,7 +210,7 @@ def build_director_context(
     if not project_summary.summary and not own and not positioned and not captions and not seams:
         return ""
 
-    dirs_by_part = _directions_by_part(own, directions)
+    dirs_by_part = _directions_by_part(own, [d for d in directions if _overlaps(d, segment)])
 
     out: list[str] = ["Project context (all videos):"]
     if project_summary.summary:
@@ -172,42 +218,44 @@ def build_director_context(
 
     if positioned:
         out.append(
-            "All videos below are concatenated into ONE finished video in this "
-            f"order; you are editing only video {index} of them."
+            "All segments below are concatenated into ONE finished video in this "
+            f"order; you are editing only segment {index} of them."
         )
 
     if own or positioned:
-        header = f'This video ("{stem}")'
+        header = f'This segment ("{segment_label(segment)}")'
         if positioned:
-            header += f" — video {index} of {total}"
+            header += f" — segment {index} of {total}"
             if index == 1:
                 header += ", the FIRST in the finished timeline"
             elif index == total:
                 header += ", the LAST in the finished timeline"
         out.append(header + ":")
-        own_summary = video_summaries.get(stem, "")
+        own_summary = video_summaries.get(stem, "") if segment.lines is None else ""
         if own_summary:
             out.append(f"Summary: {own_summary}")
         for i, p in enumerate(own):
-            line = f"- lines {p.lines[0]}-{p.lines[1]}: {p.summary}"
+            lines = _clipped(p.lines, segment)
+            line = f"- lines {lines[0]}-{lines[1]}: {p.summary}"
             part_dirs = dirs_by_part.get(i, [])
-            if len(part_dirs) == 1 and part_dirs[0].lines == p.lines:
+            if len(part_dirs) == 1 and _clipped(part_dirs[0].lines, segment) == lines:
                 out.append(line + f" → direction: {part_dirs[0].direction}")
                 continue
             if part_dirs:
                 # plan split this part: each direction states the lines it covers.
                 out.append(line + " → directions:")
                 for d in part_dirs:
-                    out.append(f"    - lines {d.lines[0]}-{d.lines[1]}: {d.direction}")
+                    clipped = _clipped(d.lines, segment)
+                    out.append(f"    - lines {clipped[0]}-{clipped[1]}: {d.direction}")
             else:
                 out.append(line)
 
     if positioned:
         earlier = [
-            _sibling_entry(i + 1, s, project_summary) for i, s in enumerate(stems[: index - 1])
+            _sibling_entry(i + 1, s, project_summary) for i, s in enumerate(order[: index - 1])
         ]
         later = [
-            _sibling_entry(index + 1 + i, s, project_summary) for i, s in enumerate(stems[index:])
+            _sibling_entry(index + 1 + i, s, project_summary) for i, s in enumerate(order[index:])
         ]
         out.append("")
         out.append("Earlier in the finished video (already edited):")
@@ -215,7 +263,7 @@ def build_director_context(
         out.append("Later in the finished video:")
         out.extend(later or ["- (none)"])
     else:
-        # One line per other source video (its video summary, else first part's summary).
+        # One line per other source video (its video summary, else first part's).
         seen: dict[str, str] = {}
         for p in parts:
             if p.stem != stem and p.stem not in seen:

@@ -14,12 +14,23 @@ _INDENT = "    "
 
 
 def anchor_gaps(
-    gaps: list[Gap], seg_times: list[tuple[float | None, float | None]]
+    gaps: list[Gap],
+    seg_times: list[tuple[float | None, float | None]],
+    lines: tuple[int, int] | None = None,
 ) -> list[tuple[int, Gap]]:
     """Attach each gap to the 1-based line it follows (``0`` = before line 1).
 
     Static gaps (no meaningful on-screen change) are skipped entirely — they
     carry no editorial signal, so neither consumer renders them.
+
+    *seg_times* is always the WHOLE source's, so one anchoring rule serves both
+    a whole source and one segment of a split one.  ``lines=(a, b)`` restricts
+    the result to the gaps that segment owns and rebases the anchors onto its
+    slice: a gap the segment does not contain is dropped rather than rendered
+    at its edge, and the gap *preceding* line ``a`` belongs to this segment
+    (anchor ``0``) because that is the footage the manifest gives it.  A gap
+    after line ``b`` belongs to whatever segment plays next — unless ``b`` is
+    the source's last line, where there is no next segment to own it.
     """
     out: list[tuple[int, Gap]] = []
     for gap in gaps:
@@ -29,6 +40,12 @@ def anchor_gaps(
         for i, (_start, end) in enumerate(seg_times):
             if end is not None and end <= gap.start + _EPS:
                 anchor = i + 1
+        if lines is not None:
+            first, last = lines
+            limit = last if last < len(seg_times) else last + 1
+            if not (first - 1 <= anchor < limit):
+                continue
+            anchor -= first - 1
         out.append((anchor, gap))
     return out
 

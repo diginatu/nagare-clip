@@ -7,6 +7,8 @@ import subprocess
 import pytest
 
 from nagare_clip.config import get_effective_config
+from nagare_clip.director.director_llm import DirectorResult, ops_from_dict
+from nagare_clip.order import Segment
 from nagare_clip.pipeline import stages as st
 from nagare_clip.pipeline.runner import PipelineContext
 from nagare_clip.pipeline.sources import SourceMedia
@@ -160,16 +162,15 @@ def test_director_adapter_passes_context_paths(tmp_path, monkeypatch):
     monkeypatch.setattr(
         st,
         "run_director",
-        lambda edits, out, cfg, **kw: seen.update(edits=edits, out=out, **kw),
+        lambda edits, cfg, **kw: (seen.update(edits=edits, **kw), DirectorResult([]))[1],
     )
     by_name = {s.name: s for s in st.STAGES}
     by_name["director"].run(_ctx(tmp_path, stems=("a",)))
     out = tmp_path / "out"
     assert seen["edits"] == out / "text_filter" / "a_edits.txt"
-    assert seen["out"] == out / "director" / "a_director.json"
     assert seen["summary"] == out / "summary" / "summary.json"
     assert seen["plan"] == out / "plan" / "plan.json"
-    assert seen["stem"] == "a"
+    assert seen["segment"] == Segment("a", None)
     assert seen["json_path"] == out / "sentence_split" / "a.json"
     assert seen["gaps"] == out / "gap_context" / "a_gaps.json"
     assert seen["cuts_txt"] == out / "audio_silence" / "a_cuts.txt"
@@ -816,17 +817,20 @@ def test_extract_gap_frames_unparseable_stats_content_excluded_from_min(gap_ctx,
     assert result["talk1"][0].ssim == pytest.approx(0.81)
 
 
-def test_director_adapter_passes_timeline_position_and_prior_ops(tmp_path, monkeypatch):
-    """Video n is told the whole concatenation order and handed the _director.json
-    of every video playing before it (already written by this same loop)."""
+def test_director_adapter_passes_the_timeline_position(tmp_path, monkeypatch):
+    """Segment n is told the whole order of the finished video.
+
+    With no plan order every source is one whole-source segment, so this is
+    shooting order expressed in the new form."""
     seen = []
     monkeypatch.setattr(st, "recorder_from_config", lambda *a, **k: _NullRec())
     monkeypatch.setattr(
         st,
         "run_director",
-        lambda edits, out, cfg, **kw: seen.append(
-            (kw["stem"], kw["all_stems"], kw["prior_director_paths"])
-        ),
+        lambda edits, cfg, **kw: (
+            seen.append((kw["segment"], kw["all_segments"])),
+            DirectorResult([]),
+        )[1],
     )
     in_dir = tmp_path / "in"
     in_dir.mkdir()
@@ -836,27 +840,29 @@ def test_director_adapter_passes_timeline_position_and_prior_ops(tmp_path, monke
     by_name = {s.name: s for s in st.STAGES}
     by_name["director"].run(_ctx(tmp_path, stems=("a", "b", "c")))
 
-    out = tmp_path / "out" / "director"
-    assert [s[0] for s in seen] == ["a", "b", "c"]
-    assert all(s[1] == ["a", "b", "c"] for s in seen)
-    assert [s[2] for s in seen] == [
-        [],
-        [out / "a_director.json"],
-        [out / "a_director.json", out / "b_director.json"],
-    ]
+    order = [Segment("a", None), Segment("b", None), Segment("c", None)]
+    assert [s[0] for s in seen] == order
+    assert all(s[1] == order for s in seen)
 
 
 def test_director_adapter_passes_the_neighbouring_transcripts(tmp_path, monkeypatch):
-    """Each video is handed the text_filter transcript of the videos playing
+    """Each segment is handed the text_filter transcript of the segments playing
     either side of it; the first has no predecessor and the last no successor."""
     seen = []
     monkeypatch.setattr(st, "recorder_from_config", lambda *a, **k: _NullRec())
     monkeypatch.setattr(
         st,
         "run_director",
-        lambda edits, out, cfg, **kw: seen.append(
-            (kw["stem"], kw["before_edits"], kw["after_edits"])
-        ),
+        lambda edits, cfg, **kw: (
+            seen.append(
+                (
+                    kw["segment"].stem,
+                    kw["before"].edits if kw["before"] else None,
+                    kw["after"].edits if kw["after"] else None,
+                )
+            ),
+            DirectorResult([]),
+        )[1],
     )
     in_dir = tmp_path / "in"
     in_dir.mkdir()
@@ -876,11 +882,13 @@ def test_director_adapter_passes_the_neighbouring_transcripts(tmp_path, monkeypa
 
 def test_director_adapter_recovers_the_order_for_a_single_source_run(tmp_path, monkeypatch):
     """`--source b.mp4` narrows what is processed, not what the finished video
-    contains: the position and the earlier videos' ops still come from the input
+    contains: the position and the neighbours still come from the input
     directory, so a re-run of one source sees what a full run saw."""
     seen = {}
     monkeypatch.setattr(st, "recorder_from_config", lambda *a, **k: _NullRec())
-    monkeypatch.setattr(st, "run_director", lambda edits, out, cfg, **kw: seen.update(kw))
+    monkeypatch.setattr(
+        st, "run_director", lambda edits, cfg, **kw: (seen.update(kw), DirectorResult([]))[1]
+    )
     in_dir = tmp_path / "in"
     in_dir.mkdir()
     for s in ("a", "b", "c"):
@@ -889,12 +897,16 @@ def test_director_adapter_recovers_the_order_for_a_single_source_run(tmp_path, m
     by_name = {s.name: s for s in st.STAGES}
     by_name["director"].run(_ctx(tmp_path, stems=("b",)))
 
-    out = tmp_path / "out" / "director"
-    assert seen["all_stems"] == ["a", "b", "c"]
-    assert seen["prior_director_paths"] == [out / "a_director.json"]
+    assert seen["all_segments"] == [
+        Segment("a", None),
+        Segment("b", None),
+        Segment("c", None),
+    ]
     tf = tmp_path / "out" / "text_filter"
-    assert seen["before_edits"] == tf / "a_edits.txt"
-    assert seen["after_edits"] == tf / "c_edits.txt"
+    assert seen["before"].segment == Segment("a", None)
+    assert seen["before"].edits == tf / "a_edits.txt"
+    assert seen["after"].segment == Segment("c", None)
+    assert seen["after"].edits == tf / "c_edits.txt"
 
 
 def test_director_adapter_falls_back_to_the_processed_stems(tmp_path, monkeypatch):
@@ -902,10 +914,12 @@ def test_director_adapter_falls_back_to_the_processed_stems(tmp_path, monkeypatc
     to the sources this run knows about rather than failing."""
     seen = {}
     monkeypatch.setattr(st, "recorder_from_config", lambda *a, **k: _NullRec())
-    monkeypatch.setattr(st, "run_director", lambda edits, out, cfg, **kw: seen.update(kw))
+    monkeypatch.setattr(
+        st, "run_director", lambda edits, cfg, **kw: (seen.update(kw), DirectorResult([]))[1]
+    )
     by_name = {s.name: s for s in st.STAGES}
     by_name["director"].run(_ctx(tmp_path, stems=("a",)))
-    assert seen["all_stems"] == ["a"]
+    assert seen["all_segments"] == [Segment("a", None)]
 
 
 def test_plan_adapter_passes_history_path(tmp_path, monkeypatch):
@@ -924,6 +938,20 @@ def test_plan_adapter_passes_history_path(tmp_path, monkeypatch):
     assert seen["history"] == out / "plan_dialogue" / "history.md"
 
 
+def _director_returning(ops):
+    """A fake director that emits *ops*.
+
+    The divergence note is built from what this run wrote, and the adapter
+    deletes a stale file before the loop (so a failure cannot leave one
+    standing), so the ops have to come from the call, not from disk.
+    """
+
+    def fake(edits, cfg, *, segment, **kw):
+        return DirectorResult(ops_from_dict({"ops": ops}, None))
+
+    return fake
+
+
 def _plan_and_ops(tmp_path, direction, ops):
     out = tmp_path / "out"
     (out / "plan").mkdir(parents=True, exist_ok=True)
@@ -938,12 +966,9 @@ def _plan_and_ops(tmp_path, direction, ops):
 
 def test_director_adapter_writes_plan_divergence_note(tmp_path, monkeypatch):
     monkeypatch.setattr(st, "recorder_from_config", lambda *a, **k: _NullRec())
-    monkeypatch.setattr(st, "run_director", lambda *a, **kw: None)
-    note = _plan_and_ops(
-        tmp_path,
-        "feature — the payoff",
-        [{"type": "cut", "lines": [1, 9], "note": "a long digression"}],
-    )
+    ops = [{"type": "cut", "lines": [1, 9], "note": "a long digression"}]
+    monkeypatch.setattr(st, "run_director", _director_returning(ops))
+    note = _plan_and_ops(tmp_path, "feature — the payoff", ops)
     by_name = {s.name: s for s in st.STAGES}
     by_name["director"].run(_ctx(tmp_path, stems=("a",)))
     text = note.read_text(encoding="utf-8")
@@ -953,7 +978,7 @@ def test_director_adapter_writes_plan_divergence_note(tmp_path, monkeypatch):
 
 def test_director_adapter_clears_a_stale_divergence_note(tmp_path, monkeypatch):
     monkeypatch.setattr(st, "recorder_from_config", lambda *a, **k: _NullRec())
-    monkeypatch.setattr(st, "run_director", lambda *a, **kw: None)
+    monkeypatch.setattr(st, "run_director", _director_returning([]))
     note = _plan_and_ops(tmp_path, "feature — the payoff", [])
     note.parent.mkdir(parents=True, exist_ok=True)
     note.write_text("stale", encoding="utf-8")
@@ -964,7 +989,7 @@ def test_director_adapter_clears_a_stale_divergence_note(tmp_path, monkeypatch):
 
 def test_director_adapter_survives_a_missing_plan(tmp_path, monkeypatch):
     monkeypatch.setattr(st, "recorder_from_config", lambda *a, **k: _NullRec())
-    monkeypatch.setattr(st, "run_director", lambda *a, **kw: None)
+    monkeypatch.setattr(st, "run_director", _director_returning([]))
     by_name = {s.name: s for s in st.STAGES}
     by_name["director"].run(_ctx(tmp_path, stems=("a",)))  # no plan.json, no ops on disk
 

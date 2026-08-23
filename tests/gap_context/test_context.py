@@ -146,3 +146,44 @@ def test_annotate_numbered_transcript_multiple_gaps_same_line():
     out = annotate_numbered_transcript(transcript, [(1, gap1), (1, gap2)])
     # Both gaps should appear after line 1, in order
     assert out == ("1: いち\n    [silent gap 5.0s: first]\n    [silent gap 5.0s: second]\n2: に")
+
+
+class TestAnchorGapsOnASegment:
+    """A split source's director call sees only its own segment's gaps."""
+
+    # Line k ends at TIMES[k-1][1]: 1.0, 3.0, 5.0, 7.0, 9.0.
+    TIMES = [(0.0, 1.0), (2.0, 3.0), (4.0, 5.0), (6.0, 7.0), (8.0, 9.0)]
+
+    def _gap(self, start, end, desc="動く"):
+        return Gap(start=start, end=end, frames=[], description=desc)
+
+    def test_a_gap_inside_the_segment_is_rebased_onto_it(self):
+        # 5.2s follows line 3; for a segment starting at line 3 that is its
+        # own second position.
+        gaps = [self._gap(5.2, 5.9)]
+        assert anchor_gaps(gaps, self.TIMES, lines=(3, 5)) == [(1, gaps[0])]
+
+    def test_a_gap_before_the_segment_is_dropped(self):
+        # 1.2s follows line 1, which this segment does not cover.
+        assert anchor_gaps([self._gap(1.2, 1.9)], self.TIMES, lines=(3, 5)) == []
+
+    def test_the_gap_that_precedes_the_segment_first_line_belongs_to_it(self):
+        # The manifest gives a segment the silent gap before its first line, so
+        # the annotation the director sees agrees with the footage it gets.
+        gaps = [self._gap(5.2, 5.9)]
+        assert anchor_gaps(gaps, self.TIMES, lines=(4, 5)) == [(0, gaps[0])]
+
+    def test_a_gap_after_the_segment_last_line_goes_to_the_next_segment(self):
+        # 7.2s follows line 4; a segment ending at line 4 does not own it.
+        assert anchor_gaps([self._gap(7.2, 7.9)], self.TIMES, lines=(3, 4)) == []
+
+    def test_the_trailing_gap_of_the_source_stays_with_its_last_segment(self):
+        # Nothing plays after it inside this source, so there is no next
+        # segment to hand it to.
+        gaps = [self._gap(9.2, 9.9)]
+        assert anchor_gaps(gaps, self.TIMES, lines=(4, 5)) == [(2, gaps[0])]
+
+    def test_a_whole_source_segment_anchors_exactly_as_before(self):
+        gaps = [self._gap(1.2, 1.9), self._gap(9.2, 9.9)]
+        assert anchor_gaps(gaps, self.TIMES, lines=(1, 5)) == anchor_gaps(gaps, self.TIMES)
+        assert anchor_gaps(gaps, self.TIMES, lines=None) == anchor_gaps(gaps, self.TIMES)
