@@ -17,6 +17,7 @@ if str(_SRC) not in sys.path:
 
 import bpy
 
+from nagare_clip.blender.frames import ordered_sources, placement_order
 from nagare_clip.blender.scene import load_source_metadata, reset_scene
 from nagare_clip.blender.timeline import (
     OVERLAY_CHANNEL,
@@ -31,6 +32,7 @@ from nagare_clip.blender.timeline import (
 from nagare_clip.blender.warnings_file import capture_warnings, write_warnings
 from nagare_clip.config import get_effective_config
 from nagare_clip.logging_setup import setup_logging
+from nagare_clip.order import read_manifest
 
 
 def parse_blender_args(argv: list[str]) -> argparse.Namespace:
@@ -54,6 +56,14 @@ def parse_blender_args(argv: list[str]) -> argparse.Namespace:
         help="Intervals JSON path (repeat to match each --source)",
     )
     parser.add_argument("--output", required=True, help="Output .blend path")
+    parser.add_argument(
+        "--manifest",
+        default=None,
+        help=(
+            "Ordered timeline manifest (intervals/timeline.json). Without it the "
+            "sources play whole, in the order they were given."
+        ),
+    )
     parser.add_argument(
         "--config", dest="config_path", default=None, help="Path to YAML config file"
     )
@@ -117,11 +127,21 @@ def _build(args: argparse.Namespace) -> None:
         with ivp.open("r", encoding="utf-8") as f:
             all_intervals_data.append(json.load(f))
 
+    path_by_stem = {p.stem: p for p in sources}
+    data_by_stem = {p.stem: d for p, d in zip(sources, all_intervals_data)}
+    entries = placement_order(
+        [p.stem for p in sources], read_manifest(args.manifest) if args.manifest else []
+    )
+    # (stem, that segment's slice of its source's intervals), in playback order.
+    segments = ordered_sources(entries, data_by_stem)
+    if not segments:
+        raise ValueError("No segments to place: the manifest names no known source.")
+
     scene = reset_scene()
 
-    # Use first source for scene metadata
+    # Scene metadata comes from whatever plays FIRST, which a reorder can change.
     first_fps, first_width, first_height = load_source_metadata(
-        sources[0], default_fps=cfg["blender"]["default_fps"]
+        path_by_stem[segments[0][0]], default_fps=cfg["blender"]["default_fps"]
     )
     fps_int = max(1, int(round(first_fps)))
     fps_base = fps_int / first_fps
@@ -155,14 +175,17 @@ def _build(args: argparse.Namespace) -> None:
                 first_height,
             )
 
-    # Loop over (source, intervals) pairs, accumulating timeline position
+    # Loop over the finished video's SEGMENTS, accumulating timeline position.
+    # A segment is one stretch of one source; with no manifest each source is
+    # one whole segment, which is what the pipeline did before the order
+    # existed.
     timeline_cursor = 1
     idx_offset = 0
 
-    for src_num, (source_path, intervals_data) in enumerate(
-        zip(sources, all_intervals_data), start=1
-    ):
-        logging.info("Source %d/%d: %s", src_num, len(sources), source_path.name)
+    for seg_num, (stem, intervals_data) in enumerate(segments, start=1):
+        source_path = path_by_stem[stem]
+        logging.info("Segment %d/%d: %s", seg_num, len(segments), source_path.name)
+        src_num = seg_num
         keep_intervals = intervals_data.get("keep_intervals", [])
         captions = intervals_data.get("captions", [])
         overlays = intervals_data.get("overlays", [])
@@ -242,12 +265,13 @@ def _build(args: argparse.Namespace) -> None:
 
     total_strips = sum(
         len(split_intervals_by_speed(d.get("keep_intervals", []), d.get("speed_ranges", [])))
-        for d in all_intervals_data
+        for _, d in segments
     )
     logging.info(
-        "Done: %d strip(s) across %d source(s), scene ends at frame %d",
+        "Done: %d strip(s) across %d segment(s) of %d source(s), scene ends at frame %d",
         total_strips,
-        len(sources),
+        len(segments),
+        len({stem for stem, _ in segments}),
         scene.frame_end,
     )
     bpy.ops.wm.save_as_mainfile(filepath=str(output_path))

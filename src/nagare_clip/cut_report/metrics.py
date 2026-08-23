@@ -98,6 +98,7 @@ class SpanStats:
 @dataclass(frozen=True)
 class CutMetrics:
     sources: int
+    segments: int
     source_duration: float
     finished_duration: float
     plain_duration: float  # on-screen seconds played at 1x
@@ -167,7 +168,9 @@ def measure(
     sped = sum(p.tl_end - p.tl_start for p in placements if p.speed != 1.0)
 
     keep_count = strips = captions = captions_in_speed = overlays = 0
-    source_duration = 0.0
+    # Per DISTINCT stem: one source split into three segments is still one
+    # source of one length, however many places it plays in.
+    durations: dict[str, float] = {}
     speed_spans: list[SpeedSpan] = []
     gaps: list[Span] = []
     fragments: list[Span] = []
@@ -175,7 +178,7 @@ def measure(
     for stem, data in sources:
         keeps = _keeps(data)
         ranges = _speed_ranges(data)
-        source_duration += float(data.get("duration_sec", 0.0) or 0.0)
+        durations.setdefault(stem, float(data.get("duration_sec", 0.0) or 0.0))
         keep_count += len(keeps)
         strips += len(split_intervals_by_speed(keeps, ranges))
         overlays += len(data.get("overlays", []) or [])
@@ -200,8 +203,9 @@ def measure(
                 )
             )
 
-        # Gaps live strictly inside one source: the seam between two sources is
-        # a concatenation boundary, not a cut.
+        # Gaps live strictly inside one SEGMENT: the seam between two segments
+        # is a concatenation boundary, not a cut -- whether the segments belong
+        # to different sources or are two stretches of the same one.
         ordered = sorted(keeps, key=lambda iv: float(iv["start"]))
         fragments += [Span(stem, float(iv["start"]), float(iv["end"])) for iv in ordered]
         gaps += [
@@ -211,8 +215,9 @@ def measure(
         ]
 
     return CutMetrics(
-        sources=len(sources),
-        source_duration=source_duration,
+        sources=len(durations),
+        segments=len(sources),
+        source_duration=sum(durations.values()),
         finished_duration=total_duration(placements),
         plain_duration=plain,
         sped_duration=sped,

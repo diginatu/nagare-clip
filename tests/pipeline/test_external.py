@@ -124,6 +124,33 @@ def test_build_blender_cmd(tmp_path):
     ]
 
 
+def test_build_blender_cmd_passes_the_manifest(tmp_path):
+    cmd = build_blender_cmd(
+        tmp_path,
+        [tmp_path / "a.mp4"],
+        [tmp_path / "a_intervals.json"],
+        tmp_path / "out.blend",
+        None,
+        tmp_path / "log.txt",
+        manifest=tmp_path / "timeline.json",
+    )
+    assert "--manifest" in cmd
+    assert cmd[cmd.index("--manifest") + 1] == str(tmp_path / "timeline.json")
+
+
+def test_build_blender_cmd_omits_an_absent_manifest(tmp_path):
+    # A project built before the order existed still runs.
+    cmd = build_blender_cmd(
+        tmp_path,
+        [tmp_path / "a.mp4"],
+        [tmp_path / "a_intervals.json"],
+        tmp_path / "out.blend",
+        None,
+        tmp_path / "log.txt",
+    )
+    assert "--manifest" not in cmd
+
+
 def test_build_blender_cmd_without_config(tmp_path):
     cmd = build_blender_cmd(
         Path("/proj"),

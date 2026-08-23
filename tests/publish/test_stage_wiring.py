@@ -76,8 +76,15 @@ def test_publish_required_output(ctx):
     assert stage.required_outputs(ctx) == [ctx.stage_dir("publish") / "publish.json"]
 
 
+def _intervals(ctx, stem, data):
+    d = ctx.output_dir / "intervals"
+    d.mkdir(parents=True, exist_ok=True)
+    (d / f"{stem}_intervals.json").write_text(json.dumps(data), encoding="utf-8")
+
+
 def test_adapter_passes_project_paths(ctx, monkeypatch):
     seen = {}
+    _intervals(ctx, "a", {"duration_sec": 10.0, "keep_intervals": [{"start": 0.0, "end": 10.0}]})
     monkeypatch.setattr(st, "recorder_from_config", lambda *a, **k: _NullRec())
     monkeypatch.setattr(
         st, "run_publish", lambda s, o, cfg, **kw: seen.update(kw, summary=s, out=o)
@@ -88,8 +95,9 @@ def test_adapter_passes_project_paths(ctx, monkeypatch):
     assert seen["out"] == out / "publish" / "publish.json"
     assert seen["markdown"] == out / "publish" / "publish.md"
     assert seen["plan_json"] == out / "plan" / "plan.json"
-    assert seen["stems"] == ["a"]
-    assert seen["intervals_paths"] == [out / "intervals" / "a_intervals.json"]
+    # The finished video, already sliced to the manifest's playback order --
+    # publish never re-derives a time from a line number.
+    assert [stem for stem, _ in seen["ordered"]] == ["a"]
 
 
 def test_disabled_extracts_no_frames(ctx, monkeypatch):

@@ -27,16 +27,13 @@ def _write(tmp_path, cfg_dict, *, parts=PARTS, intervals=INTERVALS, **kwargs):
         json.dumps(summary_to_dict(ProjectSummary("全体の要約", list(parts)))),
         encoding="utf-8",
     )
-    ivp = tmp_path / "a_intervals.json"
-    ivp.write_text(json.dumps(intervals), encoding="utf-8")
     out = tmp_path / "publish.json"
     md = tmp_path / "publish.md"
     publish_run.run_publish(
         summary,
         out,
         cfg_dict,
-        stems=["a"],
-        intervals_paths=[ivp],
+        ordered=[("a", intervals)],
         markdown=md,
         **kwargs,
     )
@@ -245,12 +242,13 @@ def test_missing_intervals_file_still_writes_the_copy(tmp_path, monkeypatch):
         json.dumps(summary_to_dict(ProjectSummary("全体", list(PARTS)))), encoding="utf-8"
     )
     out = tmp_path / "publish.json"
+    # A source whose intervals JSON was unreadable is simply not in the
+    # finished video, so it contributes no placements and no chapters.
     publish_run.run_publish(
         summary,
         out,
         {"publish": {"enabled": True}},
-        stems=["a"],
-        intervals_paths=[tmp_path / "missing_intervals.json"],
+        ordered=[],
         markdown=tmp_path / "publish.md",
     )
     data = json.loads(out.read_text(encoding="utf-8"))

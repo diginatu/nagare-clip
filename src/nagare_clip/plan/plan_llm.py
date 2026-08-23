@@ -35,6 +35,7 @@ from nagare_clip.llm_report import (
     Recorder,
 )
 from nagare_clip.llm_retry import cfg_for_attempt, retry_attempts
+from nagare_clip.order import Segment, segments_from_dict
 from nagare_clip.summary.summarize import PartSummary, ProjectSummary
 from nagare_clip.text_filter.llm_filter import _call_llm
 from nagare_clip.timing import format_dur_gap
@@ -334,6 +335,18 @@ def _coerce_pair(value: Any) -> tuple[int, int] | None:
     if not isinstance(a, int) or not isinstance(b, int):
         return None
     return (a, b)
+
+
+def order_from_dict(data: Any) -> list[Segment]:
+    """The ``order`` array of ``plan.json`` — the finished video's playback order.
+
+    Absent (every project predating the feature) reads as no order, which the
+    orchestrator resolves to shooting order.  The array is *not* validated here:
+    validation needs the per-source line counts, which live in the orchestrator.
+    """
+    if not isinstance(data, dict):
+        return []
+    return segments_from_dict(data.get("order"))
 
 
 def plan_from_dict(data: Any) -> list[PartDirection]:

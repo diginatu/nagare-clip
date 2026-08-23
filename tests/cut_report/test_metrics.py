@@ -139,3 +139,38 @@ class TestKeepHealth:
         assert m.gaps.count == 0
         assert m.gaps.minimum == 0.0
         assert m.gaps.median == 0.0
+
+
+class TestSegments:
+    """A reordered timeline arrives as several segments of the same source."""
+
+    def _split(self):
+        # One source, cut in two at 50.0s; each half is its own segment.
+        head = {
+            "duration_sec": 100.0,
+            "keep_intervals": [{"start": 0.0, "end": 20.0}, {"start": 30.0, "end": 50.0}],
+        }
+        tail = {
+            "duration_sec": 100.0,
+            "keep_intervals": [{"start": 50.0, "end": 60.0}, {"start": 80.0, "end": 100.0}],
+        }
+        return [("a", tail), ("a", head)]
+
+    def test_the_source_is_counted_once_not_once_per_segment(self):
+        m = measure(self._split())
+        assert m.sources == 1
+        assert m.source_duration == 100.0
+
+    def test_the_segment_count_is_reported_beside_it(self):
+        assert measure(self._split()).segments == 2
+
+    def test_a_segment_boundary_is_not_a_gap(self):
+        # The seam between two segments is a concatenation boundary, not a cut,
+        # exactly as the seam between two sources already was.
+        m = measure(self._split())
+        # Within the tail: 60->80. Within the head: 20->30. The 50->50 join
+        # between them is not a gap at all.
+        assert sorted(round(s.length, 3) for s in m.gaps.spans) == [10.0, 20.0]
+
+    def test_fragments_still_count_every_keep_interval(self):
+        assert measure(self._split()).fragments.count == 4

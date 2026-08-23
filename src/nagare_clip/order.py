@@ -223,10 +223,16 @@ def read_manifest(path: Path | str | None) -> list[TimelineSegment]:
     """
     if path is None:
         return []
+    path = Path(path)
+    if not path.is_file():
+        # Absent is the normal degrade, not a fault worth a warning: it is what
+        # every project built before the order existed looks like.
+        logger.debug("order: no timeline manifest at %s", path)
+        return []
     try:
-        return manifest_from_dict(json.loads(Path(path).read_text(encoding="utf-8")))
+        return manifest_from_dict(json.loads(path.read_text(encoding="utf-8")))
     except (OSError, ValueError):
-        logger.warning("order: no readable timeline manifest at %s", path)
+        logger.warning("order: could not read the timeline manifest %s", path)
         return []
 
 

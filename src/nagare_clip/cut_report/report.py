@@ -51,7 +51,11 @@ def format_measurements(m: CutMetrics) -> list[str]:
         _row("  at 1x", _minutes(m.plain_duration), f"({m.plain_share:.0%})"),
         _row("  under timelapse", _minutes(m.sped_duration), f"({m.sped_share:.0%})"),
         _row("keep intervals", str(m.keep_intervals)),
-        _row("blender strips", str(m.strips), f"across {m.sources} source(s)"),
+        _row(
+            "blender strips",
+            str(m.strips),
+            f"across {m.segments} segment(s) of {m.sources} source(s)",
+        ),
         _row(
             "captions",
             str(m.captions),

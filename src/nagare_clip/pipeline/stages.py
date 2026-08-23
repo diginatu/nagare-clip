@@ -16,6 +16,7 @@ from typing import Any
 
 from nagare_clip.audio_silence.cuts_file import read_cuts
 from nagare_clip.audio_silence.run import run_audio_silence
+from nagare_clip.blender.frames import ordered_sources
 from nagare_clip.blender.warnings_file import WARNINGS_FILENAME
 from nagare_clip.cut_report.report import build_cut_report
 from nagare_clip.director.director_llm import DirectorOp, collect_overlay_texts, ops_from_dict
@@ -30,8 +31,19 @@ from nagare_clip.gap_context.snapshot import (
     ssim_relpath,
 )
 from nagare_clip.guided_edit.run import run_guided_edit
+from nagare_clip.intervals.manifest import build_manifest
 from nagare_clip.intervals.run import run_intervals
 from nagare_clip.llm_report import recorder_from_config
+from nagare_clip.order import (
+    MANIFEST_NAME,
+    Segment,
+    TimelineSegment,
+    identity_segments,
+    normalise,
+    read_manifest,
+    validate_segments,
+    write_manifest,
+)
 from nagare_clip.pipeline.external import (
     build_blender_cmd,
     build_silencedetect_cmd,
@@ -44,7 +56,7 @@ from nagare_clip.pipeline.runner import PipelineContext, Stage
 from nagare_clip.pipeline.sources import SourceMedia, project_stems
 from nagare_clip.plan.dialogue import history_path
 from nagare_clip.plan.divergence import find_divergences, format_divergences
-from nagare_clip.plan.plan_llm import plan_from_dict
+from nagare_clip.plan.plan_llm import order_from_dict, plan_from_dict
 from nagare_clip.plan.run import run_plan
 from nagare_clip.plan_revise.run import run_plan_revise
 from nagare_clip.publish.run import run_publish
@@ -400,6 +412,64 @@ def _effective_plan_json(ctx: PipelineContext) -> Path:
     return revised if revised.is_file() else ctx.stage_dir("plan") / "plan.json"
 
 
+def _line_counts(ctx: PipelineContext) -> dict[str, int]:
+    """Lines per source, for validating an order against the real transcripts.
+
+    Read off ``text_filter/{stem}_edits.txt`` — the file the director slices, and
+    the one ``intervals/check_edits.py`` already pins to the JSON segment count.
+    Counted for the whole **project**, not this run, so ``--source`` validates
+    the same order a full run would; an unreadable source is simply absent, and
+    an order naming it is then rejected rather than half-applied.
+    """
+    d = ctx.stage_dir("text_filter")
+    counts: dict[str, int] = {}
+    for stem in project_stems(ctx.input_videos_dir) or ctx.stems:
+        path = d / f"{stem}_edits.txt"
+        try:
+            counts[stem] = len(path.read_text(encoding="utf-8").splitlines())
+        except OSError:
+            logging.debug("order: no line count for %s (%s)", stem, path)
+    return counts
+
+
+def _timeline_segments(ctx: PipelineContext) -> list[Segment]:
+    """The finished video's playback order — the one point stages consult.
+
+    This replaces ``project_stems()`` as what improvements 19 and 22 route
+    "what plays before this" through.  ``project_stems`` itself stays: it is
+    what produces the identity value, i.e. shooting order, which is what a
+    missing, unparseable or invalid order degrades to.
+
+    The order is validated against the real line counts every time, because
+    ``plan.json`` is hand-editable and ``sentence_split``/``summary`` can re-run
+    underneath it.  On any problem the fallback is shooting order for the
+    **whole project** — never a partial repair, which would be a video with a
+    scene silently moved.
+    """
+    shooting = identity_segments(project_stems(ctx.input_videos_dir) or ctx.stems)
+    plan_json = _effective_plan_json(ctx)
+    if not plan_json.is_file():
+        return shooting
+    try:
+        segments = order_from_dict(json.loads(plan_json.read_text(encoding="utf-8")))
+    except (OSError, ValueError) as e:
+        logging.warning("order: could not read %s: %s", plan_json, e)
+        return shooting
+    if not segments:
+        return shooting
+
+    counts = _line_counts(ctx)
+    problems = validate_segments(segments, counts)
+    if problems:
+        logging.warning(
+            "order: %s does not cover every line exactly once; falling back to shooting order (%s)",
+            plan_json,
+            "; ".join(problems),
+        )
+        return shooting
+    return normalise(segments, counts)
+
+
 def _plan_revise_run(ctx: PipelineContext) -> None:
     print("[plan_revise] Revising the plan with the human editor")
     rec = _recorder(ctx, "plan_revise")
@@ -548,29 +618,84 @@ def _intervals_run(ctx: PipelineContext) -> None:
             ctx.cfg,
             cuts_txt=ctx.stage_dir("audio_silence") / f"{src.stem}_cuts.txt",
         )
+    _write_manifest(ctx)
     write_cut_report(ctx)
 
 
-CUT_REPORT_NOTE = "cut_report.md"
+def _manifest_path(ctx: PipelineContext) -> Path:
+    return ctx.stage_dir("intervals") / MANIFEST_NAME
 
 
-def _load_intervals(ctx: PipelineContext) -> list[tuple[str, dict]]:
-    """Every source's intervals JSON, in the order blender concatenates them.
+def _intervals_json(ctx: PipelineContext, stem: str) -> dict | None:
+    path = ctx.stage_dir("intervals") / f"{stem}_intervals.json"
+    if not path.is_file():
+        return None
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError) as e:
+        logging.warning("order: could not read %s: %s", path, e)
+        return None
 
-    Each file is optional: the report is a courtesy, not a gate, so a source
-    whose JSON is missing or unreadable is skipped with a warning rather than
-    failing the stage that just succeeded.
+
+def _write_manifest(ctx: PipelineContext) -> list[TimelineSegment]:
+    """Resolve the order into source seconds and write ``intervals/timeline.json``.
+
+    This stage is the single conversion point between the two coordinate
+    systems: the plan is the authority on the order up to here, the manifest is
+    the authority after it, and nothing downstream re-derives a time from a line
+    number.  An order that cannot be resolved degrades the whole manifest to
+    shooting order rather than resolving some of it.
     """
-    out: list[tuple[str, dict]] = []
-    for stem in ctx.stems:
-        path = ctx.stage_dir("intervals") / f"{stem}_intervals.json"
-        if not path.is_file():
-            continue
+    segments = _timeline_segments(ctx)
+    stems = [s.stem for s in identity_segments(project_stems(ctx.input_videos_dir) or ctx.stems)]
+    durations: dict[str, float] = {}
+    for stem in stems:
+        data = _intervals_json(ctx, stem)
+        if data is not None and isinstance(data.get("duration_sec"), (int, float)):
+            durations[stem] = float(data["duration_sec"])
+
+    # Only a split source needs its line times; shooting order needs none.
+    times: dict[str, list] = {}
+    for stem in {seg.stem for seg in segments if seg.lines is not None}:
+        path = ctx.stage_dir("sentence_split") / f"{stem}.json"
         try:
-            out.append((stem, json.loads(path.read_text(encoding="utf-8"))))
-        except (OSError, ValueError) as e:
-            logging.warning("cut_report: could not read %s: %s", path, e)
-    return out
+            times[stem] = segment_times(json.loads(path.read_text(encoding="utf-8")))
+        except (OSError, ValueError):
+            logging.warning("order: could not read %s for the segment boundaries", path)
+
+    entries = build_manifest(segments, times, durations)
+    if not entries and segments:
+        entries = build_manifest(identity_segments(stems), times, durations)
+    write_manifest(_manifest_path(ctx), entries)
+    logging.info("order: wrote %s (%d segment(s))", _manifest_path(ctx), len(entries))
+    return entries
+
+
+def _ordered_sources(ctx: PipelineContext) -> list[tuple[str, dict]]:
+    """The finished video as ``(stem, sliced intervals data)``, in playback order.
+
+    Filtered to the sources this run processes, which is what makes
+    ``--source X`` build a ``.blend`` of X alone while every other stage still
+    knows the whole project's order.  A missing manifest (a project built before
+    the order existed) degrades to shooting order.
+    """
+    entries = read_manifest(_manifest_path(ctx))
+    if not entries:
+        entries = [
+            TimelineSegment(seg.stem, 0.0, float("inf"))
+            for seg in identity_segments(project_stems(ctx.input_videos_dir) or ctx.stems)
+        ]
+    only = set(ctx.stems)
+    entries = [e for e in entries if e.stem in only]
+    data_by_stem: dict[str, dict] = {}
+    for stem in {e.stem for e in entries}:
+        data = _intervals_json(ctx, stem)
+        if data is not None:
+            data_by_stem[stem] = data
+    return ordered_sources(entries, data_by_stem)
+
+
+CUT_REPORT_NOTE = "cut_report.md"
 
 
 def write_cut_report(ctx: PipelineContext) -> None:
@@ -584,7 +709,7 @@ def write_cut_report(ctx: PipelineContext) -> None:
     """
     note = ctx.llm_report_dir / "notes" / CUT_REPORT_NOTE
     try:
-        sources = _load_intervals(ctx)
+        sources = _ordered_sources(ctx)
         text = (
             build_cut_report(
                 sources,
@@ -614,8 +739,11 @@ def _intervals_required(ctx: PipelineContext) -> list[Path]:
 
 def _blender_run(ctx: PipelineContext) -> None:
     print("[blender] VSE project generation")
+    # Named after the first source in SHOOTING order, so a reorder does not
+    # rename the project file.
     output_blend = ctx.stage_dir("blender") / f"{ctx.stems[0]}_edited.blend"
     intervals_paths = [ctx.stage_dir("intervals") / f"{s}_intervals.json" for s in ctx.stems]
+    manifest = _manifest_path(ctx)
     run_command(
         build_blender_cmd(
             ctx.project_root,
@@ -624,6 +752,7 @@ def _blender_run(ctx: PipelineContext) -> None:
             output_blend,
             ctx.config_path,
             ctx.log_file,
+            manifest=manifest if manifest.is_file() else None,
         )
     )
     # Re-written now that Blender has recorded its own clamp/overlap warnings.
@@ -742,8 +871,7 @@ def _publish_run(ctx: PipelineContext) -> None:
             ctx.stage_dir("summary") / "summary.json",
             d / "publish.json",
             ctx.cfg,
-            stems=ctx.stems,
-            intervals_paths=[ctx.stage_dir("intervals") / f"{s}_intervals.json" for s in ctx.stems],
+            ordered=_ordered_sources(ctx),
             plan_json=_effective_plan_json(ctx),
             overlay_texts=overlay_texts,
             thumbs=thumbs,

@@ -163,6 +163,20 @@ class TestManifest:
         # degrades to its per-source loop rather than failing.
         assert read_manifest(tmp_path / MANIFEST_NAME) == []
 
+    def test_a_missing_file_is_not_worth_a_warning(self, tmp_path, caplog):
+        # Absent is the normal degrade; warning about it every run would drown
+        # the warning that matters, which is a manifest that will not parse.
+        with caplog.at_level("WARNING"):
+            read_manifest(tmp_path / MANIFEST_NAME)
+        assert caplog.text == ""
+
+    def test_an_unreadable_file_is_worth_a_warning(self, tmp_path, caplog):
+        path = tmp_path / MANIFEST_NAME
+        path.write_text("{not json", encoding="utf-8")
+        with caplog.at_level("WARNING"):
+            read_manifest(path)
+        assert MANIFEST_NAME in caplog.text
+
     def test_reading_junk_is_no_manifest(self, tmp_path):
         path = tmp_path / MANIFEST_NAME
         path.write_text("{not json", encoding="utf-8")

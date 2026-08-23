@@ -147,6 +147,7 @@ def build_blender_cmd(
     output_blend: Path,
     config_path: Path | None,
     log_file: Path,
+    manifest: Path | None = None,
 ) -> list[str]:
     cmd = [
         "blender",
@@ -163,6 +164,8 @@ def build_blender_cmd(
     for ivp in intervals_paths:
         cmd += ["--intervals", str(ivp)]
     cmd += ["--output", str(output_blend)]
+    if manifest is not None:
+        cmd += ["--manifest", str(manifest)]
     if config_path is not None:
         cmd += ["--config", str(config_path)]
     cmd += ["--log-file", str(log_file)]

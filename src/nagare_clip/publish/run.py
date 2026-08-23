@@ -92,15 +92,13 @@ def _load_json(path: Path | None) -> Any:
         return None
 
 
-def _load_placements(stems: Sequence[str], intervals_paths: Sequence[Path]) -> list[Placement]:
-    sources: list[tuple[str, dict]] = []
-    for stem, path in zip(stems, intervals_paths):
-        data = _load_json(path)
-        if isinstance(data, dict):
-            sources.append((stem, data))
-        else:
-            logging.warning("publish: no intervals for %s; its parts get no chapter", stem)
-    return build_placements(sources)
+def _ordered_stems(ordered: Sequence[tuple[str, dict]]) -> list[str]:
+    """Each source once, in the order it first plays in the finished video."""
+    seen: list[str] = []
+    for stem, _ in ordered:
+        if stem not in seen:
+            seen.append(stem)
+    return seen
 
 
 def _chapter_entries(
@@ -125,7 +123,10 @@ def _chapter_entries(
             )
             continue
         entries.append((time, copy.chapter_titles.get(i + 1, part.summary)))
-    return entries
+    # Parts are listed in transcript order; the finished video may play them in
+    # another.  build_chapters drops an entry that does not advance, so an
+    # unsorted list would silently delete a chapter after a reorder.
+    return sorted(entries, key=lambda entry: entry[0])
 
 
 def _thumbnail_entries(
@@ -218,8 +219,7 @@ def run_publish(
     output: Path,
     cfg: dict,
     *,
-    stems: Sequence[str],
-    intervals_paths: Sequence[Path],
+    ordered: Sequence[tuple[str, dict]],
     plan_json: Path | None = None,
     overlay_texts: dict[str, list[str]] | None = None,
     thumbs: Sequence[ThumbShot] | None = None,
@@ -236,7 +236,9 @@ def run_publish(
     else:
         project = summary_from_dict(_load_json(summary_json))
         directions: list[PartDirection] = plan_from_dict(_load_json(plan_json))
-        flat_overlays = [text for stem in stems for text in (overlay_texts or {}).get(stem, [])]
+        flat_overlays = [
+            text for stem in _ordered_stems(ordered) for text in (overlay_texts or {}).get(stem, [])
+        ]
         copy = generate_publish_copy(
             project,
             apply_brief(publish_cfg, cfg),
@@ -246,7 +248,7 @@ def run_publish(
         )
 
         min_chapter = float(publish_cfg.get("min_chapter_duration", MIN_CHAPTER_SECONDS))
-        placements = _load_placements(stems, intervals_paths)
+        placements = build_placements(ordered)
         total = total_duration(placements)
         chapters: list[Chapter] = build_chapters(
             _chapter_entries(project, placements, copy), total, min_duration=min_chapter
