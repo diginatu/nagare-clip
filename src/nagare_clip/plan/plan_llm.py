@@ -20,7 +20,7 @@ from __future__ import annotations
 import json
 import logging
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any
 
 from nagare_clip.director.director_llm import _FENCE_RE
@@ -35,7 +35,13 @@ from nagare_clip.llm_report import (
     Recorder,
 )
 from nagare_clip.llm_retry import cfg_for_attempt, retry_attempts
-from nagare_clip.order import Segment, segments_from_dict
+from nagare_clip.order import (
+    Segment,
+    normalise,
+    segments_from_dict,
+    segments_to_dict,
+    validate_segments,
+)
 from nagare_clip.summary.summarize import PartSummary, ProjectSummary
 from nagare_clip.text_filter.llm_filter import _call_llm
 from nagare_clip.timing import format_dur_gap
@@ -65,6 +71,10 @@ class ParsedPlan:
 
     directions: list[PartDirection]
     message: str = ""
+    #: The finished video's playback order.  Empty means shooting order — which
+    #: is also what an invalid order degrades to, so the artifact never carries
+    #: a contract that does not hold.
+    order: list[Segment] = field(default_factory=list)
 
 
 def assign_to_parts(
@@ -156,8 +166,32 @@ def coerce_lines(value: Any, part: PartSummary) -> tuple[int, int] | None:
     return (a, b)
 
 
+def coerce_order(value: Any, line_counts: dict[str, int] | None, drop) -> list[Segment]:
+    """The ``order`` array, validated whole or dropped whole.
+
+    Never a partial repair: an order that covers some of the project is a video
+    with a scene silently moved, which is worse than shooting order.  Without
+    line counts nothing can be validated, so nothing is written — the artifact
+    must never carry a contract that has not been checked.
+    """
+    segments = segments_from_dict(value)
+    if not segments:
+        return []
+    if not line_counts:
+        drop("order dropped, no line counts to validate it against")
+        return []
+    problems = validate_segments(segments, line_counts)
+    if problems:
+        drop("order dropped, it does not cover every line exactly once: " + "; ".join(problems))
+        return []
+    return normalise(segments, line_counts)
+
+
 def try_parse_plan_response(
-    response: str, parts: list[PartSummary], drops: list[str] | None = None
+    response: str,
+    parts: list[PartSummary],
+    drops: list[str] | None = None,
+    line_counts: dict[str, int] | None = None,
 ) -> ParsedPlan | None:
     """Parse ``{"directions": [{"index": N, "lines"?: [a, b], "direction": "…"}],
     "message": "…"}``.
@@ -231,6 +265,7 @@ def try_parse_plan_response(
             for (idx, lines), direction in sorted(out.items())
         ],
         message=message.strip(),
+        order=coerce_order(data.get("order"), line_counts, _drop),
     )
 
 
@@ -241,8 +276,14 @@ def generate_plan(
     call_llm: CallLLM = _call_llm,
     recorder: Recorder = NULL_RECORDER,
     unit: str = "plan",
+    line_counts: dict[str, int] | None = None,
 ) -> ParsedPlan:
-    """Run the plan LLM: one rough direction per part, plus its own account."""
+    """Run the plan LLM: a rough direction per part, the playback order, and its
+    own account of both.
+
+    ``line_counts`` (lines per source) is what an ``order`` is validated
+    against; without it no order is written.
+    """
     parts = project_summary.parts
     if not parts:
         return ParsedPlan([], "")
@@ -276,7 +317,7 @@ def generate_plan(
             )
             continue
         drops: list[str] = []
-        parsed = try_parse_plan_response(response, parts, drops)
+        parsed = try_parse_plan_response(response, parts, drops, line_counts)
         if parsed is None:
             recorder.attempt(
                 unit=unit,
@@ -313,17 +354,23 @@ def generate_plan(
     return ParsedPlan([], "")
 
 
-def plan_to_dict(directions: list[PartDirection]) -> dict[str, Any]:
-    return {
-        "directions": [
-            {
-                "stem": d.stem,
-                "lines": [d.lines[0], d.lines[1]],
-                "direction": d.direction,
-            }
-            for d in directions
-        ]
-    }
+def plan_to_dict(
+    directions: list[PartDirection], order: list[Segment] | None = None
+) -> dict[str, Any]:
+    """The ``plan.json`` shape.  An empty order writes no key at all, which is
+    what every project predating the feature already looks like."""
+    data: dict[str, Any] = {}
+    if order:
+        data["order"] = segments_to_dict(order)
+    data["directions"] = [
+        {
+            "stem": d.stem,
+            "lines": [d.lines[0], d.lines[1]],
+            "direction": d.direction,
+        }
+        for d in directions
+    ]
+    return data
 
 
 def _coerce_pair(value: Any) -> tuple[int, int] | None:
