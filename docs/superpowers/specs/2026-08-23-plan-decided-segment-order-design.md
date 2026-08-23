@@ -107,6 +107,23 @@ Consumers, all through `_timeline_segments`: the `director` loop (improvement
 19's position, 22's seams, 19's prior captions), the `intervals` manifest
 builder, and the order note.
 
+### Where the authority lives
+
+State it as a rule, or a later change will drift one side onto the other:
+
+> **`plan` is the authority on the order up to and including `intervals`.
+> `intervals/timeline.json` is the authority after it.  `intervals` is the single
+> conversion point from lines to seconds.**
+
+So `director`, the `intervals` manifest builder and the order note read the plan
+(through `_timeline_segments`); `blender`, `publish` and `cut_report` read the
+manifest and never the plan.  Nothing downstream of `intervals` re-derives a time
+from a line number, and nothing upstream of it reasons in seconds.
+
+This is also what makes dropping the staleness guard defensible: skipping stages
+gives stale results precisely because there is exactly **one** conversion point,
+not two that can disagree about the same order.
+
 ### `--source X` keeps global numbering
 
 Improvement 19 made the timeline order independent of `--source` on purpose, and
@@ -169,6 +186,17 @@ removed from the direction ops.
 same rule that governs directions: what no operation names survives by the code,
 not by the model's diligence.  `plan_revise/plan.json` therefore always carries
 the effective order, since `_effective_plan_json` picks exactly one file.
+
+**The current order is rendered in the revision input.**  `build_user_content()`
+today shows the parts, the directions with their ids, and the conversation — no
+order anywhere.  Restating something whole requires seeing it whole: without
+this, the first turn asking for a reorder would have the model invent an order
+from nothing rather than revise the existing one, and the inherit rule would be
+the only thing between that and a silent scramble.  It is rendered in the same
+canonical form the response is expected to use — one `stem` + `lines` entry per
+segment, in playback order — under its own header, after the parts document and
+before the conversation.  An identity order renders as such rather than being
+omitted, so "no reorder yet" is a visible state and not an absence.
 
 ## `intervals` emits the manifest
 
@@ -287,24 +315,37 @@ sources this run is not processing are left alone (prior captions read them).
   labels a whole-source segment by its stem (unchanged) and a partial one
   `stem [31-83]`, with the overlapping part summaries as its text.
 
-### Failure is fatal for a multi-segment source
+### A failed segment call fails the run
 
-If any segment call of a source with **more than one segment** fails, the run
-fails: the stem's `{stem}_director.json` is not written (and, having been deleted
-before the loop, no stale file survives), the failure is logged at ERROR, and a
-`PipelineError` is raised.  A source whose ops cover two of its three segments is
-a worse artifact than no run at all, and the previous file was built under a
-different segmentation, so it is not a valid fallback either.
+Any segment call that fails after its retries fails the run — single-segment
+source or not.  The stem's `{stem}_director.json` is not written (and, having
+been deleted before the loop, no stale file survives), the failure is logged at
+ERROR naming the stem and the segment, and a `PipelineError` is raised.
 
 `generate_director_ops` therefore has to distinguish "the LLM failed" from "the
 LLM returned no ops", which today it cannot — both are `[]`.  It returns a
 `DirectorResult(ops, ok)`, mirroring `plan_revise.Revision.ok` and
-`plan.ParsedPlan`.
+`plan.ParsedPlan`.  A legitimate empty result stays legitimate: `ok=True` with an
+empty list, which is exactly what the type now separates.
 
-A **single-segment** source keeps today's graceful degrade: all attempts failing
-writes `{"ops": []}` and the pipeline proceeds with the unedited transcript.  A
-1-of-1 failure is not partial, and making it fatal would change behaviour on the
-identity path, which must stay as it is.
+**Today's graceful degrade exists because of that ambiguity, not in spite of
+it.**  When the two cases were indistinguishable, continuing was the only safe
+move.  Once they are distinguishable, continuing on a settled failure — it
+happens only after `max_retries` is exhausted — is a choice, and the wrong one:
+`{"ops": []}` means no cuts, no timelapse and no captions for that source, i.e.
+one source passing through unedited into a project that cuts 65.5 minutes to
+20.8.  That builds successfully and is a broken video, and the run would spend
+`guided_edit`, `intervals`, `blender` and `publish` on output already known to be
+bad before a human found out by watching it.
+
+Making it fatal for every source also removes an asymmetry that would otherwise
+let an unrelated editorial decision — whether the plan happened to split that
+source — decide a robustness question.
+
+Stopping is affordable because resuming is cheap:
+`--source X --from-stage director --to-stage director` is one LLM call.
+`llm_report` already records the failed call with its outcome and reason, so the
+diagnostic trail needs nothing new.
 
 The divergence note and the order note are written in the adapter's `finally`
 today.  On a fatal segment failure they are **skipped**, not written from a
@@ -383,7 +424,8 @@ adapters — the same idempotent double-write `write_cut_report` already uses �
   and re-running `--from-stage blender` gets the old order.  `plan` is already an
   upstream dependency of `blender`; skipping the stages in between and getting
   stale results is the normal consequence of doing that, not a hazard this change
-  introduces.
+  introduces — and there is exactly one line-to-seconds conversion point (see
+  *Where the authority lives*), so the two cannot disagree, only lag.
 - Reordering *within* a segment, and any change to how `summary` draws part
   boundaries.
 - Transitions, B-roll, audio crossfades.  A bridge at a reorder boundary is the
@@ -432,6 +474,10 @@ Specific regression guards, beyond the per-unit tests:
   placements, report unit names);
 - an order that omits, repeats or overlaps a line is rejected, logged, and falls
   back to shooting order;
+- the revision input renders the current order, identity included, in the
+  canonical form the response uses;
+- a failed segment call raises, writes no `{stem}_director.json`, leaves no stale
+  one, and skips the notes — for a single-segment source as well as a split one;
 - `--source X` reports the global segment position and the real neighbours;
 - a full-cover slice returns its input unchanged;
 - a caption straddling a boundary is placed once;
