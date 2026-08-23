@@ -206,3 +206,14 @@ Nothing here can fail a run:
 - LLM/parse failure → retried via `llm_retry`, then nothing written and no reply
   appended, so the next run tries again
 - an un-writable history file → logged warning, the revision is still written
+
+## The playback order
+
+The revision input renders the current order (`plan_llm.format_order`), and the
+response restates it **whole** under `order` — order *is* position, so unlike a
+direction it cannot be edited in pieces. An identity order renders as identity,
+so "no reorder yet" is a visible state. An omitted or rejected `order` is
+inherited by the code, so `plan_revise/plan.json` always holds the effective
+order.
+
+See [`order.md`](order.md).

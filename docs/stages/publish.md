@@ -343,3 +343,13 @@ rendering, not the copy):
 
 The `project:` brief is appended to the prompt like the other briefed stages
 (`apply_brief`), so the copy knows the audience and tone.
+
+## Under a reordered timeline
+
+`build_placements` lays out the manifest's segments, sliced, in playback order —
+computing chapter times in shooting order and sorting afterwards would be
+sorting wrong numbers. `_chapter_entries` then sorts by finished-timeline time,
+because `build_chapters` drops an entry that does not advance and would
+otherwise delete chapters silently. Caption lists follow finished-video order.
+
+See [`order.md`](order.md).

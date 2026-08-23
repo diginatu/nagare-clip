@@ -140,3 +140,15 @@ Output dirs are one per stage by name, created up front by `cli.main()`:
 unconditionally (cheap no-ops when their stage is disabled in config), exactly
 as under the bash orchestrator — see [AGENTS.md](../../AGENTS.md#pipeline-overview)
 for what each no-op produces.
+
+## The segment order
+
+`pipeline/stages.py` owns the one point every stage consults for the finished
+video's playback order: `_timeline_segments(ctx)` (validate + normalise the
+plan's `order`, else shooting order from `project_stems`). `_line_counts`,
+`_write_manifest`, `_ordered_sources` and `write_order_note` sit beside it. The
+`director` loop walks the **global** order and calls only for the segments whose
+stem is in this run's sources, so `--source X` keeps its real position and its
+real neighbours.
+
+See [`order.md`](order.md).

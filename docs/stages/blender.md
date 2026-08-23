@@ -36,3 +36,15 @@ so a failed build still leaves what preceded it. The list is written **even when
 empty**: a stale file from a previous run would otherwise report warnings this
 scene never produced. The finished-cut report reads it back
 (see [cut_report.md](cut_report.md)).
+
+## Iterating the manifest
+
+The placement loop walks the segments of `intervals/timeline.json` (`--manifest`)
+rather than the sources. Absent, it falls back to the per-source loop, so a
+project built before the order existed still resumes at `--from-stage blender`.
+Each segment is that source's intervals JSON sliced to its window by
+`frames.slice_intervals_data`. Scene fps/resolution come from whatever plays
+first; the `.blend` filename stays the first source in **shooting** order, so a
+reorder does not rename the project file.
+
+See [`order.md`](order.md).

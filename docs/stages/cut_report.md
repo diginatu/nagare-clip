@@ -159,3 +159,14 @@ Everything degrades and nothing here can fail a run:
 The finished-timeline arithmetic is **not** a second copy: `measure()` calls
 `publish.timeline.build_placements`, which already reproduces the blender
 concatenation in seconds precisely so the two cannot disagree.
+
+## Segments
+
+The report measures the finished video as the manifest orders it. Inter-keep
+gaps and keep fragments are grouped **per segment**: the seam between two
+segments is a concatenation boundary, not a cut, whether they belong to
+different sources or are two stretches of the same one. A source split across
+segments is counted once and its length counted once, with the segment count
+reported beside the source count.
+
+See [`order.md`](order.md).

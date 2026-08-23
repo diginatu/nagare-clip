@@ -146,3 +146,17 @@ Every part degrades independently and nothing here can fail a run:
 - an un-writable history file → logged warning, the plan is still written
 - a `plan_revise/plan.json` that cannot be removed → logged warning, the plan is
   still written (the revision then wins until it is deleted by hand)
+
+## The playback order
+
+A plan response may carry an `order`: the finished video's segments, in playback
+order. Coverage — every line of every source exactly once — is the contract;
+sequence is free. An invalid order is dropped **whole** and the pipeline falls
+back to shooting order, never a partial repair.
+
+The prompt states the contract as a rule and carries no worked reorder: the
+editorial call belongs to the `project:` brief, and an example in this prompt
+anchors harder than the instruction around it.
+
+See [`order.md`](order.md) for the value, the contract, the manifest and the
+order note.

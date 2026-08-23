@@ -12,12 +12,12 @@ The pipeline creates a rough-cut Blender project for human review and fine-tunin
 4. gap_context (optional): a vision LLM snapshots+describes long silent gaps (from `_cuts.txt`) so summary/director can see what the transcript can't -> reviewable `output/gap_context/{stem}_gaps.json` + JPEG frames; disabled by default (no-op)
 5. summary (optional, project-wide): a larger LLM segments every video into line-range parts + summaries, a whole-video summary, and misspelling-prone keywords, and writes one all-videos summary -> reviewable `output/summary/summary.json`; the per-video summary and keywords are used by text_filter/plan/director
 6. text_filter: Text editing checkpoint -> `_edits.txt` (copy of `.txt`, or LLM-corrected with `{{old->new}}` markers), optionally primed with summary-stage context
-7. plan (optional, project-wide): a larger LLM gives a coarse, cross-video rough direction per part -> reviewable `output/plan/plan.json`, plus a plain-language account of the plan in `output/plan_dialogue/history.md`
-8. plan_revise (optional, project-wide): a larger LLM applies your conversation to those directions as delete/add/update operations -> `output/plan_revise/plan.json` (no LLM call unless you left a turn unanswered)
-9. director (optional): a larger LLM proposes high-level edits -> reviewable `_director.json` op list (fed the summary/plan overview context, and gap_context's described gaps)
+7. plan (optional, project-wide): a larger LLM gives a coarse, cross-video rough direction per part — and may state the **order the finished video plays in** — -> reviewable `output/plan/plan.json`, plus a plain-language account of the plan in `output/plan_dialogue/history.md`
+8. plan_revise (optional, project-wide): a larger LLM applies your conversation to those directions as delete/add/update operations (and restates the order) -> `output/plan_revise/plan.json` (no LLM call unless you left a turn unanswered)
+9. director (optional): a larger LLM proposes high-level edits, **one call per segment of the finished video** -> reviewable `_director.json` op list (fed the summary/plan overview context, and gap_context's described gaps)
 10. guided_edit (optional): a small LLM applies the director's ops into `_edits.txt` (deterministically verified)
-11. intervals: Patch application + keep intervals -> `*_intervals.json` keep ranges (audio cuts unioned in)
-12. blender: Blender headless -> `.blend` with VSE strips arranged back-to-back
+11. intervals: Patch application + keep intervals -> `*_intervals.json` keep ranges (audio cuts unioned in), plus `output/intervals/timeline.json` — the order in seconds
+12. blender: Blender headless -> `.blend` with VSE strips arranged back-to-back, in the order `timeline.json` gives
 13. publish (optional, project-wide): title candidates, a description with chapter timestamps taken from the finished timeline, thumbnail copy and candidate stills -> reviewable `output/publish/publish.md` + `publish.json`
 
 Stages are referenced by name (`--from-stage <name>`); the gap_context/summary/plan/plan_revise/director/guided_edit/publish stages are no-ops unless enabled in config.
@@ -36,6 +36,31 @@ The optional `director` + `guided_edit` stages automate steps like the above wit
 A director `keep` op protects a span from cutting **including its silences**, and its width follows what is on screen: the narrowest range (normally `[N, N+1]`) to rescue one silent gap, or the whole run of lines when a continuous event is playing out — an accident and the cleanup after it, a demo running — since chopping such a sequence into per-gap keeps reads as jump cuts through the payoff. What it is *not* is a way to mark a long span of **talking** as important: speech is never dropped by default, so a keep over talking only restores its pauses (in one real run, keep ops of 20-35 lines took a 22.3-minute cut to 53.9 minutes). `director.max_keep_lines` (default `8`, `0` = no limit) drops any wider `keep` the LLM proposes — a continuous event fits well inside that, precisely because nobody is talking through it — logged, and listed in the LLM report — so those lines fall back to the normal behaviour (speech kept, internal silence cut). The limit is stated to the director in its prompt automatically, so raising or lowering it needs no prompt edit. It applies only to the LLM's output: a `keep` you write by hand into `{stem}_director.json` is always honoured. The cap has no exceptions — a fast span that needs a keep of its own belongs in a `timelapse` op instead, which carries its protection as part of what the op means rather than asking the cap to look the other way.
 
 The optional `summary` + `plan` stages run **once over all source videos** (project-wide) and give downstream stages cross-video context. Enable `summary.enabled`/`plan.enabled` in config: `summary` runs before `text_filter`, segments each sentence_split transcript into line-range parts with a summary each, lists per-video misspelling-prone keywords, generates a whole-video summary per video, and writes one all-videos summary to `output/summary/summary.json` (`{summary, parts, keywords, video_summaries}`) — its per-video summary/part summaries/keywords also prime the `text_filter` LLM's prompt; `plan` still runs before `director`, reading those summaries and writing a coarse, cross-video rough direction per part (e.g. "remove — repeats an earlier part", "shorten — trim the setup") to `output/plan/plan.json`. Both files are human-reviewable/editable (and `plan_revise` revises the directions from your side of the conversation, writing `output/plan_revise/plan.json`, which `director` then prefers). Note the plan's vocabulary avoids the word "keep" on purpose — in the `director` stage `keep` is an *op* that also restores every silence in its range, and a direction reading "keep — …" was being copied across as one, inflating the finished runtime; write "feature", "retain" or "emphasise" instead when hand-editing `plan.json`. When enabled, the `director` for each video receives the overall summary plus that video's whole-video summary, its parts (line ranges, summaries, rough directions), and one-line context for the other videos (preferring each sibling's own whole-video summary), so its precise per-line ops follow the project-wide plan. They share the same `max_retries`/`retry_temp_step`/`retry_temp_cap` retry knobs.
+
+#### The order of the finished video
+
+By default the finished video is the source clips concatenated in name order.
+When `plan` is enabled it may instead state an **order**: a list of *segments*
+(one stretch of one source) in playback order, written into `plan.json`:
+
+```json
+"order": [
+  {"stem": "device_1"},
+  {"stem": "mixed_clip", "lines": [31, 83]},
+  {"stem": "mixed_clip", "lines": [1, 30]}
+]
+```
+
+`lines` is optional (omit it for a whole source), and a source may appear more
+than once. The one rule is that the segments **cover every line of every source
+exactly once** — dropping footage is the director's job, so an order that leaves
+lines out is rejected whole and the pipeline falls back to shooting order. You
+can hand-write or hand-edit `order` yourself; it is validated on every run.
+
+A reorder is never silent: whenever the finished video is not in shooting order
+(or an order was rejected), `output/llm_report/notes/order.md` says so — which
+segment plays where, and where it was before. Tell `plan_revise` what you want
+moved in the usual way (`./scripts/plan_say.sh "…"`).
 
 #### Talking to the plan (`plan_revise`)
 
