@@ -184,6 +184,17 @@ turns: a file with no leading comment (someone started it by hand), an
 already-current header, or an unreadable path all leave the file exactly as it
 is, and a comment written further down the file is the human's, not the header.
 
+Every write path was not enough, though: the run that matters most writes
+nothing. `run_plan_revise()` calls `ensure_history()` **before** the
+`has_unanswered_human` guard, so the header is refreshed whenever the stage
+reads the conversation at all — including the quiet run that returns without an
+LLM call. That is precisely the state a human is in when they need the
+instructions to be right: nothing is unanswered, they open the file to write a
+turn, and the only advice on screen is whatever was written when the file was
+created. The quiet path gains no other side effect — no divider, no reply slot,
+no turn — and the disabled path still touches nothing at all, since it returns
+before the history is read.
+
 ## Failure modes
 
 Nothing here can fail a run:

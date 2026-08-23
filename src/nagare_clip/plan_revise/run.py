@@ -22,6 +22,7 @@ from nagare_clip.llm_report import NULL_RECORDER, Recorder
 from nagare_clip.plan.dialogue import (
     PLAN,
     append_turn,
+    ensure_history,
     has_unanswered_human,
     read_active_history,
 )
@@ -62,6 +63,14 @@ def run_plan_revise(
     if not revise_cfg.get("enabled", False):
         _discard(output)
         return
+
+    if history is not None:
+        # Refresh the header whenever the conversation is read at all, not only
+        # when a turn is appended.  The quiet run is exactly when a human opens
+        # this file to type, so it is the run that most needs the instructions
+        # on screen to be the current ones.  Nothing else is written on this
+        # path: no divider, no reply slot, no turn.
+        ensure_history(history)
 
     turns = read_active_history(history)
     if not has_unanswered_human(turns):

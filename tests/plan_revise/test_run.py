@@ -8,7 +8,12 @@ import json
 import yaml
 
 import nagare_clip.plan_revise.run as revise_run
-from nagare_clip.plan.dialogue import append_divider, append_turn, read_active_history
+from nagare_clip.plan.dialogue import (
+    FILE_HEADER,
+    append_divider,
+    append_turn,
+    read_active_history,
+)
 from nagare_clip.plan.plan_llm import PartDirection, plan_to_dict
 from nagare_clip.plan_revise.revise_llm import Revision
 from nagare_clip.summary.summarize import PartSummary, ProjectSummary, summary_to_dict
@@ -263,3 +268,84 @@ class TestRoundTrip:
         assert [d["lines"] for d in after] == [[1, 4], [5, 6], [7, 9], [1, 3]]
         # the model saw the ids and the human's sentence
         assert f"[{ids[1]}]" in seen[0] and "7-9 だけがデモ本体" in seen[0]
+
+
+# The header is advice, and improvement 23 changed it: the old one tells the
+# human to re-run `--from-stage plan`, which now *retires* the turn they are
+# about to write.  The quiet run is exactly when that matters — the human opens
+# the file to type because nothing is unanswered — and it was the one path that
+# never touched the file.
+STALE_HEADER = (
+    "<!--\n"
+    "plan_dialogue/history.md — the plan_revise stage's conversation with you.\n"
+    "\n"
+    "Append a turn under a '## human' heading and re-run\n"
+    "  ./scripts/run_pipeline.sh --from-stage plan --to-stage plan\n"
+    "-->\n"
+)
+
+
+class TestHeaderRefreshOnAQuietRun:
+    def _stale(self, tmp_path, body):
+        history = tmp_path / "history.md"
+        history.write_text(STALE_HEADER + body, encoding="utf-8")
+        return history
+
+    def test_quiet_run_refreshes_the_header_and_touches_nothing_else(self, tmp_path, monkeypatch):
+        calls = []
+        monkeypatch.setattr(revise_run, "generate_revision", lambda *a, **k: calls.append(1))
+        body = "\n## human\n\nsplit part 2\n\n## plan\n\ndone\n"
+        history = self._stale(tmp_path, body)
+
+        out = _run(tmp_path, ENABLED, history=history)
+
+        text = history.read_text(encoding="utf-8")
+        assert calls == [] and not out.exists()
+        # the header is current...
+        assert "--from-stage plan --to-stage plan" not in text
+        assert text.startswith(FILE_HEADER)
+        # ...and everything below it is byte-identical: no divider, no reply
+        # slot, no turn.
+        assert text == FILE_HEADER + body
+
+    def test_a_current_header_is_left_byte_identical(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(revise_run, "generate_revision", lambda *a, **k: 1 / 0)
+        history = tmp_path / "history.md"
+        append_turn(history, "human", "split part 2")
+        append_turn(history, "plan", "done")
+        before = history.read_text(encoding="utf-8")
+
+        _run(tmp_path, ENABLED, history=history)
+
+        assert history.read_text(encoding="utf-8") == before
+
+    def test_a_firing_run_also_refreshes_the_header(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(
+            revise_run,
+            "generate_revision",
+            lambda *a, **k: Revision(directions=_plan(), message="heard", applied="", ok=True),
+        )
+        history = self._stale(tmp_path, "\n## human\n\nsplit part 2\n")
+
+        _run(tmp_path, ENABLED, history=history)
+
+        text = history.read_text(encoding="utf-8")
+        assert text.startswith(FILE_HEADER)
+        assert text.count("plan_dialogue/history.md — the plan_revise stage's") == 1
+        assert read_active_history(history)[-1].role == "plan"
+
+    def test_no_history_path_does_not_raise(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(revise_run, "generate_revision", lambda *a, **k: 1 / 0)
+        summary, plan_json, out = _paths(tmp_path)
+        revise_run.run_plan_revise(summary, plan_json, out, ENABLED, history=None)
+        assert not out.exists()
+
+    def test_disabled_does_not_touch_the_history(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(revise_run, "generate_revision", lambda *a, **k: 1 / 0)
+        summary, plan_json, out = _paths(tmp_path)
+        history = self._stale(tmp_path, "\n## human\n\nsplit part 2\n")
+        before = history.read_text(encoding="utf-8")
+        revise_run.run_plan_revise(
+            summary, plan_json, out, {"plan_revise": {"enabled": False}}, history=history
+        )
+        assert history.read_text(encoding="utf-8") == before
