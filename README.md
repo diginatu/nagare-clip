@@ -183,6 +183,17 @@ width syntax, so they render full width).
 **hand-editable contract** the `render` stage below reads — like
 `_director.json` is for the edit. `publish` itself composites nothing.
 
+**Looking at the frames.** With `publish.describe_frames.enabled` (and a
+vision-capable model configured), each candidate still is described once — what
+is actually legible in it, where the subject sits, which regions are empty and
+what colour they are — into `output/publish/frames.json`. A label from the
+director says what it *thought* was happening at that moment; only looking says
+what a viewer can make out. Descriptions are cached by a content hash of the
+JPEG itself, so re-running `publish` for better copy over an unchanged shortlist
+costs **no** vision calls, a re-extracted frame whose picture changed is
+described again, and a description you rewrite by hand in `frames.json` is the
+description from then on.
+
 ### Rendered thumbnails (`output/render/`)
 
 `render` is the last stage, and the only one that **never makes an LLM call

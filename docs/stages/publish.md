@@ -14,6 +14,7 @@ uploads.
 | `output/publish/publish.md` | The reviewable file: title candidates, a copy-pasteable description, thumbnail copy, the frame shortlist |
 | `output/publish/publish.json` | The same material as data — including the model-authored look; the hand-editable contract the `render` stage reads |
 | `output/publish/frames/{stem}/{t:.3f}.jpg` | Candidate stills at the director's payoff moments |
+| `output/publish/frames.json` | One entry per still: its shortlist fields, a content hash, and what looking at it showed |
 
 Compositing is **not** done here — that is the [`render`](render.md) stage,
 which makes no LLM call, so a hook or a colour can be hand-edited in
@@ -23,15 +24,72 @@ Disabled by default (`publish.enabled: false`) → `publish.json` holds the full
 shape with nothing in it, `publish.md` says the stage is off, and no LLM or
 Docker call is made.
 
-## Two halves
+## Three phases
 
-The stage splits cleanly along what an LLM can and cannot know.
+The stage splits along what an LLM can and cannot know, and — for the two that
+can — along what each is allowed to see.
+
+**Look** (one vision call per candidate still, `describe_frames.py`) — what is
+actually legible in each frame, cached in `frames.json` by the frame's own
+bytes. Depends on nothing but the frame.
 
 **Copy** (one LLM call, `publish_llm.py`) — title candidates, the description
-lead, chapter *titles*, thumbnail *copy*.
+lead, chapter *titles*, thumbnail *copy*. It is shown **no frames at all**:
+this codebase has repeatedly found that concrete examples anchor a model harder
+than the instructions around them, and a copy call handed two dozen frame
+descriptions starts captioning the photographs it can see instead of writing
+hooks from the story.
 
 **Timing** (deterministic, `timeline.py` + `chapters.py`) — every timestamp.
 The LLM is never asked for one; it cannot see the finished timeline.
+
+## Looking at the frames (`describe_frames.py`)
+
+The shortlist already carries the director's `label` for each still — but a
+label says what the director thought was happening at that moment, not what a
+viewer can make out. A frame labelled 「まさかの水漏れ発覚」 may show a
+person's back. Only looking can tell.
+
+So each still is described once, in prose (not JSON — it is read by a model and
+by a human, and neither needs a schema): what is visible and **legible**, where
+the subject sits, which regions are **empty**, and the colour and lightness of
+those empty regions. The default prompt asks for exactly that and forbids
+writing a headline, because a vision model handed a frame will happily caption
+it.
+
+**The label is deliberately not shown to the model.** The description exists to
+catch a label whose frame does not match it; handing the claim to the model
+meant to check it would only get the claim confirmed. A test asserts the label
+text never appears in the messages.
+
+**Described once, ever.** `frames.json` keys each description to
+`hashlib.sha256` of the JPEG's **bytes** — not its path and not its timestamp,
+both of which are stable across a re-extraction that changed the picture and
+change across one that did not. So:
+
+- re-running `publish` for better copy over an unchanged shortlist makes
+  **zero** vision calls;
+- re-running `director` changes the shortlist, and a frame whose bytes changed
+  is described again even at the same filename;
+- **a description you rewrite by hand survives.** If you disagree with what the
+  model saw, correct the prose in `frames.json` and that is the description
+  from then on.
+
+An entry with an *empty* description is not reusable — that is a call that
+failed, and the next run should retry it rather than cache the failure. Where
+two shortlist entries share one hash (an identical frame filed under two
+timestamps), the described one wins whichever order they sit in.
+
+The vision path is `gap_context/describe.py`'s, not a second one: frames go as
+base64 data-URI `image_url` parts, and this module owns its own multimodal
+`CallLLM` alias so `publish_llm.py`'s stays text-only. The LLM report records
+frame **paths**, never base64 payloads — a 24-frame shortlist of inlined JPEGs
+would make the report unopenable, and the payload says nothing a path does not.
+
+Disabled (`publish.describe_frames.enabled: false`, the default — a
+vision-capable model has to be configured first) `frames.json` is still written
+with the shortlist fields and hashes, and no call is made: the descriptions can
+then be written by hand, and turning the setting on later reuses them.
 
 ## Why the timestamps can only be computed here
 
@@ -182,6 +240,16 @@ the chapters simply come back empty.
 | `frame_width` | `1280` | Downscale width of the extracted JPEGs |
 | `image_markup` | `html` | How `publish.md` embeds the frame shortlist: `html` = sized `<img>`, `markdown` = `![alt](path)` |
 | `temperature` | `0.7` | Deliberately higher than the editing stages |
+
+`publish.describe_frames:` — its own LLM block, because it needs a **vision**
+model where the rest of the stage needs a text one:
+
+| Key | Default | Meaning |
+|-----|---------|---------|
+| `enabled` | `false` | Look at each candidate still (needs a vision-capable model) |
+| `provider` / `model` | `ollama_chat` / `qwen2.5vl:7b` | Same shape as `gap_context:` |
+| `max_retries` | `2` | Extra attempts on an LLM error or an empty answer |
+| `prompt` | (default) | What to say about a frame; forbids writing a headline |
 
 The canvas size, the font slots and the rest of the compositing settings are
 the render stage's: `render:`, documented in [`render.md`](render.md). They

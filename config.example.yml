@@ -302,6 +302,27 @@ publish:
   frame_width: 1280   # Downscale width (px) of the extracted JPEG stills; height is auto
   image_markup: html   # How publish.md embeds images: html = <img> tags (sized), markdown = ![alt](path) for viewers that strip raw HTML
   # prompt: "..."   # System prompt (has a sensible default)
+  # Frame description: one VISION call per candidate still, describing what is
+  # actually legible in it and which regions are empty -- the director's label
+  # says what it thought was happening, only looking says what a viewer can make
+  # out. Results are cached in publish/frames.json by a content hash of the JPEG,
+  # so an unchanged shortlist costs nothing on a re-run and a description you
+  # rewrite by hand survives. The pairing step uses these to put each headline on
+  # a frame that shows what it promises. Needs a vision-capable model; disabled by
+  # default (frames.json is still written, with hashes and empty descriptions).
+  describe_frames:
+    enabled: false   # Enable the frame-description vision LLM
+    provider: ollama_chat   # LiteLLM provider prefix: ollama_chat | openai | gemini | anthropic
+    api_base: ""   # Base URL; empty -> Ollama localhost default; leave empty for cloud providers
+    model: "qwen2.5vl:7b"   # A VISION-capable model (passed to LiteLLM as "<provider>/<model>")
+    api_key: ""   # API key for the provider (or set the provider's env var)
+    temperature: 0.2
+    thinking: false
+    timeout: 300
+    max_retries: 2   # Extra attempts on LLM error / empty response (0 = single attempt)
+    retry_temp_step: 0.2
+    retry_temp_cap: 0.8
+    # prompt: "..."   # System prompt (has a sensible default)
 
 # render stage: the LAST stage, and the only one that never makes an LLM call.
 # It reads output/publish/publish.json -- the hand-editable contract -- and

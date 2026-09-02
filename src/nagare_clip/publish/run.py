@@ -5,10 +5,14 @@ in the pipeline — the summaries know what the video is about, the brief knows
 who it is for, the intervals know what survived — but nothing past the
 ``.blend`` used any of it, so it was retyped by hand.
 
-Two halves:
+Three phases, in this order and deliberately not folded together:
 
+- **look** (one vision call per candidate still, cached by content hash):
+  what is actually legible in each frame, written to ``frames.json``.
+  Depends on nothing but the frame.
 - **copy** (one LLM call): several title candidates, a description lead, the
-  chapter titles, and alternative thumbnail-copy sets.
+  chapter titles, and alternative thumbnail-copy sets. It is shown no frames:
+  the headlines come from the story, not from the pictures on hand.
 - **timing** (deterministic): chapter timestamps taken from the finished
   timeline, which is the one thing that can only be computed here.
 
@@ -44,6 +48,7 @@ from nagare_clip.publish.chapters import (
     format_timestamp,
     render_chapter_lines,
 )
+from nagare_clip.publish.describe_frames import describe_frames, frames_to_dict, load_frames
 from nagare_clip.publish.publish_llm import (
     PublishCopy,
     generate_publish_copy,
@@ -205,6 +210,7 @@ def run_publish(
     plan_json: Path | None = None,
     overlay_texts: dict[str, list[str]] | None = None,
     thumbs: Sequence[ThumbShot] | None = None,
+    frames_json: Path | None = None,
     markdown: Path | None = None,
     recorder: Recorder = NULL_RECORDER,
 ) -> None:
@@ -215,6 +221,24 @@ def run_publish(
         logging.info("publish: disabled, writing empty publish material")
         data = empty_publish()
     else:
+        # Look before writing: describing a still depends on nothing but the
+        # still, and every frame whose bytes already have a description costs
+        # no call -- so re-running publish for better copy is cheap.
+        if frames_json is not None:
+            frames = describe_frames(
+                thumbs or [],
+                frames_json.parent,
+                publish_cfg.get("describe_frames") or {},
+                previous=load_frames(frames_json),
+                recorder=recorder,
+            )
+            frames_json.parent.mkdir(parents=True, exist_ok=True)
+            frames_json.write_text(
+                json.dumps(frames_to_dict(frames), ensure_ascii=False, indent=2) + "\n",
+                encoding="utf-8",
+            )
+            logging.info("publish: wrote %s", frames_json)
+
         project = summary_from_dict(_load_json(summary_json))
         directions: list[PartDirection] = plan_from_dict(_load_json(plan_json))
         flat_overlays = [

@@ -275,6 +275,65 @@ def test_the_copy_sets_are_listed_without_images(tmp_path, monkeypatch):
     assert "<img" not in text.split("## Thumbnail frame")[0]
 
 
+def _frames_run(tmp_path, cfg, *, shots):
+    """run_publish with a shortlist whose stills exist beside publish.json."""
+    for shot in shots:
+        still = tmp_path / shot.path
+        still.parent.mkdir(parents=True, exist_ok=True)
+        still.write_bytes(b"jpeg-" + shot.path.encode())
+    data, md = _write(tmp_path, cfg, thumbs=shots, frames_json=tmp_path / "frames.json")
+    frames_json = tmp_path / "frames.json"
+    frames = json.loads(frames_json.read_text(encoding="utf-8")) if frames_json.is_file() else None
+    return data, md, frames
+
+
+def test_frames_json_is_written_beside_publish_json(tmp_path, monkeypatch):
+    _fake_generate(monkeypatch, _copy())
+    shots = [ThumbShot("a", 12.0, "overlay", "水浸し！", "frames/a/12.000.jpg")]
+    _, _, frames = _frames_run(tmp_path, {"publish": {"enabled": True}}, shots=shots)
+    assert [f["path"] for f in frames["frames"]] == ["frames/a/12.000.jpg"]
+    assert frames["frames"][0]["hash"]
+    assert frames["frames"][0]["label"] == "水浸し！"
+
+
+def test_the_previous_descriptions_are_handed_back_to_the_describer(tmp_path, monkeypatch):
+    """Reuse only works if the stage reads last run's frames.json first."""
+    _fake_generate(monkeypatch, _copy())
+    shots = [ThumbShot("a", 12.0, "overlay", "l", "frames/a/12.000.jpg")]
+    (tmp_path / "frames.json").write_text(
+        json.dumps(
+            {
+                "frames": [
+                    {
+                        "stem": "a",
+                        "source_time": 12.0,
+                        "kind": "overlay",
+                        "label": "l",
+                        "path": "frames/a/12.000.jpg",
+                        "hash": "deadbeef",
+                        "description": "手書きの説明",
+                    }
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+    seen = {}
+
+    def fake_describe(shots_, publish_dir, cfg, *, previous=(), **kwargs):
+        seen["previous"] = list(previous)
+        return []
+
+    monkeypatch.setattr(publish_run, "describe_frames", fake_describe)
+    _frames_run(tmp_path, {"publish": {"enabled": True}}, shots=shots)
+    assert [p.description for p in seen["previous"]] == ["手書きの説明"]
+
+
+def test_a_disabled_stage_writes_no_frames_file(tmp_path):
+    data, _, frames = _frames_run(tmp_path, {"publish": {"enabled": False}}, shots=[])
+    assert frames is None
+
+
 def test_the_candidate_table_shows_the_still_not_its_path(tmp_path, monkeypatch):
     _fake_generate(monkeypatch, _copy())
     shots = [ThumbShot("a", 12.0, "overlay", "水浸し！", "frames/a/12.000.jpg")]

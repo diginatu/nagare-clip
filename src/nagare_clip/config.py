@@ -400,6 +400,24 @@ GAP_CONTEXT_PROMPT = (
     "- Describe only what you can see; do not speculate about the audio."
 )
 
+DESCRIBE_FRAMES_PROMPT = (
+    "You are looking at ONE still frame taken from a video, so that a "
+    "thumbnail headline can later be placed on it. Reply with plain prose, "
+    "two to four sentences. No JSON, no bullet list, no preamble.\n"
+    "\n"
+    "Say, in this order:\n"
+    "1. What is actually visible and LEGIBLE in the frame -- what a viewer "
+    "would recognise at thumbnail size. If the subject is small, turned away, "
+    "blurred, dark or out of frame, say so plainly; that is the most useful "
+    "thing you can report.\n"
+    "2. Where the subject sits: left / centre / right, upper / middle / lower.\n"
+    "3. Which regions are EMPTY enough to carry large text, and for each of "
+    "them, its colour and whether it is light or dark.\n"
+    "\n"
+    "Describe only what you can see in this frame. Do not guess what happened "
+    "before or after it, and do not write a headline or a caption of any kind."
+)
+
 PUBLISH_PROMPT = (
     "You write the publishing material for a finished video: the title, the "
     "description lead, the chapter titles and the thumbnail copy. You receive "
@@ -1046,6 +1064,47 @@ class BlenderConfig(BaseModel):
     speed_mark: SpeedMarkConfig = Field(default_factory=SpeedMarkConfig)
 
 
+class DescribeFramesConfig(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    section_comment: ClassVar[str] = (
+        "Frame description: one VISION call per candidate still, describing what is\n"
+        "actually legible in it and which regions are empty -- the director's label\n"
+        "says what it thought was happening, only looking says what a viewer can make\n"
+        "out. Results are cached in publish/frames.json by a content hash of the JPEG,\n"
+        "so an unchanged shortlist costs nothing on a re-run and a description you\n"
+        "rewrite by hand survives. The pairing step uses these to put each headline on\n"
+        "a frame that shows what it promises. Needs a vision-capable model; disabled by\n"
+        "default (frames.json is still written, with hashes and empty descriptions)."
+    )
+    enabled: bool = Field(False, description="Enable the frame-description vision LLM")
+    provider: str = Field(
+        "ollama_chat",
+        description="LiteLLM provider prefix: ollama_chat | openai | gemini | anthropic",
+    )
+    api_base: str = Field(
+        "",
+        description="Base URL; empty -> Ollama localhost default; leave empty for cloud providers",
+    )
+    model: str = Field(
+        "qwen2.5vl:7b",
+        description='A VISION-capable model (passed to LiteLLM as "<provider>/<model>")',
+    )
+    api_key: str = Field("", description="API key for the provider (or set the provider's env var)")
+    temperature: float = Field(0.2)
+    thinking: bool | str = Field(False)
+    timeout: int = Field(300)
+    max_retries: int = Field(
+        2, description="Extra attempts on LLM error / empty response (0 = single attempt)"
+    )
+    retry_temp_step: float = Field(0.2)
+    retry_temp_cap: float = Field(0.8)
+    prompt: str = _commented(
+        DESCRIBE_FRAMES_PROMPT,
+        sample='"..."',
+        description="System prompt (has a sensible default)",
+    )
+
+
 class PublishConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
     section_comment: ClassVar[str] = (
@@ -1110,6 +1169,7 @@ class PublishConfig(BaseModel):
     prompt: str = _commented(
         PUBLISH_PROMPT, sample='"..."', description="System prompt (has a sensible default)"
     )
+    describe_frames: DescribeFramesConfig = Field(default_factory=DescribeFramesConfig)
 
 
 class RenderConfig(BaseModel):

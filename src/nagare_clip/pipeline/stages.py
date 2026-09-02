@@ -982,6 +982,7 @@ def _publish_run(ctx: PipelineContext) -> None:
             plan_json=_effective_plan_json(ctx),
             overlay_texts=overlay_texts,
             thumbs=thumbs,
+            frames_json=d / "frames.json",
             markdown=d / "publish.md",
             recorder=rec,
         )

@@ -796,6 +796,29 @@ def test_text_filter_prompt_repeated_phrase_example_is_valid_patch_syntax():
     assert apply_patches_to_lines(["{{映ってる->}}映ってるね"]) == ["映ってるね"]
 
 
+def test_publish_describe_frames_defaults():
+    cfg = get_effective_config(None, {})["publish"]["describe_frames"]
+    assert cfg["enabled"] is False  # a vision model has to be configured first
+    assert cfg["provider"] == "ollama_chat"
+    assert cfg["max_retries"] == 2
+    assert cfg["prompt"]
+
+
+def test_the_frame_description_prompt_asks_for_prose_and_the_empty_regions():
+    """It is read by a model and by a human; neither needs a schema."""
+    prompt = get_effective_config(None, {})["publish"]["describe_frames"]["prompt"].lower()
+    assert "json" not in prompt or "no json" in prompt
+    assert "empty" in prompt
+    assert "legible" in prompt
+
+
+def test_the_frame_description_prompt_forbids_writing_a_headline():
+    """Writing copy is the copy call's job; this one only looks. A vision model
+    handed a frame will happily caption it unless told not to."""
+    prompt = get_effective_config(None, {})["publish"]["describe_frames"]["prompt"].lower()
+    assert "do not write a headline" in prompt
+
+
 def test_render_defaults():
     cfg = get_effective_config(None, {})
     render = cfg["render"]
