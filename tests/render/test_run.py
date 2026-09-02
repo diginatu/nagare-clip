@@ -148,6 +148,46 @@ def test_no_copy_sets_renders_nothing_without_failing(tmp_path):
     assert "_(none)_" in md
 
 
+def test_a_hand_edited_background_changes_only_that_thumbnail(tmp_path):
+    """The whole point of the split: edit one line of publish.json, re-run.
+
+    No LLM call is involved in getting here -- run_render is the entry point
+    the stage uses, and the guards below prove the transport is never loaded.
+    """
+    publish = json.loads(json.dumps(PUBLISH))
+    publish["thumbnail_copy"][1]["background"] = "frames/b/55.660.jpg"
+    run = FakeRun()
+    data, _, _ = _run(
+        tmp_path,
+        run=run,
+        publish=publish,
+        frames=("frames/a/1.000.jpg", "frames/b/55.660.jpg"),
+    )
+    assert [r["background"] for r in data["renders"]] == [
+        "frames/a/1.000.jpg",
+        "frames/b/55.660.jpg",
+    ]
+
+
+def test_an_absolute_background_outside_the_project_renders(tmp_path):
+    """A photograph the camera never rolled on is one line of JSON away."""
+    outside = tmp_path / "studio.png"
+    outside.write_bytes(b"png")
+    publish = json.loads(json.dumps(PUBLISH))
+    publish["thumbnail_copy"][0]["background"] = str(outside)
+    run = FakeRun()
+    data, md, _ = _run(tmp_path, run=run, publish=publish)
+    assert data["renders"][0]["background"] == str(outside)
+    assert next(cmd for cmd in run.cmds if cmd[-1] != "info:")[1] == str(outside)
+    assert str(outside) in md
+
+
+def test_sets_naming_no_background_render_exactly_as_before(tmp_path):
+    """Nothing said -> the first shortlist candidate, for every set."""
+    data, _, _ = _run(tmp_path)
+    assert {r["background"] for r in data["renders"]} == {"frames/a/1.000.jpg"}
+
+
 def test_the_render_package_never_reaches_for_the_llm():
     """Zero calls by construction, not by configuration.
 

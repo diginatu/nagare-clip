@@ -312,14 +312,19 @@ def thumbnail_copy_to_dict(copy: PublishCopy) -> list[dict[str, Any]]:
     """The thumbnail sets as plain JSON: copy and look together.
 
     The line count is never normalised -- a punchier video may want only a
-    hook.  Style keys sit beside the text they apply to, which is what makes
-    publish.json hand-editable: change a colour, re-run the render CLI.
+    hook.  Style keys sit beside the text they apply to, and each set names the
+    picture it goes on, which is what makes publish.json hand-editable: change
+    a colour or a background, re-run the render stage.
+
+    ``background`` is written even when empty, so a human opening the file can
+    see where a path goes without reading the docs first.
     """
     return [
         {
             "lines": [
                 {"role": line.role, "text": line.text, **line.style} for line in thumb_set.lines
             ],
+            "background": thumb_set.background,
             **thumb_set.style,
         }
         for thumb_set in copy.thumbnail_copy

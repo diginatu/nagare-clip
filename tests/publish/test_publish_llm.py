@@ -313,6 +313,7 @@ def test_thumbnail_copy_to_dict_flattens_style_beside_the_text():
     assert thumbnail_copy_to_dict(copy) == [
         {
             "lines": [{"role": "hook", "text": "h", "fill": "#B08D3E", "pointsize": 156}],
+            "background": "",
             "gravity": "southwest",
         }
     ]
@@ -372,3 +373,21 @@ def test_the_font_slots_are_appended_to_the_system_prompt(monkeypatch):
     )
     assert seen[0].startswith("BASE\n\n")
     assert "sans-bold" in seen[0]
+
+
+def test_the_background_field_is_visible_in_publish_json():
+    """The hand-edit loop needs somewhere obvious to type a path, so the key
+    is written even when nothing chose one yet."""
+    copy = PublishCopy(titles=["t"], thumbnail_copy=[ThumbSet(lines=[ThumbLine("hook", "H")])])
+    assert thumbnail_copy_to_dict(copy)[0]["background"] == ""
+
+
+def test_a_chosen_background_round_trips_through_publish_json():
+    from nagare_clip.render.thumbnail import sets_from_dict
+
+    copy = PublishCopy(
+        titles=["t"],
+        thumbnail_copy=[ThumbSet(lines=[ThumbLine("hook", "H")], background="frames/b/55.660.jpg")],
+    )
+    data = {"thumbnail_copy": thumbnail_copy_to_dict(copy)}
+    assert sets_from_dict(data)[0].background == "frames/b/55.660.jpg"

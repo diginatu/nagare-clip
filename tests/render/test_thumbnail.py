@@ -26,7 +26,9 @@ from nagare_clip.render.thumbnail import (
     resolve_background,
     resolve_line_style,
     resolve_set_style,
+    set_background,
     set_relpath,
+    sets_from_dict,
 )
 
 HAS_MAGICK = shutil.which("magick") is not None
@@ -439,6 +441,25 @@ def test_a_real_thumbnail_is_produced(tmp_path):
     assert size == "1280x720"
 
 
+@pytest.mark.skipif(not HAS_MAGICK, reason="ImageMagick not installed")
+@pytest.mark.parametrize("source_size", ["600x1600", "3000x1000", "720x720"])
+def test_any_aspect_ratio_is_cropped_to_fill_the_canvas(tmp_path, source_size):
+    """A set may name a photograph the camera never rolled on -- portrait,
+    panorama, square -- so `-resize ^` + centre `-extent` has to hold."""
+    bg = tmp_path / "bg.jpg"
+    subprocess.run(["magick", "-size", source_size, "xc:seagreen", str(bg)], check=True)
+    out = tmp_path / f"{source_size}.jpg"
+    placed = [PlacedLine("hook", LineStyle(font="", pointsize=90), "+56+62")]
+    subprocess.run(build_render_cmd(bg, placed, SetStyle(), CANVAS, out), check=True)
+    size = subprocess.run(
+        ["magick", "identify", "-format", "%wx%h", str(out)],
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout
+    assert size == "1280x720"
+
+
 CFG = {
     "enabled": True,
     "width": 1280,
@@ -487,6 +508,45 @@ def test_a_candidate_whose_file_vanished_is_skipped(tmp_path):
     assert resolve_background(shots, tmp_path) == tmp_path / "frames/a/2.000.jpg"
 
 
+def _bg_set(background="", text="H"):
+    return ThumbSet(lines=[ThumbLine("hook", text, {})], style={}, background=background)
+
+
+def test_a_set_names_its_own_background_relative_to_the_publish_dir(tmp_path):
+    _touch(tmp_path, "frames/a/1.000.jpg")
+    chosen = _touch(tmp_path, "frames/b/55.660.jpg")
+    got = set_background(_bg_set("frames/b/55.660.jpg"), [_shot()], tmp_path)
+    assert got == chosen
+
+
+def test_an_absolute_background_is_used_as_is(tmp_path, other_dir=None):
+    """A path outside the project entirely: a photograph the camera never rolled on."""
+    outside = tmp_path / "elsewhere" / "studio.png"
+    outside.parent.mkdir()
+    outside.write_bytes(b"x")
+    assert set_background(_bg_set(str(outside)), [], tmp_path / "publish") == outside
+
+
+def test_a_background_that_is_not_in_the_shortlist_is_accepted(tmp_path):
+    """The shortlist is a convenience, not an allowlist."""
+    _touch(tmp_path, "frames/a/1.000.jpg")
+    hand_pulled = _touch(tmp_path, "hand/2528.021.jpg")
+    assert set_background(_bg_set("hand/2528.021.jpg"), [_shot()], tmp_path) == hand_pulled
+
+
+def test_a_set_naming_no_background_falls_back_to_the_first_candidate(tmp_path):
+    """A project that says nothing renders exactly as it did before per-set."""
+    _touch(tmp_path, "frames/a/1.000.jpg")
+    assert set_background(_bg_set(), [_shot()], tmp_path) == tmp_path / "frames/a/1.000.jpg"
+
+
+def test_a_named_background_that_is_missing_never_falls_back(tmp_path, caplog):
+    """Rendering the wrong frame under a hook misleads review worse than a gap."""
+    _touch(tmp_path, "frames/a/1.000.jpg")
+    assert set_background(_bg_set("frames/b/nope.jpg"), [_shot()], tmp_path) is None
+    assert "nope.jpg" in caplog.text
+
+
 def _sets(n=2):
     return [
         ThumbSet(lines=[ThumbLine("hook", f"H{i}", {"font": "serif-black"})], style={})
@@ -530,6 +590,38 @@ def test_the_output_directory_is_created(tmp_path):
     _touch(tmp_path, "frames/a/1.000.jpg")
     render_sets(_sets(1), [_shot()], CFG, tmp_path, tmp_path, FakeRun())
     assert (tmp_path / "thumbnails").is_dir()
+
+
+def test_each_set_is_composited_onto_its_own_background(tmp_path):
+    _touch(tmp_path, "frames/a/1.000.jpg")
+    _touch(tmp_path, "frames/b/55.660.jpg")
+    sets = [_bg_set("frames/b/55.660.jpg", "leak"), _bg_set(text="pump")]
+    run = FakeRun()
+    renders = render_sets(sets, [_shot()], CFG, tmp_path, tmp_path, run)
+    assert [r.background for r in renders] == ["frames/b/55.660.jpg", "frames/a/1.000.jpg"]
+    backgrounds = [cmd[1] for cmd in run.cmds if cmd[-1] != "info:"]
+    assert backgrounds == [
+        str(tmp_path / "frames/b/55.660.jpg"),
+        str(tmp_path / "frames/a/1.000.jpg"),
+    ]
+
+
+def test_an_absolute_background_is_recorded_as_an_absolute_path(tmp_path):
+    outside = tmp_path / "elsewhere" / "studio.png"
+    outside.parent.mkdir()
+    outside.write_bytes(b"x")
+    publish_dir = tmp_path / "publish"
+    publish_dir.mkdir()
+    renders = render_sets([_bg_set(str(outside))], [], CFG, publish_dir, tmp_path, FakeRun())
+    assert [r.background for r in renders] == [str(outside)]
+
+
+def test_a_set_whose_background_is_missing_is_dropped_and_the_rest_render(tmp_path, caplog):
+    _touch(tmp_path, "frames/a/1.000.jpg")
+    sets = [_bg_set("frames/b/gone.jpg", "leak"), _bg_set(text="pump")]
+    renders = render_sets(sets, [_shot()], CFG, tmp_path, tmp_path, FakeRun())
+    assert [r.index for r in renders] == [2]
+    assert "gone.jpg" in caplog.text
 
 
 def test_disabled_renders_nothing(tmp_path):
@@ -620,6 +712,21 @@ def test_unusable_measure_output_still_renders_the_set(tmp_path):
         return "garbage\n" if cmd[-1] == "info:" else ""
 
     assert len(render_sets(_sets(1), [_shot()], CFG, tmp_path, tmp_path, run)) == 1
+
+
+def test_the_background_is_read_back_out_of_publish_json():
+    data = {
+        "thumbnail_copy": [
+            {"lines": [{"role": "hook", "text": "H"}], "background": "frames/b/55.660.jpg"},
+            {"lines": [{"role": "hook", "text": "H2"}]},
+        ]
+    }
+    assert [s.background for s in sets_from_dict(data)] == ["frames/b/55.660.jpg", ""]
+
+
+def test_a_non_string_background_is_ignored_rather_than_raising():
+    data = {"thumbnail_copy": [{"lines": [{"role": "hook", "text": "H"}], "background": 7}]}
+    assert sets_from_dict(data)[0].background == ""
 
 
 def test_set_relpath_is_one_based():

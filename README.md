@@ -191,9 +191,10 @@ composites one real thumbnail per copy set into
 `output/render/thumbnails/set{N}.jpg`, with `output/render/render.md` as a
 contact sheet embedding the finished images beside the copy they carry.
 
-The same LLM call that writes a set's copy also writes that copy's *look* —
-font, colours, outline, block position — in ImageMagick's own vocabulary, so
-the sets you see are real options rather than several wordings of one image;
+Each set names **its own background**, so the sets you see are real options
+rather than several wordings of one image. The same LLM call that writes a
+set's copy also writes that copy's *look* — font, colours, outline, block
+position — in ImageMagick's own vocabulary;
 the pipeline validates every value and builds every `magick` command as an
 argument list (never a shell string). This needs `magick` (ImageMagick) on
 `PATH`; set `render.enabled: false` to keep the copy but skip compositing.
@@ -654,9 +655,18 @@ Picking a background still and nudging a colour is iterative, and re-running
 you were judging. So `render` is its own stage: it reads
 `output/publish/publish.json` (including the model-authored font/colour/
 position values), re-runs ImageMagick and makes **no LLM call at all** — hand-
-edit a set's `fill`/`stroke`/`gravity`/… first, then re-run the stage to see
-the change. See [`docs/stages/render.md`](docs/stages/render.md) for the full
-style-key table.
+edit a set's `background`/`fill`/`stroke`/`gravity`/… first, then re-run the
+stage to see the change.
+
+A set's `background` is a path relative to `output/publish/` (where the
+shortlist stills are), or an absolute path. It does **not** have to be a
+shortlist frame: any image of any aspect ratio works, and is scaled to cover
+and centre-cropped to the canvas — so a photograph the camera never rolled on,
+or a frame you pulled by hand at a timestamp the shortlist missed, is one line
+of JSON away. A set that names nothing falls back to the first shortlist
+candidate; a set that names a file which is not there is skipped with a warning
+rather than quietly rendered onto some other frame. See
+[`docs/stages/render.md`](docs/stages/render.md) for the full style-key table.
 
 ## Operational Notes
 

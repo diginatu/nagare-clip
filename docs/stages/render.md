@@ -59,6 +59,41 @@ the stills are and where `publish.json` names them; the images land under the
 **render** stage dir. `ThumbRender.background` is recorded relative to the
 publish dir when it sits under it, and as an absolute path when it does not.
 
+## The background is per set
+
+`thumbnail_copy[i].background` — a path relative to `output/publish/`, or an
+absolute one. A headline and the photograph it sits on are **one** decision: a
+single project-wide background made four copy treatments into four wordings of
+one thumbnail, and no config key, no model and no human could say "this set
+gets this photo". `set_background()` resolves it per set; the old
+`publish.thumbnail.background` and `--background` are deleted rather than
+moved.
+
+**It does not have to be a shortlist frame.** This falls out of the design
+rather than being bolted on: the path is resolved as a path, and
+`build_render_cmd` composites with `-resize WxH^ -gravity center -extent WxH`,
+so any image of any aspect ratio is scaled to cover and centre-cropped. A
+photograph the camera never rolled on, or a frame pulled by hand at a timestamp
+the shortlist missed, is one line of JSON away — and a good deal of what the
+stage split is *for*. Portrait, panorama and square sources are covered by a
+real-ImageMagick test.
+
+Two fallbacks, and they differ on purpose:
+
+| the set says | what happens |
+|---|---|
+| nothing (`""` or absent) | the first frame-shortlist candidate on disk — a project that says nothing renders exactly as it did before per-set backgrounds existed |
+| a path that is not on disk | **that set is dropped**, with a warning; the others still render |
+
+The second is not the same rule as the first because rendering a hook over some
+*other* frame and presenting it as the chosen one misleads review worse than a
+missing image does. Before the split this was a whole-run failure (a named
+background that was missing rendered nothing at all); it is now per set.
+
+`publish.json` carries `"background"` on every set, **even when empty**, so a
+human opening the file can see where a path goes without reading these docs
+first.
+
 ## How a thumbnail is built
 
 The predecessor of this stage was a hand-written ImageMagick script with the
@@ -153,9 +188,9 @@ returning `None` falls back to a point-size-based estimate
 one failure that is not per-set: `resolve_background()` runs **once**, before
 the per-set loop, and when it returns `None` `render_sets()` returns `[]`
 immediately — every set in the run is skipped, not just one
-(`test_no_background_renders_nothing`). Background resolution itself: the
-first entry of the frame shortlist that is actually on disk, else nothing
-renders.
+(`test_no_background_renders_nothing`) — but that guard now only fires when
+**no** set names a background *and* the shortlist yields none, so a set with
+its own path still renders on an empty shortlist. Per-set resolution is above.
 
 `render.json` records `{set, path, background}` per rendered set, and
 `render.md` embeds `<img src="thumbnails/set1.jpg" width="480">` under each

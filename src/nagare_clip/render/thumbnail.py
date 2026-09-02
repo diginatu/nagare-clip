@@ -80,15 +80,21 @@ class ThumbLine:
 
 @dataclass(frozen=True)
 class ThumbSet:
-    """One alternative: its copy, and the look chosen for that copy.
+    """One alternative: its copy, the picture it goes on, and its look.
 
     Defined here rather than beside the LLM call that writes it: this is what
     ``publish.json`` carries, and the render stage must be able to read it
     without loading the transport.
+
+    ``background`` is per **set**, because a headline and the photograph it
+    sits on are one decision: four copy treatments over one frame is four
+    wordings of one thumbnail.  Empty means "nothing chosen" and falls back to
+    the frame shortlist.
     """
 
     lines: list[ThumbLine] = field(default_factory=list)
     style: dict[str, Any] = field(default_factory=dict)  # gravity / offset / shadow
+    background: str = ""  # relative to the publish stage dir, or absolute
 
 
 @dataclass(frozen=True)
@@ -409,6 +415,31 @@ def resolve_background(thumbs: Sequence[Any], publish_dir: Path) -> Path | None:
     return None
 
 
+def set_background(thumb_set: Any, thumbs: Sequence[Any], publish_dir: Path) -> Path | None:
+    """The still THIS set is composited onto.
+
+    A relative path is resolved against the **publish** stage dir, because
+    that is where the stills are and where ``publish.json`` names them.  An
+    absolute path is taken as it stands, and neither form has to be a
+    shortlist frame: ``build_render_cmd`` covers-and-crops whatever it is
+    given, so a photograph the camera never rolled on, or a frame pulled by
+    hand at a timestamp the shortlist missed, is one line of JSON away.
+
+    A named background that is not on disk yields ``None`` rather than the
+    shortlist fallback: rendering a hook over some other frame and calling it
+    the chosen one misleads review worse than a missing image does.
+    """
+    named = str(getattr(thumb_set, "background", "") or "").strip()
+    if not named:
+        return resolve_background(thumbs, publish_dir)
+    path = Path(named)
+    path = path if path.is_absolute() else publish_dir / path
+    if path.is_file():
+        return path
+    logger.warning("render: background %s not found; set dropped", named)
+    return None
+
+
 def render_sets(
     sets: Sequence[Any],
     thumbs: Sequence[Any],
@@ -422,9 +453,10 @@ def render_sets(
     Two calls per set: measure, then render.  *run* returns stdout, and is
     injected so this module never starts a subprocess itself.
 
-    Backgrounds are resolved against *publish_dir* because that is where the
-    stills are and where ``publish.json`` names them; the images land under
-    *out_dir*, which is the render stage's own directory.
+    Each set is composited onto **its own** background (``set_background``),
+    resolved against *publish_dir* because that is where the stills are and
+    where ``publish.json`` names them; the images land under *out_dir*, which
+    is the render stage's own directory.
 
     Nothing here is allowed to fail the stage: a set whose magick call dies is
     dropped with a warning and the rest still render.
@@ -433,8 +465,9 @@ def render_sets(
 
     if not render_cfg.get("enabled", True) or not sets:
         return []
-    background = resolve_background(thumbs, publish_dir)
-    if background is None:
+    if all(not str(getattr(s, "background", "") or "").strip() for s in sets) and (
+        resolve_background(thumbs, publish_dir) is None
+    ):
         logger.warning("render: no thumbnail background available; nothing rendered")
         return []
 
@@ -445,6 +478,10 @@ def render_sets(
 
     renders: list[ThumbRender] = []
     for index, thumb_set in enumerate(sets, start=1):
+        background = set_background(thumb_set, thumbs, publish_dir)
+        if background is None:
+            logger.warning("render: no background for set %d; skipped", index)
+            continue
         preset = preset_for(index)
         styled = [
             (line.text, resolve_line_style(line.style, line.role, fonts, preset))
@@ -515,7 +552,14 @@ def sets_from_dict(data: Any) -> list[ThumbSet]:
                 )
             )
         if lines:
-            out.append(ThumbSet(lines=lines, style={k: raw[k] for k in SET_KEYS if k in raw}))
+            background = raw.get("background")
+            out.append(
+                ThumbSet(
+                    lines=lines,
+                    style={k: raw[k] for k in SET_KEYS if k in raw},
+                    background=background.strip() if isinstance(background, str) else "",
+                )
+            )
     return out
 
 

@@ -92,7 +92,10 @@ def test_enabled_writes_titles_and_description_with_chapters(tmp_path, monkeypat
     assert data["chapters_qualify"] is True
     assert data["chapter_issues"] == []
     assert data["thumbnail_copy"] == [
-        {"lines": [{"role": "tag", "text": "水槽DIY"}, {"role": "hook", "text": "水浸し！"}]}
+        {
+            "lines": [{"role": "tag", "text": "水槽DIY"}, {"role": "hook", "text": "水浸し！"}],
+            "background": "",
+        }
     ]
     text = md.read_text(encoding="utf-8")
     assert "候補1" in text and "0:00 おさらい" in text
