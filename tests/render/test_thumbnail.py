@@ -557,7 +557,7 @@ def _sets(n=2):
 def test_one_measure_and_one_render_call_per_set(tmp_path):
     _touch(tmp_path, "frames/a/1.000.jpg")
     run = FakeRun()
-    renders = render_sets(_sets(2), [_shot()], CFG, tmp_path, tmp_path, run)
+    renders = render_sets(_sets(2), [_shot()], CFG, tmp_path, tmp_path, run).renders
     assert len(run.cmds) == 4
     assert [c[-1] for c in run.cmds] == [
         "info:",
@@ -597,7 +597,7 @@ def test_each_set_is_composited_onto_its_own_background(tmp_path):
     _touch(tmp_path, "frames/b/55.660.jpg")
     sets = [_bg_set("frames/b/55.660.jpg", "leak"), _bg_set(text="pump")]
     run = FakeRun()
-    renders = render_sets(sets, [_shot()], CFG, tmp_path, tmp_path, run)
+    renders = render_sets(sets, [_shot()], CFG, tmp_path, tmp_path, run).renders
     assert [r.background for r in renders] == ["frames/b/55.660.jpg", "frames/a/1.000.jpg"]
     backgrounds = [cmd[1] for cmd in run.cmds if cmd[-1] != "info:"]
     assert backgrounds == [
@@ -612,14 +612,16 @@ def test_an_absolute_background_is_recorded_as_an_absolute_path(tmp_path):
     outside.write_bytes(b"x")
     publish_dir = tmp_path / "publish"
     publish_dir.mkdir()
-    renders = render_sets([_bg_set(str(outside))], [], CFG, publish_dir, tmp_path, FakeRun())
+    renders = render_sets(
+        [_bg_set(str(outside))], [], CFG, publish_dir, tmp_path, FakeRun()
+    ).renders
     assert [r.background for r in renders] == [str(outside)]
 
 
 def test_a_set_whose_background_is_missing_is_dropped_and_the_rest_render(tmp_path, caplog):
     _touch(tmp_path, "frames/a/1.000.jpg")
     sets = [_bg_set("frames/b/gone.jpg", "leak"), _bg_set(text="pump")]
-    renders = render_sets(sets, [_shot()], CFG, tmp_path, tmp_path, FakeRun())
+    renders = render_sets(sets, [_shot()], CFG, tmp_path, tmp_path, FakeRun()).renders
     assert [r.index for r in renders] == [2]
     assert "gone.jpg" in caplog.text
 
@@ -628,14 +630,15 @@ def test_disabled_renders_nothing(tmp_path):
     _touch(tmp_path, "frames/a/1.000.jpg")
     run = FakeRun()
     assert (
-        render_sets(_sets(2), [_shot()], {**CFG, "enabled": False}, tmp_path, tmp_path, run) == []
+        render_sets(_sets(2), [_shot()], {**CFG, "enabled": False}, tmp_path, tmp_path, run).renders
+        == []
     )
     assert run.cmds == []
 
 
 def test_no_background_renders_nothing(tmp_path, caplog):
     run = FakeRun()
-    assert render_sets(_sets(1), [], CFG, tmp_path, tmp_path, run) == []
+    assert render_sets(_sets(1), [], CFG, tmp_path, tmp_path, run).renders == []
     assert run.cmds == []
     assert "background" in caplog.text
 
@@ -651,7 +654,7 @@ def test_a_failing_magick_drops_only_that_set(tmp_path, caplog):
             raise OSError("magick: boom")
         return FakeRun()(cmd)
 
-    renders = render_sets(_sets(2), [_shot()], CFG, tmp_path, tmp_path, run)
+    renders = render_sets(_sets(2), [_shot()], CFG, tmp_path, tmp_path, run).renders
     assert [r.index for r in renders] == [2]
     assert "boom" in caplog.text
 
@@ -662,7 +665,7 @@ def test_a_missing_magick_binary_drops_every_set_without_raising(tmp_path, caplo
     def run(cmd):
         raise FileNotFoundError("magick")
 
-    assert render_sets(_sets(2), [_shot()], CFG, tmp_path, tmp_path, run) == []
+    assert render_sets(_sets(2), [_shot()], CFG, tmp_path, tmp_path, run).renders == []
     assert "magick" in caplog.text
 
 
@@ -688,7 +691,7 @@ def test_a_failing_render_logs_magicks_stderr(tmp_path, caplog):
             return FakeRun()(cmd)
         raise subprocess.CalledProcessError(1, cmd, output="", stderr=_MAGICK_STDERR)
 
-    renders = render_sets(_sets(1), [_shot()], CFG, tmp_path, tmp_path, run)
+    renders = render_sets(_sets(1), [_shot()], CFG, tmp_path, tmp_path, run).renders
     assert renders == []
     assert any(_MAGICK_STDERR in r.getMessage() for r in caplog.records)
 
@@ -699,7 +702,7 @@ def test_a_failing_measure_logs_magicks_stderr(tmp_path, caplog):
     def run(cmd):
         raise subprocess.CalledProcessError(1, cmd, output="", stderr=_MAGICK_STDERR)
 
-    renders = render_sets(_sets(1), [_shot()], CFG, tmp_path, tmp_path, run)
+    renders = render_sets(_sets(1), [_shot()], CFG, tmp_path, tmp_path, run).renders
     assert renders == []
     assert any(_MAGICK_STDERR in r.getMessage() for r in caplog.records)
 
@@ -711,7 +714,36 @@ def test_unusable_measure_output_still_renders_the_set(tmp_path):
     def run(cmd):
         return "garbage\n" if cmd[-1] == "info:" else ""
 
-    assert len(render_sets(_sets(1), [_shot()], CFG, tmp_path, tmp_path, run)) == 1
+    assert len(render_sets(_sets(1), [_shot()], CFG, tmp_path, tmp_path, run).renders) == 1
+
+
+def test_every_set_that_did_not_render_carries_its_reason(tmp_path):
+    _touch(tmp_path, "frames/a/1.000.jpg")
+    sets = [_bg_set("frames/z/gone.jpg", "leak"), _bg_set(text="pump")]
+    result = render_sets(sets, [_shot()], CFG, tmp_path, tmp_path, FakeRun())
+    assert [r.index for r in result.renders] == [2]
+    assert [(s.index, s.reason) for s in result.skipped] == [
+        (1, "background not found: frames/z/gone.jpg")
+    ]
+
+
+def test_a_set_with_nothing_to_fall_back_on_says_which_problem_it_is(tmp_path):
+    result = render_sets([_bg_set()], [], CFG, tmp_path, tmp_path, FakeRun())
+    assert result.renders == []
+    assert len(result.skipped) == 1
+    assert "no background" in result.skipped[0].reason
+
+
+def test_a_failing_render_is_reported_with_magicks_own_words(tmp_path):
+    def run(cmd):
+        if cmd[-1] == "info:":
+            return FakeRun()(cmd)
+        raise subprocess.CalledProcessError(1, cmd, output="", stderr=_MAGICK_STDERR)
+
+    _touch(tmp_path, "frames/a/1.000.jpg")
+    result = render_sets(_sets(1), [_shot()], CFG, tmp_path, tmp_path, run)
+    assert result.renders == []
+    assert _MAGICK_STDERR in result.skipped[0].reason
 
 
 def test_the_background_is_read_back_out_of_publish_json():

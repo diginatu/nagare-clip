@@ -192,9 +192,20 @@ immediately — every set in the run is skipped, not just one
 **no** set names a background *and* the shortlist yields none, so a set with
 its own path still renders on an empty shortlist. Per-set resolution is above.
 
-`render.json` records `{set, path, background}` per rendered set, and
-`render.md` embeds `<img src="thumbnails/set1.jpg" width="480">` under each
-`## Set N` beside the copy it carries and the background it went onto.
+`render.json` records `{set, path, background}` per rendered set and
+`{set, reason}` per skipped one; `render.md` embeds
+`<img src="thumbnails/set1.jpg" width="480">` under each `## Set N` beside the
+copy it carries and the background it went onto.
+
+**A set that produced no image keeps its heading and its copy, and says why**
+(`**Not rendered:** background not found: frames/z/nope.jpg`). The loop is
+"edit publish.json, run render, read render.md", so a set that quietly vanishes
+from that file turns a one-character typo into a mystery whose only trace is a
+log line the human is not reading. `render_sets()` therefore returns a
+`RenderResult(renders, skipped)` rather than a bare list, and every `continue`
+in its loop goes through `skip(index, reason)` — a missing background (with the
+path that was tried), a failed measure or a failed `magick`, each carrying
+magick's own stderr where there is one.
 
 The embed goes through `markdown.embed_image(path, alt, width, markup)`, which
 `render.image_markup` selects: `html` (default) keeps the sized `<img>` and

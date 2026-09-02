@@ -665,7 +665,9 @@ and centre-cropped to the canvas — so a photograph the camera never rolled on,
 or a frame you pulled by hand at a timestamp the shortlist missed, is one line
 of JSON away. A set that names nothing falls back to the first shortlist
 candidate; a set that names a file which is not there is skipped with a warning
-rather than quietly rendered onto some other frame. See
+rather than quietly rendered onto some other frame — `render.md` keeps that
+set's heading and copy and says why it produced no image, so a typo is visible
+in the file you are already reading. See
 [`docs/stages/render.md`](docs/stages/render.md) for the full style-key table.
 
 ## Operational Notes

@@ -83,7 +83,7 @@ def _run(tmp_path, cfg=CFG, *, run=None, publish=PUBLISH, frames=("frames/a/1.00
 
 def test_disabled_writes_an_empty_artifact(tmp_path):
     data, md, _ = _run(tmp_path, {"render": {"enabled": False}})
-    assert data == {"renders": []}
+    assert data == {"renders": [], "skipped": []}
     assert "disabled" in md
 
 
@@ -96,7 +96,7 @@ def test_a_missing_publish_json_writes_an_empty_artifact(tmp_path, caplog):
         run=FakeRun(),
     )
     data = json.loads((tmp_path / "render" / "render.json").read_text(encoding="utf-8"))
-    assert data == {"renders": []}
+    assert data == {"renders": [], "skipped": []}
     assert "publish.json" in caplog.text
 
 
@@ -186,6 +186,52 @@ def test_sets_naming_no_background_render_exactly_as_before(tmp_path):
     """Nothing said -> the first shortlist candidate, for every set."""
     data, _, _ = _run(tmp_path)
     assert {r["background"] for r in data["renders"]} == {"frames/a/1.000.jpg"}
+
+
+def _skipping(tmp_path, *, background, frames=("frames/a/1.000.jpg",), run=None):
+    """One set that cannot render, one that can."""
+    publish = json.loads(json.dumps(PUBLISH))
+    publish["thumbnail_copy"][0]["background"] = background
+    return _run(tmp_path, publish=publish, frames=frames, run=run)
+
+
+def test_a_set_that_could_not_be_rendered_says_so_in_the_contact_sheet(tmp_path):
+    """The human edits publish.json and reads render.md; a typo that makes a
+    set vanish from that file, with the reason only in the log, is unreadable."""
+    data, md, _ = _skipping(tmp_path, background="frames/z/nope.jpg")
+    assert "## Set 1" in md and "水浸し！" in md  # heading and copy still there
+    assert "not rendered" in md.lower()
+    assert "frames/z/nope.jpg" in md
+    assert '<img src="thumbnails/set1.jpg"' not in md
+    assert [r["set"] for r in data["renders"]] == [2]
+
+
+def test_the_skipped_sets_are_recorded_in_render_json(tmp_path):
+    data, _, _ = _skipping(tmp_path, background="frames/z/nope.jpg")
+    assert data["skipped"] == [{"set": 1, "reason": "background not found: frames/z/nope.jpg"}]
+
+
+def test_a_set_with_no_background_anywhere_says_that_instead(tmp_path):
+    """Nothing named and nothing on the shortlist is a different problem from
+    a path that is wrong, and the fix is a different one."""
+    data, md, _ = _run(tmp_path, publish={**PUBLISH, "thumbnails": []}, frames=())
+    assert data["renders"] == []
+    assert [e["set"] for e in data["skipped"]] == [1, 2]
+    assert "no background" in md.lower()
+    assert "## Set 2" in md and "穴あけ不要。" in md
+
+
+def test_a_failed_magick_call_is_reported_in_the_contact_sheet(tmp_path, caplog):
+    def run(cmd):
+        if cmd[-1] == "info:":
+            return FakeRun()(cmd)
+        raise OSError("magick: unable to write")
+
+    data, md, _ = _run(tmp_path, run=run)
+    assert data["renders"] == []
+    assert [e["set"] for e in data["skipped"]] == [1, 2]
+    assert "not rendered" in md.lower()
+    assert "magick" in md.lower()
 
 
 def test_the_render_package_never_reaches_for_the_llm():

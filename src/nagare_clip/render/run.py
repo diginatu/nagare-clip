@@ -28,7 +28,7 @@ from typing import Any
 
 from nagare_clip.markdown import embed_image
 from nagare_clip.render.thumbnail import (
-    ThumbRender,
+    RenderResult,
     render_sets,
     sets_from_dict,
     shots_from_dict,
@@ -37,7 +37,7 @@ from nagare_clip.render.thumbnail import (
 
 def empty_render() -> dict[str, Any]:
     """The disabled-stage artifact: the full shape, with nothing in it."""
-    return {"renders": []}
+    return {"renders": [], "skipped": []}
 
 
 def _load_publish(publish_json: Path) -> Any:
@@ -56,16 +56,21 @@ def _load_publish(publish_json: Path) -> Any:
         return None
 
 
-def _render_markdown(
-    sets: Sequence[Any], renders: Sequence[ThumbRender], enabled: bool, markup: str
-) -> str:
-    """The contact sheet: every set's copy, its background, and the image."""
+def _render_markdown(sets: Sequence[Any], result: RenderResult, enabled: bool, markup: str) -> str:
+    """The contact sheet: every set's copy, its background, and the image.
+
+    A set that produced no image keeps its heading and its copy and says
+    **why** — this file is what the human reads after editing publish.json, so
+    a set that quietly disappears from it turns a one-character typo into a
+    mystery whose only trace is a log line.
+    """
     if not enabled:
         return "# render\n\nThe render stage is disabled (`render.enabled: false`).\n"
     lines = ["# render", ""]
-    if not renders:
+    if not sets:
         lines += ["_(none)_", ""]
-    by_index = {r.index: r for r in renders}
+    by_index = {r.index: r for r in result.renders}
+    reasons = {s.index: s.reason for s in result.skipped}
     for index, thumb_set in enumerate(sets, start=1):
         render = by_index.get(index)
         lines.append(f"## Set {index}")
@@ -77,6 +82,8 @@ def _render_markdown(
                 "",
                 embed_image(render.path, f"Set {index}", 480, markup),
             ]
+        else:
+            lines += ["", f"**Not rendered:** {reasons.get(index, 'unknown reason')}"]
         lines.append("")
     return "\n".join(lines).rstrip("\n") + "\n"
 
@@ -96,22 +103,30 @@ def run_render(
     out_dir = output.parent
 
     sets: list[Any] = []
-    renders: list[ThumbRender] = []
+    result = RenderResult()
     if not enabled:
         logging.info("render: disabled, writing empty render material")
     else:
         data = _load_publish(publish_json)
         sets = sets_from_dict(data)
-        renders = render_sets(sets, shots_from_dict(data), render_cfg, publish_dir, out_dir, run)
+        result = render_sets(sets, shots_from_dict(data), render_cfg, publish_dir, out_dir, run)
 
     artifact = {
-        "renders": [{"set": r.index, "path": r.path, "background": r.background} for r in renders]
+        "renders": [
+            {"set": r.index, "path": r.path, "background": r.background} for r in result.renders
+        ],
+        "skipped": [{"set": s.index, "reason": s.reason} for s in result.skipped],
     }
     output.parent.mkdir(parents=True, exist_ok=True)
     output.write_text(json.dumps(artifact, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
-    logging.info("render: wrote %s (%d image(s))", output, len(renders))
+    logging.info(
+        "render: wrote %s (%d image(s), %d skipped)",
+        output,
+        len(result.renders),
+        len(result.skipped),
+    )
     if markdown is not None:
         markdown.parent.mkdir(parents=True, exist_ok=True)
         markup = str(render_cfg.get("image_markup", "html"))
-        markdown.write_text(_render_markdown(sets, renders, enabled, markup), encoding="utf-8")
+        markdown.write_text(_render_markdown(sets, result, enabled, markup), encoding="utf-8")
         logging.info("render: wrote %s", markdown)

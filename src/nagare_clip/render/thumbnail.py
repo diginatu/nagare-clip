@@ -396,6 +396,27 @@ class ThumbRender:
     background: str  # the still it was composited onto
 
 
+@dataclass(frozen=True)
+class SkippedSet:
+    """A set that produced no image, and the reason a human can act on.
+
+    The loop here is "edit publish.json, re-run render, look at render.md", so
+    a set that quietly disappears from the contact sheet -- with the reason
+    only in the log -- is a typo the human cannot see.
+    """
+
+    index: int
+    reason: str
+
+
+@dataclass(frozen=True)
+class RenderResult:
+    """What became of every copy set: an image, or a reason there is none."""
+
+    renders: list[ThumbRender] = field(default_factory=list)
+    skipped: list[SkippedSet] = field(default_factory=list)
+
+
 def set_relpath(index: int) -> str:
     """Render path relative to the render stage dir."""
     return f"thumbnails/set{index}.jpg"
@@ -415,6 +436,11 @@ def resolve_background(thumbs: Sequence[Any], publish_dir: Path) -> Path | None:
     return None
 
 
+def named_background(thumb_set: Any) -> str:
+    """The path this set names, if any -- lenient about a hand-edited value."""
+    return str(getattr(thumb_set, "background", "") or "").strip()
+
+
 def set_background(thumb_set: Any, thumbs: Sequence[Any], publish_dir: Path) -> Path | None:
     """The still THIS set is composited onto.
 
@@ -429,7 +455,7 @@ def set_background(thumb_set: Any, thumbs: Sequence[Any], publish_dir: Path) -> 
     shortlist fallback: rendering a hook over some other frame and calling it
     the chosen one misleads review worse than a missing image does.
     """
-    named = str(getattr(thumb_set, "background", "") or "").strip()
+    named = named_background(thumb_set)
     if not named:
         return resolve_background(thumbs, publish_dir)
     path = Path(named)
@@ -447,7 +473,7 @@ def render_sets(
     publish_dir: Path,
     out_dir: Path,
     run: Callable[[list[str]], str],
-) -> list[ThumbRender]:
+) -> RenderResult:
     """One rendered thumbnail per copy set, so render.md shows options.
 
     Two calls per set: measure, then render.  *run* returns stdout, and is
@@ -458,29 +484,36 @@ def render_sets(
     where ``publish.json`` names them; the images land under *out_dir*, which
     is the render stage's own directory.
 
-    Nothing here is allowed to fail the stage: a set whose magick call dies is
-    dropped with a warning and the rest still render.
+    Nothing here is allowed to fail the stage: a set whose background is
+    missing or whose magick call dies comes back as a ``SkippedSet`` carrying
+    the reason, and the rest still render.
     """
     import subprocess
 
+    result = RenderResult(renders=[], skipped=[])
     if not render_cfg.get("enabled", True) or not sets:
-        return []
-    if all(not str(getattr(s, "background", "") or "").strip() for s in sets) and (
-        resolve_background(thumbs, publish_dir) is None
-    ):
-        logger.warning("render: no thumbnail background available; nothing rendered")
-        return []
+        return result
 
     fonts = render_cfg.get("fonts") or {}
     canvas = (int(render_cfg.get("width", 1280)), int(render_cfg.get("height", 720)))
     line_gap = int(render_cfg.get("line_gap", 12))
     (out_dir / "thumbnails").mkdir(parents=True, exist_ok=True)
 
-    renders: list[ThumbRender] = []
+    def skip(index: int, reason: str) -> None:
+        logger.warning("render: set %d not rendered: %s", index, reason)
+        result.skipped.append(SkippedSet(index=index, reason=reason))
+
     for index, thumb_set in enumerate(sets, start=1):
         background = set_background(thumb_set, thumbs, publish_dir)
         if background is None:
-            logger.warning("render: no background for set %d; skipped", index)
+            named = named_background(thumb_set)
+            skip(
+                index,
+                f"background not found: {named}"
+                if named
+                else "no background: the set names none and no frame shortlist "
+                "candidate is on disk",
+            )
             continue
         preset = preset_for(index)
         styled = [
@@ -495,12 +528,12 @@ def render_sets(
             # from a bad `render.fonts` slot) -- without it the log only
             # has the argv and "exit status 1", and the human has to re-run by hand
             # to learn why every set silently dropped.
-            logger.warning(
-                "render: could not measure thumbnail set %d: %s", index, e.stderr, exc_info=True
-            )
+            logger.debug("render: measure failed for set %d", index, exc_info=True)
+            skip(index, f"could not measure the text: {e.stderr}")
             continue
-        except Exception:  # noqa: BLE001 - a dead magick must not fail the stage
-            logger.warning("render: could not measure thumbnail set %d", index, exc_info=True)
+        except Exception as e:  # noqa: BLE001 - a dead magick must not fail the stage
+            logger.debug("render: measure failed for set %d", index, exc_info=True)
+            skip(index, f"could not measure the text: {e}")
             continue
         if metrics is None:
             # Unmeasured fallback: point size is a fair proxy for line height.
@@ -511,20 +544,24 @@ def render_sets(
         try:
             run(build_render_cmd(background, placed, set_style, canvas, out_dir / rel))
         except subprocess.CalledProcessError as e:
-            logger.warning(
-                "render: could not render thumbnail set %d: %s", index, e.stderr, exc_info=True
-            )
+            logger.debug("render: magick failed for set %d", index, exc_info=True)
+            skip(index, f"magick failed: {e.stderr}")
             continue
-        except Exception:  # noqa: BLE001
-            logger.warning("render: could not render thumbnail set %d", index, exc_info=True)
+        except Exception as e:  # noqa: BLE001
+            logger.debug("render: magick failed for set %d", index, exc_info=True)
+            skip(index, f"magick failed: {e}")
             continue
         try:
             bg_name = str(background.relative_to(publish_dir))
         except ValueError:
             bg_name = str(background)
-        renders.append(ThumbRender(index=index, path=rel, background=bg_name))
-    logger.info("render: rendered %d thumbnail(s)", len(renders))
-    return renders
+        result.renders.append(ThumbRender(index=index, path=rel, background=bg_name))
+    logger.info(
+        "render: rendered %d thumbnail(s), %d skipped",
+        len(result.renders),
+        len(result.skipped),
+    )
+    return result
 
 
 def sets_from_dict(data: Any) -> list[ThumbSet]:
