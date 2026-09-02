@@ -1117,14 +1117,21 @@ class PairingConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
     section_comment: ClassVar[str] = (
         "Pairing: a second, text-only call that puts each thumbnail headline on the\n"
-        "frame that shows what it promises, and decides where and in what colour the\n"
-        "text sits -- from the frame DESCRIPTIONS (see describe_frames above), never\n"
-        "from images. It is kept apart from the copy call because two dozen frame\n"
-        "descriptions in front of that one makes it caption the photographs instead of\n"
-        "writing hooks from the story. Uses publish's own provider/model (it is the\n"
-        "same kind of call), overriding only what is set here. Disable it and every set\n"
-        "falls back to the built-in presets, exactly as a project renders with no\n"
-        "pairing at all."
+        "frame that shows what it promises, and decides where the text sits and in what\n"
+        "colour -- from the frame DESCRIPTIONS above, never from images, and naming its\n"
+        "frame by INDEX (publish resolves that to a path before writing publish.json).\n"
+        "It is kept apart from the copy call because two dozen frame descriptions in\n"
+        "front of that one makes it caption the photographs it can see instead of\n"
+        "writing hooks from the story.\n"
+        "\n"
+        "Cost: exactly one extra text call per publish run, whatever the shortlist size.\n"
+        "It needs NO new model -- it uses publish's own provider/model/api_base/api_key,\n"
+        "since it is the same kind of call, and overrides only what is set here.\n"
+        "\n"
+        "ON by default, unlike describe_frames, because the copy call no longer chooses\n"
+        "colours or placement at all: turning this off is not a no-op but a fallback to\n"
+        "the four built-in presets on one shared background -- which is what a project\n"
+        "renders with no pairing at all, and is a downgrade rather than nothing."
     )
     enabled: bool = Field(True, description="Run the pairing call")
     temperature: float = Field(
@@ -1144,13 +1151,24 @@ class DescribeFramesConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
     section_comment: ClassVar[str] = (
         "Frame description: one VISION call per candidate still, describing what is\n"
-        "actually legible in it and which regions are empty -- the director's label\n"
-        "says what it thought was happening, only looking says what a viewer can make\n"
-        "out. Results are cached in publish/frames.json by a content hash of the JPEG,\n"
-        "so an unchanged shortlist costs nothing on a re-run and a description you\n"
-        "rewrite by hand survives. The pairing step uses these to put each headline on\n"
-        "a frame that shows what it promises. Needs a vision-capable model; disabled by\n"
-        "default (frames.json is still written, with hashes and empty descriptions)."
+        "actually legible in it, where the subject sits and which regions are empty --\n"
+        "the director's label says what it THOUGHT was happening at that moment, only\n"
+        "looking says what a viewer can make out. The pairing step below uses these to\n"
+        "put each headline on a frame that shows what it promises.\n"
+        "\n"
+        "Cost: up to publish.max_frames calls the first time (24 by default), then only\n"
+        "for frames whose picture CHANGED. Results are cached in publish/frames.json by\n"
+        "a content hash of the JPEG itself, so re-running publish for better copy over\n"
+        "an unchanged shortlist costs nothing, and a description you rewrite by hand is\n"
+        "the description from then on.\n"
+        "\n"
+        "OFF by default because it needs a VISION-capable model and the rest of publish\n"
+        "needs a text one: a project that has only configured publish.model would\n"
+        "otherwise fire two dozen vision calls at a model that cannot see. Turning it\n"
+        "off is not a no-op the way disabling a stage is -- frames.json is still written\n"
+        "with the shortlist fields and hashes, so descriptions can be written by hand and\n"
+        "are reused when this is switched on. Without descriptions the pairing call still\n"
+        "runs, on the director's labels alone."
     )
     enabled: bool = Field(False, description="Enable the frame-description vision LLM")
     provider: str = Field(
@@ -1186,14 +1204,18 @@ class PublishConfig(BaseModel):
     section_comment: ClassVar[str] = (
         "publish stage: runs once project-wide AFTER blender. An LLM turns the summaries\n"
         "and the project brief into several title candidates, a description lead, chapter\n"
-        "titles and alternative thumbnail-copy sets (copy AND look, in ImageMagick's own\n"
-        "vocabulary); the chapter TIMESTAMPS are computed from the finished timeline (keep\n"
-        "intervals + speed ranges), which exists nowhere else. Stills are extracted at the\n"
-        "moments the director marked as payoffs and shown in publish.md beside the copy.\n"
+        "titles and alternative thumbnail-copy sets (WORDS only -- see pairing below);\n"
+        "the chapter TIMESTAMPS are computed from the finished timeline (keep intervals +\n"
+        "speed ranges), which exists nowhere else. Stills are extracted at the moments the\n"
+        "director marked as payoffs and shown in publish.md beside the copy.\n"
         "Compositing is NOT done here: the render stage (below) reads publish.json and\n"
         "runs ImageMagick, so a hook or a background can be hand-edited and re-rendered\n"
         "without paying for the copy again. Uploading, and picking which rendered set to\n"
-        "ship, stay manual. Disabled by default (no-op)."
+        "ship, stay manual. Disabled by default (no-op).\n"
+        "\n"
+        "Cost of one enabled run: the copy call, plus the pairing call, plus one VISION\n"
+        "call per candidate still that does not already have a description (see\n"
+        "describe_frames)."
     )
     enabled: bool = Field(False, description="Enable the publish LLM")
     provider: str = Field(
@@ -1450,7 +1472,7 @@ def _render_model(model_cls: type[BaseModel], indent: int) -> list[str]:
         if isinstance(ann, type) and issubclass(ann, BaseModel):
             sub_comment = getattr(ann, "section_comment", "")
             if sub_comment:
-                lines += [f"{pad}# {c}" for c in sub_comment.split("\n")]
+                lines += [f"{pad}# {c}".rstrip() for c in sub_comment.split("\n")]
             lines.append(f"{pad}{name}:")
             lines += _render_model(ann, indent + 2)
             continue
@@ -1476,7 +1498,7 @@ def generate_example_yaml() -> str:
             continue
         section_comment = getattr(model_cls, "section_comment", "")
         if section_comment:
-            out += [f"# {c}" for c in section_comment.split("\n")]
+            out += [f"# {c}".rstrip() for c in section_comment.split("\n")]
         out.append(f"{name}:")
         out += _render_model(model_cls, 2)
         out.append("")

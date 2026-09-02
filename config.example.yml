@@ -276,14 +276,18 @@ blender:
 
 # publish stage: runs once project-wide AFTER blender. An LLM turns the summaries
 # and the project brief into several title candidates, a description lead, chapter
-# titles and alternative thumbnail-copy sets (copy AND look, in ImageMagick's own
-# vocabulary); the chapter TIMESTAMPS are computed from the finished timeline (keep
-# intervals + speed ranges), which exists nowhere else. Stills are extracted at the
-# moments the director marked as payoffs and shown in publish.md beside the copy.
+# titles and alternative thumbnail-copy sets (WORDS only -- see pairing below);
+# the chapter TIMESTAMPS are computed from the finished timeline (keep intervals +
+# speed ranges), which exists nowhere else. Stills are extracted at the moments the
+# director marked as payoffs and shown in publish.md beside the copy.
 # Compositing is NOT done here: the render stage (below) reads publish.json and
 # runs ImageMagick, so a hook or a background can be hand-edited and re-rendered
 # without paying for the copy again. Uploading, and picking which rendered set to
 # ship, stay manual. Disabled by default (no-op).
+#
+# Cost of one enabled run: the copy call, plus the pairing call, plus one VISION
+# call per candidate still that does not already have a description (see
+# describe_frames).
 publish:
   enabled: false   # Enable the publish LLM
   provider: ollama_chat   # LiteLLM provider prefix: ollama_chat | openai | gemini | anthropic
@@ -303,13 +307,24 @@ publish:
   image_markup: html   # How publish.md embeds images: html = <img> tags (sized), markdown = ![alt](path) for viewers that strip raw HTML
   # prompt: "..."   # System prompt (has a sensible default)
   # Frame description: one VISION call per candidate still, describing what is
-  # actually legible in it and which regions are empty -- the director's label
-  # says what it thought was happening, only looking says what a viewer can make
-  # out. Results are cached in publish/frames.json by a content hash of the JPEG,
-  # so an unchanged shortlist costs nothing on a re-run and a description you
-  # rewrite by hand survives. The pairing step uses these to put each headline on
-  # a frame that shows what it promises. Needs a vision-capable model; disabled by
-  # default (frames.json is still written, with hashes and empty descriptions).
+  # actually legible in it, where the subject sits and which regions are empty --
+  # the director's label says what it THOUGHT was happening at that moment, only
+  # looking says what a viewer can make out. The pairing step below uses these to
+  # put each headline on a frame that shows what it promises.
+  #
+  # Cost: up to publish.max_frames calls the first time (24 by default), then only
+  # for frames whose picture CHANGED. Results are cached in publish/frames.json by
+  # a content hash of the JPEG itself, so re-running publish for better copy over
+  # an unchanged shortlist costs nothing, and a description you rewrite by hand is
+  # the description from then on.
+  #
+  # OFF by default because it needs a VISION-capable model and the rest of publish
+  # needs a text one: a project that has only configured publish.model would
+  # otherwise fire two dozen vision calls at a model that cannot see. Turning it
+  # off is not a no-op the way disabling a stage is -- frames.json is still written
+  # with the shortlist fields and hashes, so descriptions can be written by hand and
+  # are reused when this is switched on. Without descriptions the pairing call still
+  # runs, on the director's labels alone.
   describe_frames:
     enabled: false   # Enable the frame-description vision LLM
     provider: ollama_chat   # LiteLLM provider prefix: ollama_chat | openai | gemini | anthropic
@@ -324,14 +339,21 @@ publish:
     retry_temp_cap: 0.8
     # prompt: "..."   # System prompt (has a sensible default)
   # Pairing: a second, text-only call that puts each thumbnail headline on the
-  # frame that shows what it promises, and decides where and in what colour the
-  # text sits -- from the frame DESCRIPTIONS (see describe_frames above), never
-  # from images. It is kept apart from the copy call because two dozen frame
-  # descriptions in front of that one makes it caption the photographs instead of
-  # writing hooks from the story. Uses publish's own provider/model (it is the
-  # same kind of call), overriding only what is set here. Disable it and every set
-  # falls back to the built-in presets, exactly as a project renders with no
-  # pairing at all.
+  # frame that shows what it promises, and decides where the text sits and in what
+  # colour -- from the frame DESCRIPTIONS above, never from images, and naming its
+  # frame by INDEX (publish resolves that to a path before writing publish.json).
+  # It is kept apart from the copy call because two dozen frame descriptions in
+  # front of that one makes it caption the photographs it can see instead of
+  # writing hooks from the story.
+  #
+  # Cost: exactly one extra text call per publish run, whatever the shortlist size.
+  # It needs NO new model -- it uses publish's own provider/model/api_base/api_key,
+  # since it is the same kind of call, and overrides only what is set here.
+  #
+  # ON by default, unlike describe_frames, because the copy call no longer chooses
+  # colours or placement at all: turning this off is not a no-op but a fallback to
+  # the four built-in presets on one shared background -- which is what a project
+  # renders with no pairing at all, and is a downgrade rather than nothing.
   pairing:
     enabled: true   # Run the pairing call
     temperature: 0.2   # Lower than publish.temperature: this is a matching task, not writing

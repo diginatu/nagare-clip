@@ -35,6 +35,15 @@ into this behaviour: the standalone `python -m nagare_clip.publish.thumbnail`
 CLI that used to exist was a side door around a stage that could not be
 re-entered, and the stage can now be re-entered.
 
+**The loop is pinned by a test, not just by a promise.**
+`test_hand_editing_one_background_changes_exactly_one_thumbnail` renders four
+sets with real ImageMagick, edits one set's `background` in `publish.json`,
+re-runs the stage and asserts that set's JPEG changed **and the other three
+came back byte-identical**. A companion test renders the same project twice and
+asserts the bytes match (so the comparison means something) and that four sets
+with identical copy still produce four different images (so `preset_for()`'s
+round-robin is doing its job). Both skip when `magick` is not installed.
+
 **Zero calls is a property of the code, not of the config.** Every provider in
 this repo goes through `llm_client.call_llm` (a hard constraint in AGENTS.md),
 and nothing under `src/nagare_clip/render/` names either the module or the

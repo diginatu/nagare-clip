@@ -5,12 +5,18 @@ from __future__ import annotations
 
 import ast
 import json
+import shutil
 import subprocess
 import sys
 import textwrap
 from pathlib import Path
 
+import pytest
+
 import nagare_clip.render.run as render_run
+from nagare_clip.pipeline.external import run_magick
+
+HAS_MAGICK = shutil.which("magick") is not None
 
 CFG = {"render": {"enabled": True, "width": 1280, "height": 720, "line_gap": 12, "fonts": {}}}
 
@@ -282,3 +288,99 @@ def test_the_stage_runs_without_ever_loading_the_transport(tmp_path):
         """
     )
     subprocess.run([sys.executable, "-c", script, str(publish_dir), str(render_dir)], check=True)
+
+
+# --- the zero-call loop, end to end ------------------------------------------
+
+
+def _four_set_project(tmp_path):
+    """A publish dir with four copy sets and two real stills."""
+    publish_dir = tmp_path / "publish"
+    (publish_dir / "frames" / "a").mkdir(parents=True)
+    for name, gradient in (("9.622.jpg", "navy-skyblue"), ("55.660.jpg", "darkred-orange")):
+        subprocess.run(
+            [
+                "magick",
+                "-size",
+                "640x360",
+                f"gradient:{gradient}",
+                str(publish_dir / "frames/a" / name),
+            ],
+            check=True,
+        )
+    publish = {
+        **PUBLISH,
+        "thumbnail_copy": [
+            # Identical copy on purpose: then any difference between the four
+            # images is the preset, and byte-identity below cannot be a
+            # coincidence of the text.
+            {"lines": [{"role": "hook", "text": "hook"}], "background": ""}
+            for _ in range(4)
+        ],
+        "thumbnails": [
+            {
+                "stem": "a",
+                "source_time": 9.622,
+                "timeline_time": 9.6,
+                "kind": "overlay",
+                "label": "l",
+                "path": "frames/a/9.622.jpg",
+            }
+        ],
+    }
+    (publish_dir / "publish.json").write_text(
+        json.dumps(publish, ensure_ascii=False), encoding="utf-8"
+    )
+    return publish_dir, tmp_path / "render"
+
+
+@pytest.mark.skipif(not HAS_MAGICK, reason="ImageMagick not installed")
+def test_hand_editing_one_background_changes_exactly_one_thumbnail(tmp_path):
+    """The acceptance constraint this whole stage split exists for.
+
+    Edit one set's background in publish.json, re-run render: that thumbnail
+    changes, the other three come back byte-identical, and no model is called.
+    """
+    publish_dir, render_dir = _four_set_project(tmp_path)
+    args = (publish_dir / "publish.json", render_dir / "render.json", CFG)
+    render_run.run_render(*args, run=run_magick, markdown=render_dir / "render.md")
+    before = {p.name: p.read_bytes() for p in sorted((render_dir / "thumbnails").iterdir())}
+    assert len(before) == 4
+
+    data = json.loads((publish_dir / "publish.json").read_text(encoding="utf-8"))
+    data["thumbnail_copy"][1]["background"] = "frames/a/55.660.jpg"
+    (publish_dir / "publish.json").write_text(
+        json.dumps(data, ensure_ascii=False), encoding="utf-8"
+    )
+
+    render_run.run_render(*args, run=run_magick, markdown=render_dir / "render.md")
+    after = {p.name: p.read_bytes() for p in sorted((render_dir / "thumbnails").iterdir())}
+
+    assert after["set2.jpg"] != before["set2.jpg"], "the edited set did not change"
+    for name in ("set1.jpg", "set3.jpg", "set4.jpg"):
+        assert after[name] == before[name], f"{name} changed and should not have"
+
+    manifest = json.loads((render_dir / "render.json").read_text(encoding="utf-8"))
+    assert [r["background"] for r in manifest["renders"]] == [
+        "frames/a/9.622.jpg",
+        "frames/a/55.660.jpg",
+        "frames/a/9.622.jpg",
+        "frames/a/9.622.jpg",
+    ]
+
+
+@pytest.mark.skipif(not HAS_MAGICK, reason="ImageMagick not installed")
+def test_a_project_naming_no_background_renders_the_same_twice(tmp_path):
+    """Line-count and preset variation survive, and rendering is deterministic
+    -- which is what makes the comparison above mean anything."""
+    publish_dir, render_dir = _four_set_project(tmp_path)
+    args = (publish_dir / "publish.json", render_dir / "render.json", CFG)
+    render_run.run_render(*args, run=run_magick)
+    first = {p.name: p.read_bytes() for p in sorted((render_dir / "thumbnails").iterdir())}
+    render_run.run_render(*args, run=run_magick)
+    second = {p.name: p.read_bytes() for p in sorted((render_dir / "thumbnails").iterdir())}
+    assert first == second
+    # identical copy, identical background: the four images differ only because
+    # preset_for() is round-robin, which is what keeps four options looking
+    # like four options.
+    assert len(set(first.values())) == 4
