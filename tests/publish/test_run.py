@@ -334,6 +334,86 @@ def test_a_disabled_stage_writes_no_frames_file(tmp_path):
     assert frames is None
 
 
+def test_the_pairing_decision_lands_in_publish_json(tmp_path, monkeypatch):
+    """Index in, path out: the human editing this file wants a filename."""
+    _fake_generate(monkeypatch, _copy(thumbnail_copy=_sets()))
+    shots = [
+        ThumbShot("a", 1.0, "overlay", "l1", "frames/a/1.000.jpg"),
+        ThumbShot("a", 2.0, "keep", "l2", "frames/a/2.000.jpg"),
+    ]
+
+    def fake_pairing(copy, frames, cfg, **kwargs):
+        from nagare_clip.publish.pairing import SetPairing
+
+        return {2: SetPairing(frame=2, style={"gravity": "north"}, lines={1: {"fill": "white"}})}
+
+    monkeypatch.setattr(publish_run, "generate_pairing", fake_pairing)
+    data, _, _ = _frames_run(tmp_path, {"publish": {"enabled": True}}, shots=shots)
+    assert data["thumbnail_copy"][1]["background"] == "frames/a/2.000.jpg"
+    assert data["thumbnail_copy"][1]["gravity"] == "north"
+    assert data["thumbnail_copy"][1]["lines"][0]["fill"] == "white"
+    # the set the pairing never mentioned keeps today's preset fallback
+    assert data["thumbnail_copy"][0]["background"] == ""
+    assert "gravity" not in data["thumbnail_copy"][0]
+
+
+def test_the_pairing_call_receives_the_frame_descriptions(tmp_path, monkeypatch):
+    _fake_generate(monkeypatch, _copy(thumbnail_copy=_sets()))
+    shots = [ThumbShot("a", 1.0, "overlay", "l1", "frames/a/1.000.jpg")]
+    seen = {}
+
+    def fake_pairing(copy, frames, cfg, **kwargs):
+        seen["frames"] = list(frames)
+        seen["cfg"] = cfg
+        return {}
+
+    monkeypatch.setattr(publish_run, "generate_pairing", fake_pairing)
+    _frames_run(tmp_path, {"publish": {"enabled": True}}, shots=shots)
+    assert [f.path for f in seen["frames"]] == ["frames/a/1.000.jpg"]
+
+
+def test_the_pairing_call_uses_publishs_model_and_its_own_temperature(tmp_path, monkeypatch):
+    """It is the same kind of call as the copy one, so configuring a model
+    twice would only be a way to configure it wrong."""
+    _fake_generate(monkeypatch, _copy(thumbnail_copy=_sets()))
+    seen = {}
+
+    def fake_pairing(copy, frames, cfg, **kwargs):
+        seen["cfg"] = cfg
+        return {}
+
+    monkeypatch.setattr(publish_run, "generate_pairing", fake_pairing)
+    cfg = {
+        "publish": {
+            "enabled": True,
+            "model": "big-text-model",
+            "temperature": 0.7,
+            "pairing": {"enabled": True, "temperature": 0.2, "prompt": "PAIR"},
+        }
+    }
+    _frames_run(tmp_path, cfg, shots=[ThumbShot("a", 1.0, "overlay", "l", "frames/a/1.000.jpg")])
+    assert seen["cfg"]["model"] == "big-text-model"
+    assert seen["cfg"]["temperature"] == 0.2
+    assert seen["cfg"]["prompt"] == "PAIR"
+
+
+def test_pairing_disabled_makes_no_call_and_leaves_the_presets(tmp_path, monkeypatch):
+    _fake_generate(monkeypatch, _copy(thumbnail_copy=_sets()))
+    calls = []
+
+    def fake_pairing(*a, **k):
+        calls.append(a)
+        return {}
+
+    monkeypatch.setattr(publish_run, "generate_pairing", fake_pairing)
+    cfg = {"publish": {"enabled": True, "pairing": {"enabled": False}}}
+    data, _, _ = _frames_run(
+        tmp_path, cfg, shots=[ThumbShot("a", 1.0, "overlay", "l", "frames/a/1.000.jpg")]
+    )
+    assert calls == []
+    assert [s["background"] for s in data["thumbnail_copy"]] == ["", ""]
+
+
 def test_the_candidate_table_shows_the_still_not_its_path(tmp_path, monkeypatch):
     _fake_generate(monkeypatch, _copy())
     shots = [ThumbShot("a", 12.0, "overlay", "水浸し！", "frames/a/12.000.jpg")]

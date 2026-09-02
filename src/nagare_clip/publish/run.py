@@ -11,8 +11,14 @@ Three phases, in this order and deliberately not folded together:
   what is actually legible in each frame, written to ``frames.json``.
   Depends on nothing but the frame.
 - **copy** (one LLM call): several title candidates, a description lead, the
-  chapter titles, and alternative thumbnail-copy sets. It is shown no frames:
-  the headlines come from the story, not from the pictures on hand.
+  chapter titles, and alternative thumbnail-copy sets as plain role+text. It
+  is shown no frames: the headlines come from the story, not from the pictures
+  on hand.
+- **pair** (one text-only LLM call): per set, which frame it goes on and where
+  and in what colour the text sits — from the descriptions, never from images,
+  and naming its frame by index. Separate from the copy call because two dozen
+  frame descriptions in front of that one makes it caption the photographs
+  instead.
 - **timing** (deterministic): chapter timestamps taken from the finished
   timeline, which is the one thing that can only be computed here.
 
@@ -48,7 +54,13 @@ from nagare_clip.publish.chapters import (
     format_timestamp,
     render_chapter_lines,
 )
-from nagare_clip.publish.describe_frames import describe_frames, frames_to_dict, load_frames
+from nagare_clip.publish.describe_frames import (
+    FrameDescription,
+    describe_frames,
+    frames_to_dict,
+    load_frames,
+)
+from nagare_clip.publish.pairing import apply_pairing, generate_pairing
 from nagare_clip.publish.publish_llm import (
     PublishCopy,
     generate_publish_copy,
@@ -224,6 +236,7 @@ def run_publish(
         # Look before writing: describing a still depends on nothing but the
         # still, and every frame whose bytes already have a description costs
         # no call -- so re-running publish for better copy is cheap.
+        frames: list[FrameDescription] = []
         if frames_json is not None:
             frames = describe_frames(
                 thumbs or [],
@@ -251,6 +264,19 @@ def run_publish(
             overlay_texts=flat_overlays,
             recorder=recorder,
         )
+
+        # Pair last: the copy is written blind, then matched to a picture.
+        # A set the pairing does not decide keeps the built-in preset look,
+        # which is exactly how a project with no pairing at all renders.
+        pairing_cfg = publish_cfg.get("pairing") or {}
+        if pairing_cfg.get("enabled", True):
+            pairing = generate_pairing(
+                copy,
+                frames,
+                {**publish_cfg, **pairing_cfg, "fonts": (cfg.get("render") or {}).get("fonts")},
+                recorder=recorder,
+            )
+            copy.thumbnail_copy = apply_pairing(copy.thumbnail_copy, pairing, frames)
 
         min_chapter = float(publish_cfg.get("min_chapter_duration", MIN_CHAPTER_SECONDS))
         placements = build_placements(ordered)

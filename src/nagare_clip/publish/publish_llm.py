@@ -8,6 +8,14 @@ copy, which comes back as alternative *sets* of one to three lines, each line
 tagged with the role it plays so a layout can follow the copy instead of the
 copy being padded to fill a template.
 
+**This call is blind, on purpose.**  It emits ``role`` and ``text`` and
+nothing else: no colours, no placement, no font, and it is shown no frames.
+The look is decided afterwards by ``publish/pairing.py``, which has the frame
+descriptions.  Hooks come from the story, not from the pictures that happen to
+be on hand — and a style key arriving in this response is something the model
+was not asked for, so it is dropped at the parse boundary rather than carried
+into ``publish.json``.
+
 Chapter *timestamps* are never asked for: they come from the finished timeline
 (``publish.timeline``), which the LLM cannot see.  It supplies only the titles,
 keyed by part index, and any part it skips falls back to that part's summary.
@@ -20,7 +28,7 @@ from __future__ import annotations
 
 import json
 import logging
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -38,9 +46,7 @@ from nagare_clip.llm_report import (
 from nagare_clip.llm_retry import cfg_for_attempt, retry_attempts
 from nagare_clip.plan.plan_llm import PartDirection
 from nagare_clip.render.thumbnail import (
-    LINE_KEYS,
     MAX_THUMB_LINES,
-    SET_KEYS,
     VALID_ROLES,
     ThumbLine,
     ThumbSet,
@@ -137,11 +143,6 @@ def _parse_chapter_titles(
     return out
 
 
-def _pick(raw: Mapping[str, Any], keys: Sequence[str]) -> dict[str, Any]:
-    """Only the style keys we know; anything else never enters the artifact."""
-    return {k: raw[k] for k in keys if k in raw}
-
-
 def _parse_thumb_set(raw: Any, drop: Callable[[str], None]) -> ThumbSet:
     raw_lines = raw.get("lines") if isinstance(raw, dict) else None
     lines: list[ThumbLine] = []
@@ -156,11 +157,12 @@ def _parse_thumb_set(raw: Any, drop: Callable[[str], None]) -> ThumbSet:
         if not text:
             drop(f"thumbnail line dropped, empty text ({role})")
             continue
-        lines.append(ThumbLine(role=role, text=text, style=_pick(entry, LINE_KEYS)))
+        # Style deliberately empty: this call does not choose the look.
+        lines.append(ThumbLine(role=role, text=text))
     if len(lines) > MAX_THUMB_LINES:
         drop(f"thumbnail set trimmed from {len(lines)} to {MAX_THUMB_LINES} line(s)")
         lines = lines[:MAX_THUMB_LINES]
-    return ThumbSet(lines=lines, style=_pick(raw, SET_KEYS) if isinstance(raw, dict) else {})
+    return ThumbSet(lines=lines)
 
 
 def try_parse_publish_response(
@@ -212,19 +214,6 @@ def try_parse_publish_response(
     )
 
 
-def font_slot_note(fonts: Mapping[str, str]) -> str:
-    """The one-line prompt addendum naming the installed font slots.
-
-    Generated rather than written into PUBLISH_PROMPT so the names the LLM is
-    offered are always the names the renderer can resolve.
-    """
-    return (
-        'Thumbnail "font" must be one of these slot names: '
-        + ", ".join(sorted(fonts))
-        + ". A line with no font, or an unknown one, uses the default face."
-    )
-
-
 def generate_publish_copy(
     project_summary: ProjectSummary,
     cfg: dict[str, Any],
@@ -240,12 +229,8 @@ def generate_publish_copy(
     if not parts:
         logger.warning("publish: no summary parts; nothing to write copy from")
         return PublishCopy()
-    system_prompt = cfg.get("prompt", "")
-    fonts = (cfg.get("thumbnail") or {}).get("fonts") or {}
-    if fonts:
-        system_prompt = f"{system_prompt}\n\n{font_slot_note(fonts)}"
     messages = [
-        {"role": "system", "content": system_prompt},
+        {"role": "system", "content": cfg.get("prompt", "")},
         {
             "role": "user",
             "content": format_publish_context(project_summary, directions, overlay_texts),
@@ -309,7 +294,7 @@ def generate_publish_copy(
 
 
 def thumbnail_copy_to_dict(copy: PublishCopy) -> list[dict[str, Any]]:
-    """The thumbnail sets as plain JSON: copy and look together.
+    """The thumbnail sets as plain JSON: copy, background and look together.
 
     The line count is never normalised -- a punchier video may want only a
     hook.  Style keys sit beside the text they apply to, and each set names the

@@ -433,12 +433,8 @@ PUBLISH_PROMPT = (
     '  "lead": "two or three sentences opening the description",\n'
     '  "chapters": [{"index": 1, "title": "short chapter title"}],\n'
     '  "thumbnail_copy": [\n'
-    '    {"lines": [{"role": "tag", "text": "...", "font": "<slot>", "pointsize": 70,\n'
-    '                "fill": "white", "stroke": "rgba(30,30,30,1)", "strokewidth": 8},\n'
-    '               {"role": "hook", "text": "...", "font": "<slot>", "pointsize": 156,\n'
-    '                "fill": "#B08D3E", "stroke": "rgba(250,250,250,1)", "strokewidth": 12}],\n'
-    '     "gravity": "northwest", "offset": "+56+62",\n'
-    '     "shadow": {"color": "rgba(0,0,0,0.8)", "blur": "0x8"}}\n'
+    '    {"lines": [{"role": "tag", "text": "..."},\n'
+    '               {"role": "hook", "text": "..."}]}\n'
     "  ]\n"
     "}\n"
     "\n"
@@ -459,16 +455,12 @@ PUBLISH_PROMPT = (
     "thumbnail is built around, a `subtitle` adds the one detail that makes "
     "the hook land. Only the roles you need — a punchy video may want a hook "
     "alone. Never pad a set to three lines.\n"
-    "- Each thumbnail set also carries its own LOOK, as ImageMagick options "
-    'on a 1280x720 canvas: per line "fill" and "stroke" colours '
-    '(#RRGGBB or rgba(r,g,b,a)), "strokewidth" (0-40, the outline that '
-    'keeps text readable over a photo), "pointsize" (8-400; a hook is '
-    'large, a tag small); per set "gravity" (northwest / north / … / '
-    'southeast), "offset" (+x+y from that corner) and "shadow". The sets '
-    "must DIFFER visibly from each other in colour and placement, not only "
-    "in wording — they are alternatives a human chooses between. Line "
-    "positions are computed, so give the block anchor, not a position per "
-    "line.\n"
+    "- The sets must be genuinely different ANGLES on the video, not "
+    "rewordings of one — they are alternatives a human chooses between.\n"
+    "- Write the WORDS ONLY. Which photograph a set goes on, and what "
+    "colour its text is and where it sits, are decided afterwards by "
+    "someone who has looked at the pictures. You have not seen them, so "
+    "do not describe, assume or refer to a background.\n"
     "- Prefer the concrete moments the captions and part summaries name "
     "(a failure, a fix, a result) over generic phrasing.\n"
     "- Output only the JSON object, no other text."
@@ -1064,6 +1056,90 @@ class BlenderConfig(BaseModel):
     speed_mark: SpeedMarkConfig = Field(default_factory=SpeedMarkConfig)
 
 
+PAIRING_PROMPT = (
+    "You put each thumbnail headline on the photograph that shows what it "
+    "promises, and decide how the text sits on that photograph.\n"
+    "\n"
+    "You receive the thumbnail COPY SETS (alternatives a human will choose "
+    "between, each one to three numbered lines) and a numbered list of "
+    "CANDIDATE FRAMES. Each frame shows the moment's kind, its time, the "
+    "editor's label for it, and -- where one exists -- a description of what "
+    "is actually visible in it, written by someone who looked. The label is a "
+    "claim about the moment; the description is what a viewer would really "
+    "see. Where they disagree, believe the description.\n"
+    "\n"
+    "You never see the images themselves and you never name a file. Name a "
+    "frame by its INDEX in the list. Output ONLY a JSON object.\n"
+    "\n"
+    "JSON shape:\n"
+    "{\n"
+    '  "sets": [\n'
+    '    {"set": 1, "frame": 7,\n'
+    '     "gravity": "northwest", "offset": "+56+62",\n'
+    '     "shadow": {"color": "rgba(0,0,0,0.8)", "blur": "0x8"},\n'
+    '     "lines": [{"line": 1, "font": "<slot>", "pointsize": 70,\n'
+    '                "fill": "white", "stroke": "rgba(30,30,30,1)", "strokewidth": 8},\n'
+    '               {"line": 2, "font": "<slot>", "pointsize": 156,\n'
+    '                "fill": "#B08D3E", "stroke": "rgba(30,30,30,1)", "strokewidth": 12}]}\n'
+    "  ]\n"
+    "}\n"
+    "\n"
+    "Rules:\n"
+    "- One entry per copy set, keyed by the set number as given.\n"
+    '- "frame": the index of a frame that actually SHOWS what that set\'s '
+    "hook promises. A hook about a leak belongs on a frame whose description "
+    "mentions the leak, not on one whose label merely says so. If no frame "
+    "shows it, pick the one that comes closest and do not pretend "
+    "otherwise.\n"
+    "- Two sets may use the same frame, but prefer different ones: they are "
+    "alternatives, and four treatments of one photograph is one thumbnail "
+    "with four captions.\n"
+    '- "gravity" (northwest / north / … / southeast) and "offset" (+x+y from '
+    "that corner) place the whole block. Put it where the frame's "
+    "description says the picture is EMPTY -- never across the subject. Line "
+    "positions within the block are computed for you, so give the block "
+    "anchor, not a position per line.\n"
+    '- "fill" and "stroke" are colours (#RRGGBB or rgba(r,g,b,a)); '
+    '"strokewidth" (0-40) is the outline that keeps text readable over a '
+    "photo. Choose them against what the description says is behind the "
+    "text: light text with a dark outline on a dark region, and the reverse "
+    "on a light one. Do not put a mid-tone colour on a mid-tone region.\n"
+    '- "pointsize" (8-400) on a 1280x720 canvas: a hook is large, a tag '
+    "small, a subtitle in between.\n"
+    '- "line" is the line number within that set, as given.\n'
+    "- Leave out anything you have no reason to choose; a sensible default is "
+    "used for it.\n"
+    "- Output only the JSON object, no other text."
+)
+
+
+class PairingConfig(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    section_comment: ClassVar[str] = (
+        "Pairing: a second, text-only call that puts each thumbnail headline on the\n"
+        "frame that shows what it promises, and decides where and in what colour the\n"
+        "text sits -- from the frame DESCRIPTIONS (see describe_frames above), never\n"
+        "from images. It is kept apart from the copy call because two dozen frame\n"
+        "descriptions in front of that one makes it caption the photographs instead of\n"
+        "writing hooks from the story. Uses publish's own provider/model (it is the\n"
+        "same kind of call), overriding only what is set here. Disable it and every set\n"
+        "falls back to the built-in presets, exactly as a project renders with no\n"
+        "pairing at all."
+    )
+    enabled: bool = Field(True, description="Run the pairing call")
+    temperature: float = Field(
+        0.2, description="Lower than publish.temperature: this is a matching task, not writing"
+    )
+    max_retries: int = Field(
+        2, description="Extra attempts on LLM error / unparseable response (0 = single attempt)"
+    )
+    retry_temp_step: float = Field(0.2)
+    retry_temp_cap: float = Field(0.8)
+    prompt: str = _commented(
+        PAIRING_PROMPT, sample='"..."', description="System prompt (has a sensible default)"
+    )
+
+
 class DescribeFramesConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
     section_comment: ClassVar[str] = (
@@ -1170,6 +1246,7 @@ class PublishConfig(BaseModel):
         PUBLISH_PROMPT, sample='"..."', description="System prompt (has a sensible default)"
     )
     describe_frames: DescribeFramesConfig = Field(default_factory=DescribeFramesConfig)
+    pairing: PairingConfig = Field(default_factory=PairingConfig)
 
 
 class RenderConfig(BaseModel):

@@ -323,6 +323,22 @@ publish:
     retry_temp_step: 0.2
     retry_temp_cap: 0.8
     # prompt: "..."   # System prompt (has a sensible default)
+  # Pairing: a second, text-only call that puts each thumbnail headline on the
+  # frame that shows what it promises, and decides where and in what colour the
+  # text sits -- from the frame DESCRIPTIONS (see describe_frames above), never
+  # from images. It is kept apart from the copy call because two dozen frame
+  # descriptions in front of that one makes it caption the photographs instead of
+  # writing hooks from the story. Uses publish's own provider/model (it is the
+  # same kind of call), overriding only what is set here. Disable it and every set
+  # falls back to the built-in presets, exactly as a project renders with no
+  # pairing at all.
+  pairing:
+    enabled: true   # Run the pairing call
+    temperature: 0.2   # Lower than publish.temperature: this is a matching task, not writing
+    max_retries: 2   # Extra attempts on LLM error / unparseable response (0 = single attempt)
+    retry_temp_step: 0.2
+    retry_temp_cap: 0.8
+    # prompt: "..."   # System prompt (has a sensible default)
 
 # render stage: the LAST stage, and the only one that never makes an LLM call.
 # It reads output/publish/publish.json -- the hand-editable contract -- and

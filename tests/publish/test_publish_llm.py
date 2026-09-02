@@ -10,7 +10,6 @@ from nagare_clip.publish.publish_llm import (
     PublishCopy,
     ThumbLine,
     ThumbSet,
-    font_slot_note,
     format_publish_context,
     generate_publish_copy,
     thumbnail_copy_to_dict,
@@ -227,60 +226,9 @@ def test_generate_without_parts_makes_no_call():
 # --- thumbnail style ---------------------------------------------------------
 
 
-def test_line_style_keys_are_carried_through():
-    data = {
-        "titles": ["A"],
-        "thumbnail_copy": [
-            {
-                "lines": [
-                    {
-                        "role": "hook",
-                        "text": "h",
-                        "font": "serif-black",
-                        "pointsize": 156,
-                        "fill": "#B08D3E",
-                        "stroke": "white",
-                        "strokewidth": 12,
-                    }
-                ]
-            }
-        ],
-    }
-    copy = try_parse_publish_response(json.dumps(data), num_parts=1)
-    assert copy is not None
-    assert copy.thumbnail_copy[0].lines[0].style == {
-        "font": "serif-black",
-        "pointsize": 156,
-        "fill": "#B08D3E",
-        "stroke": "white",
-        "strokewidth": 12,
-    }
-
-
-def test_set_style_keys_are_carried_through():
-    data = {
-        "titles": ["A"],
-        "thumbnail_copy": [
-            {
-                "lines": [{"role": "hook", "text": "h"}],
-                "gravity": "southwest",
-                "offset": "+56+62",
-                "shadow": {"color": "rgba(0,0,0,0.8)", "blur": "0x8"},
-            }
-        ],
-    }
-    copy = try_parse_publish_response(json.dumps(data), num_parts=1)
-    assert copy is not None
-    assert copy.thumbnail_copy[0].style == {
-        "gravity": "southwest",
-        "offset": "+56+62",
-        "shadow": {"color": "rgba(0,0,0,0.8)", "blur": "0x8"},
-    }
-
-
-def test_unknown_style_keys_never_reach_the_artifact():
-    """Validation lives in thumbnail.py, but an operator-shaped key has no
-    business being carried at all."""
+def test_no_style_key_at_all_reaches_the_artifact():
+    """The copy call is blind: a style key here -- operator-shaped or not --
+    is something it was not asked for."""
     data = {
         "titles": ["A"],
         "thumbnail_copy": [
@@ -337,11 +285,6 @@ def test_the_prompt_tells_the_model_the_sets_must_look_different():
     assert "differ" in DEFAULTS["publish"]["prompt"]
 
 
-def test_font_slot_note_lists_the_configured_slots():
-    note = font_slot_note({"serif-black": "X", "sans-bold": "Y"})
-    assert "sans-bold" in note and "serif-black" in note
-
-
 def test_the_system_prompt_is_unchanged_when_no_fonts_are_configured(monkeypatch):
     """Regression guard: a project without font slots gets the prompt it had."""
     seen = []
@@ -356,23 +299,6 @@ def test_the_system_prompt_is_unchanged_when_no_fonts_are_configured(monkeypatch
         project, {"prompt": "BASE", "thumbnail": {"fonts": {}}}, call_llm=fake_call
     )
     assert seen == ["BASE", "BASE"]
-
-
-def test_the_font_slots_are_appended_to_the_system_prompt(monkeypatch):
-    seen = []
-
-    def fake_call(messages, cfg):
-        seen.append(messages[0]["content"])
-        return json.dumps({"titles": ["A"]})
-
-    project = ProjectSummary("s", [PartSummary("a", (1, 2), "p")])
-    generate_publish_copy(
-        project,
-        {"prompt": "BASE", "thumbnail": {"fonts": {"sans-bold": "X"}}},
-        call_llm=fake_call,
-    )
-    assert seen[0].startswith("BASE\n\n")
-    assert "sans-bold" in seen[0]
 
 
 def test_the_background_field_is_visible_in_publish_json():
@@ -391,3 +317,56 @@ def test_a_chosen_background_round_trips_through_publish_json():
     )
     data = {"thumbnail_copy": thumbnail_copy_to_dict(copy)}
     assert sets_from_dict(data)[0].background == "frames/b/55.660.jpg"
+
+
+# --- the copy call comes out blind -------------------------------------------
+
+
+def test_the_copy_call_emits_role_and_text_only():
+    """The look is the pairing call's job. A style key in this response is
+    something the model was not asked for and must not reach publish.json."""
+    response = json.dumps(
+        {
+            "titles": ["A"],
+            "thumbnail_copy": [
+                {
+                    "lines": [{"role": "hook", "text": "h", "fill": "#B08D3E", "pointsize": 156}],
+                    "gravity": "southwest",
+                    "offset": "+56+62",
+                }
+            ],
+        }
+    )
+    copy = try_parse_publish_response(response, num_parts=1)
+    assert copy.thumbnail_copy[0].lines[0].style == {}
+    assert copy.thumbnail_copy[0].style == {}
+
+
+def test_the_copy_prompt_carries_no_look_vocabulary():
+    """Anchoring works both ways: colour words in this prompt are what made a
+    call that has never seen the picture choose a corner anyway."""
+    from nagare_clip.config import get_effective_config
+
+    prompt = get_effective_config(None, {})["publish"]["prompt"].lower()
+    for word in ("fill", "stroke", "pointsize", "gravity", "offset", "imagemagick", "#rrggbb"):
+        assert word not in prompt, f"{word!r} still in the copy prompt"
+
+
+def test_the_copy_call_is_never_told_about_the_font_slots(monkeypatch):
+    """Fonts are part of the look, so they belong to the pairing call."""
+    seen = {}
+
+    def fake(messages, cfg):
+        seen["system"] = messages[0]["content"]
+        return json.dumps({"titles": ["A"]})
+
+    cfg = {"prompt": "BASE", "fonts": {"sans-bold": "Noto"}}
+    generate_publish_copy(_ps(), cfg, call_llm=fake)
+    assert seen["system"] == "BASE"
+
+
+def test_no_frame_material_can_reach_the_copy_call():
+    """The whole reason the pairing call is separate: 24 frame descriptions in
+    front of this one and it starts captioning photographs."""
+    context = format_publish_context(_ps())
+    assert "frame" not in context.lower()

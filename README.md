@@ -183,6 +183,16 @@ width syntax, so they render full width).
 **hand-editable contract** the `render` stage below reads — like
 `_director.json` is for the edit. `publish` itself composites nothing.
 
+**How a headline meets its picture.** `publish` makes two text calls where it
+used to make one. The **copy** call writes the hooks from the story and is shown
+no frames at all — two dozen frame descriptions in front of it and it starts
+captioning the photographs instead. The **pairing** call then takes those hooks
+and the frame *descriptions* (never the images) and decides, per set, which
+frame it goes on and where and in what colour the text sits. It names its frame
+by index, and `publish` writes the resolved **path** into `publish.json`, which
+is what you then edit. Turn it off with `publish.pairing.enabled: false` and
+every set falls back to the built-in presets.
+
 **Looking at the frames.** With `publish.describe_frames.enabled` (and a
 vision-capable model configured), each candidate still is described once — what
 is actually legible in it, where the subject sits, which regions are empty and
@@ -202,10 +212,10 @@ composites one real thumbnail per copy set into
 `output/render/thumbnails/set{N}.jpg`, with `output/render/render.md` as a
 contact sheet embedding the finished images beside the copy they carry.
 
-Each set names **its own background**, so the sets you see are real options
-rather than several wordings of one image. The same LLM call that writes a
-set's copy also writes that copy's *look* — font, colours, outline, block
-position — in ImageMagick's own vocabulary;
+Each set names **its own background** and carries its own *look* — font,
+colours, outline, block position — so the sets you see are real options rather
+than several wordings of one image. Both are decided by `publish`'s **pairing**
+call, in ImageMagick's own vocabulary;
 the pipeline validates every value and builds every `magick` command as an
 argument list (never a shell string). This needs `magick` (ImageMagick) on
 `PATH`; set `render.enabled: false` to keep the copy but skip compositing.

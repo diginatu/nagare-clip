@@ -34,11 +34,11 @@ actually legible in each frame, cached in `frames.json` by the frame's own
 bytes. Depends on nothing but the frame.
 
 **Copy** (one LLM call, `publish_llm.py`) — title candidates, the description
-lead, chapter *titles*, thumbnail *copy*. It is shown **no frames at all**:
-this codebase has repeatedly found that concrete examples anchor a model harder
-than the instructions around them, and a copy call handed two dozen frame
-descriptions starts captioning the photographs it can see instead of writing
-hooks from the story.
+lead, chapter *titles*, thumbnail *copy* as plain `role`+`text`. It is shown
+**no frames at all** and its prompt carries no look vocabulary.
+
+**Pair** (one text-only LLM call, `pairing.py`) — per set: which frame, where
+the text sits, what colour it is. From the descriptions, never from images.
 
 **Timing** (deterministic, `timeline.py` + `chapters.py`) — every timestamp.
 The LLM is never asked for one; it cannot see the finished timeline.
@@ -90,6 +90,46 @@ Disabled (`publish.describe_frames.enabled: false`, the default — a
 vision-capable model has to be configured first) `frames.json` is still written
 with the shortlist fields and hashes, and no call is made: the descriptions can
 then be written by hand, and turning the setting on later reuses them.
+
+## Pairing a headline to a picture
+
+One call used to write the copy *and* its `fill`/`gravity`/`pointsize` — which
+is precisely how the look came to be chosen blind: the model deciding where the
+text goes had never seen the photograph, so it picked a corner and the sets that
+read cleanly did so by luck. Splitting the two buys three things.
+
+**The copy call comes out blind.** It emits `role` and `text` and nothing else.
+`PUBLISH_PROMPT` lost the colour/placement vocabulary entirely (a test asserts
+`fill`, `stroke`, `pointsize`, `gravity`, `offset` and `imagemagick` do not
+appear in it), `_parse_thumb_set` drops a style key that arrives anyway, and
+`font_slot_note()` moved to `pairing.py` — a font is part of the look. If any
+frame material could reach this call the anchoring problem would move rather
+than go away, so the guard is a test, not a convention.
+
+**The pairing call sees descriptions, not images.** It receives the copy sets
+(lines numbered) and the shortlist (frames numbered, each with kind, time, the
+director's label and the description), and answers per set with a frame plus
+`gravity`/`offset`/`shadow` and per-line `fill`/`stroke`/`strokewidth`/
+`pointsize`/`font`. Its prompt tells it to believe the description over the
+label where they disagree — the label is a claim about the moment, the
+description is what a viewer would really see — to put the block where the
+description says the picture is empty, and to choose colours against what the
+description says is behind the text.
+
+**It names its frame by INDEX, never a path.** A path is a string a model can
+invent; an index is bounded and checkable. `apply_pairing()` resolves the index
+to a path before it reaches `publish.json`, because the human editing that file
+wants a filename, not a number.
+
+Degrading follows the house style, with one deliberate asymmetry: only invalid
+JSON or a response with no usable `sets` array is a hard failure that retries. A
+bad **set** index drops that entry; a bad **frame** index costs only the
+background, and the rest of that set's decision still applies — the set renders
+on the shortlist's first still rather than not at all. Style *values* are not
+validated here, because `render/thumbnail.py` already checks every one against
+an allowlist and falls back **per key** to a preset. So a set the pairing never
+mentioned, a decision it got wrong, an index that did not resolve, a failed call
+and `pairing.enabled: false` all converge on the same place: today's `PRESETS`.
 
 ## Why the timestamps can only be computed here
 
@@ -240,6 +280,17 @@ the chapters simply come back empty.
 | `frame_width` | `1280` | Downscale width of the extracted JPEGs |
 | `image_markup` | `html` | How `publish.md` embeds the frame shortlist: `html` = sized `<img>`, `markdown` = `![alt](path)` |
 | `temperature` | `0.7` | Deliberately higher than the editing stages |
+
+`publish.pairing:` — the second text call. It uses `publish:`'s own
+provider/model (it is the same kind of call, and configuring a model twice
+would only be a way to configure it wrong), overriding only:
+
+| Key | Default | Meaning |
+|-----|---------|---------|
+| `enabled` | `true` | Pair each copy set to a frame and a look; `false` = every set falls back to the presets |
+| `temperature` | `0.2` | Lower than `publish.temperature`: this is a matching task, not writing |
+| `max_retries` | `2` | Extra attempts on an LLM error or an unparseable response |
+| `prompt` | (default) | Carries the style-key vocabulary the copy prompt gave up |
 
 `publish.describe_frames:` — its own LLM block, because it needs a **vision**
 model where the rest of the stage needs a text one:

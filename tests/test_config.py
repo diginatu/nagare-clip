@@ -819,6 +819,42 @@ def test_the_frame_description_prompt_forbids_writing_a_headline():
     assert "do not write a headline" in prompt
 
 
+def test_publish_pairing_defaults():
+    cfg = get_effective_config(None, {})["publish"]["pairing"]
+    assert cfg["enabled"] is True  # same text model as the copy call; no new dependency
+    assert cfg["temperature"] == 0.2  # a matching task, unlike the copy call's 0.7
+    assert cfg["prompt"]
+
+
+def test_the_pairing_prompt_owns_the_look_vocabulary_the_copy_prompt_lost():
+    prompt = get_effective_config(None, {})["publish"]["pairing"]["prompt"].lower()
+    for word in ("fill", "stroke", "strokewidth", "pointsize", "gravity", "offset"):
+        assert word in prompt
+
+
+def test_the_pairing_prompt_asks_for_an_index_never_a_path():
+    """A path is a string a model can invent; an index is bounded."""
+    prompt = get_effective_config(None, {})["publish"]["pairing"]["prompt"].lower()
+    assert "index" in prompt
+    assert ".jpg" not in prompt and "path" not in prompt
+
+
+def test_the_pairing_prompts_own_json_example_parses():
+    from nagare_clip.publish.pairing import try_parse_pairing_response
+
+    prompt = get_effective_config(None, {})["publish"]["pairing"]["prompt"]
+    start = prompt.index("{", prompt.index("JSON shape"))
+    depth, end = 0, start
+    for i, ch in enumerate(prompt[start:], start=start):
+        depth += (ch == "{") - (ch == "}")
+        if depth == 0:
+            end = i + 1
+            break
+    got = try_parse_pairing_response(prompt[start:end], num_sets=4, num_frames=24)
+    assert got is not None and got[1].frame is not None
+    assert got[1].style and got[1].lines
+
+
 def test_render_defaults():
     cfg = get_effective_config(None, {})
     render = cfg["render"]

@@ -107,10 +107,12 @@ ImageMagick once per copy set, stack one to three lines, shrink text that
 overruns the frame — so `render/thumbnail.py` (`render_sets()`) now does that
 procedure itself, once per copy set written by `publish_llm.py`.
 
-**The look is model-authored, in ImageMagick's own vocabulary.** The same LLM
-call that writes a set's copy also writes that copy's style, as magick flags
-with magick's own value syntax — the model reasons about the tool it already
-knows rather than an abstraction over it:
+**The look is model-authored, in ImageMagick's own vocabulary.** `publish`'s
+**pairing** call writes each set's style as magick flags with magick's own value
+syntax — the model reasons about the tool it already knows rather than an
+abstraction over it. (It is a separate call from the one that writes the copy,
+and it has the frame descriptions: see
+[`publish.md`](publish.md#pairing-a-headline-to-a-picture).)
 
 | key | flag | scope | accepted |
 |---|---|---|---|
