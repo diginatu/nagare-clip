@@ -50,3 +50,29 @@ class TestCfgForAttempt:
         # survive a retry without a float(None) crash and without being nudged.
         out = cfg_for_attempt({"temperature": None}, 2)
         assert out["temperature"] is None
+
+
+def test_the_cap_never_lowers_the_temperature_below_the_configured_one():
+    """A retry ADDS to the temperature; landing below the configured value is
+    incoherent, and it breaks a model that accepts only one temperature.
+
+    A project on such a model sets temperature: 1.0, and the default cap of
+    0.8 would otherwise hand attempt 2 a 0.8 the provider rejects outright --
+    so the stage's every retry fails before it leaves the machine.
+    """
+    cfg = {"temperature": 1.0, "retry_temp_step": 0.2, "retry_temp_cap": 0.8}
+    assert cfg_for_attempt(cfg, 1)["temperature"] == 1.0
+    assert cfg_for_attempt(cfg, 2)["temperature"] == 1.0
+
+
+def test_a_zero_step_pins_the_temperature_across_every_attempt():
+    """The documented escape hatch for a model that accepts one temperature."""
+    cfg = {"temperature": 1.0, "retry_temp_step": 0.0, "retry_temp_cap": 2.0}
+    assert [cfg_for_attempt(cfg, a)["temperature"] for a in (1, 2, 3)] == [1.0, 1.0, 1.0]
+
+
+def test_the_cap_still_bounds_a_low_temperature():
+    cfg = {"temperature": 0.2, "retry_temp_step": 0.4, "retry_temp_cap": 0.8}
+    assert cfg_for_attempt(cfg, 1)["temperature"] == pytest.approx(0.6)
+    assert cfg_for_attempt(cfg, 2)["temperature"] == pytest.approx(0.8)
+    assert cfg_for_attempt(cfg, 5)["temperature"] == pytest.approx(0.8)

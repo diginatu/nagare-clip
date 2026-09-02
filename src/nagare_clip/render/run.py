@@ -56,7 +56,36 @@ def _load_publish(publish_json: Path) -> Any:
         return None
 
 
-def _render_markdown(sets: Sequence[Any], result: RenderResult, enabled: bool, markup: str) -> str:
+def _no_font_warning(sets: Sequence[Any], fonts: Any) -> str:
+    """The note for copy that ImageMagick's default face cannot draw.
+
+    That face has no CJK glyphs and renders such a character as **nothing at
+    all** -- not as a box -- so the thumbnail comes back merely looking empty.
+    A real run lost every headline this way and it took a person to notice, so
+    the file that person is reading is where it has to be said.
+    """
+    if fonts:
+        return ""
+    if not any(
+        ord(ch) > 0x7F for thumb_set in sets for line in thumb_set.lines for ch in line.text
+    ):
+        return ""
+    return (
+        "**No `render.fonts` configured**, and this copy is not plain ASCII. "
+        "ImageMagick's default face draws nothing at all for a character it has no "
+        "glyph for, so those lines are missing from the images below rather than "
+        "showing as boxes. Add a slot to `render.fonts` -- the first one listed is "
+        "the face a line falls back to."
+    )
+
+
+def _render_markdown(
+    sets: Sequence[Any],
+    result: RenderResult,
+    enabled: bool,
+    markup: str,
+    fonts: Any = None,
+) -> str:
     """The contact sheet: every set's copy, its background, and the image.
 
     A set that produced no image keeps its heading and its copy and says
@@ -67,6 +96,9 @@ def _render_markdown(sets: Sequence[Any], result: RenderResult, enabled: bool, m
     if not enabled:
         return "# render\n\nThe render stage is disabled (`render.enabled: false`).\n"
     lines = ["# render", ""]
+    warning = _no_font_warning(sets, fonts)
+    if warning:
+        lines += [warning, ""]
     if not sets:
         lines += ["_(none)_", ""]
     by_index = {r.index: r for r in result.renders}
@@ -127,6 +159,9 @@ def run_render(
     )
     if markdown is not None:
         markdown.parent.mkdir(parents=True, exist_ok=True)
-        markup = str(render_cfg.get("image_markup", "html"))
-        markdown.write_text(_render_markdown(sets, result, enabled, markup), encoding="utf-8")
+        markup = str((cfg.get("general") or {}).get("image_markup", "html"))
+        markdown.write_text(
+            _render_markdown(sets, result, enabled, markup, render_cfg.get("fonts")),
+            encoding="utf-8",
+        )
         logging.info("render: wrote %s", markdown)

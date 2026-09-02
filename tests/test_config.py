@@ -272,13 +272,13 @@ class TestGetEffectiveConfig:
         with pytest.raises(ValidationError):
             get_effective_config(cfg_file)
 
-    def test_publish_image_markup_default_is_html(self):
+    def test_general_image_markup_default_is_html(self):
         cfg = get_effective_config(None)
-        assert cfg["publish"]["image_markup"] == "html"
+        assert cfg["general"]["image_markup"] == "html"
 
-    def test_publish_image_markup_rejects_unknown_value(self, tmp_path: Path):
+    def test_general_image_markup_rejects_unknown_value(self, tmp_path: Path):
         cfg_file = tmp_path / "cfg.yml"
-        cfg_file.write_text(yaml.dump({"publish": {"image_markup": "rst"}}))
+        cfg_file.write_text(yaml.dump({"general": {"image_markup": "rst"}}))
         with pytest.raises(ValidationError):
             get_effective_config(cfg_file)
 
@@ -819,10 +819,31 @@ def test_the_frame_description_prompt_forbids_writing_a_headline():
     assert "do not write a headline" in prompt
 
 
+def test_image_markup_is_general_not_per_stage():
+    """It is a property of the VIEWER, not of a stage: two copies is one for a
+    human to keep in sync, and one project with two markdown files disagreeing."""
+    cfg = get_effective_config(None, {})
+    assert cfg["general"]["image_markup"] == "html"
+    assert "image_markup" not in cfg["publish"]
+    assert "image_markup" not in cfg["render"]
+
+
+@pytest.mark.parametrize("section", ["publish", "render"])
+def test_a_per_stage_image_markup_is_rejected_rather_than_ignored(tmp_path, section):
+    path = tmp_path / "c.yml"
+    path.write_text(f"{section}:\n  image_markup: markdown\n", encoding="utf-8")
+    with pytest.raises(ValidationError):
+        get_effective_config(path, {})
+
+
 def test_publish_pairing_defaults():
     cfg = get_effective_config(None, {})["publish"]["pairing"]
     assert cfg["enabled"] is True  # same text model as the copy call; no new dependency
-    assert cfg["temperature"] == 0.2  # a matching task, unlike the copy call's 0.7
+    # unset = inherit publish's, because it runs on publish's model and must be
+    # sampled the way that model requires
+    assert cfg["temperature"] is None
+    assert cfg["max_retries"] is None
+    assert cfg["retry_temp_step"] is None and cfg["retry_temp_cap"] is None
     assert cfg["prompt"]
 
 
@@ -862,7 +883,6 @@ def test_render_defaults():
     assert (render["width"], render["height"]) == (1280, 720)
     assert render["line_gap"] == 12
     assert render["fonts"] == {}
-    assert render["image_markup"] == "html"
 
 
 def test_render_fonts_come_from_the_file(tmp_path):

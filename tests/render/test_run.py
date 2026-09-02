@@ -142,7 +142,8 @@ def test_the_markdown_is_a_contact_sheet_of_the_finished_images(tmp_path):
 
 
 def test_markdown_image_markup_uses_markdown_images(tmp_path):
-    cfg = {"render": {**CFG["render"], "image_markup": "markdown"}}
+    """One setting, read by both markdown files: it describes the viewer."""
+    cfg = {**CFG, "general": {"image_markup": "markdown"}}
     _, md, _ = _run(tmp_path, cfg)
     assert "![Set 1](thumbnails/set1.jpg)" in md
     assert "<img" not in md
@@ -238,6 +239,32 @@ def test_a_failed_magick_call_is_reported_in_the_contact_sheet(tmp_path, caplog)
     assert [e["set"] for e in data["skipped"]] == [1, 2]
     assert "not rendered" in md.lower()
     assert "magick" in md.lower()
+
+
+def test_non_latin_copy_with_no_fonts_configured_says_so_in_the_contact_sheet(tmp_path):
+    """ImageMagick's default face has no CJK glyphs and renders them as
+    nothing at all -- silently. The one run this actually happened on took a
+    person to notice; the file they were reading should have said it."""
+    cfg = {"render": {**CFG["render"], "fonts": {}}}
+    data, md, _ = _run(tmp_path, cfg)
+    assert data["renders"], "the sets still render; this is a warning, not a skip"
+    assert "render.fonts" in md
+    assert "draws nothing at all" in md
+
+
+def test_latin_only_copy_with_no_fonts_says_nothing(tmp_path):
+    """The default face can draw it, so there is nothing to warn about."""
+    publish = json.loads(json.dumps(PUBLISH))
+    publish["thumbnail_copy"] = [{"lines": [{"role": "hook", "text": "plain ascii"}]}]
+    cfg = {"render": {**CFG["render"], "fonts": {}}}
+    _, md, _ = _run(tmp_path, cfg, publish=publish)
+    assert "render.fonts" not in md
+
+
+def test_configured_fonts_mean_no_warning(tmp_path):
+    cfg = {"render": {**CFG["render"], "fonts": {"sans-bold": "Noto-Sans-CJK-JP-Bold"}}}
+    _, md, _ = _run(tmp_path, cfg)
+    assert "render.fonts" not in md
 
 
 def test_the_render_package_never_reaches_for_the_llm():

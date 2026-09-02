@@ -125,7 +125,7 @@ and it has the frame descriptions: see
 
 | key | flag | scope | accepted |
 |---|---|---|---|
-| `font` | `-font` | line | a key of `render.fonts` (a config *slot name*, never a path — the model cannot know what is installed) |
+| `font` | `-font` | line | a key of `render.fonts` (a config *slot name*, never a path — the model cannot know what is installed). A line naming none, or an unknown one, takes the **first slot listed** — see below |
 | `pointsize` | `-pointsize` | line | int 8–400 |
 | `fill` | `-fill` | line | `#RGB`/`#RGBA`/`#RRGGBB`/`#RRGGBBAA`, `rgb(…)`/`rgba(…)`, or a named-colour allowlist |
 | `stroke` | `-stroke` | line | as `fill` |
@@ -150,6 +150,23 @@ that path is exercised by direct unit tests, not by the stage in production.
 A set with *no* usable style at all gets a whole preset, chosen **round-robin**
 by set index (`preset_for()`) rather than randomly, so a rerun of the same pipeline
 produces the same images and four sets still read as four options.
+
+**A preset cannot name a font**, and that is why `fallback_font()` exists. Slot
+names are project-defined and this module has never seen the config, so every
+`LineStyle` in `PRESETS` carries `font = ""` — no `-font` flag, ImageMagick's
+own default face. That face has no CJK glyphs and draws such a character as
+**nothing at all**, not as a box. On the first real run of the pairing feature
+the pairing call failed on every attempt, every set fell to the presets, and
+the thumbnails came back with the headlines simply missing — so "a project with
+pairing disabled renders exactly as it does today" was false, because before
+the copy call was blinded it had named a slot on every line.
+
+So a line that names no slot, or an unknown one, resolves to the **first face
+listed in `render.fonts`**. First-listed rather than sorted: YAML preserves
+mapping order, so a human writes the face they want first and the rule is one
+they can act on. With no fonts configured at all there is nothing to reach and
+the flag stays off — `render.md` then carries a note saying so, because that
+failure is invisible in the image.
 
 **Line positions are computed, never the model's.** The model gives the block
 anchor (`gravity` + `offset`) and each line's point size; it cannot measure a

@@ -174,10 +174,11 @@ it writes files, you upload.
   boundaries of a `timelapse`), so you pick from a shortlist instead of
   scrubbing the timeline. The JPEGs are under `output/publish/frames/`.
 
-The candidate stills are embedded as sized `<img>` tags by default. If you
-read `publish.md` in a viewer that strips raw HTML, set `publish.image_markup:
-markdown` and they become plain `![alt](path)` images instead (markdown has no
-width syntax, so they render full width).
+Images are embedded as sized `<img>` tags by default. If you read these files
+in a viewer that strips raw HTML, set `general.image_markup: markdown` and they
+become plain `![alt](path)` images instead (markdown has no width syntax, so
+they render full width). One key, read by both `publish.md` and `render.md` —
+it describes your viewer, not a stage.
 
 `output/publish/publish.json` holds the same material as data, and is the
 **hand-editable contract** the `render` stage below reads — like
@@ -219,6 +220,12 @@ call, in ImageMagick's own vocabulary;
 the pipeline validates every value and builds every `magick` command as an
 argument list (never a shell string). This needs `magick` (ImageMagick) on
 `PATH`; set `render.enabled: false` to keep the copy but skip compositing.
+
+**Set `render.fonts` if your copy is not plain ASCII.** ImageMagick's default
+face draws nothing at all — not even a box — for a character it has no glyph
+for, so a Japanese headline comes back invisible. The first slot you list is
+also the face any line falls back to when the model named none, so put a font
+that covers your language first. `render.md` says so at the top when it applies.
 
 The split exists for one loop — look at a render, change one thing, look
 again:

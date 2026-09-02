@@ -19,6 +19,7 @@ from nagare_clip.render.thumbnail import (
     build_measure_cmd,
     build_render_cmd,
     escape_magick_text,
+    fallback_font,
     layout_lines,
     parse_metrics,
     preset_for,
@@ -97,17 +98,55 @@ def _line(**raw):
     return resolve_line_style(raw, "hook", FONTS, PRESETS[0])
 
 
+def test_a_line_with_no_font_falls_back_to_the_first_configured_slot():
+    """The presets cannot name a slot -- slot names are project-defined -- so
+    a set that chose no font must still reach `render.fonts`.
+
+    Without this the whole preset fallback renders in ImageMagick's default
+    face, which has no CJK glyphs: a real run whose pairing call failed came
+    back as blank thumbnails, and "pairing disabled renders as it does today"
+    was false.
+    """
+    fonts = {"sans-bold": "Noto-Sans-CJK-JP-Bold", "serif-black": "Noto-Serif-CJK-JP-Black"}
+    style = resolve_line_style({}, "hook", fonts, PRESETS[0])
+    assert style.font == "Noto-Sans-CJK-JP-Bold"
+
+
+def test_an_unknown_slot_falls_back_to_the_first_configured_one_too():
+    fonts = {"sans-bold": "Noto-Sans-CJK-JP-Bold"}
+    style = resolve_line_style({"font": "no-such-slot"}, "hook", fonts, PRESETS[0])
+    assert style.font == "Noto-Sans-CJK-JP-Bold"
+
+
+def test_no_configured_fonts_still_means_no_font_flag():
+    """Nothing to fall back to; ImageMagick's own default is all there is."""
+    assert resolve_line_style({}, "hook", {}, PRESETS[0]).font == ""
+
+
+def test_the_fallback_face_reaches_the_magick_commands(tmp_path):
+    """The unit above is only worth having if it survives into the argv."""
+    _touch(tmp_path, "frames/a/1.000.jpg")
+    run = FakeRun()
+    fonts = {"sans-bold": "Noto-Sans-CJK-JP-Bold"}
+    sets = [ThumbSet(lines=[ThumbLine("hook", "まさかの水漏れ発覚")])]  # no style at all
+    render_sets(sets, [_shot()], {**CFG, "fonts": fonts}, tmp_path, tmp_path, run)
+    for cmd in run.cmds:
+        assert "-font" in cmd, cmd
+        assert cmd[cmd.index("-font") + 1] == "Noto-Sans-CJK-JP-Bold"
+
+
 def test_a_font_slot_resolves_to_the_configured_face():
     assert _line(font="serif-black").font == "Noto-Serif-CJK-JP-Black"
 
 
-def test_an_unknown_font_slot_falls_back_to_the_preset():
-    """The model cannot know what is installed, so only slots are accepted."""
-    assert _line(font="Comic Sans").font == PRESETS[0].lines["hook"].font
+def test_an_unknown_font_slot_never_becomes_a_face_name():
+    """The model cannot know what is installed, so only slots are accepted --
+    an unknown one falls back to a configured slot, never to what it said."""
+    assert _line(font="Comic Sans").font == "Noto-Sans-CJK-JP-Bold"
 
 
 def test_a_font_path_is_not_accepted_as_a_slot():
-    assert _line(font="/usr/share/fonts/evil.ttf").font == PRESETS[0].lines["hook"].font
+    assert _line(font="/usr/share/fonts/evil.ttf").font == "Noto-Sans-CJK-JP-Bold"
 
 
 @pytest.mark.parametrize(
@@ -172,7 +211,10 @@ def test_the_preset_is_chosen_by_role():
 
 
 def test_an_unknown_role_falls_back_to_the_hook_style():
-    assert resolve_line_style({}, "banner", FONTS, PRESETS[0]) == PRESETS[0].lines["hook"]
+    from dataclasses import replace
+
+    expected = replace(PRESETS[0].lines["hook"], font=fallback_font(FONTS))
+    assert resolve_line_style({}, "banner", FONTS, PRESETS[0]) == expected
 
 
 @pytest.mark.parametrize("value", ["northwest", "center", "southeast", "north"])

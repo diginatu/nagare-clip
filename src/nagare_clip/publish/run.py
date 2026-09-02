@@ -213,6 +213,22 @@ def _render_markdown(data: dict[str, Any], enabled: bool, markup: str = "html") 
     return "\n".join(lines).rstrip("\n") + "\n"
 
 
+def _pairing_cfg(publish_cfg: dict, pairing_cfg: dict, cfg: dict) -> dict[str, Any]:
+    """The pairing call's config: publish's, overridden by what pairing states.
+
+    It runs on publish's own provider and model, so it must also be sampled
+    the way that model requires -- an unset key means "inherit", not "use my
+    own idea of a good temperature".  A hardcoded default beside an inherited
+    model is how a real run got `temperature=0.4` rejected on every attempt by
+    a model that accepts only `1`.
+
+    Font slots come from `render:`, because a font is part of the look and the
+    renderer is what resolves a slot name.
+    """
+    stated = {k: v for k, v in pairing_cfg.items() if v is not None}
+    return {**publish_cfg, **stated, "fonts": (cfg.get("render") or {}).get("fonts")}
+
+
 def run_publish(
     summary_json: Path,
     output: Path,
@@ -273,7 +289,7 @@ def run_publish(
             pairing = generate_pairing(
                 copy,
                 frames,
-                {**publish_cfg, **pairing_cfg, "fonts": (cfg.get("render") or {}).get("fonts")},
+                _pairing_cfg(publish_cfg, pairing_cfg, cfg),
                 recorder=recorder,
             )
             copy.thumbnail_copy = apply_pairing(copy.thumbnail_copy, pairing, frames)
@@ -315,6 +331,6 @@ def run_publish(
     logging.info("publish: wrote %s", output)
     if markdown is not None:
         markdown.parent.mkdir(parents=True, exist_ok=True)
-        markup = str(publish_cfg.get("image_markup", "html"))
+        markup = str((cfg.get("general") or {}).get("image_markup", "html"))
         markdown.write_text(_render_markdown(data, enabled, markup), encoding="utf-8")
         logging.info("publish: wrote %s", markdown)

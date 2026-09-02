@@ -153,6 +153,23 @@ def preset_for(index: int) -> Preset:
     return PRESETS[(max(index, 1) - 1) % len(PRESETS)]
 
 
+def fallback_font(fonts: Mapping[str, str]) -> str:
+    """The face for a line that named no usable slot: the FIRST one configured.
+
+    The presets cannot name a slot -- slot names are project-defined, and this
+    module has never seen the config -- so without this every preset renders in
+    ImageMagick's own default face, which has no CJK glyphs.  A real run whose
+    pairing call failed came back as blank thumbnails for exactly that reason,
+    and "a project with pairing disabled renders as it does today" was false:
+    before the copy call was blinded it named a slot on every line.
+
+    First-listed rather than sorted: a human writes the face they want first,
+    and YAML mapping order is preserved, so the rule is one a person can act
+    on.  No fonts configured at all leaves ``""`` -- there is nothing to reach.
+    """
+    return next(iter(fonts.values()), "") if fonts else ""
+
+
 def _color(value: Any) -> str | None:
     if not isinstance(value, str):
         return None
@@ -189,7 +206,7 @@ def resolve_line_style(
     slot = raw.get("font")
     font = fonts.get(slot, base.font) if isinstance(slot, str) else base.font
     return LineStyle(
-        font=font,
+        font=font or fallback_font(fonts),
         pointsize=_int_in(raw.get("pointsize"), MIN_POINTSIZE, MAX_POINTSIZE) or base.pointsize,
         fill=_color(raw.get("fill")) or base.fill,
         stroke=_color(raw.get("stroke")) or base.stroke,
@@ -495,6 +512,13 @@ def render_sets(
         return result
 
     fonts = render_cfg.get("fonts") or {}
+    if not fonts and any(
+        ord(ch) > 0x7F for thumb_set in sets for line in thumb_set.lines for ch in line.text
+    ):
+        logger.warning(
+            "render: no render.fonts configured and the copy is not plain ASCII; "
+            "ImageMagick's default face draws nothing for a glyph it lacks"
+        )
     canvas = (int(render_cfg.get("width", 1280)), int(render_cfg.get("height", 720)))
     line_gap = int(render_cfg.get("line_gap", 12))
     (out_dir / "thumbnails").mkdir(parents=True, exist_ok=True)

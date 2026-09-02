@@ -106,7 +106,7 @@ def font_slot_note(fonts: Mapping[str, str]) -> str:
     return (
         'A line\'s "font" must be one of these slot names: '
         + ", ".join(sorted(fonts))
-        + ". A line with no font, or an unknown one, uses the default face."
+        + ". A line with no font, or an unknown one, uses the first slot listed."
     )
 
 

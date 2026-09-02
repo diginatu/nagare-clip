@@ -506,6 +506,14 @@ class GeneralConfig(BaseModel):
         True,
         description="send LLM traces to Langfuse when LANGFUSE_PUBLIC_KEY/SECRET_KEY are set (false to force-disable)",
     )
+    image_markup: Literal["html", "markdown"] = Field(
+        "html",
+        description=(
+            "How the reviewable markdown files (publish.md, render.md) embed images: "
+            "html = <img> tags (sized), markdown = ![alt](path) for viewers that strip "
+            "raw HTML. A property of your viewer, so it is set once here"
+        ),
+    )
 
 
 class ProjectConfig(BaseModel):
@@ -1126,7 +1134,11 @@ class PairingConfig(BaseModel):
         "\n"
         "Cost: exactly one extra text call per publish run, whatever the shortlist size.\n"
         "It needs NO new model -- it uses publish's own provider/model/api_base/api_key,\n"
-        "since it is the same kind of call, and overrides only what is set here.\n"
+        "AND publish's own sampling settings, since it is the same kind of call on the\n"
+        'same model: a key left unset below means "inherit", not "use my own idea of a\n'
+        'good temperature". That matters because some models accept exactly one\n'
+        "temperature (claude-sonnet-5 wants 1.0) and reject anything else before the\n"
+        "request leaves the machine.\n"
         "\n"
         "ON by default, unlike describe_frames, because the copy call no longer chooses\n"
         "colours or placement at all: turning this off is not a no-op but a fallback to\n"
@@ -1134,14 +1146,22 @@ class PairingConfig(BaseModel):
         "renders with no pairing at all, and is a downgrade rather than nothing."
     )
     enabled: bool = Field(True, description="Run the pairing call")
-    temperature: float = Field(
-        0.2, description="Lower than publish.temperature: this is a matching task, not writing"
+    # Unset = inherit publish's. The pairing call runs on publish's own model,
+    # so it must be sampled the way that model requires: a hardcoded 0.2 beside
+    # an inherited model that accepts only temperature=1 is a default
+    # incompatible with the default it is paired with.
+    temperature: float | None = _commented(
+        None, sample="0.2", description="Sampling temperature; unset = publish.temperature"
     )
-    max_retries: int = Field(
-        2, description="Extra attempts on LLM error / unparseable response (0 = single attempt)"
+    max_retries: int | None = _commented(
+        None, sample="2", description="Extra attempts; unset = publish.max_retries"
     )
-    retry_temp_step: float = Field(0.2)
-    retry_temp_cap: float = Field(0.8)
+    retry_temp_step: float | None = _commented(
+        None, sample="0.2", description="Unset = publish.retry_temp_step"
+    )
+    retry_temp_cap: float | None = _commented(
+        None, sample="0.8", description="Unset = publish.retry_temp_cap"
+    )
     prompt: str = _commented(
         PAIRING_PROMPT, sample='"..."', description="System prompt (has a sensible default)"
     )
@@ -1257,13 +1277,6 @@ class PublishConfig(BaseModel):
     frame_width: int = Field(
         1280, description="Downscale width (px) of the extracted JPEG stills; height is auto"
     )
-    image_markup: Literal["html", "markdown"] = Field(
-        "html",
-        description=(
-            "How publish.md embeds images: html = <img> tags (sized), "
-            "markdown = ![alt](path) for viewers that strip raw HTML"
-        ),
-    )
     prompt: str = _commented(
         PUBLISH_PROMPT, sample='"..."', description="System prompt (has a sensible default)"
     )
@@ -1281,24 +1294,25 @@ class RenderConfig(BaseModel):
         "output/publish/, or absolute; any aspect ratio, cropped to fill). Renders land\n"
         "in output/render/thumbnails/ beside render.json and render.md. Edit a hook or\n"
         "a background in publish.json and re-run --from-stage render --to-stage render:\n"
-        "zero calls, every time. Only `fonts` is set here, because the model cannot\n"
-        "know what is installed."
+        "zero calls, every time. Only `fonts` is set here, because the model cannot know\n"
+        "what is installed -- and SET IT if your copy is not plain ASCII: ImageMagick's\n"
+        "default face draws nothing at all (not even a box) for a character it has no\n"
+        "glyph for, so a CJK headline comes back invisible."
     )
     enabled: bool = Field(True, description="Render a thumbnail per copy set")
     width: int = Field(1280, description="Canvas width in px")
     height: int = Field(720, description="Canvas height in px")
     line_gap: int = Field(12, description="Vertical gap between stacked lines in px")
-    image_markup: Literal["html", "markdown"] = Field(
-        "html",
-        description=(
-            "How render.md embeds images: html = <img> tags (sized), "
-            "markdown = ![alt](path) for viewers that strip raw HTML"
-        ),
-    )
     fonts: dict[str, str] = _commented(
         {},
         sample='{sans-bold: "Noto-Sans-CJK-JP-Bold", serif-black: "Noto-Serif-CJK-JP-Black"}',
-        description="Font slots the LLM may choose from: slot name -> ImageMagick font name or path",
+        description=(
+            "Font slots the pairing call may choose from: slot name -> ImageMagick font "
+            "name or path. THE FIRST ONE LISTED is also the fallback face for any line "
+            "that named no slot (a preset cannot name one), so put a font that covers "
+            "your language first. Leave this empty and ImageMagick's default face is "
+            "used, which draws nothing at all for a CJK character"
+        ),
     )
 
 

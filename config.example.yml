@@ -18,6 +18,7 @@ general:
   llm_report: true   # write a per-call LLM report under output/llm_report/
   llm_report_dir: "output/llm_report"
   langfuse: true   # send LLM traces to Langfuse when LANGFUSE_PUBLIC_KEY/SECRET_KEY are set (false to force-disable)
+  image_markup: html   # How the reviewable markdown files (publish.md, render.md) embed images: html = <img> tags (sized), markdown = ![alt](path) for viewers that strip raw HTML. A property of your viewer, so it is set once here
 
 # project: the editorial brief for this project (all fields optional, free text).
 # Whatever is set here is appended to the system prompts of the summary, plan,
@@ -304,7 +305,6 @@ publish:
   min_chapter_duration: 10.0   # YouTube ignores a chapter list unless every chapter is at least this long; a shorter one is merged into a neighbour
   max_frames: 24   # Cap on thumbnail candidate stills (0 = no limit); overlays outrank keeps
   frame_width: 1280   # Downscale width (px) of the extracted JPEG stills; height is auto
-  image_markup: html   # How publish.md embeds images: html = <img> tags (sized), markdown = ![alt](path) for viewers that strip raw HTML
   # prompt: "..."   # System prompt (has a sensible default)
   # Frame description: one VISION call per candidate still, describing what is
   # actually legible in it, where the subject sits and which regions are empty --
@@ -348,7 +348,11 @@ publish:
   #
   # Cost: exactly one extra text call per publish run, whatever the shortlist size.
   # It needs NO new model -- it uses publish's own provider/model/api_base/api_key,
-  # since it is the same kind of call, and overrides only what is set here.
+  # AND publish's own sampling settings, since it is the same kind of call on the
+  # same model: a key left unset below means "inherit", not "use my own idea of a
+  # good temperature". That matters because some models accept exactly one
+  # temperature (claude-sonnet-5 wants 1.0) and reject anything else before the
+  # request leaves the machine.
   #
   # ON by default, unlike describe_frames, because the copy call no longer chooses
   # colours or placement at all: turning this off is not a no-op but a fallback to
@@ -356,10 +360,10 @@ publish:
   # renders with no pairing at all, and is a downgrade rather than nothing.
   pairing:
     enabled: true   # Run the pairing call
-    temperature: 0.2   # Lower than publish.temperature: this is a matching task, not writing
-    max_retries: 2   # Extra attempts on LLM error / unparseable response (0 = single attempt)
-    retry_temp_step: 0.2
-    retry_temp_cap: 0.8
+    # temperature: 0.2   # Sampling temperature; unset = publish.temperature
+    # max_retries: 2   # Extra attempts; unset = publish.max_retries
+    # retry_temp_step: 0.2   # Unset = publish.retry_temp_step
+    # retry_temp_cap: 0.8   # Unset = publish.retry_temp_cap
     # prompt: "..."   # System prompt (has a sensible default)
 
 # render stage: the LAST stage, and the only one that never makes an LLM call.
@@ -369,15 +373,16 @@ publish:
 # output/publish/, or absolute; any aspect ratio, cropped to fill). Renders land
 # in output/render/thumbnails/ beside render.json and render.md. Edit a hook or
 # a background in publish.json and re-run --from-stage render --to-stage render:
-# zero calls, every time. Only `fonts` is set here, because the model cannot
-# know what is installed.
+# zero calls, every time. Only `fonts` is set here, because the model cannot know
+# what is installed -- and SET IT if your copy is not plain ASCII: ImageMagick's
+# default face draws nothing at all (not even a box) for a character it has no
+# glyph for, so a CJK headline comes back invisible.
 render:
   enabled: true   # Render a thumbnail per copy set
   width: 1280   # Canvas width in px
   height: 720   # Canvas height in px
   line_gap: 12   # Vertical gap between stacked lines in px
-  image_markup: html   # How render.md embeds images: html = <img> tags (sized), markdown = ![alt](path) for viewers that strip raw HTML
-  # fonts: {sans-bold: "Noto-Sans-CJK-JP-Bold", serif-black: "Noto-Serif-CJK-JP-Black"}   # Font slots the LLM may choose from: slot name -> ImageMagick font name or path
+  # fonts: {sans-bold: "Noto-Sans-CJK-JP-Bold", serif-black: "Noto-Serif-CJK-JP-Black"}   # Font slots the pairing call may choose from: slot name -> ImageMagick font name or path. THE FIRST ONE LISTED is also the fallback face for any line that named no slot (a preset cannot name one), so put a font that covers your language first. Leave this empty and ImageMagick's default face is used, which draws nothing at all for a CJK character
 
 # cut_report: deterministic metrics + checks on the FINISHED cut (no LLM call).
 # Runs after intervals (again after blender, with Blender's own warnings) and

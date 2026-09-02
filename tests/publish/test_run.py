@@ -7,6 +7,7 @@ from __future__ import annotations
 import json
 
 import nagare_clip.publish.run as publish_run
+from nagare_clip.config import get_effective_config
 from nagare_clip.publish.publish_llm import PublishCopy, ThumbLine, ThumbSet
 from nagare_clip.publish.thumbs import ThumbShot
 from nagare_clip.summary.summarize import PartSummary, ProjectSummary, summary_to_dict
@@ -372,7 +373,63 @@ def test_the_pairing_call_receives_the_frame_descriptions(tmp_path, monkeypatch)
     assert [f.path for f in seen["frames"]] == ["frames/a/1.000.jpg"]
 
 
-def test_the_pairing_call_uses_publishs_model_and_its_own_temperature(tmp_path, monkeypatch):
+def test_the_pairing_call_inherits_publishs_sampling_knobs(tmp_path, monkeypatch):
+    """It is the same kind of call as the copy one, on the same model, so it
+    inherits how that model is sampled too.
+
+    A model may accept exactly one temperature (claude-sonnet-5 wants 1.0);
+    a project sets publish.temperature for that reason, and a pairing call
+    carrying its own 0.2 would be rejected by the provider on every attempt --
+    which is a default that is incompatible with the default it is paired
+    with, i.e. not a default.
+    """
+    _fake_generate(monkeypatch, _copy(thumbnail_copy=_sets()))
+    seen = {}
+
+    def fake_pairing(copy, frames, cfg, **kwargs):
+        seen["cfg"] = cfg
+        return {}
+
+    monkeypatch.setattr(publish_run, "generate_pairing", fake_pairing)
+    cfg = get_effective_config(
+        None,
+        {
+            "publish": {
+                "enabled": True,
+                "model": "claude-sonnet-5",
+                "temperature": 1.0,
+                "retry_temp_step": 0.0,
+                "retry_temp_cap": 1.0,
+                "max_retries": 3,
+            }
+        },
+    )
+    _frames_run(tmp_path, cfg, shots=[ThumbShot("a", 1.0, "overlay", "l", "frames/a/1.000.jpg")])
+    assert seen["cfg"]["temperature"] == 1.0
+    assert seen["cfg"]["retry_temp_step"] == 0.0
+    assert seen["cfg"]["retry_temp_cap"] == 1.0
+    assert seen["cfg"]["max_retries"] == 3
+
+
+def test_an_explicit_pairing_temperature_still_wins(tmp_path, monkeypatch):
+    """Inheritance is the default, not a ban on saying otherwise."""
+    _fake_generate(monkeypatch, _copy(thumbnail_copy=_sets()))
+    seen = {}
+
+    def fake_pairing(copy, frames, cfg, **kwargs):
+        seen["cfg"] = cfg
+        return {}
+
+    monkeypatch.setattr(publish_run, "generate_pairing", fake_pairing)
+    cfg = get_effective_config(
+        None,
+        {"publish": {"enabled": True, "temperature": 1.0, "pairing": {"temperature": 0.2}}},
+    )
+    _frames_run(tmp_path, cfg, shots=[ThumbShot("a", 1.0, "overlay", "l", "frames/a/1.000.jpg")])
+    assert seen["cfg"]["temperature"] == 0.2
+
+
+def test_the_pairing_call_uses_publishs_model_and_its_own_prompt(tmp_path, monkeypatch):
     """It is the same kind of call as the copy one, so configuring a model
     twice would only be a way to configure it wrong."""
     _fake_generate(monkeypatch, _copy(thumbnail_copy=_sets()))
@@ -388,12 +445,11 @@ def test_the_pairing_call_uses_publishs_model_and_its_own_temperature(tmp_path, 
             "enabled": True,
             "model": "big-text-model",
             "temperature": 0.7,
-            "pairing": {"enabled": True, "temperature": 0.2, "prompt": "PAIR"},
+            "pairing": {"enabled": True, "prompt": "PAIR"},
         }
     }
     _frames_run(tmp_path, cfg, shots=[ThumbShot("a", 1.0, "overlay", "l", "frames/a/1.000.jpg")])
     assert seen["cfg"]["model"] == "big-text-model"
-    assert seen["cfg"]["temperature"] == 0.2
     assert seen["cfg"]["prompt"] == "PAIR"
 
 
@@ -428,7 +484,7 @@ def _markup_md(tmp_path, monkeypatch, markup):
     _fake_generate(monkeypatch, _copy(thumbnail_copy=_sets()))
     cfg = {"publish": {"enabled": True}}
     if markup is not None:
-        cfg["publish"]["image_markup"] = markup
+        cfg["general"] = {"image_markup": markup}
     shots = [ThumbShot("a", 12.0, "overlay", "水浸し！", "frames/a/12.000.jpg")]
     _, md = _write(tmp_path, cfg, thumbs=shots)
     return md.read_text(encoding="utf-8")
