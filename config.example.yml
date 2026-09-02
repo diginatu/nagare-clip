@@ -279,10 +279,11 @@ blender:
 # titles and alternative thumbnail-copy sets (copy AND look, in ImageMagick's own
 # vocabulary); the chapter TIMESTAMPS are computed from the finished timeline (keep
 # intervals + speed ranges), which exists nowhere else. Stills are extracted at the
-# moments the director marked as payoffs, one thumbnail is rendered per copy set
-# with ImageMagick (see publish.thumbnail below), and publish.md embeds the results
-# alongside publish.json (the hand-editable contract for the look). Uploading, and
-# picking which rendered set to ship, stay manual. Disabled by default (no-op).
+# moments the director marked as payoffs and shown in publish.md beside the copy.
+# Compositing is NOT done here: the render stage (below) reads publish.json and
+# runs ImageMagick, so a hook or a background can be hand-edited and re-rendered
+# without paying for the copy again. Uploading, and picking which rendered set to
+# ship, stay manual. Disabled by default (no-op).
 publish:
   enabled: false   # Enable the publish LLM
   provider: ollama_chat   # LiteLLM provider prefix: ollama_chat | openai | gemini | anthropic
@@ -300,19 +301,24 @@ publish:
   max_frames: 24   # Cap on thumbnail candidate stills (0 = no limit); overlays outrank keeps
   frame_width: 1280   # Downscale width (px) of the extracted JPEG stills; height is auto
   image_markup: html   # How publish.md embeds images: html = <img> tags (sized), markdown = ![alt](path) for viewers that strip raw HTML
-  # Thumbnail rendering: one image per LLM copy set, composited with ImageMagick
-  # (`magick` must be on PATH). The LLM writes the colours, point sizes and
-  # placement for its own copy, in ImageMagick's vocabulary; only `fonts` is set
-  # here, because the model cannot know what is installed. Renders land in
-  # output/publish/thumbnails/ and are embedded in publish.md.
-  thumbnail:
-    enabled: true   # Render a thumbnail per copy set
-    background: ""   # Still to composite onto: path relative to output/publish/ (or absolute); empty = the first candidate in the frame shortlist
-    width: 1280   # Canvas width in px
-    height: 720   # Canvas height in px
-    line_gap: 12   # Vertical gap between stacked lines in px
-    # fonts: {sans-bold: "Noto-Sans-CJK-JP-Bold", serif-black: "Noto-Serif-CJK-JP-Black"}   # Font slots the LLM may choose from: slot name -> ImageMagick font name or path
   # prompt: "..."   # System prompt (has a sensible default)
+
+# render stage: the LAST stage, and the only one that never makes an LLM call.
+# It reads output/publish/publish.json -- the hand-editable contract -- and
+# composites one thumbnail per copy set with ImageMagick (`magick` must be on
+# PATH), each onto the background that set names (a path relative to
+# output/publish/, or absolute; any aspect ratio, cropped to fill). Renders land
+# in output/render/thumbnails/ beside render.json and render.md. Edit a hook or
+# a background in publish.json and re-run --from-stage render --to-stage render:
+# zero calls, every time. Only `fonts` is set here, because the model cannot
+# know what is installed.
+render:
+  enabled: true   # Render a thumbnail per copy set
+  width: 1280   # Canvas width in px
+  height: 720   # Canvas height in px
+  line_gap: 12   # Vertical gap between stacked lines in px
+  image_markup: html   # How render.md embeds images: html = <img> tags (sized), markdown = ![alt](path) for viewers that strip raw HTML
+  # fonts: {sans-bold: "Noto-Sans-CJK-JP-Bold", serif-black: "Noto-Serif-CJK-JP-Black"}   # Font slots the LLM may choose from: slot name -> ImageMagick font name or path
 
 # cut_report: deterministic metrics + checks on the FINISHED cut (no LLM call).
 # Runs after intervals (again after blender, with Blender's own warnings) and
@@ -328,4 +334,4 @@ pipeline:
   input_videos_dir: src_video
   output_dir: output   # Root dir; stage outputs go to per-stage named subdirs
   from_stage: transcription   # Start from this stage; reuses earlier stage outputs
-  to_stage: publish   # Stop after this stage (inclusive). Must not precede from_stage
+  to_stage: render   # Stop after this stage (inclusive). Must not precede from_stage

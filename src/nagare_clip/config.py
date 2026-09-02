@@ -1046,33 +1046,6 @@ class BlenderConfig(BaseModel):
     speed_mark: SpeedMarkConfig = Field(default_factory=SpeedMarkConfig)
 
 
-class ThumbnailConfig(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-    section_comment: ClassVar[str] = (
-        "Thumbnail rendering: one image per LLM copy set, composited with ImageMagick\n"
-        "(`magick` must be on PATH). The LLM writes the colours, point sizes and\n"
-        "placement for its own copy, in ImageMagick's vocabulary; only `fonts` is set\n"
-        "here, because the model cannot know what is installed. Renders land in\n"
-        "output/publish/thumbnails/ and are embedded in publish.md."
-    )
-    enabled: bool = Field(True, description="Render a thumbnail per copy set")
-    background: str = Field(
-        "",
-        description=(
-            "Still to composite onto: path relative to output/publish/ (or absolute); "
-            "empty = the first candidate in the frame shortlist"
-        ),
-    )
-    width: int = Field(1280, description="Canvas width in px")
-    height: int = Field(720, description="Canvas height in px")
-    line_gap: int = Field(12, description="Vertical gap between stacked lines in px")
-    fonts: dict[str, str] = _commented(
-        {},
-        sample='{sans-bold: "Noto-Sans-CJK-JP-Bold", serif-black: "Noto-Serif-CJK-JP-Black"}',
-        description="Font slots the LLM may choose from: slot name -> ImageMagick font name or path",
-    )
-
-
 class PublishConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
     section_comment: ClassVar[str] = (
@@ -1081,10 +1054,11 @@ class PublishConfig(BaseModel):
         "titles and alternative thumbnail-copy sets (copy AND look, in ImageMagick's own\n"
         "vocabulary); the chapter TIMESTAMPS are computed from the finished timeline (keep\n"
         "intervals + speed ranges), which exists nowhere else. Stills are extracted at the\n"
-        "moments the director marked as payoffs, one thumbnail is rendered per copy set\n"
-        "with ImageMagick (see publish.thumbnail below), and publish.md embeds the results\n"
-        "alongside publish.json (the hand-editable contract for the look). Uploading, and\n"
-        "picking which rendered set to ship, stay manual. Disabled by default (no-op)."
+        "moments the director marked as payoffs and shown in publish.md beside the copy.\n"
+        "Compositing is NOT done here: the render stage (below) reads publish.json and\n"
+        "runs ImageMagick, so a hook or a background can be hand-edited and re-rendered\n"
+        "without paying for the copy again. Uploading, and picking which rendered set to\n"
+        "ship, stay manual. Disabled by default (no-op)."
     )
     enabled: bool = Field(False, description="Enable the publish LLM")
     provider: str = Field(
@@ -1133,9 +1107,39 @@ class PublishConfig(BaseModel):
             "markdown = ![alt](path) for viewers that strip raw HTML"
         ),
     )
-    thumbnail: ThumbnailConfig = Field(default_factory=ThumbnailConfig)
     prompt: str = _commented(
         PUBLISH_PROMPT, sample='"..."', description="System prompt (has a sensible default)"
+    )
+
+
+class RenderConfig(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    section_comment: ClassVar[str] = (
+        "render stage: the LAST stage, and the only one that never makes an LLM call.\n"
+        "It reads output/publish/publish.json -- the hand-editable contract -- and\n"
+        "composites one thumbnail per copy set with ImageMagick (`magick` must be on\n"
+        "PATH), each onto the background that set names (a path relative to\n"
+        "output/publish/, or absolute; any aspect ratio, cropped to fill). Renders land\n"
+        "in output/render/thumbnails/ beside render.json and render.md. Edit a hook or\n"
+        "a background in publish.json and re-run --from-stage render --to-stage render:\n"
+        "zero calls, every time. Only `fonts` is set here, because the model cannot\n"
+        "know what is installed."
+    )
+    enabled: bool = Field(True, description="Render a thumbnail per copy set")
+    width: int = Field(1280, description="Canvas width in px")
+    height: int = Field(720, description="Canvas height in px")
+    line_gap: int = Field(12, description="Vertical gap between stacked lines in px")
+    image_markup: Literal["html", "markdown"] = Field(
+        "html",
+        description=(
+            "How render.md embeds images: html = <img> tags (sized), "
+            "markdown = ![alt](path) for viewers that strip raw HTML"
+        ),
+    )
+    fonts: dict[str, str] = _commented(
+        {},
+        sample='{sans-bold: "Noto-Sans-CJK-JP-Bold", serif-black: "Noto-Serif-CJK-JP-Black"}',
+        description="Font slots the LLM may choose from: slot name -> ImageMagick font name or path",
     )
 
 
@@ -1185,7 +1189,7 @@ class PipelineConfig(BaseModel):
         "transcription", description="Start from this stage; reuses earlier stage outputs"
     )
     to_stage: str = Field(
-        "publish", description="Stop after this stage (inclusive). Must not precede from_stage"
+        "render", description="Stop after this stage (inclusive). Must not precede from_stage"
     )
 
 
@@ -1211,6 +1215,7 @@ class NagareClipConfig(BaseModel):
     intervals: IntervalsConfig = Field(default_factory=IntervalsConfig)
     blender: BlenderConfig = Field(default_factory=BlenderConfig)
     publish: PublishConfig = Field(default_factory=PublishConfig)
+    render: RenderConfig = Field(default_factory=RenderConfig)
     cut_report: CutReportConfig = Field(default_factory=CutReportConfig)
     pipeline: PipelineConfig = Field(default_factory=PipelineConfig)
 

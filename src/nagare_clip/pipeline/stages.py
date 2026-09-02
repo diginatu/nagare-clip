@@ -10,9 +10,7 @@ from __future__ import annotations
 
 import json
 import logging
-from collections.abc import Sequence
 from pathlib import Path
-from typing import Any
 
 from nagare_clip.audio_silence.cuts_file import read_cuts
 from nagare_clip.audio_silence.run import run_audio_silence
@@ -69,7 +67,6 @@ from nagare_clip.plan.plan_llm import order_from_dict, plan_from_dict
 from nagare_clip.plan.run import run_plan
 from nagare_clip.plan_revise.run import run_plan_revise
 from nagare_clip.publish.run import run_publish
-from nagare_clip.publish.thumbnail import ThumbRender, render_sets
 from nagare_clip.publish.thumbs import (
     ThumbCandidate,
     ThumbShot,
@@ -79,6 +76,7 @@ from nagare_clip.publish.thumbs import (
 from nagare_clip.publish.thumbs import (
     frame_relpath as thumb_relpath,
 )
+from nagare_clip.render.run import run_render
 from nagare_clip.sentence_split.run import run_sentence_split
 from nagare_clip.summary.run import run_summary
 from nagare_clip.text_filter.run import run_text_filter
@@ -98,6 +96,7 @@ STAGE_NAMES = [
     "intervals",
     "blender",
     "publish",
+    "render",
 ]
 
 
@@ -956,15 +955,6 @@ def _extract_thumb_frames(
     return shots
 
 
-def _render_thumbnails(
-    ctx: PipelineContext, sets: Sequence[Any], thumbs: Sequence[ThumbShot]
-) -> list[ThumbRender]:
-    """Composite each copy set over the chosen still (host ImageMagick)."""
-    return render_sets(
-        sets, thumbs, ctx.cfg["publish"]["thumbnail"], ctx.stage_dir("publish"), run_magick
-    )
-
-
 def _publish_run(ctx: PipelineContext) -> None:
     print("[publish] Title, description, chapters, thumbnail material")
     rec = _recorder(ctx, "publish")
@@ -994,7 +984,6 @@ def _publish_run(ctx: PipelineContext) -> None:
             thumbs=thumbs,
             markdown=d / "publish.md",
             recorder=rec,
-            render=lambda sets, shots: _render_thumbnails(ctx, sets, shots),
         )
     finally:
         rec.rebuild_index()
@@ -1002,6 +991,24 @@ def _publish_run(ctx: PipelineContext) -> None:
 
 def _publish_required(ctx: PipelineContext) -> list[Path]:
     return [ctx.stage_dir("publish") / "publish.json"]
+
+
+# --- render ------------------------------------------------------------------
+
+
+def _render_run(ctx: PipelineContext) -> None:
+    print("[render] Thumbnails from publish.json (no LLM call)")
+    run_render(
+        ctx.stage_dir("publish") / "publish.json",
+        ctx.stage_dir("render") / "render.json",
+        ctx.cfg,
+        markdown=ctx.stage_dir("render") / "render.md",
+        run=run_magick,
+    )
+
+
+def _render_required(ctx: PipelineContext) -> list[Path]:
+    return [ctx.stage_dir("render") / "render.json"]
 
 
 STAGES = [
@@ -1018,4 +1025,5 @@ STAGES = [
     Stage("intervals", _intervals_run, _intervals_required),
     Stage("blender", _blender_run),
     Stage("publish", _publish_run, _publish_required),
+    Stage("render", _render_run, _render_required),
 ]

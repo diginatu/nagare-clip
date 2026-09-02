@@ -8,7 +8,6 @@ import json
 
 import nagare_clip.publish.run as publish_run
 from nagare_clip.publish.publish_llm import PublishCopy, ThumbLine, ThumbSet
-from nagare_clip.publish.thumbnail import ThumbRender
 from nagare_clip.publish.thumbs import ThumbShot
 from nagare_clip.summary.summarize import PartSummary, ProjectSummary, summary_to_dict
 
@@ -75,7 +74,6 @@ def test_disabled_writes_an_empty_artifact(tmp_path):
         "chapter_issues": [],
         "thumbnail_copy": [],
         "thumbnails": [],
-        "renders": [],
     }
     assert "disabled" in md.read_text(encoding="utf-8")
 
@@ -263,71 +261,15 @@ def _sets():
     ]
 
 
-def test_disabled_artifact_has_an_empty_renders_array(tmp_path):
-    data, _ = _write(tmp_path, {"publish": {"enabled": False}})
-    assert data["renders"] == []
-
-
-def test_the_renders_are_recorded_in_the_artifact(tmp_path, monkeypatch):
+def test_the_copy_sets_are_listed_without_images(tmp_path, monkeypatch):
+    """publish.json is the contract; the pictures are the render stage's job."""
     _fake_generate(monkeypatch, _copy(thumbnail_copy=_sets()))
-
-    def render(sets, thumbs):
-        return [ThumbRender(1, "thumbnails/set1.jpg", "frames/a/1.000.jpg")]
-
-    data, _ = _write(tmp_path, {"publish": {"enabled": True}}, render=render)
-    assert data["renders"] == [
-        {"set": 1, "path": "thumbnails/set1.jpg", "background": "frames/a/1.000.jpg"}
-    ]
-
-
-def test_the_renderer_receives_the_sets_and_the_shortlist(tmp_path, monkeypatch):
-    _fake_generate(monkeypatch, _copy(thumbnail_copy=_sets()))
-    seen = {}
-
-    def render(sets, thumbs):
-        seen["sets"] = sets
-        seen["thumbs"] = thumbs
-        return []
-
-    shots = [ThumbShot("a", 12.0, "overlay", "l", "frames/a/12.000.jpg")]
-    _write(tmp_path, {"publish": {"enabled": True}}, render=render, thumbs=shots)
-    assert len(seen["sets"]) == 2
-    assert seen["thumbs"] == shots
-
-
-def test_each_rendered_thumbnail_appears_under_its_copy_set(tmp_path, monkeypatch):
-    _fake_generate(monkeypatch, _copy(thumbnail_copy=_sets()))
-
-    def render(sets, thumbs):
-        return [
-            ThumbRender(1, "thumbnails/set1.jpg", "b.jpg"),
-            ThumbRender(2, "thumbnails/set2.jpg", "b.jpg"),
-        ]
-
-    _, md = _write(tmp_path, {"publish": {"enabled": True}}, render=render)
+    data, md = _write(tmp_path, {"publish": {"enabled": True}})
+    assert "renders" not in data
     text = md.read_text(encoding="utf-8")
-    first = text.index("### Set 1")
-    second = text.index("### Set 2")
-    assert first < text.index('<img src="thumbnails/set1.jpg"') < second
-    assert second < text.index('<img src="thumbnails/set2.jpg"')
-
-
-def test_a_set_without_a_render_still_shows_its_copy(tmp_path, monkeypatch):
-    _fake_generate(monkeypatch, _copy(thumbnail_copy=_sets()))
-
-    def render(sets, thumbs):
-        return [ThumbRender(2, "thumbnails/set2.jpg", "b.jpg")]
-
-    _, md = _write(tmp_path, {"publish": {"enabled": True}}, render=render)
-    text = md.read_text(encoding="utf-8")
-    assert "水浸し！" in text
-    assert "thumbnails/set1.jpg" not in text
-
-
-def test_no_renderer_leaves_the_markdown_without_images(tmp_path, monkeypatch):
-    _fake_generate(monkeypatch, _copy(thumbnail_copy=_sets()))
-    _, md = _write(tmp_path, {"publish": {"enabled": True}})
-    assert "<img" not in md.read_text(encoding="utf-8").split("## Thumbnail frame")[0]
+    assert text.index("### Set 1") < text.index("水浸し！") < text.index("### Set 2")
+    assert "穴あけ不要。" in text
+    assert "<img" not in text.split("## Thumbnail frame")[0]
 
 
 def test_the_candidate_table_shows_the_still_not_its_path(tmp_path, monkeypatch):
@@ -340,25 +282,20 @@ def test_the_candidate_table_shows_the_still_not_its_path(tmp_path, monkeypatch)
 
 
 def _markup_md(tmp_path, monkeypatch, markup):
-    """publish.md rendered with a render, a still and the given image_markup."""
+    """publish.md rendered with a still and the given image_markup."""
     _fake_generate(monkeypatch, _copy(thumbnail_copy=_sets()))
     cfg = {"publish": {"enabled": True}}
     if markup is not None:
         cfg["publish"]["image_markup"] = markup
-
-    def render(sets, thumbs):
-        return [ThumbRender(1, "thumbnails/set1.jpg", "b.jpg")]
-
     shots = [ThumbShot("a", 12.0, "overlay", "水浸し！", "frames/a/12.000.jpg")]
-    _, md = _write(tmp_path, cfg, render=render, thumbs=shots)
+    _, md = _write(tmp_path, cfg, thumbs=shots)
     return md.read_text(encoding="utf-8")
 
 
 def test_markdown_image_markup_uses_markdown_images(tmp_path, monkeypatch):
     """Renderers that don't allow raw HTML (plain markdown viewers) still show
-    the images when image_markup is markdown; the width hint is HTML-only."""
+    the stills when image_markup is markdown; the width hint is HTML-only."""
     text = _markup_md(tmp_path, monkeypatch, "markdown")
-    assert "![Set 1](thumbnails/set1.jpg)" in text
     assert "![水浸し！](frames/a/12.000.jpg)" in text
     assert "<img" not in text
 
@@ -368,6 +305,5 @@ def test_html_image_markup_is_the_default(tmp_path, monkeypatch):
     default = _markup_md(tmp_path, monkeypatch, None)
     explicit = _markup_md(tmp_path, monkeypatch, "html")
     assert default == explicit
-    assert '<img src="thumbnails/set1.jpg" width="480">' in default
     assert '<img src="frames/a/12.000.jpg" width="240">' in default
     assert "![" not in default

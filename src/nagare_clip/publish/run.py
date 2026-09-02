@@ -12,13 +12,12 @@ Two halves:
 - **timing** (deterministic): chapter timestamps taken from the finished
   timeline, which is the one thing that can only be computed here.
 
-Compositing the chosen frame and copy into the actual thumbnail is no longer a
-project-level script: the LLM writes each copy set's look in ImageMagick's own
-vocabulary (fill/stroke/pointsize/gravity/offset/shadow), this stage validates
-every value and builds every ``magick`` command as an argument list, and one
-thumbnail per copy set lands under ``output/publish/thumbnails/`` and is
-embedded in ``publish.md``. What still stays manual is picking which rendered
-set to ship and uploading it.
+Compositing is deliberately NOT done here.  The LLM writes each copy set's
+look in ImageMagick's own vocabulary (fill/stroke/pointsize/gravity/offset/
+shadow) into ``publish.json``, and the ``render`` stage -- which never calls a
+model -- turns that into images.  So a hook or a background can be hand-edited
+and re-rendered without paying for the copy again.  What still stays manual is
+picking which rendered set to ship and uploading it.
 
 When ``publish.enabled`` is false (default) an empty artifact is written and no
 LLM or Docker call is made.
@@ -28,12 +27,13 @@ from __future__ import annotations
 
 import json
 import logging
-from collections.abc import Callable, Sequence
+from collections.abc import Sequence
 from pathlib import Path
 from typing import Any
 
 from nagare_clip.brief import apply_brief
 from nagare_clip.llm_report import NULL_RECORDER, Recorder
+from nagare_clip.markdown import embed_image
 from nagare_clip.plan.plan_llm import PartDirection, plan_from_dict
 from nagare_clip.publish.chapters import (
     MIN_CHAPTER_SECONDS,
@@ -46,11 +46,9 @@ from nagare_clip.publish.chapters import (
 )
 from nagare_clip.publish.publish_llm import (
     PublishCopy,
-    ThumbSet,
     generate_publish_copy,
     thumbnail_copy_to_dict,
 )
-from nagare_clip.publish.thumbnail import ThumbRender
 from nagare_clip.publish.thumbs import ThumbShot
 from nagare_clip.publish.timeline import (
     Placement,
@@ -72,7 +70,6 @@ def empty_publish() -> dict[str, Any]:
         "chapter_issues": [],
         "thumbnail_copy": [],
         "thumbnails": [],
-        "renders": [],
     }
 
 
@@ -148,18 +145,6 @@ def _thumbnail_entries(
     return out
 
 
-def _image(path: str, alt: str, width: int, markup: str) -> str:
-    """One embedded image, in whichever markup the config asked for.
-
-    ``html`` (default) keeps the sized ``<img>`` — a shortlist of stills is
-    unreviewable at full width.  ``markdown`` is for viewers that strip raw
-    HTML; the size hint has no markdown equivalent, so it is simply dropped.
-    """
-    if markup == "markdown":
-        return f"![{alt}]({path})"
-    return f'<img src="{path}" width="{width}">'
-
-
 def _render_markdown(data: dict[str, Any], enabled: bool, markup: str = "html") -> str:
     """The reviewable file: copy-pasteable description, everything else beside it."""
     if not enabled:
@@ -184,13 +169,10 @@ def _render_markdown(data: dict[str, Any], enabled: bool, markup: str = "html") 
     lines.append("")
 
     lines += ["## Thumbnail copy", ""]
-    by_index = {r["set"]: r["path"] for r in data["renders"]}
     if data["thumbnail_copy"]:
         for i, thumb_set in enumerate(data["thumbnail_copy"], start=1):
             lines.append(f"### Set {i}")
             lines += [f"- {line['role']}: {line['text']}" for line in thumb_set["lines"]]
-            if i in by_index:
-                lines += ["", _image(by_index[i], f"Set {i}", 480, markup)]
             lines.append("")
     else:
         lines += ["_(none)_", ""]
@@ -204,7 +186,7 @@ def _render_markdown(data: dict[str, Any], enabled: bool, markup: str = "html") 
                 if thumb["timeline_time"] is not None
                 else "—"
             )
-            still = _image(thumb["path"], thumb["label"], 240, markup)
+            still = embed_image(thumb["path"], thumb["label"], 240, markup)
             lines.append(
                 f"| {at} | {thumb['source_time']:.1f}s | {thumb['kind']} | "
                 f"{thumb['label']} | {still} |"
@@ -225,7 +207,6 @@ def run_publish(
     thumbs: Sequence[ThumbShot] | None = None,
     markdown: Path | None = None,
     recorder: Recorder = NULL_RECORDER,
-    render: Callable[[Sequence[ThumbSet], Sequence[ThumbShot]], list[ThumbRender]] | None = None,
 ) -> None:
     publish_cfg = cfg["publish"]
     enabled = bool(publish_cfg.get("enabled", False))
@@ -257,7 +238,6 @@ def run_publish(
         chapter_lines = render_chapter_lines(chapters)
         issues = chapter_issues(chapters, total, min_duration=min_chapter)
         description = "\n\n".join(part for part in (copy.lead, "\n".join(chapter_lines)) if part)
-        renders = list(render(copy.thumbnail_copy, thumbs or [])) if render else []
 
         data = {
             "titles": copy.titles,
@@ -271,18 +251,13 @@ def run_publish(
             "chapter_issues": issues,
             "thumbnail_copy": thumbnail_copy_to_dict(copy),
             "thumbnails": _thumbnail_entries(thumbs or [], placements),
-            "renders": [
-                {"set": r.index, "path": r.path, "background": r.background} for r in renders
-            ],
         }
         logging.info(
-            "publish: %d title(s), %d chapter(s), %d thumbnail copy set(s), %d frame(s), "
-            "%d thumbnail render(s)",
+            "publish: %d title(s), %d chapter(s), %d thumbnail copy set(s), %d frame(s)",
             len(data["titles"]),
             len(data["chapters"]),
             len(data["thumbnail_copy"]),
             len(data["thumbnails"]),
-            len(data["renders"]),
         )
 
     output.parent.mkdir(parents=True, exist_ok=True)

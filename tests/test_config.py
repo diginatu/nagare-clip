@@ -233,7 +233,7 @@ class TestGetEffectiveConfig:
     def test_pipeline_stage_defaults_are_names(self):
         cfg = get_effective_config(None)
         assert cfg["pipeline"]["from_stage"] == "transcription"
-        assert cfg["pipeline"]["to_stage"] == "publish"
+        assert cfg["pipeline"]["to_stage"] == "render"
 
     def test_transcription_language_default(self):
         cfg = get_effective_config(None)
@@ -796,31 +796,48 @@ def test_text_filter_prompt_repeated_phrase_example_is_valid_patch_syntax():
     assert apply_patches_to_lines(["{{映ってる->}}映ってるね"]) == ["映ってるね"]
 
 
-def test_publish_thumbnail_defaults():
+def test_render_defaults():
     cfg = get_effective_config(None, {})
-    thumb = cfg["publish"]["thumbnail"]
-    assert thumb["enabled"] is True
-    assert thumb["background"] == ""
-    assert (thumb["width"], thumb["height"]) == (1280, 720)
-    assert thumb["line_gap"] == 12
-    assert thumb["fonts"] == {}
+    render = cfg["render"]
+    assert render["enabled"] is True
+    assert (render["width"], render["height"]) == (1280, 720)
+    assert render["line_gap"] == 12
+    assert render["fonts"] == {}
+    assert render["image_markup"] == "html"
 
 
-def test_publish_thumbnail_fonts_come_from_the_file(tmp_path):
+def test_render_fonts_come_from_the_file(tmp_path):
     path = tmp_path / "c.yml"
     path.write_text(
-        'publish:\n  thumbnail:\n    fonts:\n      hook: "Noto-Serif-CJK-JP-Black"\n',
+        'render:\n  fonts:\n    hook: "Noto-Serif-CJK-JP-Black"\n',
         encoding="utf-8",
     )
     cfg = get_effective_config(path, {})
-    assert cfg["publish"]["thumbnail"]["fonts"] == {"hook": "Noto-Serif-CJK-JP-Black"}
+    assert cfg["render"]["fonts"] == {"hook": "Noto-Serif-CJK-JP-Black"}
 
 
-def test_an_unknown_thumbnail_key_is_rejected(tmp_path):
+def test_an_unknown_render_key_is_rejected(tmp_path):
     path = tmp_path / "c.yml"
-    path.write_text("publish:\n  thumbnail:\n    colour: red\n", encoding="utf-8")
+    path.write_text("render:\n  colour: red\n", encoding="utf-8")
     with pytest.raises(ValidationError):
         get_effective_config(path, {})
+
+
+def test_a_background_key_is_rejected_rather_than_ignored(tmp_path):
+    """One project-wide background is gone; a set names its own in publish.json."""
+    path = tmp_path / "c.yml"
+    path.write_text("render:\n  background: frames/a/1.jpg\n", encoding="utf-8")
+    with pytest.raises(ValidationError):
+        get_effective_config(path, {})
+
+
+def test_a_config_still_carrying_publish_thumbnail_fails_loudly(tmp_path):
+    """No shim: the canvas size must have exactly one place to look."""
+    path = tmp_path / "c.yml"
+    path.write_text("publish:\n  thumbnail:\n    width: 1920\n", encoding="utf-8")
+    with pytest.raises(ValidationError) as e:
+        get_effective_config(path, {})
+    assert "thumbnail" in str(e.value)
 
 
 def _plan_prompt() -> str:

@@ -19,17 +19,19 @@ Maintain and improve a multi-stage rough-cut pipeline:
 11. Patch application + keep-interval computation in Python (audio cuts unioned in)
 12. Blender VSE auto-layout in headless mode
 13. publish — title candidates, a description with chapter timestamps taken from the finished timeline, thumbnail copy and candidate stills (disabled by default)
+14. render — composites one thumbnail per copy set with ImageMagick; the last stage, and the only one that never makes an LLM call
 
 Plus two deterministic reports (no LLM call): the **order note** (`order_note.py` → `llm_report/notes/order.md`), which states plainly whenever the finished video is not in shooting order — or that an order was rejected — because a reorder changes the shape of the finished video more than any other single decision and must never arrive unannounced; and `cut_report` — not a stage but a deterministic report that measures the finished cut after `intervals`/`blender` and writes a section into `llm_report/index.md`.
 
 Final deliverable is a `.blend` project for human editing, plus a reviewable
-`publish.md` of the material needed to upload it.
+`publish.md` of the material needed to upload it and the thumbnails `render`
+composited from it.
 
 > **Naming convention:** Stages are identified only by their **functional /
 > config-section name** — there are no stage numbers anywhere. The canonical
 > identifiers are: `transcription:`, `audio_silence:`, `sentence_split:`,
 > `gap_context:`, `summary:`, `text_filter:`, `plan:`, `plan_revise:`, `director:`, `guided_edit:`,
-> `intervals:`, `blender:`, `publish:`.
+> `intervals:`, `blender:`, `publish:`, `render:`.
 > Package dirs (`src/nagare_clip/<name>/`), `output/<name>/` subdirs, and
 > `run_pipeline.sh --from-stage`/`--to-stage` all use these same names. A new
 > stage can be inserted anywhere without renumbering the others.
@@ -193,14 +195,23 @@ Two halves, split along what an LLM can know. **Copy** (one LLM call, `publish_l
 
 `publish/chapters.py` then makes YouTube's four conditions hold rather than hoping the mapping lands right: the first entry is **forced** to `0:00` (the first part rarely starts there once its opening is cut); any chapter whose rendered span is under `publish.min_chapter_duration` (default 10.0s) is **dropped** so the previous title stretches over it — the first chapter, having no previous neighbour, gives way to the next one, which then inherits `0:00`; a non-ascending entry is dropped rather than reordered. The first chapter's span is measured from `0.0`, not its own timestamp, because that is how it renders; `format_timestamp` **truncates** (rounding 9.9s up to `0:10` would point past the chapter's own start). The list is **always written**, qualifying or not — YouTube auto-links timestamps regardless, so a list of two still lets a viewer jump; `chapter_issues()` reports what is missing (`chapters_qualify`) instead of suppressing the output.
 
-**Thumbnail frame candidates** come from the director's ops (`thumbs.select_candidates()`), not from guesswork: an `overlay` yields the midpoint of its anchor line, a `keep` the midpoint of the whole event it rescued, a `timelapse` **both** boundaries. Midpoints because a line's first frame is often still the previous shot; coinciding moments collapse to one candidate keeping the highest-priority kind. `cap_candidates()` enforces `publish.max_frames` (default 24) by kind priority (overlay > timelapse > keep), then restores `(stem, time)` order. Extraction reuses gap_context's batching — **one** `docker compose run` for the whole stage via `build_snapshot_batch_cmd` — and a failed batch or an unwritten frame drops the still, never the run. The same LLM call that writes a copy set's title/hook/subtitle lines also writes that set's LOOK, in ImageMagick's own vocabulary (`font`/`pointsize`/`fill`/`stroke`/`strokewidth` per line, `gravity`/`offset`/`shadow` per set) — `thumbnail.py` validates every value against an allowlist (unknown key dropped, bad value falls back per-key to a round-robin preset) and builds every `magick` invocation as an argument list, never a shell string, so the worst a bad generation can do is an ugly image. Line *positions* stay code's, never the model's: `layout_lines()` stacks lines by **measured** height (one `magick` call reads back `%w %h` per line) and shrinks an over-wide line's point size — the model cannot measure a rendered glyph run, which is exactly where overlap and overflow come from. `render_sets()` renders one thumbnail per copy set into `output/publish/thumbnails/set{N}.jpg`, recorded in `publish.json`'s `renders` array and embedded in `publish.md` (candidate stills too, in place of backticked paths) — as a sized `<img>` by default, or as `![alt](path)` when `publish.image_markup` is `markdown` (for viewers that strip raw HTML; markdown has no width syntax, so the size hint is dropped rather than faked — both forms come from `run._image()`); a missing `magick` or a non-zero exit from either subprocess call drops that one set's render with a warning and the rest still render; unusable measure output does not drop a render (it falls back to a point-size-based estimate and renders anyway); no background is not per-set — `resolve_background()` runs once before the loop, and `None` skips the whole run, not one set. `publish.json`'s `thumbnail_copy` is the hand-editable contract for the look (like `_director.json` is for the edit); `python -m nagare_clip.publish.thumbnail` re-renders from it with no LLM call, for iterating on a background/colour without getting different copy back.
+**Thumbnail frame candidates** come from the director's ops (`thumbs.select_candidates()`), not from guesswork: an `overlay` yields the midpoint of its anchor line, a `keep` the midpoint of the whole event it rescued, a `timelapse` **both** boundaries. Midpoints because a line's first frame is often still the previous shot; coinciding moments collapse to one candidate keeping the highest-priority kind. `cap_candidates()` enforces `publish.max_frames` (default 24) by kind priority (overlay > timelapse > keep), then restores `(stem, time)` order. Extraction reuses gap_context's batching — **one** `docker compose run` for the whole stage via `build_snapshot_batch_cmd` — and a failed batch or an unwritten frame drops the still, never the run. The candidate table's frame column is an `<img>`, not a backticked path — as a sized `<img>` by default, or as `![alt](path)` when `publish.image_markup` is `markdown` (for viewers that strip raw HTML; markdown has no width syntax, so the size hint is dropped rather than faked — both forms come from `markdown.embed_image()`, shared with `render.md`). The same LLM call that writes a copy set's title/hook/subtitle lines also writes that set's LOOK, in ImageMagick's own vocabulary (`font`/`pointsize`/`fill`/`stroke`/`strokewidth` per line, `gravity`/`offset`/`shadow` per set), into `publish.json` — but **`publish` composites nothing**: that is the `render` stage. `publish.json`'s `thumbnail_copy` is the hand-editable contract for the look, like `_director.json` is for the edit.
 
 Every input is optional — the stage runs last, so a missing `summary.json`/`plan.json`/`_director.json`/`_intervals.json` degrades only the part that needed it. Disabled → `publish.json` holds the full shape with nothing in it, no LLM or Docker call.
 
 See [`docs/stages/publish.md`](docs/stages/publish.md) for the timeline mapping, the chapter rules and the frame shortlist in detail.
 
 - **Inputs:** `output/summary/summary.json`; optionally `output/plan/plan.json`, each source's `{stem}_intervals.json` (in blender's concatenation order, as `intervals_paths`), `{stem}_director.json` and the sentence_split `{stem}.json` (for the frame shortlist and the caption list)
-- **Outputs:** `output/publish/publish.md` (reviewable), `output/publish/publish.json` (the hand-editable look contract), `output/publish/frames/{stem}/{t}.jpg`, `output/publish/thumbnails/set{N}.jpg`
+- **Outputs:** `output/publish/publish.md` (reviewable), `output/publish/publish.json` (the hand-editable look contract), `output/publish/frames/{stem}/{t}.jpg`
+
+### render — Compositing the Thumbnails (no LLM call, ever)
+
+The **last** stage, and the only one that never calls a model under any circumstances. It reads `output/publish/publish.json` — the hand-editable contract — and composites one image per copy set: `render/thumbnail.py` validates every model-authored style value against an allowlist (unknown key dropped, bad value falls back **per key** to a round-robin `preset_for()` preset) and builds every `magick` invocation as an argument list, never a shell string, so the worst a bad generation can do is an ugly image. Line *positions* stay code's, never the model's: `layout_lines()` stacks lines by **measured** height (one `magick` call reads back `%w %h` per line) and shrinks an over-wide line's point size — the model cannot measure a rendered glyph run, which is exactly where overlap and overflow come from. Backgrounds resolve against the **publish** stage dir (that is where the stills are and where `publish.json` names them); the images land in `output/render/thumbnails/set{N}.jpg`, recorded in `render.json` (`{"renders":[{set,path,background}]}`) and embedded in `render.md` beside each set's copy. A missing `magick` or a non-zero exit from either subprocess call drops that one set with a warning and the rest still render; unusable measure output does not drop a render (it falls back to a point-size-based estimate and renders anyway); no background at all is not per-set — `resolve_background()` runs once before the loop, and `None` skips the whole run.
+
+**Why a stage rather than a flag:** the human loop is "look at the render, change one thing, look again", and the thing being changed sits *between* the two halves — a background that should have been the next frame over, a headline the model got nearly right. `$EDITOR output/publish/publish.json` then `--from-stage render --to-stage render` costs **zero** calls, every time, whereas re-running `publish` would hand back different copy than the one being judged. There is deliberately no second path: the old `python -m nagare_clip.publish.thumbnail` side door is **deleted**, along with `publish.thumbnail.background` and its `--background` flag (a per-set background makes one project-wide background pointless). Zero calls is a property of the **code**, not the config: every provider goes through `llm_client.call_llm`, nothing under `src/nagare_clip/render/` names either, and a test guards that statically *and* in a fresh interpreter — which is why `ThumbLine`/`ThumbSet` live in `render/thumbnail.py` rather than beside the LLM call that writes them, and why `publish/thumbs.py` imports `DirectorOp` under `TYPE_CHECKING` only.
+
+- **Inputs:** `output/publish/publish.json` (missing/unreadable → an empty contact sheet, never a traceback)
+- **Outputs:** `output/render/thumbnails/set{N}.jpg`, `output/render/render.json`, `output/render/render.md`
 
 ### Human Editing Workflow
 
@@ -213,7 +224,7 @@ See [`docs/stages/publish.md`](docs/stages/publish.md) for the timeline mapping,
 - Dependency management uses uv + pyproject.toml.
 - LiteLLM is the LLM transport dependency: all provider access (OpenAI/Gemini/Anthropic/Ollama) goes through `nagare_clip.llm_client.call_llm` — do not add provider-specific HTTP clients.
 - Runtime NLP dependency is `ginza` + `ja_ginza` (spaCy-based).
-- Route media tooling (ffmpeg) through the existing whisperx Docker image; do not add host binaries or new Python audio deps. ImageMagick (`magick`, `publish/thumbnail.py`) is a deliberate, documented exception: it runs on the **host**, like the `blender` stage already does, because the whisperx image has neither ImageMagick nor CJK fonts, and font slots resolve through host fontconfig (which is what makes a CJK font slot work at all).
+- Route media tooling (ffmpeg) through the existing whisperx Docker image; do not add host binaries or new Python audio deps. ImageMagick (`magick`, `render/thumbnail.py`) is a deliberate, documented exception: it runs on the **host**, like the `blender` stage already does, because the whisperx image has neither ImageMagick nor CJK fonts, and font slots resolve through host fontconfig (which is what makes a CJK font slot work at all).
 - Preserve the interval JSON (`intervals/` package) as the human-editable contract for the Blender stage.
 - The Blender stage must reference original media; do not re-encode/copy source media.
 - Commit straight to `main` in this repository — do **not** create a branch for a change, and do not offer to. This overrides any default "branch before committing" behaviour.
@@ -227,6 +238,7 @@ src/nagare_clip/          # Main Python package (src layout)
   llm_retry.py                # Shared bounded-retry helpers (director/guided_edit): retry_attempts(), cfg_for_attempt()
   llm_report.py               # Structured per-call LLM report: Recorder + rebuild_index (index.md + per-call <stage>/<unit>.md)
   llm_client.py               # Unified LiteLLM transport: call_llm(messages, cfg) -> str (OpenAI/Gemini/Anthropic/Ollama)
+  markdown.py                 # embed_image(): the one image embed shared by publish.md and render.md
   order.py                    # Segment/TimelineSegment: the playback order, identity, coverage contract, manifest
   order_note.py               # format_order_note(): says plainly when the order is not shooting order (no LLM)
   brief.py                    # project: editorial brief -> format_brief()/apply_brief() (summary/plan/director/text_filter prompts)
@@ -306,8 +318,10 @@ src/nagare_clip/          # Main Python package (src layout)
     chapters.py               # YouTube chapter rules: 0:00 anchor, 10s merge, ascending, M:SS
     thumbs.py                 # ThumbCandidate/ThumbShot: payoff moments from director ops
     publish_llm.py            # titles/lead/chapter titles/thumbnail copy (incl. LOOK) in one call
-    thumbnail.py              # escape/validate/layout/build magick argv; render_sets(); standalone re-render CLI
     run.py                    # run_publish() (writes publish.json + publish.md)
+  render/                     # render stage (project-wide, after publish; never calls an LLM)
+    thumbnail.py              # ThumbLine/ThumbSet contract; escape/validate/layout/build magick argv; render_sets()
+    run.py                    # run_render() (publish.json -> render.json + render.md)
 scripts/
   run_pipeline.sh             # Shim: exec uv run python -m nagare_clip.pipeline "$@"
   plan_say.sh                 # Shim: append a human turn to plan_dialogue/history.md
@@ -330,6 +344,7 @@ tests/
   intervals/                  # interval-stage unit tests (incl. <keep>/<cut> markers, cuts_txt union)
   blender/                    # Blender-stage tests
   publish/                    # publish (timeline / chapters / thumbs / publish_llm / run / stage wiring) tests
+  render/                     # render (thumbnail argv/layout / run / stage wiring) tests
   cut_report/                 # finished-cut metrics / checks / report / stage-wiring tests
 ```
 
@@ -388,6 +403,7 @@ the [Documentation Policy](#documentation-policy)):
 - intervals (`<keep>`/`<speed>`/`<overlay/>`/`<cut>` markers, margins, captions) → [`docs/stages/intervals.md`](docs/stages/intervals.md)
 - blender (VSE layout, text styling, retiming) → [`docs/stages/blender.md`](docs/stages/blender.md)
 - publish (finished-timeline mapping, chapter rules, thumbnail material) → [`docs/stages/publish.md`](docs/stages/publish.md)
+- render (style validation, layout/escaping, the zero-call loop) → [`docs/stages/render.md`](docs/stages/render.md)
 - cut_report (finished-cut metrics + checks, Blender-warning capture) → [`docs/stages/cut_report.md`](docs/stages/cut_report.md)
 - segment order (the plan's `order`, the `intervals/timeline.json` manifest, the order note) → [`docs/stages/order.md`](docs/stages/order.md)
 - pipeline orchestration (`nagare_clip.pipeline`) → [`docs/stages/pipeline.md`](docs/stages/pipeline.md)

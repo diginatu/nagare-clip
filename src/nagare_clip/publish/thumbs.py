@@ -14,8 +14,11 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 from dataclasses import dataclass
+from typing import TYPE_CHECKING
 
-from nagare_clip.director.director_llm import DirectorOp
+if TYPE_CHECKING:  # annotation only: importing the director here would drag the
+    # LLM transport into the render stage, which must never load it.
+    from nagare_clip.director.director_llm import DirectorOp
 
 # Kinds, most interesting first: an overlay carries the director's own words
 # for the moment, a timelapse boundary shows the before/after of the work, and

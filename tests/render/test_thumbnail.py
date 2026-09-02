@@ -1,4 +1,4 @@
-"""publish thumbnail rendering: escaping, style validation, layout, argv."""
+"""render-stage thumbnail compositing: escaping, style validation, layout, argv."""
 
 from __future__ import annotations
 
@@ -9,7 +9,8 @@ from pathlib import Path
 import pytest
 
 from nagare_clip.publish.publish_llm import ThumbLine, ThumbSet
-from nagare_clip.publish.thumbnail import (
+from nagare_clip.publish.thumbs import ThumbShot
+from nagare_clip.render.thumbnail import (
     PRESETS,
     LineStyle,
     PlacedLine,
@@ -27,7 +28,6 @@ from nagare_clip.publish.thumbnail import (
     resolve_set_style,
     set_relpath,
 )
-from nagare_clip.publish.thumbs import ThumbShot
 
 HAS_MAGICK = shutil.which("magick") is not None
 
@@ -441,7 +441,6 @@ def test_a_real_thumbnail_is_produced(tmp_path):
 
 CFG = {
     "enabled": True,
-    "background": "",
     "width": 1280,
     "height": 720,
     "line_gap": 12,
@@ -475,44 +474,17 @@ class FakeRun:
 
 def test_the_background_defaults_to_the_first_candidate(tmp_path):
     _touch(tmp_path, "frames/a/1.000.jpg")
-    got = resolve_background(CFG, [_shot()], tmp_path)
-    assert got == tmp_path / "frames/a/1.000.jpg"
+    assert resolve_background([_shot()], tmp_path) == tmp_path / "frames/a/1.000.jpg"
 
 
-def test_a_configured_background_wins(tmp_path):
-    _touch(tmp_path, "frames/a/1.000.jpg")
-    _touch(tmp_path, "frames/a/9.000.jpg")
-    cfg = {**CFG, "background": "frames/a/9.000.jpg"}
-    assert resolve_background(cfg, [_shot()], tmp_path) == tmp_path / "frames/a/9.000.jpg"
-
-
-def test_an_absolute_background_is_used_as_is(tmp_path):
-    p = _touch(tmp_path, "elsewhere.jpg")
-    cfg = {**CFG, "background": str(p)}
-    assert resolve_background(cfg, [], tmp_path) == p
-
-
-def test_a_missing_configured_background_is_reported_and_gives_nothing(tmp_path, caplog):
-    cfg = {**CFG, "background": "nope.jpg"}
-    assert resolve_background(cfg, [_shot()], tmp_path) is None
-    assert "nope.jpg" in caplog.text
-
-
-def test_no_candidates_and_no_config_means_no_background(tmp_path):
-    assert resolve_background(CFG, [], tmp_path) is None
+def test_no_candidates_means_no_background(tmp_path):
+    assert resolve_background([], tmp_path) is None
 
 
 def test_a_candidate_whose_file_vanished_is_skipped(tmp_path):
     _touch(tmp_path, "frames/a/2.000.jpg")
     shots = [_shot("frames/a/1.000.jpg"), _shot("frames/a/2.000.jpg")]
-    assert resolve_background(CFG, shots, tmp_path) == tmp_path / "frames/a/2.000.jpg"
-
-
-def test_a_missing_configured_background_does_not_fall_back_to_a_candidate(tmp_path):
-    """A named background that silently renders onto a different frame misleads review."""
-    _touch(tmp_path, "frames/a/1.000.jpg")
-    cfg = {**CFG, "background": "frames/a/missing.jpg"}
-    assert resolve_background(cfg, [_shot()], tmp_path) is None
+    assert resolve_background(shots, tmp_path) == tmp_path / "frames/a/2.000.jpg"
 
 
 def _sets(n=2):
@@ -525,7 +497,7 @@ def _sets(n=2):
 def test_one_measure_and_one_render_call_per_set(tmp_path):
     _touch(tmp_path, "frames/a/1.000.jpg")
     run = FakeRun()
-    renders = render_sets(_sets(2), [_shot()], CFG, tmp_path, run)
+    renders = render_sets(_sets(2), [_shot()], CFG, tmp_path, tmp_path, run)
     assert len(run.cmds) == 4
     assert [c[-1] for c in run.cmds] == [
         "info:",
@@ -542,34 +514,36 @@ def test_one_measure_and_one_render_call_per_set(tmp_path):
 def test_the_font_slot_is_resolved_before_the_command_is_built(tmp_path):
     _touch(tmp_path, "frames/a/1.000.jpg")
     run = FakeRun()
-    render_sets(_sets(1), [_shot()], CFG, tmp_path, run)
+    render_sets(_sets(1), [_shot()], CFG, tmp_path, tmp_path, run)
     assert "SerifFace" in run.cmds[1]
 
 
 def test_sets_without_a_usable_style_get_different_presets(tmp_path):
     _touch(tmp_path, "frames/a/1.000.jpg")
     run = FakeRun()
-    render_sets(_sets(2), [_shot()], CFG, tmp_path, run)
+    render_sets(_sets(2), [_shot()], CFG, tmp_path, tmp_path, run)
     first, second = run.cmds[1], run.cmds[3]
     assert first[first.index("-gravity", 3) :] != second[second.index("-gravity", 3) :]
 
 
 def test_the_output_directory_is_created(tmp_path):
     _touch(tmp_path, "frames/a/1.000.jpg")
-    render_sets(_sets(1), [_shot()], CFG, tmp_path, FakeRun())
+    render_sets(_sets(1), [_shot()], CFG, tmp_path, tmp_path, FakeRun())
     assert (tmp_path / "thumbnails").is_dir()
 
 
 def test_disabled_renders_nothing(tmp_path):
     _touch(tmp_path, "frames/a/1.000.jpg")
     run = FakeRun()
-    assert render_sets(_sets(2), [_shot()], {**CFG, "enabled": False}, tmp_path, run) == []
+    assert (
+        render_sets(_sets(2), [_shot()], {**CFG, "enabled": False}, tmp_path, tmp_path, run) == []
+    )
     assert run.cmds == []
 
 
 def test_no_background_renders_nothing(tmp_path, caplog):
     run = FakeRun()
-    assert render_sets(_sets(1), [], CFG, tmp_path, run) == []
+    assert render_sets(_sets(1), [], CFG, tmp_path, tmp_path, run) == []
     assert run.cmds == []
     assert "background" in caplog.text
 
@@ -585,7 +559,7 @@ def test_a_failing_magick_drops_only_that_set(tmp_path, caplog):
             raise OSError("magick: boom")
         return FakeRun()(cmd)
 
-    renders = render_sets(_sets(2), [_shot()], CFG, tmp_path, run)
+    renders = render_sets(_sets(2), [_shot()], CFG, tmp_path, tmp_path, run)
     assert [r.index for r in renders] == [2]
     assert "boom" in caplog.text
 
@@ -596,7 +570,7 @@ def test_a_missing_magick_binary_drops_every_set_without_raising(tmp_path, caplo
     def run(cmd):
         raise FileNotFoundError("magick")
 
-    assert render_sets(_sets(2), [_shot()], CFG, tmp_path, run) == []
+    assert render_sets(_sets(2), [_shot()], CFG, tmp_path, tmp_path, run) == []
     assert "magick" in caplog.text
 
 
@@ -612,7 +586,7 @@ _MAGICK_STDERR = "unable to read font 'X'"
 
 
 def test_a_failing_render_logs_magicks_stderr(tmp_path, caplog):
-    """The most likely real failure -- a `publish.thumbnail.fonts` slot naming a
+    """The most likely real failure -- a `render.fonts` slot naming a
     face fontconfig cannot resolve -- must surface magick's own explanation
     (e.g. "unable to read font 'X'"), not just the argv and exit status."""
     _touch(tmp_path, "frames/a/1.000.jpg")
@@ -622,7 +596,7 @@ def test_a_failing_render_logs_magicks_stderr(tmp_path, caplog):
             return FakeRun()(cmd)
         raise subprocess.CalledProcessError(1, cmd, output="", stderr=_MAGICK_STDERR)
 
-    renders = render_sets(_sets(1), [_shot()], CFG, tmp_path, run)
+    renders = render_sets(_sets(1), [_shot()], CFG, tmp_path, tmp_path, run)
     assert renders == []
     assert any(_MAGICK_STDERR in r.getMessage() for r in caplog.records)
 
@@ -633,7 +607,7 @@ def test_a_failing_measure_logs_magicks_stderr(tmp_path, caplog):
     def run(cmd):
         raise subprocess.CalledProcessError(1, cmd, output="", stderr=_MAGICK_STDERR)
 
-    renders = render_sets(_sets(1), [_shot()], CFG, tmp_path, run)
+    renders = render_sets(_sets(1), [_shot()], CFG, tmp_path, tmp_path, run)
     assert renders == []
     assert any(_MAGICK_STDERR in r.getMessage() for r in caplog.records)
 
@@ -645,7 +619,7 @@ def test_unusable_measure_output_still_renders_the_set(tmp_path):
     def run(cmd):
         return "garbage\n" if cmd[-1] == "info:" else ""
 
-    assert len(render_sets(_sets(1), [_shot()], CFG, tmp_path, run)) == 1
+    assert len(render_sets(_sets(1), [_shot()], CFG, tmp_path, tmp_path, run)) == 1
 
 
 def test_set_relpath_is_one_based():

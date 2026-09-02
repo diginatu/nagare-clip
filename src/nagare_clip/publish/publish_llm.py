@@ -37,32 +37,31 @@ from nagare_clip.llm_report import (
 )
 from nagare_clip.llm_retry import cfg_for_attempt, retry_attempts
 from nagare_clip.plan.plan_llm import PartDirection
-from nagare_clip.publish.thumbnail import LINE_KEYS, SET_KEYS
+from nagare_clip.render.thumbnail import (
+    LINE_KEYS,
+    MAX_THUMB_LINES,
+    SET_KEYS,
+    VALID_ROLES,
+    ThumbLine,
+    ThumbSet,
+)
 from nagare_clip.summary.summarize import ProjectSummary
 
 logger = logging.getLogger(__name__)
 
 CallLLM = Callable[[list[dict[str, str]], dict[str, Any]], str]
 
-# A thumbnail line states which job it does, so the compositing script can lay
-# out a set of one, two or three lines instead of assuming a fixed template.
-VALID_ROLES = ("tag", "hook", "subtitle")
-MAX_THUMB_LINES = 3
-
-
-@dataclass(frozen=True)
-class ThumbLine:
-    role: str  # one of VALID_ROLES
-    text: str
-    style: dict[str, Any] = field(default_factory=dict)  # raw; validated at render time
-
-
-@dataclass(frozen=True)
-class ThumbSet:
-    """One alternative: its copy, and the look the model chose for that copy."""
-
-    lines: list[ThumbLine] = field(default_factory=list)
-    style: dict[str, Any] = field(default_factory=dict)  # gravity / offset / shadow
+__all__ = [
+    "MAX_THUMB_LINES",
+    "VALID_ROLES",
+    "PublishCopy",
+    "ThumbLine",
+    "ThumbSet",
+    "format_publish_context",
+    "generate_publish_copy",
+    "thumbnail_copy_to_dict",
+    "try_parse_publish_response",
+]
 
 
 @dataclass
