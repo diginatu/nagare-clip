@@ -8,12 +8,14 @@ config overrides so precedence is CLI > YAML > model defaults.
 from __future__ import annotations
 
 import argparse
+import logging
 import os
 import sys
 from datetime import datetime
 from pathlib import Path
 
 from nagare_clip.config import get_effective_config
+from nagare_clip.index_page import write_index
 from nagare_clip.logging_setup import setup_logging
 from nagare_clip.pipeline.errors import PipelineError
 from nagare_clip.pipeline.runner import PipelineContext, resolve_window, run_stages
@@ -125,6 +127,21 @@ def main(argv: list[str] | None = None) -> int:
         finally:
             for f in cleanup:
                 f.unlink(missing_ok=True)
+            # The one page at the top of the output directory, regenerated
+            # whatever the range was -- including a run that died partway,
+            # which is when knowing what is on disk is worth most.  Last, so
+            # it can count llm_report/index.md's rows; and swallowing its own
+            # exception, because a finally that raises replaces the real error
+            # with its own.
+            try:
+                page = write_index(
+                    ctx.output_dir,
+                    cfg,
+                    blend=ctx.stage_dir("blender") / f"{ctx.stems[0]}_edited.blend",
+                )
+                print(f"Index: {page}")
+            except Exception:
+                logging.exception("index: could not write the output index")
 
         # The .blend is the deliverable; the publish material and the rendered
         # thumbnails (when the run reached those stages) sit beside it and are
