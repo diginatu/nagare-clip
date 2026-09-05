@@ -126,14 +126,16 @@ def main(argv: list[str] | None = None) -> int:
             for f in cleanup:
                 f.unlink(missing_ok=True)
 
-        # The .blend is the deliverable; the publish material (when the run
-        # reached that stage) sits beside it and is the next thing a human
-        # opens, so both paths are printed.
+        # The .blend is the deliverable; the publish material and the rendered
+        # thumbnails (when the run reached those stages) sit beside it and are
+        # the next things a human opens, so every path reached is printed.
         last_stage = STAGES[to_index].name
-        if last_stage in ("blender", "publish"):
+        if last_stage in ("blender", "publish", "render"):
             print(f"Done: {ctx.stage_dir('blender') / f'{ctx.stems[0]}_edited.blend'}")
-            if last_stage == "publish":
+            if last_stage in ("publish", "render"):
                 print(f"Publish material: {ctx.stage_dir('publish') / 'publish.md'}")
+            if last_stage == "render":
+                print(f"Thumbnails: {ctx.stage_dir('render') / 'render.md'}")
         else:
             print(f"Done (stopped at --to-stage {p['to_stage']})")
         return 0

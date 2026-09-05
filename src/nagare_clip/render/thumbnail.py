@@ -2,15 +2,14 @@
 
 The publish LLM writes the copy AND the style for that copy, in ImageMagick's
 own vocabulary (``-fill``, ``-stroke``, ``-strokewidth``, ``-pointsize``,
-``-gravity``), so the four sets in ``publish.md`` are four real options rather
-than four wordings of one look.
+``-gravity``), so the sets in ``publish.json`` are real options rather than
+several wordings of one look.  This module is the *render* stage: it turns
+those values into images and never calls a model.
 
-It emits *values*; this module builds every command.  The publish prompt is fed
-the summaries, the plan directions and the director's captions -- all derived
-from the video's transcript -- so anything said on camera reaches the model.
-``magick`` reads and writes files (``@``, ``-write``, MSL), which makes a
-model-authored command line a real hole and an allowlisted operator set a cheap
-fix: the worst a bad generation can do is produce an ugly image.
+It receives *values*; it builds every command.  ``magick`` reads and writes
+files (``@``, ``-write``, MSL), which makes a model-authored command line a
+real hole and an allowlisted operator set a cheap fix: the worst a bad
+generation can do is produce an ugly image.
 
 Commands are argument lists.  Never a shell string.
 """
@@ -20,9 +19,11 @@ from __future__ import annotations
 import logging
 import re
 from collections.abc import Callable, Mapping, Sequence
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any
+
+from nagare_clip.publish.thumbs import ThumbShot
 
 logger = logging.getLogger(__name__)
 
@@ -64,6 +65,37 @@ MAX_STROKEWIDTH = 40
 LINE_KEYS = ("font", "pointsize", "fill", "stroke", "strokewidth")
 SET_KEYS = ("gravity", "offset", "shadow")
 
+# A thumbnail line states which job it does, so a layout can follow a set of
+# one, two or three lines instead of the copy being padded to fill a template.
+VALID_ROLES = ("tag", "hook", "subtitle")
+MAX_THUMB_LINES = 3
+
+
+@dataclass(frozen=True)
+class ThumbLine:
+    role: str  # one of VALID_ROLES
+    text: str
+    style: dict[str, Any] = field(default_factory=dict)  # raw; validated at render time
+
+
+@dataclass(frozen=True)
+class ThumbSet:
+    """One alternative: its copy, the picture it goes on, and its look.
+
+    Defined here rather than beside the LLM call that writes it: this is what
+    ``publish.json`` carries, and the render stage must be able to read it
+    without loading the transport.
+
+    ``background`` is per **set**, because a headline and the photograph it
+    sits on are one decision: four copy treatments over one frame is four
+    wordings of one thumbnail.  Empty means "nothing chosen" and falls back to
+    the frame shortlist.
+    """
+
+    lines: list[ThumbLine] = field(default_factory=list)
+    style: dict[str, Any] = field(default_factory=dict)  # gravity / offset / shadow
+    background: str = ""  # relative to the publish stage dir, or absolute
+
 
 @dataclass(frozen=True)
 class LineStyle:
@@ -103,7 +135,7 @@ def _preset(
 
 
 # Fallbacks only. A set whose style is unusable still has to look unlike its
-# neighbours, or `publish.md` shows four copies of one thumbnail.
+# neighbours, or `render.md` shows four copies of one thumbnail.
 PRESETS: tuple[Preset, ...] = (
     _preset("northwest", "+56+62", "white", "#B08D3E", "white", "rgba(30,30,30,1)"),
     _preset("southwest", "+56+62", "#FFD54F", "white", "#FFD54F", "rgba(20,20,20,1)"),
@@ -119,6 +151,23 @@ def preset_for(index: int) -> Preset:
     rerun of the same pipeline produces the same images.
     """
     return PRESETS[(max(index, 1) - 1) % len(PRESETS)]
+
+
+def fallback_font(fonts: Mapping[str, str]) -> str:
+    """The face for a line that named no usable slot: the FIRST one configured.
+
+    The presets cannot name a slot -- slot names are project-defined, and this
+    module has never seen the config -- so without this every preset renders in
+    ImageMagick's own default face, which has no CJK glyphs.  A real run whose
+    pairing call failed came back as blank thumbnails for exactly that reason,
+    and "a project with pairing disabled renders as it does today" was false:
+    before the copy call was blinded it named a slot on every line.
+
+    First-listed rather than sorted: a human writes the face they want first,
+    and YAML mapping order is preserved, so the rule is one a person can act
+    on.  No fonts configured at all leaves ``""`` -- there is nothing to reach.
+    """
+    return next(iter(fonts.values()), "") if fonts else ""
 
 
 def _color(value: Any) -> str | None:
@@ -141,7 +190,7 @@ def _warn_unknown(
 ) -> None:
     for key in raw:
         if key not in known and key not in skip:
-            logger.warning("publish: thumbnail style key %r is not supported; ignored", key)
+            logger.warning("render: thumbnail style key %r is not supported; ignored", key)
 
 
 def resolve_line_style(
@@ -157,7 +206,7 @@ def resolve_line_style(
     slot = raw.get("font")
     font = fonts.get(slot, base.font) if isinstance(slot, str) else base.font
     return LineStyle(
-        font=font,
+        font=font or fallback_font(fonts),
         pointsize=_int_in(raw.get("pointsize"), MIN_POINTSIZE, MAX_POINTSIZE) or base.pointsize,
         fill=_color(raw.get("fill")) or base.fill,
         stroke=_color(raw.get("stroke")) or base.stroke,
@@ -359,72 +408,137 @@ def build_render_cmd(
 
 @dataclass(frozen=True)
 class ThumbRender:
-    index: int  # 1-based set number, matching publish.md's "Set N"
-    path: str  # relative to the publish stage dir
+    index: int  # 1-based set number, matching render.md's "Set N"
+    path: str  # relative to the render stage dir
     background: str  # the still it was composited onto
 
 
+@dataclass(frozen=True)
+class SkippedSet:
+    """A set that produced no image, and the reason a human can act on.
+
+    The loop here is "edit publish.json, re-run render, look at render.md", so
+    a set that quietly disappears from the contact sheet -- with the reason
+    only in the log -- is a typo the human cannot see.
+    """
+
+    index: int
+    reason: str
+
+
+@dataclass(frozen=True)
+class RenderResult:
+    """What became of every copy set: an image, or a reason there is none."""
+
+    renders: list[ThumbRender] = field(default_factory=list)
+    skipped: list[SkippedSet] = field(default_factory=list)
+
+
 def set_relpath(index: int) -> str:
-    """Render path relative to the publish stage dir."""
+    """Render path relative to the render stage dir."""
     return f"thumbnails/set{index}.jpg"
 
 
-def resolve_background(
-    thumbnail_cfg: Mapping[str, Any], thumbs: Sequence[Any], stage_dir: Path
-) -> Path | None:
-    """The still every set is composited onto.
+def resolve_background(thumbs: Sequence[Any], publish_dir: Path) -> Path | None:
+    """The fallback still, for a set that names none of its own.
 
-    Config wins; otherwise the first candidate that is actually on disk --
-    picking the frame is quick, and the shortlist is already ordered by how
-    interesting the director thought the moment was.
+    The first candidate that is actually on disk: the shortlist is already
+    ordered by how interesting the director thought the moment was, and a
+    project that says nothing renders exactly as it always has.
     """
-    configured = str(thumbnail_cfg.get("background", "")).strip()
-    if configured:
-        path = Path(configured)
-        path = path if path.is_absolute() else stage_dir / path
-        if path.is_file():
-            return path
-        logger.warning("publish: thumbnail background %s not found", configured)
-        return None
     for shot in thumbs:
-        path = stage_dir / shot.path
+        path = publish_dir / shot.path
         if path.is_file():
             return path
+    return None
+
+
+def named_background(thumb_set: Any) -> str:
+    """The path this set names, if any -- lenient about a hand-edited value."""
+    return str(getattr(thumb_set, "background", "") or "").strip()
+
+
+def set_background(thumb_set: Any, thumbs: Sequence[Any], publish_dir: Path) -> Path | None:
+    """The still THIS set is composited onto.
+
+    A relative path is resolved against the **publish** stage dir, because
+    that is where the stills are and where ``publish.json`` names them.  An
+    absolute path is taken as it stands, and neither form has to be a
+    shortlist frame: ``build_render_cmd`` covers-and-crops whatever it is
+    given, so a photograph the camera never rolled on, or a frame pulled by
+    hand at a timestamp the shortlist missed, is one line of JSON away.
+
+    A named background that is not on disk yields ``None`` rather than the
+    shortlist fallback: rendering a hook over some other frame and calling it
+    the chosen one misleads review worse than a missing image does.
+    """
+    named = named_background(thumb_set)
+    if not named:
+        return resolve_background(thumbs, publish_dir)
+    path = Path(named)
+    path = path if path.is_absolute() else publish_dir / path
+    if path.is_file():
+        return path
+    logger.warning("render: background %s not found; set dropped", named)
     return None
 
 
 def render_sets(
     sets: Sequence[Any],
     thumbs: Sequence[Any],
-    thumbnail_cfg: Mapping[str, Any],
-    stage_dir: Path,
+    render_cfg: Mapping[str, Any],
+    publish_dir: Path,
+    out_dir: Path,
     run: Callable[[list[str]], str],
-) -> list[ThumbRender]:
-    """One rendered thumbnail per copy set, so publish.md shows options.
+) -> RenderResult:
+    """One rendered thumbnail per copy set, so render.md shows options.
 
     Two calls per set: measure, then render.  *run* returns stdout, and is
     injected so this module never starts a subprocess itself.
 
-    Nothing here is allowed to fail the stage: a set whose magick call dies is
-    dropped with a warning and the rest still render.
+    Each set is composited onto **its own** background (``set_background``),
+    resolved against *publish_dir* because that is where the stills are and
+    where ``publish.json`` names them; the images land under *out_dir*, which
+    is the render stage's own directory.
+
+    Nothing here is allowed to fail the stage: a set whose background is
+    missing or whose magick call dies comes back as a ``SkippedSet`` carrying
+    the reason, and the rest still render.
     """
     import subprocess
 
-    if not thumbnail_cfg.get("enabled", True) or not sets:
-        return []
-    background = resolve_background(thumbnail_cfg, thumbs, stage_dir)
-    if background is None:
-        logger.warning("publish: no thumbnail background available; nothing rendered")
-        return []
+    result = RenderResult(renders=[], skipped=[])
+    if not render_cfg.get("enabled", True) or not sets:
+        return result
 
-    fonts = thumbnail_cfg.get("fonts") or {}
-    canvas = (int(thumbnail_cfg.get("width", 1280)), int(thumbnail_cfg.get("height", 720)))
-    line_gap = int(thumbnail_cfg.get("line_gap", 12))
-    out_dir = stage_dir / "thumbnails"
-    out_dir.mkdir(parents=True, exist_ok=True)
+    fonts = render_cfg.get("fonts") or {}
+    if not fonts and any(
+        ord(ch) > 0x7F for thumb_set in sets for line in thumb_set.lines for ch in line.text
+    ):
+        logger.warning(
+            "render: no render.fonts configured and the copy is not plain ASCII; "
+            "ImageMagick's default face draws nothing for a glyph it lacks"
+        )
+    canvas = (int(render_cfg.get("width", 1280)), int(render_cfg.get("height", 720)))
+    line_gap = int(render_cfg.get("line_gap", 12))
+    (out_dir / "thumbnails").mkdir(parents=True, exist_ok=True)
 
-    renders: list[ThumbRender] = []
+    def skip(index: int, reason: str) -> None:
+        logger.warning("render: set %d not rendered: %s", index, reason)
+        result.skipped.append(SkippedSet(index=index, reason=reason))
+
     for index, thumb_set in enumerate(sets, start=1):
+        background = set_background(thumb_set, thumbs, publish_dir)
+        if background is None:
+            named = named_background(thumb_set)
+            skip(
+                index,
+                f"background not found: {named}"
+                if named
+                else "no background: the set names none and no frame shortlist "
+                "candidate is on disk",
+            )
+            continue
         preset = preset_for(index)
         styled = [
             (line.text, resolve_line_style(line.style, line.role, fonts, preset))
@@ -435,49 +549,51 @@ def render_sets(
             metrics = parse_metrics(run(build_measure_cmd(styled)), expected=len(styled))
         except subprocess.CalledProcessError as e:
             # magick's stderr is the actual reason (e.g. "unable to read font 'X'"
-            # from a bad `publish.thumbnail.fonts` slot) -- without it the log only
+            # from a bad `render.fonts` slot) -- without it the log only
             # has the argv and "exit status 1", and the human has to re-run by hand
             # to learn why every set silently dropped.
-            logger.warning(
-                "publish: could not measure thumbnail set %d: %s", index, e.stderr, exc_info=True
-            )
+            logger.debug("render: measure failed for set %d", index, exc_info=True)
+            skip(index, f"could not measure the text: {e.stderr}")
             continue
-        except Exception:  # noqa: BLE001 - a dead magick must not fail the stage
-            logger.warning("publish: could not measure thumbnail set %d", index, exc_info=True)
+        except Exception as e:  # noqa: BLE001 - a dead magick must not fail the stage
+            logger.debug("render: measure failed for set %d", index, exc_info=True)
+            skip(index, f"could not measure the text: {e}")
             continue
         if metrics is None:
             # Unmeasured fallback: point size is a fair proxy for line height.
-            logger.warning("publish: unusable text metrics for set %d; estimating", index)
+            logger.warning("render: unusable text metrics for set %d; estimating", index)
             metrics = [(1, int(style.pointsize * 1.2)) for _, style in styled]
         placed = layout_lines(styled, metrics, set_style, canvas, line_gap)
         rel = set_relpath(index)
         try:
-            run(build_render_cmd(background, placed, set_style, canvas, stage_dir / rel))
+            run(build_render_cmd(background, placed, set_style, canvas, out_dir / rel))
         except subprocess.CalledProcessError as e:
-            logger.warning(
-                "publish: could not render thumbnail set %d: %s", index, e.stderr, exc_info=True
-            )
+            logger.debug("render: magick failed for set %d", index, exc_info=True)
+            skip(index, f"magick failed: {e.stderr}")
             continue
-        except Exception:  # noqa: BLE001
-            logger.warning("publish: could not render thumbnail set %d", index, exc_info=True)
+        except Exception as e:  # noqa: BLE001
+            logger.debug("render: magick failed for set %d", index, exc_info=True)
+            skip(index, f"magick failed: {e}")
             continue
         try:
-            bg_name = str(background.relative_to(stage_dir))
+            bg_name = str(background.relative_to(publish_dir))
         except ValueError:
             bg_name = str(background)
-        renders.append(ThumbRender(index=index, path=rel, background=bg_name))
-    logger.info("publish: rendered %d thumbnail(s)", len(renders))
-    return renders
+        result.renders.append(ThumbRender(index=index, path=rel, background=bg_name))
+    logger.info(
+        "render: rendered %d thumbnail(s), %d skipped",
+        len(result.renders),
+        len(result.skipped),
+    )
+    return result
 
 
-def sets_from_dict(data: Any) -> list[Any]:
+def sets_from_dict(data: Any) -> list[ThumbSet]:
     """``thumbnail_copy`` read back out of publish.json.
 
     Lenient, like every hand-editable intermediate in this pipeline: a
     malformed set is dropped, never raised.
     """
-    from nagare_clip.publish.publish_llm import ThumbLine, ThumbSet
-
     raw_sets = data.get("thumbnail_copy") if isinstance(data, Mapping) else None
     out = []
     for raw in raw_sets if isinstance(raw_sets, list) else []:
@@ -497,29 +613,27 @@ def sets_from_dict(data: Any) -> list[Any]:
                 )
             )
         if lines:
-            out.append(ThumbSet(lines=lines, style={k: raw[k] for k in SET_KEYS if k in raw}))
+            background = raw.get("background")
+            out.append(
+                ThumbSet(
+                    lines=lines,
+                    style={k: raw[k] for k in SET_KEYS if k in raw},
+                    background=background.strip() if isinstance(background, str) else "",
+                )
+            )
     return out
 
 
-def _runner() -> Callable[[list[str]], str]:
-    """The subprocess runner, indirected so tests never shell out."""
-    from nagare_clip.pipeline.external import run_magick
-
-    return run_magick
-
-
-def _shots_from_dict(data: Any) -> list[Any]:
+def shots_from_dict(data: Any) -> list[ThumbShot]:
     """``thumbnails`` read back out of publish.json, as real ``ThumbShot``s.
 
     Tolerant like ``sets_from_dict``: a missing/malformed field falls back to
     a sensible default, and an entry with no usable ``path`` is dropped. Path
     existence is not checked here -- ``resolve_background``/``render_sets``
-    do that against the stage dir -- but a real dataclass beats an anonymous
+    do that against the publish dir -- but a real dataclass beats an anonymous
     stand-in for anything that later touches ``.stem``/``.time``/``.kind``/
     ``.label``.
     """
-    from nagare_clip.publish.thumbs import ThumbShot
-
     raw_thumbs = data.get("thumbnails") if isinstance(data, Mapping) else None
     out = []
     for raw in raw_thumbs if isinstance(raw_thumbs, list) else []:
@@ -542,64 +656,3 @@ def _shots_from_dict(data: Any) -> list[Any]:
             )
         )
     return out
-
-
-def main(argv: Sequence[str] | None = None) -> int:
-    """Re-render the thumbnails from an existing publish.json.
-
-    Picking the background and nudging a colour is iterative; re-running the
-    stage would re-run the LLM and change the copy being judged.  So this CLI
-    makes no model call at all -- it only re-reads ``publish.json`` (the
-    hand-editable contract for the look) and re-runs ImageMagick.
-    """
-    import argparse
-    import json
-    import sys
-
-    from nagare_clip.config import get_effective_config
-
-    parser = argparse.ArgumentParser(description="Re-render publish thumbnails")
-    parser.add_argument(
-        "--publish-dir",
-        default="output/publish",
-        help="directory holding publish.json (default: output/publish)",
-    )
-    parser.add_argument(
-        "--config",
-        default=None,
-        help=(
-            "path to your project's config YAML; omitting this uses built-in defaults "
-            "(1280x720, no -font flag) rather than your project's config, so your "
-            "configured fonts and canvas size will not be applied"
-        ),
-    )
-    parser.add_argument(
-        "--background",
-        default=None,
-        help="still to composite onto (overrides publish.thumbnail.background)",
-    )
-    args = parser.parse_args(argv)
-
-    logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
-    stage_dir = Path(args.publish_dir)
-    publish_json = stage_dir / "publish.json"
-    if not publish_json.is_file():
-        print(f"error: no publish.json at {publish_json}", file=sys.stderr)
-        return 1
-    data = json.loads(publish_json.read_text(encoding="utf-8"))
-
-    cfg = get_effective_config(Path(args.config) if args.config else None, {})
-    thumbnail_cfg = dict(cfg["publish"]["thumbnail"])
-    if args.background:
-        thumbnail_cfg["background"] = args.background
-    thumbnail_cfg["enabled"] = True
-
-    shots = _shots_from_dict(data)
-    renders = render_sets(sets_from_dict(data), shots, thumbnail_cfg, stage_dir, _runner())
-    for render in renders:
-        print(f"set {render.index}: {stage_dir / render.path}")
-    return 0
-
-
-if __name__ == "__main__":
-    raise SystemExit(main())

@@ -60,6 +60,7 @@ def test_stage_names_canonical_order():
         "intervals",
         "blender",
         "publish",
+        "render",
     ]
     assert [s.name for s in st.STAGES] == st.STAGE_NAMES
 

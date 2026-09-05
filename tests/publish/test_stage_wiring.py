@@ -65,9 +65,9 @@ def _segments(ctx, count, seconds=10.0):
     )
 
 
-def test_publish_is_the_last_stage():
-    assert st.STAGE_NAMES[-1] == "publish"
+def test_publish_runs_after_blender_and_before_render():
     assert st.STAGE_NAMES.index("publish") == st.STAGE_NAMES.index("blender") + 1
+    assert st.STAGE_NAMES.index("render") == st.STAGE_NAMES.index("publish") + 1
     assert [s.name for s in st.STAGES] == st.STAGE_NAMES
 
 
@@ -94,6 +94,7 @@ def test_adapter_passes_project_paths(ctx, monkeypatch):
     assert seen["summary"] == out / "summary" / "summary.json"
     assert seen["out"] == out / "publish" / "publish.json"
     assert seen["markdown"] == out / "publish" / "publish.md"
+    assert seen["frames_json"] == out / "publish" / "frames.json"
     assert seen["plan_json"] == out / "plan" / "plan.json"
     # The finished video, already sliced to the manifest's playback order --
     # publish never re-derives a time from a line number.
@@ -206,29 +207,15 @@ def test_missing_director_json_leaves_the_shortlist_empty(ctx, monkeypatch):
     assert calls == []
 
 
-def test_the_publish_stage_passes_a_renderer(ctx, monkeypatch):
-    seen = {}
-
-    def fake_run_publish(*args, **kwargs):
-        seen["render"] = kwargs.get("render")
-
-    monkeypatch.setattr(st, "run_publish", fake_run_publish)
+def test_the_publish_stage_composites_nothing(ctx, monkeypatch):
+    """No magick from here: publish writes the contract, render reads it."""
     monkeypatch.setattr(st, "recorder_from_config", lambda *a, **k: _NullRec())
+    monkeypatch.setattr(st, "run_command", lambda *a, **k: None)
+
+    def boom(*a, **k):
+        raise AssertionError("publish must not run ImageMagick")
+
+    monkeypatch.setattr(st, "run_magick", boom)
+    monkeypatch.setattr(st, "run_publish", lambda *a, **k: None)
     _enable(ctx)
     st._publish_run(ctx)
-    assert callable(seen["render"])
-
-
-def test_the_renderer_uses_run_magick(ctx, monkeypatch):
-    calls = {}
-
-    def fake_render_sets(sets, thumbs, cfg, stage_dir, run):
-        calls["run"] = run
-        calls["cfg"] = cfg
-        return []
-
-    monkeypatch.setattr(st, "render_sets", fake_render_sets)
-    _enable(ctx)
-    st._render_thumbnails(ctx, [], [])
-    assert calls["run"] is st.run_magick
-    assert calls["cfg"] == ctx.cfg["publish"]["thumbnail"]

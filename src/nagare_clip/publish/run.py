@@ -5,20 +5,29 @@ in the pipeline — the summaries know what the video is about, the brief knows
 who it is for, the intervals know what survived — but nothing past the
 ``.blend`` used any of it, so it was retyped by hand.
 
-Two halves:
+Three phases, in this order and deliberately not folded together:
 
+- **look** (one vision call per candidate still, cached by content hash):
+  what is actually legible in each frame, written to ``frames.json``.
+  Depends on nothing but the frame.
 - **copy** (one LLM call): several title candidates, a description lead, the
-  chapter titles, and alternative thumbnail-copy sets.
+  chapter titles, and alternative thumbnail-copy sets as plain role+text. It
+  is shown no frames: the headlines come from the story, not from the pictures
+  on hand.
+- **pair** (one text-only LLM call): per set, which frame it goes on and where
+  and in what colour the text sits — from the descriptions, never from images,
+  and naming its frame by index. Separate from the copy call because two dozen
+  frame descriptions in front of that one makes it caption the photographs
+  instead.
 - **timing** (deterministic): chapter timestamps taken from the finished
   timeline, which is the one thing that can only be computed here.
 
-Compositing the chosen frame and copy into the actual thumbnail is no longer a
-project-level script: the LLM writes each copy set's look in ImageMagick's own
-vocabulary (fill/stroke/pointsize/gravity/offset/shadow), this stage validates
-every value and builds every ``magick`` command as an argument list, and one
-thumbnail per copy set lands under ``output/publish/thumbnails/`` and is
-embedded in ``publish.md``. What still stays manual is picking which rendered
-set to ship and uploading it.
+Compositing is deliberately NOT done here.  The LLM writes each copy set's
+look in ImageMagick's own vocabulary (fill/stroke/pointsize/gravity/offset/
+shadow) into ``publish.json``, and the ``render`` stage -- which never calls a
+model -- turns that into images.  So a hook or a background can be hand-edited
+and re-rendered without paying for the copy again.  What still stays manual is
+picking which rendered set to ship and uploading it.
 
 When ``publish.enabled`` is false (default) an empty artifact is written and no
 LLM or Docker call is made.
@@ -28,12 +37,13 @@ from __future__ import annotations
 
 import json
 import logging
-from collections.abc import Callable, Sequence
+from collections.abc import Sequence
 from pathlib import Path
 from typing import Any
 
 from nagare_clip.brief import apply_brief
 from nagare_clip.llm_report import NULL_RECORDER, Recorder
+from nagare_clip.markdown import embed_image
 from nagare_clip.plan.plan_llm import PartDirection, plan_from_dict
 from nagare_clip.publish.chapters import (
     MIN_CHAPTER_SECONDS,
@@ -44,13 +54,18 @@ from nagare_clip.publish.chapters import (
     format_timestamp,
     render_chapter_lines,
 )
+from nagare_clip.publish.describe_frames import (
+    FrameDescription,
+    describe_frames,
+    frames_to_dict,
+    load_frames,
+)
+from nagare_clip.publish.pairing import apply_pairing, generate_pairing
 from nagare_clip.publish.publish_llm import (
     PublishCopy,
-    ThumbSet,
     generate_publish_copy,
     thumbnail_copy_to_dict,
 )
-from nagare_clip.publish.thumbnail import ThumbRender
 from nagare_clip.publish.thumbs import ThumbShot
 from nagare_clip.publish.timeline import (
     Placement,
@@ -72,7 +87,6 @@ def empty_publish() -> dict[str, Any]:
         "chapter_issues": [],
         "thumbnail_copy": [],
         "thumbnails": [],
-        "renders": [],
     }
 
 
@@ -148,18 +162,6 @@ def _thumbnail_entries(
     return out
 
 
-def _image(path: str, alt: str, width: int, markup: str) -> str:
-    """One embedded image, in whichever markup the config asked for.
-
-    ``html`` (default) keeps the sized ``<img>`` — a shortlist of stills is
-    unreviewable at full width.  ``markdown`` is for viewers that strip raw
-    HTML; the size hint has no markdown equivalent, so it is simply dropped.
-    """
-    if markup == "markdown":
-        return f"![{alt}]({path})"
-    return f'<img src="{path}" width="{width}">'
-
-
 def _render_markdown(data: dict[str, Any], enabled: bool, markup: str = "html") -> str:
     """The reviewable file: copy-pasteable description, everything else beside it."""
     if not enabled:
@@ -184,13 +186,10 @@ def _render_markdown(data: dict[str, Any], enabled: bool, markup: str = "html") 
     lines.append("")
 
     lines += ["## Thumbnail copy", ""]
-    by_index = {r["set"]: r["path"] for r in data["renders"]}
     if data["thumbnail_copy"]:
         for i, thumb_set in enumerate(data["thumbnail_copy"], start=1):
             lines.append(f"### Set {i}")
             lines += [f"- {line['role']}: {line['text']}" for line in thumb_set["lines"]]
-            if i in by_index:
-                lines += ["", _image(by_index[i], f"Set {i}", 480, markup)]
             lines.append("")
     else:
         lines += ["_(none)_", ""]
@@ -204,7 +203,7 @@ def _render_markdown(data: dict[str, Any], enabled: bool, markup: str = "html") 
                 if thumb["timeline_time"] is not None
                 else "—"
             )
-            still = _image(thumb["path"], thumb["label"], 240, markup)
+            still = embed_image(thumb["path"], thumb["label"], 240, markup)
             lines.append(
                 f"| {at} | {thumb['source_time']:.1f}s | {thumb['kind']} | "
                 f"{thumb['label']} | {still} |"
@@ -212,6 +211,22 @@ def _render_markdown(data: dict[str, Any], enabled: bool, markup: str = "html") 
     else:
         lines.append("_(none)_")
     return "\n".join(lines).rstrip("\n") + "\n"
+
+
+def _pairing_cfg(publish_cfg: dict, pairing_cfg: dict, cfg: dict) -> dict[str, Any]:
+    """The pairing call's config: publish's, overridden by what pairing states.
+
+    It runs on publish's own provider and model, so it must also be sampled
+    the way that model requires -- an unset key means "inherit", not "use my
+    own idea of a good temperature".  A hardcoded default beside an inherited
+    model is how a real run got `temperature=0.4` rejected on every attempt by
+    a model that accepts only `1`.
+
+    Font slots come from `render:`, because a font is part of the look and the
+    renderer is what resolves a slot name.
+    """
+    stated = {k: v for k, v in pairing_cfg.items() if v is not None}
+    return {**publish_cfg, **stated, "fonts": (cfg.get("render") or {}).get("fonts")}
 
 
 def run_publish(
@@ -223,9 +238,9 @@ def run_publish(
     plan_json: Path | None = None,
     overlay_texts: dict[str, list[str]] | None = None,
     thumbs: Sequence[ThumbShot] | None = None,
+    frames_json: Path | None = None,
     markdown: Path | None = None,
     recorder: Recorder = NULL_RECORDER,
-    render: Callable[[Sequence[ThumbSet], Sequence[ThumbShot]], list[ThumbRender]] | None = None,
 ) -> None:
     publish_cfg = cfg["publish"]
     enabled = bool(publish_cfg.get("enabled", False))
@@ -234,6 +249,25 @@ def run_publish(
         logging.info("publish: disabled, writing empty publish material")
         data = empty_publish()
     else:
+        # Look before writing: describing a still depends on nothing but the
+        # still, and every frame whose bytes already have a description costs
+        # no call -- so re-running publish for better copy is cheap.
+        frames: list[FrameDescription] = []
+        if frames_json is not None:
+            frames = describe_frames(
+                thumbs or [],
+                frames_json.parent,
+                publish_cfg.get("describe_frames") or {},
+                previous=load_frames(frames_json),
+                recorder=recorder,
+            )
+            frames_json.parent.mkdir(parents=True, exist_ok=True)
+            frames_json.write_text(
+                json.dumps(frames_to_dict(frames), ensure_ascii=False, indent=2) + "\n",
+                encoding="utf-8",
+            )
+            logging.info("publish: wrote %s", frames_json)
+
         project = summary_from_dict(_load_json(summary_json))
         directions: list[PartDirection] = plan_from_dict(_load_json(plan_json))
         flat_overlays = [
@@ -247,6 +281,19 @@ def run_publish(
             recorder=recorder,
         )
 
+        # Pair last: the copy is written blind, then matched to a picture.
+        # A set the pairing does not decide keeps the built-in preset look,
+        # which is exactly how a project with no pairing at all renders.
+        pairing_cfg = publish_cfg.get("pairing") or {}
+        if pairing_cfg.get("enabled", True):
+            pairing = generate_pairing(
+                copy,
+                frames,
+                _pairing_cfg(publish_cfg, pairing_cfg, cfg),
+                recorder=recorder,
+            )
+            copy.thumbnail_copy = apply_pairing(copy.thumbnail_copy, pairing, frames)
+
         min_chapter = float(publish_cfg.get("min_chapter_duration", MIN_CHAPTER_SECONDS))
         placements = build_placements(ordered)
         total = total_duration(placements)
@@ -257,7 +304,6 @@ def run_publish(
         chapter_lines = render_chapter_lines(chapters)
         issues = chapter_issues(chapters, total, min_duration=min_chapter)
         description = "\n\n".join(part for part in (copy.lead, "\n".join(chapter_lines)) if part)
-        renders = list(render(copy.thumbnail_copy, thumbs or [])) if render else []
 
         data = {
             "titles": copy.titles,
@@ -271,18 +317,13 @@ def run_publish(
             "chapter_issues": issues,
             "thumbnail_copy": thumbnail_copy_to_dict(copy),
             "thumbnails": _thumbnail_entries(thumbs or [], placements),
-            "renders": [
-                {"set": r.index, "path": r.path, "background": r.background} for r in renders
-            ],
         }
         logging.info(
-            "publish: %d title(s), %d chapter(s), %d thumbnail copy set(s), %d frame(s), "
-            "%d thumbnail render(s)",
+            "publish: %d title(s), %d chapter(s), %d thumbnail copy set(s), %d frame(s)",
             len(data["titles"]),
             len(data["chapters"]),
             len(data["thumbnail_copy"]),
             len(data["thumbnails"]),
-            len(data["renders"]),
         )
 
     output.parent.mkdir(parents=True, exist_ok=True)
@@ -290,6 +331,6 @@ def run_publish(
     logging.info("publish: wrote %s", output)
     if markdown is not None:
         markdown.parent.mkdir(parents=True, exist_ok=True)
-        markup = str(publish_cfg.get("image_markup", "html"))
+        markup = str((cfg.get("general") or {}).get("image_markup", "html"))
         markdown.write_text(_render_markdown(data, enabled, markup), encoding="utf-8")
         logging.info("publish: wrote %s", markdown)

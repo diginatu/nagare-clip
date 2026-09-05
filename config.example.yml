@@ -18,6 +18,7 @@ general:
   llm_report: true   # write a per-call LLM report under output/llm_report/
   llm_report_dir: "output/llm_report"
   langfuse: true   # send LLM traces to Langfuse when LANGFUSE_PUBLIC_KEY/SECRET_KEY are set (false to force-disable)
+  image_markup: html   # How the reviewable markdown files (publish.md, render.md) embed images: html = <img> tags (sized), markdown = ![alt](path) for viewers that strip raw HTML. A property of your viewer, so it is set once here
 
 # project: the editorial brief for this project (all fields optional, free text).
 # Whatever is set here is appended to the system prompts of the summary, plan,
@@ -276,13 +277,18 @@ blender:
 
 # publish stage: runs once project-wide AFTER blender. An LLM turns the summaries
 # and the project brief into several title candidates, a description lead, chapter
-# titles and alternative thumbnail-copy sets (copy AND look, in ImageMagick's own
-# vocabulary); the chapter TIMESTAMPS are computed from the finished timeline (keep
-# intervals + speed ranges), which exists nowhere else. Stills are extracted at the
-# moments the director marked as payoffs, one thumbnail is rendered per copy set
-# with ImageMagick (see publish.thumbnail below), and publish.md embeds the results
-# alongside publish.json (the hand-editable contract for the look). Uploading, and
-# picking which rendered set to ship, stay manual. Disabled by default (no-op).
+# titles and alternative thumbnail-copy sets (WORDS only -- see pairing below);
+# the chapter TIMESTAMPS are computed from the finished timeline (keep intervals +
+# speed ranges), which exists nowhere else. Stills are extracted at the moments the
+# director marked as payoffs and shown in publish.md beside the copy.
+# Compositing is NOT done here: the render stage (below) reads publish.json and
+# runs ImageMagick, so a hook or a background can be hand-edited and re-rendered
+# without paying for the copy again. Uploading, and picking which rendered set to
+# ship, stay manual. Disabled by default (no-op).
+#
+# Cost of one enabled run: the copy call, plus the pairing call, plus one VISION
+# call per candidate still that does not already have a description (see
+# describe_frames).
 publish:
   enabled: false   # Enable the publish LLM
   provider: ollama_chat   # LiteLLM provider prefix: ollama_chat | openai | gemini | anthropic
@@ -299,20 +305,84 @@ publish:
   min_chapter_duration: 10.0   # YouTube ignores a chapter list unless every chapter is at least this long; a shorter one is merged into a neighbour
   max_frames: 24   # Cap on thumbnail candidate stills (0 = no limit); overlays outrank keeps
   frame_width: 1280   # Downscale width (px) of the extracted JPEG stills; height is auto
-  image_markup: html   # How publish.md embeds images: html = <img> tags (sized), markdown = ![alt](path) for viewers that strip raw HTML
-  # Thumbnail rendering: one image per LLM copy set, composited with ImageMagick
-  # (`magick` must be on PATH). The LLM writes the colours, point sizes and
-  # placement for its own copy, in ImageMagick's vocabulary; only `fonts` is set
-  # here, because the model cannot know what is installed. Renders land in
-  # output/publish/thumbnails/ and are embedded in publish.md.
-  thumbnail:
-    enabled: true   # Render a thumbnail per copy set
-    background: ""   # Still to composite onto: path relative to output/publish/ (or absolute); empty = the first candidate in the frame shortlist
-    width: 1280   # Canvas width in px
-    height: 720   # Canvas height in px
-    line_gap: 12   # Vertical gap between stacked lines in px
-    # fonts: {sans-bold: "Noto-Sans-CJK-JP-Bold", serif-black: "Noto-Serif-CJK-JP-Black"}   # Font slots the LLM may choose from: slot name -> ImageMagick font name or path
   # prompt: "..."   # System prompt (has a sensible default)
+  # Frame description: one VISION call per candidate still, describing what is
+  # actually legible in it, where the subject sits and which regions are empty --
+  # the director's label says what it THOUGHT was happening at that moment, only
+  # looking says what a viewer can make out. The pairing step below uses these to
+  # put each headline on a frame that shows what it promises.
+  #
+  # Cost: up to publish.max_frames calls the first time (24 by default), then only
+  # for frames whose picture CHANGED. Results are cached in publish/frames.json by
+  # a content hash of the JPEG itself, so re-running publish for better copy over
+  # an unchanged shortlist costs nothing, and a description you rewrite by hand is
+  # the description from then on.
+  #
+  # OFF by default because it needs a VISION-capable model and the rest of publish
+  # needs a text one: a project that has only configured publish.model would
+  # otherwise fire two dozen vision calls at a model that cannot see. Turning it
+  # off is not a no-op the way disabling a stage is -- frames.json is still written
+  # with the shortlist fields and hashes, so descriptions can be written by hand and
+  # are reused when this is switched on. Without descriptions the pairing call still
+  # runs, on the director's labels alone.
+  describe_frames:
+    enabled: false   # Enable the frame-description vision LLM
+    provider: ollama_chat   # LiteLLM provider prefix: ollama_chat | openai | gemini | anthropic
+    api_base: ""   # Base URL; empty -> Ollama localhost default; leave empty for cloud providers
+    model: "qwen2.5vl:7b"   # A VISION-capable model (passed to LiteLLM as "<provider>/<model>")
+    api_key: ""   # API key for the provider (or set the provider's env var)
+    temperature: 0.2
+    thinking: false
+    timeout: 300
+    max_retries: 2   # Extra attempts on LLM error / empty response (0 = single attempt)
+    retry_temp_step: 0.2
+    retry_temp_cap: 0.8
+    # prompt: "..."   # System prompt (has a sensible default)
+  # Pairing: a second, text-only call that puts each thumbnail headline on the
+  # frame that shows what it promises, and decides where the text sits and in what
+  # colour -- from the frame DESCRIPTIONS above, never from images, and naming its
+  # frame by INDEX (publish resolves that to a path before writing publish.json).
+  # It is kept apart from the copy call because two dozen frame descriptions in
+  # front of that one makes it caption the photographs it can see instead of
+  # writing hooks from the story.
+  #
+  # Cost: exactly one extra text call per publish run, whatever the shortlist size.
+  # It needs NO new model -- it uses publish's own provider/model/api_base/api_key,
+  # AND publish's own sampling settings, since it is the same kind of call on the
+  # same model: a key left unset below means "inherit", not "use my own idea of a
+  # good temperature". That matters because some models accept exactly one
+  # temperature (claude-sonnet-5 wants 1.0) and reject anything else before the
+  # request leaves the machine.
+  #
+  # ON by default, unlike describe_frames, because the copy call no longer chooses
+  # colours or placement at all: turning this off is not a no-op but a fallback to
+  # the four built-in presets on one shared background -- which is what a project
+  # renders with no pairing at all, and is a downgrade rather than nothing.
+  pairing:
+    enabled: true   # Run the pairing call
+    # temperature: 0.2   # Sampling temperature; unset = publish.temperature
+    # max_retries: 2   # Extra attempts; unset = publish.max_retries
+    # retry_temp_step: 0.2   # Unset = publish.retry_temp_step
+    # retry_temp_cap: 0.8   # Unset = publish.retry_temp_cap
+    # prompt: "..."   # System prompt (has a sensible default)
+
+# render stage: the LAST stage, and the only one that never makes an LLM call.
+# It reads output/publish/publish.json -- the hand-editable contract -- and
+# composites one thumbnail per copy set with ImageMagick (`magick` must be on
+# PATH), each onto the background that set names (a path relative to
+# output/publish/, or absolute; any aspect ratio, cropped to fill). Renders land
+# in output/render/thumbnails/ beside render.json and render.md. Edit a hook or
+# a background in publish.json and re-run --from-stage render --to-stage render:
+# zero calls, every time. Only `fonts` is set here, because the model cannot know
+# what is installed -- and SET IT if your copy is not plain ASCII: ImageMagick's
+# default face draws nothing at all (not even a box) for a character it has no
+# glyph for, so a CJK headline comes back invisible.
+render:
+  enabled: true   # Render a thumbnail per copy set
+  width: 1280   # Canvas width in px
+  height: 720   # Canvas height in px
+  line_gap: 12   # Vertical gap between stacked lines in px
+  # fonts: {sans-bold: "Noto-Sans-CJK-JP-Bold", serif-black: "Noto-Serif-CJK-JP-Black"}   # Font slots the pairing call may choose from: slot name -> ImageMagick font name or path. THE FIRST ONE LISTED is also the fallback face for any line that named no slot (a preset cannot name one), so put a font that covers your language first. Leave this empty and ImageMagick's default face is used, which draws nothing at all for a CJK character
 
 # cut_report: deterministic metrics + checks on the FINISHED cut (no LLM call).
 # Runs after intervals (again after blender, with Blender's own warnings) and
@@ -328,4 +398,4 @@ pipeline:
   input_videos_dir: src_video
   output_dir: output   # Root dir; stage outputs go to per-stage named subdirs
   from_stage: transcription   # Start from this stage; reuses earlier stage outputs
-  to_stage: publish   # Stop after this stage (inclusive). Must not precede from_stage
+  to_stage: render   # Stop after this stage (inclusive). Must not precede from_stage

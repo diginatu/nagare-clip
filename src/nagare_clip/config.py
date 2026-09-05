@@ -400,6 +400,24 @@ GAP_CONTEXT_PROMPT = (
     "- Describe only what you can see; do not speculate about the audio."
 )
 
+DESCRIBE_FRAMES_PROMPT = (
+    "You are looking at ONE still frame taken from a video, so that a "
+    "thumbnail headline can later be placed on it. Reply with plain prose, "
+    "two to four sentences. No JSON, no bullet list, no preamble.\n"
+    "\n"
+    "Say, in this order:\n"
+    "1. What is actually visible and LEGIBLE in the frame -- what a viewer "
+    "would recognise at thumbnail size. If the subject is small, turned away, "
+    "blurred, dark or out of frame, say so plainly; that is the most useful "
+    "thing you can report.\n"
+    "2. Where the subject sits: left / centre / right, upper / middle / lower.\n"
+    "3. Which regions are EMPTY enough to carry large text, and for each of "
+    "them, its colour and whether it is light or dark.\n"
+    "\n"
+    "Describe only what you can see in this frame. Do not guess what happened "
+    "before or after it, and do not write a headline or a caption of any kind."
+)
+
 PUBLISH_PROMPT = (
     "You write the publishing material for a finished video: the title, the "
     "description lead, the chapter titles and the thumbnail copy. You receive "
@@ -415,12 +433,8 @@ PUBLISH_PROMPT = (
     '  "lead": "two or three sentences opening the description",\n'
     '  "chapters": [{"index": 1, "title": "short chapter title"}],\n'
     '  "thumbnail_copy": [\n'
-    '    {"lines": [{"role": "tag", "text": "...", "font": "<slot>", "pointsize": 70,\n'
-    '                "fill": "white", "stroke": "rgba(30,30,30,1)", "strokewidth": 8},\n'
-    '               {"role": "hook", "text": "...", "font": "<slot>", "pointsize": 156,\n'
-    '                "fill": "#B08D3E", "stroke": "rgba(250,250,250,1)", "strokewidth": 12}],\n'
-    '     "gravity": "northwest", "offset": "+56+62",\n'
-    '     "shadow": {"color": "rgba(0,0,0,0.8)", "blur": "0x8"}}\n'
+    '    {"lines": [{"role": "tag", "text": "..."},\n'
+    '               {"role": "hook", "text": "..."}]}\n'
     "  ]\n"
     "}\n"
     "\n"
@@ -441,16 +455,12 @@ PUBLISH_PROMPT = (
     "thumbnail is built around, a `subtitle` adds the one detail that makes "
     "the hook land. Only the roles you need — a punchy video may want a hook "
     "alone. Never pad a set to three lines.\n"
-    "- Each thumbnail set also carries its own LOOK, as ImageMagick options "
-    'on a 1280x720 canvas: per line "fill" and "stroke" colours '
-    '(#RRGGBB or rgba(r,g,b,a)), "strokewidth" (0-40, the outline that '
-    'keeps text readable over a photo), "pointsize" (8-400; a hook is '
-    'large, a tag small); per set "gravity" (northwest / north / … / '
-    'southeast), "offset" (+x+y from that corner) and "shadow". The sets '
-    "must DIFFER visibly from each other in colour and placement, not only "
-    "in wording — they are alternatives a human chooses between. Line "
-    "positions are computed, so give the block anchor, not a position per "
-    "line.\n"
+    "- The sets must be genuinely different ANGLES on the video, not "
+    "rewordings of one — they are alternatives a human chooses between.\n"
+    "- Write the WORDS ONLY. Which photograph a set goes on, and what "
+    "colour its text is and where it sits, are decided afterwards by "
+    "someone who has looked at the pictures. You have not seen them, so "
+    "do not describe, assume or refer to a background.\n"
     "- Prefer the concrete moments the captions and part summaries name "
     "(a failure, a fix, a result) over generic phrasing.\n"
     "- Output only the JSON object, no other text."
@@ -495,6 +505,14 @@ class GeneralConfig(BaseModel):
     langfuse: bool = Field(
         True,
         description="send LLM traces to Langfuse when LANGFUSE_PUBLIC_KEY/SECRET_KEY are set (false to force-disable)",
+    )
+    image_markup: Literal["html", "markdown"] = Field(
+        "html",
+        description=(
+            "How the reviewable markdown files (publish.md, render.md) embed images: "
+            "html = <img> tags (sized), markdown = ![alt](path) for viewers that strip "
+            "raw HTML. A property of your viewer, so it is set once here"
+        ),
     )
 
 
@@ -1046,30 +1064,158 @@ class BlenderConfig(BaseModel):
     speed_mark: SpeedMarkConfig = Field(default_factory=SpeedMarkConfig)
 
 
-class ThumbnailConfig(BaseModel):
+PAIRING_PROMPT = (
+    "You put each thumbnail headline on the photograph that shows what it "
+    "promises, and decide how the text sits on that photograph.\n"
+    "\n"
+    "You receive the thumbnail COPY SETS (alternatives a human will choose "
+    "between, each one to three numbered lines) and a numbered list of "
+    "CANDIDATE FRAMES. Each frame shows the moment's kind, its time, the "
+    "editor's label for it, and -- where one exists -- a description of what "
+    "is actually visible in it, written by someone who looked. The label is a "
+    "claim about the moment; the description is what a viewer would really "
+    "see. Where they disagree, believe the description.\n"
+    "\n"
+    "You never see the images themselves and you never name a file. Name a "
+    "frame by its INDEX in the list. Output ONLY a JSON object.\n"
+    "\n"
+    "JSON shape:\n"
+    "{\n"
+    '  "sets": [\n'
+    '    {"set": 1, "frame": 7,\n'
+    '     "gravity": "northwest", "offset": "+56+62",\n'
+    '     "shadow": {"color": "rgba(0,0,0,0.8)", "blur": "0x8"},\n'
+    '     "lines": [{"line": 1, "font": "<slot>", "pointsize": 70,\n'
+    '                "fill": "white", "stroke": "rgba(30,30,30,1)", "strokewidth": 8},\n'
+    '               {"line": 2, "font": "<slot>", "pointsize": 156,\n'
+    '                "fill": "#B08D3E", "stroke": "rgba(30,30,30,1)", "strokewidth": 12}]}\n'
+    "  ]\n"
+    "}\n"
+    "\n"
+    "Rules:\n"
+    "- One entry per copy set, keyed by the set number as given.\n"
+    '- "frame": the index of a frame that actually SHOWS what that set\'s '
+    "hook promises. A hook about a leak belongs on a frame whose description "
+    "mentions the leak, not on one whose label merely says so. If no frame "
+    "shows it, pick the one that comes closest and do not pretend "
+    "otherwise.\n"
+    "- Two sets may use the same frame, but prefer different ones: they are "
+    "alternatives, and four treatments of one photograph is one thumbnail "
+    "with four captions.\n"
+    '- "gravity" (northwest / north / … / southeast) and "offset" (+x+y from '
+    "that corner) place the whole block. Put it where the frame's "
+    "description says the picture is EMPTY -- never across the subject. Line "
+    "positions within the block are computed for you, so give the block "
+    "anchor, not a position per line.\n"
+    '- "fill" and "stroke" are colours (#RRGGBB or rgba(r,g,b,a)); '
+    '"strokewidth" (0-40) is the outline that keeps text readable over a '
+    "photo. Choose them against what the description says is behind the "
+    "text: light text with a dark outline on a dark region, and the reverse "
+    "on a light one. Do not put a mid-tone colour on a mid-tone region.\n"
+    '- "pointsize" (8-400) on a 1280x720 canvas: a hook is large, a tag '
+    "small, a subtitle in between.\n"
+    '- "line" is the line number within that set, as given.\n'
+    "- Leave out anything you have no reason to choose; a sensible default is "
+    "used for it.\n"
+    "- Output only the JSON object, no other text."
+)
+
+
+class PairingConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
     section_comment: ClassVar[str] = (
-        "Thumbnail rendering: one image per LLM copy set, composited with ImageMagick\n"
-        "(`magick` must be on PATH). The LLM writes the colours, point sizes and\n"
-        "placement for its own copy, in ImageMagick's vocabulary; only `fonts` is set\n"
-        "here, because the model cannot know what is installed. Renders land in\n"
-        "output/publish/thumbnails/ and are embedded in publish.md."
+        "Pairing: a second, text-only call that puts each thumbnail headline on the\n"
+        "frame that shows what it promises, and decides where the text sits and in what\n"
+        "colour -- from the frame DESCRIPTIONS above, never from images, and naming its\n"
+        "frame by INDEX (publish resolves that to a path before writing publish.json).\n"
+        "It is kept apart from the copy call because two dozen frame descriptions in\n"
+        "front of that one makes it caption the photographs it can see instead of\n"
+        "writing hooks from the story.\n"
+        "\n"
+        "Cost: exactly one extra text call per publish run, whatever the shortlist size.\n"
+        "It needs NO new model -- it uses publish's own provider/model/api_base/api_key,\n"
+        "AND publish's own sampling settings, since it is the same kind of call on the\n"
+        'same model: a key left unset below means "inherit", not "use my own idea of a\n'
+        'good temperature". That matters because some models accept exactly one\n'
+        "temperature (claude-sonnet-5 wants 1.0) and reject anything else before the\n"
+        "request leaves the machine.\n"
+        "\n"
+        "ON by default, unlike describe_frames, because the copy call no longer chooses\n"
+        "colours or placement at all: turning this off is not a no-op but a fallback to\n"
+        "the four built-in presets on one shared background -- which is what a project\n"
+        "renders with no pairing at all, and is a downgrade rather than nothing."
     )
-    enabled: bool = Field(True, description="Render a thumbnail per copy set")
-    background: str = Field(
+    enabled: bool = Field(True, description="Run the pairing call")
+    # Unset = inherit publish's. The pairing call runs on publish's own model,
+    # so it must be sampled the way that model requires: a hardcoded 0.2 beside
+    # an inherited model that accepts only temperature=1 is a default
+    # incompatible with the default it is paired with.
+    temperature: float | None = _commented(
+        None, sample="0.2", description="Sampling temperature; unset = publish.temperature"
+    )
+    max_retries: int | None = _commented(
+        None, sample="2", description="Extra attempts; unset = publish.max_retries"
+    )
+    retry_temp_step: float | None = _commented(
+        None, sample="0.2", description="Unset = publish.retry_temp_step"
+    )
+    retry_temp_cap: float | None = _commented(
+        None, sample="0.8", description="Unset = publish.retry_temp_cap"
+    )
+    prompt: str = _commented(
+        PAIRING_PROMPT, sample='"..."', description="System prompt (has a sensible default)"
+    )
+
+
+class DescribeFramesConfig(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    section_comment: ClassVar[str] = (
+        "Frame description: one VISION call per candidate still, describing what is\n"
+        "actually legible in it, where the subject sits and which regions are empty --\n"
+        "the director's label says what it THOUGHT was happening at that moment, only\n"
+        "looking says what a viewer can make out. The pairing step below uses these to\n"
+        "put each headline on a frame that shows what it promises.\n"
+        "\n"
+        "Cost: up to publish.max_frames calls the first time (24 by default), then only\n"
+        "for frames whose picture CHANGED. Results are cached in publish/frames.json by\n"
+        "a content hash of the JPEG itself, so re-running publish for better copy over\n"
+        "an unchanged shortlist costs nothing, and a description you rewrite by hand is\n"
+        "the description from then on.\n"
+        "\n"
+        "OFF by default because it needs a VISION-capable model and the rest of publish\n"
+        "needs a text one: a project that has only configured publish.model would\n"
+        "otherwise fire two dozen vision calls at a model that cannot see. Turning it\n"
+        "off is not a no-op the way disabling a stage is -- frames.json is still written\n"
+        "with the shortlist fields and hashes, so descriptions can be written by hand and\n"
+        "are reused when this is switched on. Without descriptions the pairing call still\n"
+        "runs, on the director's labels alone."
+    )
+    enabled: bool = Field(False, description="Enable the frame-description vision LLM")
+    provider: str = Field(
+        "ollama_chat",
+        description="LiteLLM provider prefix: ollama_chat | openai | gemini | anthropic",
+    )
+    api_base: str = Field(
         "",
-        description=(
-            "Still to composite onto: path relative to output/publish/ (or absolute); "
-            "empty = the first candidate in the frame shortlist"
-        ),
+        description="Base URL; empty -> Ollama localhost default; leave empty for cloud providers",
     )
-    width: int = Field(1280, description="Canvas width in px")
-    height: int = Field(720, description="Canvas height in px")
-    line_gap: int = Field(12, description="Vertical gap between stacked lines in px")
-    fonts: dict[str, str] = _commented(
-        {},
-        sample='{sans-bold: "Noto-Sans-CJK-JP-Bold", serif-black: "Noto-Serif-CJK-JP-Black"}',
-        description="Font slots the LLM may choose from: slot name -> ImageMagick font name or path",
+    model: str = Field(
+        "qwen2.5vl:7b",
+        description='A VISION-capable model (passed to LiteLLM as "<provider>/<model>")',
+    )
+    api_key: str = Field("", description="API key for the provider (or set the provider's env var)")
+    temperature: float = Field(0.2)
+    thinking: bool | str = Field(False)
+    timeout: int = Field(300)
+    max_retries: int = Field(
+        2, description="Extra attempts on LLM error / empty response (0 = single attempt)"
+    )
+    retry_temp_step: float = Field(0.2)
+    retry_temp_cap: float = Field(0.8)
+    prompt: str = _commented(
+        DESCRIBE_FRAMES_PROMPT,
+        sample='"..."',
+        description="System prompt (has a sensible default)",
     )
 
 
@@ -1078,13 +1224,18 @@ class PublishConfig(BaseModel):
     section_comment: ClassVar[str] = (
         "publish stage: runs once project-wide AFTER blender. An LLM turns the summaries\n"
         "and the project brief into several title candidates, a description lead, chapter\n"
-        "titles and alternative thumbnail-copy sets (copy AND look, in ImageMagick's own\n"
-        "vocabulary); the chapter TIMESTAMPS are computed from the finished timeline (keep\n"
-        "intervals + speed ranges), which exists nowhere else. Stills are extracted at the\n"
-        "moments the director marked as payoffs, one thumbnail is rendered per copy set\n"
-        "with ImageMagick (see publish.thumbnail below), and publish.md embeds the results\n"
-        "alongside publish.json (the hand-editable contract for the look). Uploading, and\n"
-        "picking which rendered set to ship, stay manual. Disabled by default (no-op)."
+        "titles and alternative thumbnail-copy sets (WORDS only -- see pairing below);\n"
+        "the chapter TIMESTAMPS are computed from the finished timeline (keep intervals +\n"
+        "speed ranges), which exists nowhere else. Stills are extracted at the moments the\n"
+        "director marked as payoffs and shown in publish.md beside the copy.\n"
+        "Compositing is NOT done here: the render stage (below) reads publish.json and\n"
+        "runs ImageMagick, so a hook or a background can be hand-edited and re-rendered\n"
+        "without paying for the copy again. Uploading, and picking which rendered set to\n"
+        "ship, stay manual. Disabled by default (no-op).\n"
+        "\n"
+        "Cost of one enabled run: the copy call, plus the pairing call, plus one VISION\n"
+        "call per candidate still that does not already have a description (see\n"
+        "describe_frames)."
     )
     enabled: bool = Field(False, description="Enable the publish LLM")
     provider: str = Field(
@@ -1126,16 +1277,42 @@ class PublishConfig(BaseModel):
     frame_width: int = Field(
         1280, description="Downscale width (px) of the extracted JPEG stills; height is auto"
     )
-    image_markup: Literal["html", "markdown"] = Field(
-        "html",
-        description=(
-            "How publish.md embeds images: html = <img> tags (sized), "
-            "markdown = ![alt](path) for viewers that strip raw HTML"
-        ),
-    )
-    thumbnail: ThumbnailConfig = Field(default_factory=ThumbnailConfig)
     prompt: str = _commented(
         PUBLISH_PROMPT, sample='"..."', description="System prompt (has a sensible default)"
+    )
+    describe_frames: DescribeFramesConfig = Field(default_factory=DescribeFramesConfig)
+    pairing: PairingConfig = Field(default_factory=PairingConfig)
+
+
+class RenderConfig(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    section_comment: ClassVar[str] = (
+        "render stage: the LAST stage, and the only one that never makes an LLM call.\n"
+        "It reads output/publish/publish.json -- the hand-editable contract -- and\n"
+        "composites one thumbnail per copy set with ImageMagick (`magick` must be on\n"
+        "PATH), each onto the background that set names (a path relative to\n"
+        "output/publish/, or absolute; any aspect ratio, cropped to fill). Renders land\n"
+        "in output/render/thumbnails/ beside render.json and render.md. Edit a hook or\n"
+        "a background in publish.json and re-run --from-stage render --to-stage render:\n"
+        "zero calls, every time. Only `fonts` is set here, because the model cannot know\n"
+        "what is installed -- and SET IT if your copy is not plain ASCII: ImageMagick's\n"
+        "default face draws nothing at all (not even a box) for a character it has no\n"
+        "glyph for, so a CJK headline comes back invisible."
+    )
+    enabled: bool = Field(True, description="Render a thumbnail per copy set")
+    width: int = Field(1280, description="Canvas width in px")
+    height: int = Field(720, description="Canvas height in px")
+    line_gap: int = Field(12, description="Vertical gap between stacked lines in px")
+    fonts: dict[str, str] = _commented(
+        {},
+        sample='{sans-bold: "Noto-Sans-CJK-JP-Bold", serif-black: "Noto-Serif-CJK-JP-Black"}',
+        description=(
+            "Font slots the pairing call may choose from: slot name -> ImageMagick font "
+            "name or path. THE FIRST ONE LISTED is also the fallback face for any line "
+            "that named no slot (a preset cannot name one), so put a font that covers "
+            "your language first. Leave this empty and ImageMagick's default face is "
+            "used, which draws nothing at all for a CJK character"
+        ),
     )
 
 
@@ -1185,7 +1362,7 @@ class PipelineConfig(BaseModel):
         "transcription", description="Start from this stage; reuses earlier stage outputs"
     )
     to_stage: str = Field(
-        "publish", description="Stop after this stage (inclusive). Must not precede from_stage"
+        "render", description="Stop after this stage (inclusive). Must not precede from_stage"
     )
 
 
@@ -1211,6 +1388,7 @@ class NagareClipConfig(BaseModel):
     intervals: IntervalsConfig = Field(default_factory=IntervalsConfig)
     blender: BlenderConfig = Field(default_factory=BlenderConfig)
     publish: PublishConfig = Field(default_factory=PublishConfig)
+    render: RenderConfig = Field(default_factory=RenderConfig)
     cut_report: CutReportConfig = Field(default_factory=CutReportConfig)
     pipeline: PipelineConfig = Field(default_factory=PipelineConfig)
 
@@ -1308,7 +1486,7 @@ def _render_model(model_cls: type[BaseModel], indent: int) -> list[str]:
         if isinstance(ann, type) and issubclass(ann, BaseModel):
             sub_comment = getattr(ann, "section_comment", "")
             if sub_comment:
-                lines += [f"{pad}# {c}" for c in sub_comment.split("\n")]
+                lines += [f"{pad}# {c}".rstrip() for c in sub_comment.split("\n")]
             lines.append(f"{pad}{name}:")
             lines += _render_model(ann, indent + 2)
             continue
@@ -1334,7 +1512,7 @@ def generate_example_yaml() -> str:
             continue
         section_comment = getattr(model_cls, "section_comment", "")
         if section_comment:
-            out += [f"# {c}" for c in section_comment.split("\n")]
+            out += [f"# {c}".rstrip() for c in section_comment.split("\n")]
         out.append(f"{name}:")
         out += _render_model(model_cls, 2)
         out.append("")

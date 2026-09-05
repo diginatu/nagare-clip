@@ -31,6 +31,14 @@ def cfg_for_attempt(cfg: dict[str, Any], attempt: int) -> dict[str, Any]:
     ``retry_temp_step``, capped at ``retry_temp_cap``.  The base *cfg* is never
     mutated.
 
+    The cap can only bound a **rise**: it never returns less than the
+    configured temperature.  A retry that *lowered* it would contradict the
+    word "adds", and it broke a real run -- a project on a model that accepts
+    only ``temperature=1`` sets ``temperature: 1.0``, and the default cap of
+    ``0.8`` handed every retry a value the provider rejected before the
+    request left the machine.  For such a model, ``retry_temp_step: 0`` pins
+    the temperature across all attempts.
+
     When no temperature is configured (absent or ``None``), there is nothing to
     nudge: the request rides the provider's own default on every attempt, so
     *cfg* is returned unchanged (the client never forwards a fabricated value).
@@ -43,5 +51,5 @@ def cfg_for_attempt(cfg: dict[str, Any], attempt: int) -> dict[str, Any]:
     step = float(cfg.get("retry_temp_step", DEFAULT_RETRY_TEMP_STEP))
     cap = float(cfg.get("retry_temp_cap", DEFAULT_RETRY_TEMP_CAP))
     out = dict(cfg)
-    out["temperature"] = min(base + step * attempt, cap)
+    out["temperature"] = min(base + step * attempt, max(cap, base))
     return out

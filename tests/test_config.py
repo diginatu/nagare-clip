@@ -233,7 +233,7 @@ class TestGetEffectiveConfig:
     def test_pipeline_stage_defaults_are_names(self):
         cfg = get_effective_config(None)
         assert cfg["pipeline"]["from_stage"] == "transcription"
-        assert cfg["pipeline"]["to_stage"] == "publish"
+        assert cfg["pipeline"]["to_stage"] == "render"
 
     def test_transcription_language_default(self):
         cfg = get_effective_config(None)
@@ -272,13 +272,13 @@ class TestGetEffectiveConfig:
         with pytest.raises(ValidationError):
             get_effective_config(cfg_file)
 
-    def test_publish_image_markup_default_is_html(self):
+    def test_general_image_markup_default_is_html(self):
         cfg = get_effective_config(None)
-        assert cfg["publish"]["image_markup"] == "html"
+        assert cfg["general"]["image_markup"] == "html"
 
-    def test_publish_image_markup_rejects_unknown_value(self, tmp_path: Path):
+    def test_general_image_markup_rejects_unknown_value(self, tmp_path: Path):
         cfg_file = tmp_path / "cfg.yml"
-        cfg_file.write_text(yaml.dump({"publish": {"image_markup": "rst"}}))
+        cfg_file.write_text(yaml.dump({"general": {"image_markup": "rst"}}))
         with pytest.raises(ValidationError):
             get_effective_config(cfg_file)
 
@@ -796,31 +796,127 @@ def test_text_filter_prompt_repeated_phrase_example_is_valid_patch_syntax():
     assert apply_patches_to_lines(["{{映ってる->}}映ってるね"]) == ["映ってるね"]
 
 
-def test_publish_thumbnail_defaults():
+def test_publish_describe_frames_defaults():
+    cfg = get_effective_config(None, {})["publish"]["describe_frames"]
+    assert cfg["enabled"] is False  # a vision model has to be configured first
+    assert cfg["provider"] == "ollama_chat"
+    assert cfg["max_retries"] == 2
+    assert cfg["prompt"]
+
+
+def test_the_frame_description_prompt_asks_for_prose_and_the_empty_regions():
+    """It is read by a model and by a human; neither needs a schema."""
+    prompt = get_effective_config(None, {})["publish"]["describe_frames"]["prompt"].lower()
+    assert "json" not in prompt or "no json" in prompt
+    assert "empty" in prompt
+    assert "legible" in prompt
+
+
+def test_the_frame_description_prompt_forbids_writing_a_headline():
+    """Writing copy is the copy call's job; this one only looks. A vision model
+    handed a frame will happily caption it unless told not to."""
+    prompt = get_effective_config(None, {})["publish"]["describe_frames"]["prompt"].lower()
+    assert "do not write a headline" in prompt
+
+
+def test_image_markup_is_general_not_per_stage():
+    """It is a property of the VIEWER, not of a stage: two copies is one for a
+    human to keep in sync, and one project with two markdown files disagreeing."""
     cfg = get_effective_config(None, {})
-    thumb = cfg["publish"]["thumbnail"]
-    assert thumb["enabled"] is True
-    assert thumb["background"] == ""
-    assert (thumb["width"], thumb["height"]) == (1280, 720)
-    assert thumb["line_gap"] == 12
-    assert thumb["fonts"] == {}
+    assert cfg["general"]["image_markup"] == "html"
+    assert "image_markup" not in cfg["publish"]
+    assert "image_markup" not in cfg["render"]
 
 
-def test_publish_thumbnail_fonts_come_from_the_file(tmp_path):
+@pytest.mark.parametrize("section", ["publish", "render"])
+def test_a_per_stage_image_markup_is_rejected_rather_than_ignored(tmp_path, section):
+    path = tmp_path / "c.yml"
+    path.write_text(f"{section}:\n  image_markup: markdown\n", encoding="utf-8")
+    with pytest.raises(ValidationError):
+        get_effective_config(path, {})
+
+
+def test_publish_pairing_defaults():
+    cfg = get_effective_config(None, {})["publish"]["pairing"]
+    assert cfg["enabled"] is True  # same text model as the copy call; no new dependency
+    # unset = inherit publish's, because it runs on publish's model and must be
+    # sampled the way that model requires
+    assert cfg["temperature"] is None
+    assert cfg["max_retries"] is None
+    assert cfg["retry_temp_step"] is None and cfg["retry_temp_cap"] is None
+    assert cfg["prompt"]
+
+
+def test_the_pairing_prompt_owns_the_look_vocabulary_the_copy_prompt_lost():
+    prompt = get_effective_config(None, {})["publish"]["pairing"]["prompt"].lower()
+    for word in ("fill", "stroke", "strokewidth", "pointsize", "gravity", "offset"):
+        assert word in prompt
+
+
+def test_the_pairing_prompt_asks_for_an_index_never_a_path():
+    """A path is a string a model can invent; an index is bounded."""
+    prompt = get_effective_config(None, {})["publish"]["pairing"]["prompt"].lower()
+    assert "index" in prompt
+    assert ".jpg" not in prompt and "path" not in prompt
+
+
+def test_the_pairing_prompts_own_json_example_parses():
+    from nagare_clip.publish.pairing import try_parse_pairing_response
+
+    prompt = get_effective_config(None, {})["publish"]["pairing"]["prompt"]
+    start = prompt.index("{", prompt.index("JSON shape"))
+    depth, end = 0, start
+    for i, ch in enumerate(prompt[start:], start=start):
+        depth += (ch == "{") - (ch == "}")
+        if depth == 0:
+            end = i + 1
+            break
+    got = try_parse_pairing_response(prompt[start:end], num_sets=4, num_frames=24)
+    assert got is not None and got[1].frame is not None
+    assert got[1].style and got[1].lines
+
+
+def test_render_defaults():
+    cfg = get_effective_config(None, {})
+    render = cfg["render"]
+    assert render["enabled"] is True
+    assert (render["width"], render["height"]) == (1280, 720)
+    assert render["line_gap"] == 12
+    assert render["fonts"] == {}
+
+
+def test_render_fonts_come_from_the_file(tmp_path):
     path = tmp_path / "c.yml"
     path.write_text(
-        'publish:\n  thumbnail:\n    fonts:\n      hook: "Noto-Serif-CJK-JP-Black"\n',
+        'render:\n  fonts:\n    hook: "Noto-Serif-CJK-JP-Black"\n',
         encoding="utf-8",
     )
     cfg = get_effective_config(path, {})
-    assert cfg["publish"]["thumbnail"]["fonts"] == {"hook": "Noto-Serif-CJK-JP-Black"}
+    assert cfg["render"]["fonts"] == {"hook": "Noto-Serif-CJK-JP-Black"}
 
 
-def test_an_unknown_thumbnail_key_is_rejected(tmp_path):
+def test_an_unknown_render_key_is_rejected(tmp_path):
     path = tmp_path / "c.yml"
-    path.write_text("publish:\n  thumbnail:\n    colour: red\n", encoding="utf-8")
+    path.write_text("render:\n  colour: red\n", encoding="utf-8")
     with pytest.raises(ValidationError):
         get_effective_config(path, {})
+
+
+def test_a_background_key_is_rejected_rather_than_ignored(tmp_path):
+    """One project-wide background is gone; a set names its own in publish.json."""
+    path = tmp_path / "c.yml"
+    path.write_text("render:\n  background: frames/a/1.jpg\n", encoding="utf-8")
+    with pytest.raises(ValidationError):
+        get_effective_config(path, {})
+
+
+def test_a_config_still_carrying_publish_thumbnail_fails_loudly(tmp_path):
+    """No shim: the canvas size must have exactly one place to look."""
+    path = tmp_path / "c.yml"
+    path.write_text("publish:\n  thumbnail:\n    width: 1920\n", encoding="utf-8")
+    with pytest.raises(ValidationError) as e:
+        get_effective_config(path, {})
+    assert "thumbnail" in str(e.value)
 
 
 def _plan_prompt() -> str:

@@ -82,7 +82,7 @@ def test_pipeline_wires_context_and_prints_done(tmp_path, monkeypatch, capsys):
     assert "Done: " in capsys.readouterr().out
 
 
-def test_full_run_points_at_the_blend_and_the_publish_material(tmp_path, monkeypatch, capsys):
+def test_full_run_points_at_the_blend_the_copy_and_the_thumbnails(tmp_path, monkeypatch, capsys):
     monkeypatch.chdir(tmp_path)
     (tmp_path / "src_video").mkdir()
     (tmp_path / "src_video" / "a.mp4").write_bytes(b"x")
@@ -91,6 +91,19 @@ def test_full_run_points_at_the_blend_and_the_publish_material(tmp_path, monkeyp
     out = capsys.readouterr().out
     assert "a_edited.blend" in out
     assert "publish.md" in out
+    assert "render.md" in out
+
+
+def test_stopping_at_publish_does_not_point_at_thumbnails(tmp_path, monkeypatch, capsys):
+    """The contact sheet does not exist until render has run."""
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "src_video").mkdir()
+    (tmp_path / "src_video" / "a.mp4").write_bytes(b"x")
+    monkeypatch.setattr(cli, "run_stages", lambda stages, ctx: None)
+    assert cli.main(["--to-stage", "publish"]) == 0
+    out = capsys.readouterr().out
+    assert "publish.md" in out
+    assert "render.md" not in out
 
 
 def test_stopping_at_blender_points_at_the_blend_only(tmp_path, monkeypatch, capsys):

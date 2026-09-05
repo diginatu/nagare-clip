@@ -174,30 +174,70 @@ it writes files, you upload.
   boundaries of a `timelapse`), so you pick from a shortlist instead of
   scrubbing the timeline. The JPEGs are under `output/publish/frames/`.
 
-`publish` also **renders** a real thumbnail image per copy set, into
-`output/publish/thumbnails/set{N}.jpg`, and embeds each render (plus the
-candidate stills above) as an inline image in `publish.md` — so reviewing the
-options means looking at them, not opening files by hand. The same LLM call
-that writes a set's copy also writes that copy's *look* — font, colours,
-outline, block position — in ImageMagick's own vocabulary, so the four sets
-you see are four real options rather than four wordings of one image; the
-pipeline validates every value and builds every `magick` command as an
+Images are embedded as sized `<img>` tags by default. If you read these files
+in a viewer that strips raw HTML, set `general.image_markup: markdown` and they
+become plain `![alt](path)` images instead (markdown has no width syntax, so
+they render full width). One key, read by both `publish.md` and `render.md` —
+it describes your viewer, not a stage.
+
+`output/publish/publish.json` holds the same material as data, and is the
+**hand-editable contract** the `render` stage below reads — like
+`_director.json` is for the edit. `publish` itself composites nothing.
+
+**How a headline meets its picture.** `publish` makes two text calls where it
+used to make one. The **copy** call writes the hooks from the story and is shown
+no frames at all — two dozen frame descriptions in front of it and it starts
+captioning the photographs instead. The **pairing** call then takes those hooks
+and the frame *descriptions* (never the images) and decides, per set, which
+frame it goes on and where and in what colour the text sits. It names its frame
+by index, and `publish` writes the resolved **path** into `publish.json`, which
+is what you then edit. Turn it off with `publish.pairing.enabled: false` and
+every set falls back to the built-in presets.
+
+**Looking at the frames.** With `publish.describe_frames.enabled` (and a
+vision-capable model configured), each candidate still is described once — what
+is actually legible in it, where the subject sits, which regions are empty and
+what colour they are — into `output/publish/frames.json`. A label from the
+director says what it *thought* was happening at that moment; only looking says
+what a viewer can make out. Descriptions are cached by a content hash of the
+JPEG itself, so re-running `publish` for better copy over an unchanged shortlist
+costs **no** vision calls, a re-extracted frame whose picture changed is
+described again, and a description you rewrite by hand in `frames.json` is the
+description from then on.
+
+### Rendered thumbnails (`output/render/`)
+
+`render` is the last stage, and the only one that **never makes an LLM call
+under any circumstances**. It reads `output/publish/publish.json` and
+composites one real thumbnail per copy set into
+`output/render/thumbnails/set{N}.jpg`, with `output/render/render.md` as a
+contact sheet embedding the finished images beside the copy they carry.
+
+Each set names **its own background** and carries its own *look* — font,
+colours, outline, block position — so the sets you see are real options rather
+than several wordings of one image. Both are decided by `publish`'s **pairing**
+call, in ImageMagick's own vocabulary;
+the pipeline validates every value and builds every `magick` command as an
 argument list (never a shell string). This needs `magick` (ImageMagick) on
-`PATH`; set `publish.thumbnail.enabled: false` to keep the copy but skip
-rendering. `output/publish/publish.json`'s `thumbnail_copy` — including that
-model-authored look — is a hand-editable contract, like `_director.json` is
-for the edit; see [`docs/stages/publish.md`](docs/stages/publish.md) for the
-full style-key table and escaping rules, and the "Re-rendering" note below for
-iterating on a background/colour without calling the LLM again.
+`PATH`; set `render.enabled: false` to keep the copy but skip compositing.
 
-Those images are embedded as sized `<img>` tags by default. If you read
-`publish.md` in a viewer that strips raw HTML, set `publish.image_markup:
-markdown` and they become plain `![alt](path)` images instead (markdown has no
-width syntax, so they render full width).
+**Set `render.fonts` if your copy is not plain ASCII.** ImageMagick's default
+face draws nothing at all — not even a box — for a character it has no glyph
+for, so a Japanese headline comes back invisible. The first slot you list is
+also the face any line falls back to when the model named none, so put a font
+that covers your language first. `render.md` says so at the top when it applies.
 
-`output/publish/publish.json` holds the same material as data, including the
-`renders` array (`{set, path, background}`), for anything reading it
-programmatically.
+The split exists for one loop — look at a render, change one thing, look
+again:
+
+```bash
+$EDITOR output/publish/publish.json          # retype a hook, swap a colour
+./scripts/run_pipeline.sh --from-stage render --to-stage render
+```
+
+That costs **zero** LLM calls, every time. See
+[`docs/stages/render.md`](docs/stages/render.md) for the full style-key table
+and escaping rules.
 
 **Chapter timestamps come from the finished timeline**, not from the source: a
 part that was cut entirely drops out of the list, and a part inside a timelapse
@@ -280,9 +320,7 @@ your config file, or export `NAGARE_LANGFUSE=0` before running the pipeline.
 `run_pipeline.sh` (via `python -m nagare_clip.pipeline`) maps the config flag to
 `NAGARE_LANGFUSE` automatically, once, for the whole run. Note: `call_llm` reads
 only the env var, so `general.langfuse: false` takes effect only when run
-through the pipeline CLI. (`python -m nagare_clip.publish.thumbnail`, below,
-is a standalone CLI, but it never calls an LLM — it only re-runs ImageMagick —
-so there is nothing for it to bypass.)
+through the pipeline CLI.
 
 Traces are grouped by pipeline run (`session_id` = one timestamp per
 `run_pipeline.sh` invocation, exported as `NAGARE_RUN_ID`), by stage
@@ -298,7 +336,7 @@ alongside Langfuse — the two are independent sinks.
 - NVIDIA GPU + NVIDIA Container Toolkit
 - Docker + Docker Compose
 - Blender available as `blender`
-- ImageMagick available as `magick` (only needed for `publish.thumbnail.enabled`, i.e. when the optional `publish` stage renders thumbnails)
+- ImageMagick available as `magick` (only needed for `render.enabled`, i.e. when the `render` stage composites thumbnails)
 - Python 3.11+
 
 ## Setup
@@ -568,9 +606,7 @@ Notes:
 ### audio_silence only (audio-silence detection)
 
 There is no standalone CLI for *this* stage — it runs through the pipeline
-orchestrator like the rest (the `python -m nagare_clip.publish.thumbnail`
-re-render CLI, documented under "publish only" below, is the one exception).
-Run just this stage with `--from-stage`/`--to-stage` (it drives the ffmpeg
+orchestrator, like every stage in this repo. Run just this stage with `--from-stage`/`--to-stage` (it drives the ffmpeg
 `silencedetect` Docker call and parses its stderr into `{stem}_cuts.txt`
 internally):
 
@@ -636,33 +672,31 @@ so it can be re-run on its own to get a different set of title/thumbnail
 candidates without touching the cut. Any of those inputs missing degrades just
 the part that needed it (no intervals → no chapter timestamps).
 
-#### Re-rendering thumbnails without re-running the LLM
-
-Picking a background still and nudging a colour is iterative, and re-running
-the `publish` stage above would call the LLM again and hand you *different*
-copy than the one you were judging. `output/publish/publish.json`'s
-`thumbnail_copy` (including the model-authored font/colour/position values) is
-a hand-editable contract, the same way `_director.json` is for the edit — this
-CLI reads it back and re-runs ImageMagick with **no LLM call at all**:
+### render only (composite the thumbnails)
 
 ```bash
-uv run python -m nagare_clip.publish.thumbnail \
-  --publish-dir output/publish \
-  --config my_project.yml \
-  --background frames/myvideo/2528.021.jpg
+./scripts/run_pipeline.sh --from-stage render --to-stage render --config my_project.yml
 ```
 
-Pass `--config` explicitly, the same as the pipeline CLI — this CLI does not
-pick up a project config file on its own, so without it the render falls back
-to built-in defaults (1280x720, no `-font` flag) instead of your configured
-canvas size and CJK font slots.
+Picking a background still and nudging a colour is iterative, and re-running
+`publish` would call the LLM again and hand you *different* copy than the one
+you were judging. So `render` is its own stage: it reads
+`output/publish/publish.json` (including the model-authored font/colour/
+position values), re-runs ImageMagick and makes **no LLM call at all** — hand-
+edit a set's `background`/`fill`/`stroke`/`gravity`/… first, then re-run the
+stage to see the change.
 
-`--background` (a path relative to `--publish-dir`, or absolute) overrides
-`publish.thumbnail.background` for that run only; omit it to reuse whatever is
-already configured, or the first frame-shortlist candidate. Hand-edit a set's
-`fill`/`stroke`/`gravity`/… in `publish.json` first, then re-run this CLI to
-see the change. See [`docs/stages/publish.md`](docs/stages/publish.md) for the
-full style-key table.
+A set's `background` is a path relative to `output/publish/` (where the
+shortlist stills are), or an absolute path. It does **not** have to be a
+shortlist frame: any image of any aspect ratio works, and is scaled to cover
+and centre-cropped to the canvas — so a photograph the camera never rolled on,
+or a frame you pulled by hand at a timestamp the shortlist missed, is one line
+of JSON away. A set that names nothing falls back to the first shortlist
+candidate; a set that names a file which is not there is skipped with a warning
+rather than quietly rendered onto some other frame — `render.md` keeps that
+set's heading and copy and says why it produced no image, so a typo is visible
+in the file you are already reading. See
+[`docs/stages/render.md`](docs/stages/render.md) for the full style-key table.
 
 ## Operational Notes
 

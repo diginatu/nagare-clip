@@ -82,9 +82,9 @@ would cross it.
 2. Report how `nagare_config.yml` differs from the repo defaults — enabled
    stages, models, tuned thresholds — and list config keys the repo has gained
    that this project does not set yet.
-3. Check the `publish` prerequisites: `magick` on PATH, and
-   `publish.thumbnail.fonts` listing fonts actually installed here. The stage
-   writes the thumbnail copy but cannot know what fonts exist.
+3. Check the `render` prerequisites: `magick` on PATH, and `render.fonts`
+   listing fonts actually installed here. `publish` writes the thumbnail copy
+   but cannot know what fonts exist.
 4. Ask me about the video: audience, purpose, target length, tone, what happened
    in the previous episode if this is a series, anything I already want cut or
    kept.

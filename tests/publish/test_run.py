@@ -7,8 +7,8 @@ from __future__ import annotations
 import json
 
 import nagare_clip.publish.run as publish_run
+from nagare_clip.config import get_effective_config
 from nagare_clip.publish.publish_llm import PublishCopy, ThumbLine, ThumbSet
-from nagare_clip.publish.thumbnail import ThumbRender
 from nagare_clip.publish.thumbs import ThumbShot
 from nagare_clip.summary.summarize import PartSummary, ProjectSummary, summary_to_dict
 
@@ -75,7 +75,6 @@ def test_disabled_writes_an_empty_artifact(tmp_path):
         "chapter_issues": [],
         "thumbnail_copy": [],
         "thumbnails": [],
-        "renders": [],
     }
     assert "disabled" in md.read_text(encoding="utf-8")
 
@@ -94,7 +93,10 @@ def test_enabled_writes_titles_and_description_with_chapters(tmp_path, monkeypat
     assert data["chapters_qualify"] is True
     assert data["chapter_issues"] == []
     assert data["thumbnail_copy"] == [
-        {"lines": [{"role": "tag", "text": "水槽DIY"}, {"role": "hook", "text": "水浸し！"}]}
+        {
+            "lines": [{"role": "tag", "text": "水槽DIY"}, {"role": "hook", "text": "水浸し！"}],
+            "background": "",
+        }
     ]
     text = md.read_text(encoding="utf-8")
     assert "候補1" in text and "0:00 おさらい" in text
@@ -263,71 +265,209 @@ def _sets():
     ]
 
 
-def test_disabled_artifact_has_an_empty_renders_array(tmp_path):
-    data, _ = _write(tmp_path, {"publish": {"enabled": False}})
-    assert data["renders"] == []
-
-
-def test_the_renders_are_recorded_in_the_artifact(tmp_path, monkeypatch):
+def test_the_copy_sets_are_listed_without_images(tmp_path, monkeypatch):
+    """publish.json is the contract; the pictures are the render stage's job."""
     _fake_generate(monkeypatch, _copy(thumbnail_copy=_sets()))
+    data, md = _write(tmp_path, {"publish": {"enabled": True}})
+    assert "renders" not in data
+    text = md.read_text(encoding="utf-8")
+    assert text.index("### Set 1") < text.index("水浸し！") < text.index("### Set 2")
+    assert "穴あけ不要。" in text
+    assert "<img" not in text.split("## Thumbnail frame")[0]
 
-    def render(sets, thumbs):
-        return [ThumbRender(1, "thumbnails/set1.jpg", "frames/a/1.000.jpg")]
 
-    data, _ = _write(tmp_path, {"publish": {"enabled": True}}, render=render)
-    assert data["renders"] == [
-        {"set": 1, "path": "thumbnails/set1.jpg", "background": "frames/a/1.000.jpg"}
+def _frames_run(tmp_path, cfg, *, shots):
+    """run_publish with a shortlist whose stills exist beside publish.json."""
+    for shot in shots:
+        still = tmp_path / shot.path
+        still.parent.mkdir(parents=True, exist_ok=True)
+        still.write_bytes(b"jpeg-" + shot.path.encode())
+    data, md = _write(tmp_path, cfg, thumbs=shots, frames_json=tmp_path / "frames.json")
+    frames_json = tmp_path / "frames.json"
+    frames = json.loads(frames_json.read_text(encoding="utf-8")) if frames_json.is_file() else None
+    return data, md, frames
+
+
+def test_frames_json_is_written_beside_publish_json(tmp_path, monkeypatch):
+    _fake_generate(monkeypatch, _copy())
+    shots = [ThumbShot("a", 12.0, "overlay", "水浸し！", "frames/a/12.000.jpg")]
+    _, _, frames = _frames_run(tmp_path, {"publish": {"enabled": True}}, shots=shots)
+    assert [f["path"] for f in frames["frames"]] == ["frames/a/12.000.jpg"]
+    assert frames["frames"][0]["hash"]
+    assert frames["frames"][0]["label"] == "水浸し！"
+
+
+def test_the_previous_descriptions_are_handed_back_to_the_describer(tmp_path, monkeypatch):
+    """Reuse only works if the stage reads last run's frames.json first."""
+    _fake_generate(monkeypatch, _copy())
+    shots = [ThumbShot("a", 12.0, "overlay", "l", "frames/a/12.000.jpg")]
+    (tmp_path / "frames.json").write_text(
+        json.dumps(
+            {
+                "frames": [
+                    {
+                        "stem": "a",
+                        "source_time": 12.0,
+                        "kind": "overlay",
+                        "label": "l",
+                        "path": "frames/a/12.000.jpg",
+                        "hash": "deadbeef",
+                        "description": "手書きの説明",
+                    }
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+    seen = {}
+
+    def fake_describe(shots_, publish_dir, cfg, *, previous=(), **kwargs):
+        seen["previous"] = list(previous)
+        return []
+
+    monkeypatch.setattr(publish_run, "describe_frames", fake_describe)
+    _frames_run(tmp_path, {"publish": {"enabled": True}}, shots=shots)
+    assert [p.description for p in seen["previous"]] == ["手書きの説明"]
+
+
+def test_a_disabled_stage_writes_no_frames_file(tmp_path):
+    data, _, frames = _frames_run(tmp_path, {"publish": {"enabled": False}}, shots=[])
+    assert frames is None
+
+
+def test_the_pairing_decision_lands_in_publish_json(tmp_path, monkeypatch):
+    """Index in, path out: the human editing this file wants a filename."""
+    _fake_generate(monkeypatch, _copy(thumbnail_copy=_sets()))
+    shots = [
+        ThumbShot("a", 1.0, "overlay", "l1", "frames/a/1.000.jpg"),
+        ThumbShot("a", 2.0, "keep", "l2", "frames/a/2.000.jpg"),
     ]
 
+    def fake_pairing(copy, frames, cfg, **kwargs):
+        from nagare_clip.publish.pairing import SetPairing
 
-def test_the_renderer_receives_the_sets_and_the_shortlist(tmp_path, monkeypatch):
+        return {2: SetPairing(frame=2, style={"gravity": "north"}, lines={1: {"fill": "white"}})}
+
+    monkeypatch.setattr(publish_run, "generate_pairing", fake_pairing)
+    data, _, _ = _frames_run(tmp_path, {"publish": {"enabled": True}}, shots=shots)
+    assert data["thumbnail_copy"][1]["background"] == "frames/a/2.000.jpg"
+    assert data["thumbnail_copy"][1]["gravity"] == "north"
+    assert data["thumbnail_copy"][1]["lines"][0]["fill"] == "white"
+    # the set the pairing never mentioned keeps today's preset fallback
+    assert data["thumbnail_copy"][0]["background"] == ""
+    assert "gravity" not in data["thumbnail_copy"][0]
+
+
+def test_the_pairing_call_receives_the_frame_descriptions(tmp_path, monkeypatch):
+    _fake_generate(monkeypatch, _copy(thumbnail_copy=_sets()))
+    shots = [ThumbShot("a", 1.0, "overlay", "l1", "frames/a/1.000.jpg")]
+    seen = {}
+
+    def fake_pairing(copy, frames, cfg, **kwargs):
+        seen["frames"] = list(frames)
+        seen["cfg"] = cfg
+        return {}
+
+    monkeypatch.setattr(publish_run, "generate_pairing", fake_pairing)
+    _frames_run(tmp_path, {"publish": {"enabled": True}}, shots=shots)
+    assert [f.path for f in seen["frames"]] == ["frames/a/1.000.jpg"]
+
+
+def test_the_pairing_call_inherits_publishs_sampling_knobs(tmp_path, monkeypatch):
+    """It is the same kind of call as the copy one, on the same model, so it
+    inherits how that model is sampled too.
+
+    A model may accept exactly one temperature (claude-sonnet-5 wants 1.0);
+    a project sets publish.temperature for that reason, and a pairing call
+    carrying its own 0.2 would be rejected by the provider on every attempt --
+    which is a default that is incompatible with the default it is paired
+    with, i.e. not a default.
+    """
     _fake_generate(monkeypatch, _copy(thumbnail_copy=_sets()))
     seen = {}
 
-    def render(sets, thumbs):
-        seen["sets"] = sets
-        seen["thumbs"] = thumbs
-        return []
+    def fake_pairing(copy, frames, cfg, **kwargs):
+        seen["cfg"] = cfg
+        return {}
 
-    shots = [ThumbShot("a", 12.0, "overlay", "l", "frames/a/12.000.jpg")]
-    _write(tmp_path, {"publish": {"enabled": True}}, render=render, thumbs=shots)
-    assert len(seen["sets"]) == 2
-    assert seen["thumbs"] == shots
+    monkeypatch.setattr(publish_run, "generate_pairing", fake_pairing)
+    cfg = get_effective_config(
+        None,
+        {
+            "publish": {
+                "enabled": True,
+                "model": "claude-sonnet-5",
+                "temperature": 1.0,
+                "retry_temp_step": 0.0,
+                "retry_temp_cap": 1.0,
+                "max_retries": 3,
+            }
+        },
+    )
+    _frames_run(tmp_path, cfg, shots=[ThumbShot("a", 1.0, "overlay", "l", "frames/a/1.000.jpg")])
+    assert seen["cfg"]["temperature"] == 1.0
+    assert seen["cfg"]["retry_temp_step"] == 0.0
+    assert seen["cfg"]["retry_temp_cap"] == 1.0
+    assert seen["cfg"]["max_retries"] == 3
 
 
-def test_each_rendered_thumbnail_appears_under_its_copy_set(tmp_path, monkeypatch):
+def test_an_explicit_pairing_temperature_still_wins(tmp_path, monkeypatch):
+    """Inheritance is the default, not a ban on saying otherwise."""
     _fake_generate(monkeypatch, _copy(thumbnail_copy=_sets()))
+    seen = {}
 
-    def render(sets, thumbs):
-        return [
-            ThumbRender(1, "thumbnails/set1.jpg", "b.jpg"),
-            ThumbRender(2, "thumbnails/set2.jpg", "b.jpg"),
-        ]
+    def fake_pairing(copy, frames, cfg, **kwargs):
+        seen["cfg"] = cfg
+        return {}
 
-    _, md = _write(tmp_path, {"publish": {"enabled": True}}, render=render)
-    text = md.read_text(encoding="utf-8")
-    first = text.index("### Set 1")
-    second = text.index("### Set 2")
-    assert first < text.index('<img src="thumbnails/set1.jpg"') < second
-    assert second < text.index('<img src="thumbnails/set2.jpg"')
+    monkeypatch.setattr(publish_run, "generate_pairing", fake_pairing)
+    cfg = get_effective_config(
+        None,
+        {"publish": {"enabled": True, "temperature": 1.0, "pairing": {"temperature": 0.2}}},
+    )
+    _frames_run(tmp_path, cfg, shots=[ThumbShot("a", 1.0, "overlay", "l", "frames/a/1.000.jpg")])
+    assert seen["cfg"]["temperature"] == 0.2
 
 
-def test_a_set_without_a_render_still_shows_its_copy(tmp_path, monkeypatch):
+def test_the_pairing_call_uses_publishs_model_and_its_own_prompt(tmp_path, monkeypatch):
+    """It is the same kind of call as the copy one, so configuring a model
+    twice would only be a way to configure it wrong."""
     _fake_generate(monkeypatch, _copy(thumbnail_copy=_sets()))
+    seen = {}
 
-    def render(sets, thumbs):
-        return [ThumbRender(2, "thumbnails/set2.jpg", "b.jpg")]
+    def fake_pairing(copy, frames, cfg, **kwargs):
+        seen["cfg"] = cfg
+        return {}
 
-    _, md = _write(tmp_path, {"publish": {"enabled": True}}, render=render)
-    text = md.read_text(encoding="utf-8")
-    assert "水浸し！" in text
-    assert "thumbnails/set1.jpg" not in text
+    monkeypatch.setattr(publish_run, "generate_pairing", fake_pairing)
+    cfg = {
+        "publish": {
+            "enabled": True,
+            "model": "big-text-model",
+            "temperature": 0.7,
+            "pairing": {"enabled": True, "prompt": "PAIR"},
+        }
+    }
+    _frames_run(tmp_path, cfg, shots=[ThumbShot("a", 1.0, "overlay", "l", "frames/a/1.000.jpg")])
+    assert seen["cfg"]["model"] == "big-text-model"
+    assert seen["cfg"]["prompt"] == "PAIR"
 
 
-def test_no_renderer_leaves_the_markdown_without_images(tmp_path, monkeypatch):
+def test_pairing_disabled_makes_no_call_and_leaves_the_presets(tmp_path, monkeypatch):
     _fake_generate(monkeypatch, _copy(thumbnail_copy=_sets()))
-    _, md = _write(tmp_path, {"publish": {"enabled": True}})
-    assert "<img" not in md.read_text(encoding="utf-8").split("## Thumbnail frame")[0]
+    calls = []
+
+    def fake_pairing(*a, **k):
+        calls.append(a)
+        return {}
+
+    monkeypatch.setattr(publish_run, "generate_pairing", fake_pairing)
+    cfg = {"publish": {"enabled": True, "pairing": {"enabled": False}}}
+    data, _, _ = _frames_run(
+        tmp_path, cfg, shots=[ThumbShot("a", 1.0, "overlay", "l", "frames/a/1.000.jpg")]
+    )
+    assert calls == []
+    assert [s["background"] for s in data["thumbnail_copy"]] == ["", ""]
 
 
 def test_the_candidate_table_shows_the_still_not_its_path(tmp_path, monkeypatch):
@@ -340,25 +480,20 @@ def test_the_candidate_table_shows_the_still_not_its_path(tmp_path, monkeypatch)
 
 
 def _markup_md(tmp_path, monkeypatch, markup):
-    """publish.md rendered with a render, a still and the given image_markup."""
+    """publish.md rendered with a still and the given image_markup."""
     _fake_generate(monkeypatch, _copy(thumbnail_copy=_sets()))
     cfg = {"publish": {"enabled": True}}
     if markup is not None:
-        cfg["publish"]["image_markup"] = markup
-
-    def render(sets, thumbs):
-        return [ThumbRender(1, "thumbnails/set1.jpg", "b.jpg")]
-
+        cfg["general"] = {"image_markup": markup}
     shots = [ThumbShot("a", 12.0, "overlay", "水浸し！", "frames/a/12.000.jpg")]
-    _, md = _write(tmp_path, cfg, render=render, thumbs=shots)
+    _, md = _write(tmp_path, cfg, thumbs=shots)
     return md.read_text(encoding="utf-8")
 
 
 def test_markdown_image_markup_uses_markdown_images(tmp_path, monkeypatch):
     """Renderers that don't allow raw HTML (plain markdown viewers) still show
-    the images when image_markup is markdown; the width hint is HTML-only."""
+    the stills when image_markup is markdown; the width hint is HTML-only."""
     text = _markup_md(tmp_path, monkeypatch, "markdown")
-    assert "![Set 1](thumbnails/set1.jpg)" in text
     assert "![水浸し！](frames/a/12.000.jpg)" in text
     assert "<img" not in text
 
@@ -368,6 +503,5 @@ def test_html_image_markup_is_the_default(tmp_path, monkeypatch):
     default = _markup_md(tmp_path, monkeypatch, None)
     explicit = _markup_md(tmp_path, monkeypatch, "html")
     assert default == explicit
-    assert '<img src="thumbnails/set1.jpg" width="480">' in default
     assert '<img src="frames/a/12.000.jpg" width="240">' in default
     assert "![" not in default
