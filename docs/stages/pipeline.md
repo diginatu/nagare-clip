@@ -141,6 +141,41 @@ unconditionally (cheap no-ops when their stage is disabled in config), exactly
 as under the bash orchestrator — see [AGENTS.md](../../AGENTS.md#pipeline-overview)
 for what each no-op produces.
 
+## `output/index.md` — the page at the top
+
+`cli.main()` ends with a `finally` around `run_stages()` that calls
+`index_page.write_index(ctx.output_dir, cfg, blend=...)`. Four properties are
+the whole design:
+
+- **It runs whatever the range was**, including one that produced nothing, and
+  **it runs when the pipeline failed** — a run that died in `director` is when
+  knowing what is on disk is worth most. It never changes the exit code.
+- **It cannot fail the run.** Its own exception is logged and swallowed at the
+  call site: a `finally` that raises replaces the real error with its own.
+- **It goes last**, after `llm_report/index.md` has been written, because it
+  counts that file's calls.
+- **It is deliberately not a stage.** It cannot be `STAGES[-1]` (`resolve_window()`
+  cuts the list, so `--to-stage render` would drop it), and it needs no
+  `Stage.when`/`ALWAYS` concept in the runner: it has one consumer, and the
+  `finally` regenerates the page on every invocation, so there is nothing to
+  name with `--from-stage`. If a second always-runs step ever appears, build the
+  concept then.
+
+`index_page.py` reads only what is on disk (mtimes, `publish.json`,
+`render.json`, `llm_report/index.md`, the intervals JSONs + `timeline.json`) and
+sits at the package top level rather than under a stage dir, like `order_note.py`.
+The headline is `cut_report.metrics.measure()`, so the page and the cut report
+cannot disagree; the finished cut it measures is the **manifest's**, over the
+whole project rather than one run's `--source` filter. Nothing under it imports
+`llm_client` — zero calls is a property of the code, enforced by an AST check
+and a fresh-interpreter run, the way improvement 25 enforced it for `render`.
+
+A row states an mtime or `—`, and **never explains an absence**. Two attempts at
+diagnosing one missing file while this page was being designed were both wrong
+(a partial re-run; a silent failure — in fact the report post-dated that
+project's last `intervals` run). A timestamp is a fact; an explanation is a guess
+by a writer who cannot see the run.
+
 ## The segment order
 
 `pipeline/stages.py` owns the one point every stage consults for the finished

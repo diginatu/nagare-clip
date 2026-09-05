@@ -158,3 +158,90 @@ def test_cleanup_of_copied_sources(tmp_path, monkeypatch):
     assert cli.main(["--source", str(outside)]) == 0
     assert not (tmp_path / "src_video" / "clip.mp4").exists()
     assert outside.exists()
+
+
+# --- the page at the top of the output directory ------------------------------
+
+
+def _one_source(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "src_video").mkdir()
+    (tmp_path / "src_video" / "a.mp4").write_bytes(b"x")
+
+
+def test_every_invocation_writes_the_index(tmp_path, monkeypatch):
+    _one_source(tmp_path, monkeypatch)
+    monkeypatch.setattr(cli, "run_stages", lambda stages, ctx: None)
+    assert cli.main([]) == 0
+    assert (tmp_path / "output" / "index.md").is_file()
+
+
+def test_a_single_stage_run_writes_the_index_too(tmp_path, monkeypatch):
+    """It is a finally, not the last stage: --to-stage cuts the stage list."""
+    _one_source(tmp_path, monkeypatch)
+    monkeypatch.setattr(cli, "run_stages", lambda stages, ctx: None)
+    assert cli.main(["--from-stage", "render", "--to-stage", "render"]) == 0
+    assert (tmp_path / "output" / "index.md").is_file()
+
+
+def test_a_failed_run_still_writes_the_index_and_still_exits_non_zero(tmp_path, monkeypatch):
+    """A run that died in director is when you most want to know what is on disk."""
+    _one_source(tmp_path, monkeypatch)
+
+    def boom(stages, ctx):
+        raise cli.PipelineError("[director] failed: nope")
+
+    monkeypatch.setattr(cli, "run_stages", boom)
+    assert cli.main([]) == 1
+    assert (tmp_path / "output" / "index.md").is_file()
+
+
+def test_an_exploding_index_writer_does_not_change_the_outcome(tmp_path, monkeypatch, capsys):
+    """A finally that raises replaces the real error with its own."""
+    _one_source(tmp_path, monkeypatch)
+    monkeypatch.setattr(cli, "run_stages", lambda stages, ctx: None)
+    monkeypatch.setattr(cli, "write_index", _explode)
+    assert cli.main([]) == 0
+    err = capsys.readouterr().err
+    assert "could not write the output index" in err
+    assert "the index writer blew up" in err
+
+
+def test_an_exploding_index_writer_does_not_mask_a_failure(tmp_path, monkeypatch, capsys):
+    _one_source(tmp_path, monkeypatch)
+
+    def boom(stages, ctx):
+        raise cli.PipelineError("[director] failed: nope")
+
+    monkeypatch.setattr(cli, "run_stages", boom)
+    monkeypatch.setattr(cli, "write_index", _explode)
+    assert cli.main([]) == 1
+    assert "[director] failed: nope" in capsys.readouterr().err
+
+
+def _explode(*args, **kwargs):
+    raise RuntimeError("the index writer blew up")
+
+
+def test_the_index_is_written_after_the_llm_report(tmp_path, monkeypatch):
+    """It counts the report's rows, so the report has to exist first."""
+    _one_source(tmp_path, monkeypatch)
+    order = []
+    monkeypatch.setattr(cli, "run_stages", lambda stages, ctx: order.append("stages"))
+    real = cli.write_index
+    monkeypatch.setattr(
+        cli, "write_index", lambda *a, **k: (order.append("index"), real(*a, **k))[1]
+    )
+    assert cli.main([]) == 0
+    assert order == ["stages", "index"]
+
+
+def test_the_page_needed_no_new_stage_machinery():
+    """It has one consumer and a finally regenerates it every invocation, so
+    there is nothing to name with --from-stage."""
+    from dataclasses import fields
+
+    from nagare_clip.pipeline.runner import Stage
+
+    assert [f.name for f in fields(Stage)] == ["name", "run", "required_outputs"]
+    assert [s.name for s in cli.STAGES] == list(cli.STAGE_NAMES)

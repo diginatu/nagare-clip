@@ -21,7 +21,7 @@ Maintain and improve a multi-stage rough-cut pipeline:
 13. publish — title candidates, a description with chapter timestamps taken from the finished timeline, thumbnail copy and candidate stills (disabled by default)
 14. render — composites one thumbnail per copy set with ImageMagick; the last stage, and the only one that never makes an LLM call
 
-Plus two deterministic reports (no LLM call): the **order note** (`order_note.py` → `llm_report/notes/order.md`), which states plainly whenever the finished video is not in shooting order — or that an order was rejected — because a reorder changes the shape of the finished video more than any other single decision and must never arrive unannounced; and `cut_report` — not a stage but a deterministic report that measures the finished cut after `intervals`/`blender` and writes a section into `llm_report/index.md`.
+Plus two deterministic reports (no LLM call): the **order note** (`order_note.py` → `llm_report/notes/order.md`), which states plainly whenever the finished video is not in shooting order — or that an order was rejected — because a reorder changes the shape of the finished video more than any other single decision and must never arrive unannounced; and `cut_report` — not a stage but a deterministic report that measures the finished cut after `intervals`/`blender` and writes a section into `llm_report/index.md`. A third non-stage artifact, `index_page.py` → `output/index.md`, is written by a `finally` in `pipeline/cli.py` after **every** invocation (failed ones included): one page naming the `.blend` and linking the four files written to be read by a human. Each row carries an mtime or `—` and **never explains an absence** — an explanation is a guess by something that cannot see the run, and a wrong one is worse than a dash. Deliberately not a stage and deliberately no `Stage.when`/`ALWAYS` concept in the runner: `resolve_window()` would cut a `STAGES[-1]` entry out of a `--to-stage render` run, and a `finally` regenerates the page every invocation, so there is nothing to name with `--from-stage`. Zero LLM calls, enforced the way `render`'s are (an AST import check plus a fresh-interpreter run), and it honours `general.image_markup` like `publish.md`/`render.md` — one key, three readers, because it describes the viewer. See [`docs/stages/pipeline.md`](docs/stages/pipeline.md).
 
 Final deliverable is a `.blend` project for human editing, plus a reviewable
 `publish.md` of the material needed to upload it and the thumbnails `render`
@@ -243,6 +243,7 @@ src/nagare_clip/          # Main Python package (src layout)
   llm_report.py               # Structured per-call LLM report: Recorder + rebuild_index (index.md + per-call <stage>/<unit>.md)
   llm_client.py               # Unified LiteLLM transport: call_llm(messages, cfg) -> str (OpenAI/Gemini/Anthropic/Ollama)
   markdown.py                 # embed_image(): the one image embed shared by publish.md and render.md
+  index_page.py               # output/index.md: the one page at the top of the output dir (no LLM)
   order.py                    # Segment/TimelineSegment: the playback order, identity, coverage contract, manifest
   order_note.py               # format_order_note(): says plainly when the order is not shooting order (no LLM)
   brief.py                    # project: editorial brief -> format_brief()/apply_brief() (summary/plan/director/text_filter prompts)
@@ -352,6 +353,7 @@ tests/
   publish/                    # publish (timeline / chapters / thumbs / publish_llm / run / stage wiring) tests
   render/                     # render (thumbnail argv/layout / run / stage wiring) tests
   cut_report/                 # finished-cut metrics / checks / report / stage-wiring tests
+  test_index_page.py          # output/index.md: rows, mtimes, headline, thumbnails, zero calls
 ```
 
 ## Configuration System
