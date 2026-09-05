@@ -475,7 +475,7 @@ def test_the_candidate_table_shows_the_still_not_its_path(tmp_path, monkeypatch)
     shots = [ThumbShot("a", 12.0, "overlay", "水浸し！", "frames/a/12.000.jpg")]
     _, md = _write(tmp_path, {"publish": {"enabled": True}}, thumbs=shots)
     text = md.read_text(encoding="utf-8")
-    assert '<img src="frames/a/12.000.jpg" width="240">' in text
+    assert '<img src="frames/a/12.000.jpg" alt="水浸し！" width="240">' in text
     assert "`frames/a/12.000.jpg`" not in text
 
 
@@ -503,5 +503,5 @@ def test_html_image_markup_is_the_default(tmp_path, monkeypatch):
     default = _markup_md(tmp_path, monkeypatch, None)
     explicit = _markup_md(tmp_path, monkeypatch, "html")
     assert default == explicit
-    assert '<img src="frames/a/12.000.jpg" width="240">' in default
+    assert '<img src="frames/a/12.000.jpg" alt="水浸し！" width="240">' in default
     assert "![" not in default

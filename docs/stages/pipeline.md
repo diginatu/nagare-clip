@@ -170,6 +170,16 @@ whole project rather than one run's `--source` filter. Nothing under it imports
 `llm_client` — zero calls is a property of the code, enforced by an AST check
 and a fresh-interpreter run, the way improvement 25 enforced it for `render`.
 
+The embedded thumbnails carry each set's hook in the **alt text**
+(`_thumbnail_alt`, hooks read from `publish.json`'s `thumbnail_copy`, no call).
+A visible caption line was rejected: the copy is burned into the image, so it is
+already in front of the human, and a line under it is redundant to exactly the
+reader who can see. Alt is invisible to that reader and is the only description
+that reaches a screen reader or a model reading the file, so that is where the
+hook goes. `markdown.embed_image` carries it in both markups (it had been
+dropping it in the `<img>`), escaping it so it cannot break out of the attribute
+or close the image early.
+
 A row states an mtime or `—`, and **never explains an absence**. Two attempts at
 diagnosing one missing file while this page was being designed were both wrong
 (a partial re-run; a silent failure — in fact the report post-dated that

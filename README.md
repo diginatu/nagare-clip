@@ -165,6 +165,13 @@ the finished cut in one line, and embeds the rendered thumbnails. It costs no
 LLM call at any setting and honours `general.image_markup` like the other two
 reviewable files.
 
+Each embedded thumbnail's **alt text** carries that set's hook, taken from
+`publish.json` (`Set 1 — まさかの水漏れ、また発覚`). It is in the alt rather than
+in a caption line under the picture because the copy is burned into the image:
+you can already read it, so a visible line would only repeat itself at you. The
+alt costs you nothing and is the only description that reaches a screen reader
+or a model reading the file. A set whose copy has no hook keeps the bare label.
+
 Each row carries the file's mtime, or `—` when the file is not there. A row
 never explains an absence: a timestamp is a fact, while a guess at *why*
 something is missing, written by something that cannot see your run, is worse

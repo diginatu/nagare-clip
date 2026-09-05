@@ -236,6 +236,14 @@ class TestRowsThatCount:
 
 
 class TestThumbnails:
+    def _copy(self, output, sets):
+        (output / "publish" / "publish.json").write_text(
+            json.dumps(
+                {"titles": ["t"], "chapters": [], "thumbnail_copy": sets}, ensure_ascii=False
+            ),
+            encoding="utf-8",
+        )
+
     def _rendered(self, tmp_path):
         output = _project(tmp_path)
         (output / "render" / "thumbnails").mkdir(parents=True)
@@ -266,6 +274,77 @@ class TestThumbnails:
 
     def test_no_renders_means_no_section(self, tmp_path):
         assert "## thumbnails" not in build_index(_project(tmp_path), CFG)
+
+    def test_the_hook_is_the_markdown_alt_text(self, tmp_path):
+        """Alt is where a picture's content goes; a set number is not content."""
+        output = self._rendered(tmp_path)
+        self._copy(
+            output,
+            [
+                {
+                    "lines": [
+                        {"role": "tag", "text": "第2回"},
+                        {"role": "hook", "text": "まさかの水漏れ、また発覚"},
+                    ]
+                },
+                {"lines": [{"role": "hook", "text": "魚もきた"}]},
+            ],
+        )
+        md = build_index(output, {"general": {"image_markup": "markdown"}})
+        assert "![Set 1 — まさかの水漏れ、また発覚](render/thumbnails/set1.jpg)" in md
+        assert "![Set 2 — 魚もきた](render/thumbnails/set2.jpg)" in md
+
+    def test_the_hook_is_the_html_alt_text(self, tmp_path):
+        """The same string, whichever markup the viewer asked for."""
+        output = self._rendered(tmp_path)
+        self._copy(output, [{"lines": [{"role": "hook", "text": "まさかの水漏れ、また発覚"}]}])
+        md = build_index(output, {"general": {"image_markup": "html"}})
+        assert '<img src="render/thumbnails/set1.jpg" alt="Set 1 — まさかの水漏れ、また発覚"' in md
+
+    def test_the_hook_is_not_also_printed_as_a_visible_line(self, tmp_path):
+        """The copy is burned into the image, so a viewer already sees it; a
+        caption line under the picture would be redundant to the human and is
+        why the headline goes in the alt instead."""
+        output = self._rendered(tmp_path)
+        self._copy(output, [{"lines": [{"role": "hook", "text": "まさかの水漏れ"}]}])
+        for markup in ("markdown", "html"):
+            md = build_index(output, {"general": {"image_markup": markup}})
+            assert sum("まさかの水漏れ" in line for line in md.splitlines()) == 1
+
+    def test_a_set_with_no_hook_keeps_the_bare_label(self, tmp_path):
+        output = self._rendered(tmp_path)
+        self._copy(output, [{"lines": [{"role": "tag", "text": "第2回"}]}])
+        md = build_index(output, {"general": {"image_markup": "markdown"}})
+        assert "![Set 1](render/thumbnails/set1.jpg)" in md
+
+    def test_without_publish_json_every_label_is_bare(self, tmp_path):
+        md = build_index(self._rendered(tmp_path), {"general": {"image_markup": "markdown"}})
+        assert "![Set 1](render/thumbnails/set1.jpg)" in md
+        assert "![Set 2](render/thumbnails/set2.jpg)" in md
+
+    def test_the_hook_follows_the_set_number_not_the_render_order(self, tmp_path):
+        """render.json's `set` is the copy set it was composited from; a
+        skipped set means the two lists do not line up by position."""
+        output = self._rendered(tmp_path)
+        (output / "render" / "render.json").write_text(
+            json.dumps(
+                {
+                    "renders": [{"set": 2, "path": "thumbnails/set2.jpg", "background": "b.jpg"}],
+                    "skipped": [{"set": 1, "reason": "no background"}],
+                }
+            ),
+            encoding="utf-8",
+        )
+        self._copy(
+            output,
+            [
+                {"lines": [{"role": "hook", "text": "いちばん"}]},
+                {"lines": [{"role": "hook", "text": "にばん"}]},
+            ],
+        )
+        md = build_index(output, {"general": {"image_markup": "markdown"}})
+        assert "![Set 2 — にばん](render/thumbnails/set2.jpg)" in md
+        assert "いちばん" not in md
 
 
 class TestWriting:

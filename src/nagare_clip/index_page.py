@@ -178,12 +178,49 @@ def _sources(output_dir: Path) -> list[tuple[str, dict]]:
     return ordered_sources(entries, data_by_stem)
 
 
+def _hooks(publish_json: Path) -> dict[int, str]:
+    """Each copy set's hook line, by set number, from ``publish.json``.
+
+    The hook is already written and already on disk; no call is made for it.
+    """
+    data = _read_json(publish_json)
+    if not isinstance(data, dict):
+        return {}
+    hooks: dict[int, str] = {}
+    for index, thumb_set in enumerate(data.get("thumbnail_copy") or [], start=1):
+        if not isinstance(thumb_set, dict):
+            continue
+        for line in thumb_set.get("lines") or []:
+            text = line.get("text") if isinstance(line, dict) else None
+            if line.get("role") == "hook" and isinstance(text, str) and text.strip():
+                hooks[index] = text.strip()
+                break
+    return hooks
+
+
+def _thumbnail_alt(number: int, hooks: dict[int, str]) -> str:
+    """``Set 1 — <hook>``: what the picture says, not just which one it is.
+
+    It goes in the alt rather than in a caption line under the image because
+    the copy is burned into the thumbnail: a person looking at the page reads
+    it off the picture, and a visible line repeating it is redundant to them.
+    Alt is invisible to that reader and is the only description that reaches a
+    screen reader or a model reading this file, so it is where the hook earns
+    its place.  A set whose copy has no hook keeps the bare label.
+    """
+    hook = hooks.get(number, "")
+    return f"Set {number} — {hook}" if hook else f"Set {number}"
+
+
 def _thumbnails(output_dir: Path, markup: str) -> list[str]:
     """The rendered sets, inline -- the one thing on the page worth looking at."""
     data = _read_json(output_dir / "render" / "render.json")
     renders = data.get("renders") or [] if isinstance(data, dict) else []
+    hooks = _hooks(output_dir / "publish" / "publish.json")
     embeds = [
-        embed_image(f"render/{r['path']}", f"Set {r.get('set', i)}", THUMB_WIDTH, markup)
+        embed_image(
+            f"render/{r['path']}", _thumbnail_alt(r.get("set", i), hooks), THUMB_WIDTH, markup
+        )
         for i, r in enumerate(renders, start=1)
         if isinstance(r, dict) and isinstance(r.get("path"), str)
     ]
