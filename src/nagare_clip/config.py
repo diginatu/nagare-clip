@@ -999,10 +999,14 @@ class CaptionStyleConfig(BaseModel):
     example_extra: ClassVar[str] = (
         "# font: /abs/path/to/MyFont.ttf   # Absolute path to a font file; loaded as a Blender VectorFont.\n"
         "# color: [1, 1, 1, 1]             # Font fill color (RGBA, 0.0 - 1.0); default white\n"
+        '# color: "#FFCC00"                # ...or a hex string, alpha optional (#RRGGBBAA)\n'
         "# use_outline: false              # Enable text outline\n"
         "# outline_color: [0, 0, 0, 1]     # Outline color (RGBA)\n"
         "# use_box: false                  # Enable background box behind text\n"
         "# box_color: [0, 0, 0, 0.5]       # Box color (RGBA)\n"
+        "# Any color key (color / *_color) takes either form. To copy a color OUT of\n"
+        "# Blender, use the color picker's Hex field -- NOT Ctrl-C on the swatch, which\n"
+        "# linearises the value and pastes back visibly darker (0.5 copies as 0.214).\n"
         "# Any other key is forwarded verbatim to the Blender TextStrip attribute of the\n"
         "# same name (see bpy.types.TextStrip), e.g. shadow_color / shadow_offset /\n"
         "# shadow_blur / box_margin. An unknown key is logged and skipped."
@@ -1026,7 +1030,7 @@ class OverlayStyleConfig(BaseModel):
         "# font_size: 50       # inherits from caption_style if omitted\n"
         "# alignment_x: CENTER\n"
         "# location_x: 0.5\n"
-        "# color: [1, 1, 1, 1]  # overrides caption_style"
+        '# color: [1, 1, 1, 1]  # overrides caption_style (or a hex string, e.g. "#FFCC00")'
     )
     anchor_y: str = Field("TOP", description="default: TOP (overlays sit at top of frame)")
     location_y: float = Field(0.95, description="default: 0.95")
@@ -1038,7 +1042,7 @@ class SpeedMarkConfig(BaseModel):
         "Speed-up mark: auto on-screen badge over every <speed> region."
     )
     example_extra: ClassVar[str] = (
-        "# color: [1, 1, 1, 1]   # Font fill color (RGBA); overrides caption_style"
+        "# color: [1, 1, 1, 1]   # Font fill color (RGBA or hex); overrides caption_style"
     )
     enabled: bool = Field(True, description="set false to disable all speed badges")
     template: str = Field(

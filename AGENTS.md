@@ -165,6 +165,8 @@ Auto-assembles the rough cut in headless Blender. References original media in-p
 
 The stage also records **its own** WARNING lines to `output/blender/blender_warnings.json` (`blender/warnings_file.py`: `capture_warnings()` attaches a WARNING-level root handler for the whole build, `write_warnings()` writes in a `finally` so a failed build still leaves what preceded it, and always writes — an empty list overwrites a stale file rather than letting it report warnings this scene never produced). The clamp/overlap notices are the only sign that a requested interval did not fit, and they print into the same stream as Blender's unrelated `bl_pkg`/`cattrs` extension tracebacks the operator is told to ignore, so in practice they scroll past unread; `cut_report` reads them back out of the file.
 
+Caption/overlay/speed-mark colour keys (`color`, `*_color`) accept either an RGBA list or a **hex string** (`color: "#FFCC00"`, alpha optional). The hex form exists because Blender's TextStrip colours are `PROP_COLOR_GAMMA` — the RNA value *is* the sRGB value the picker's sliders show — but `but_copy_color()` **linearises** a COLOR_GAMMA button on Ctrl-C and `but_paste_color()` un-linearises on Ctrl-V, so copy/paste round-trips inside Blender while the clipboard text is not the RNA value and pastes into config visibly darker (`0.5` copies as `0.214`; alpha is untouched, which is the tell-tale). The picker's **Hex** field skips that conversion for a gamma button, so hex is exactly `round(channel * 255)` and is the copy-paste-safe route. A malformed hex string is a hard error, like a bad `font` path.
+
 - **Inputs:** source video files, `{stem}_intervals.json` for each source
 - **Outputs:** `{stem}_edited.blend` — ready for human editing; `blender_warnings.json`
 
@@ -313,6 +315,7 @@ src/nagare_clip/          # Main Python package (src layout)
     scene.py                  # Blender scene setup
     timeline.py               # Strip and caption placement
     frames.py                 # Pure placement helpers, no bpy (clamp_frames, split_intervals_by_speed, slice_intervals_data, placement_order, ordered_sources -- shared with publish/cut_report)
+    color.py                  # Hex -> RGBA for caption_style colour keys (Blender's Ctrl-C linearises; its Hex field does not)
     warnings_file.py          # capture_warnings()/write_warnings(): blender_warnings.json for cut_report
   cut_report/                 # finished-cut metrics + checks (no LLM; NOT a stage)
     metrics.py                # CutMetrics/SpeedSpan/SpanStats + measure() (pure)

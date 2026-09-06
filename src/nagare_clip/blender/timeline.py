@@ -7,6 +7,7 @@ import os
 
 import bpy
 
+from nagare_clip.blender.color import is_color_key, parse_hex_color
 from nagare_clip.blender.frames import clamp_frames, retimed_frame_count
 
 # Re-exported (explicit `as` alias) so blender_cli and the existing tests keep
@@ -66,6 +67,11 @@ def apply_text_style(text_strip: object, style: dict) -> None:
     ``font`` is special-cased: its value is an absolute filepath loaded into a
     ``VectorFont`` datablock (a bare ``setattr`` would reject the string); see
     ``_load_font`` — an invalid/missing path raises (hard error).
+
+    A colour key (``color``/``*_color``) given as a **string** is parsed as hex
+    (``color: "#FFCC00"``); a list is forwarded verbatim as before. See
+    ``nagare_clip.blender.color`` for why the colour picker's Hex field is the
+    copy-paste-safe route and Ctrl-C over the swatch is not.
     """
     for key, value in style.items():
         if key in _MAPPED_STYLE_KEYS:
@@ -73,6 +79,8 @@ def apply_text_style(text_strip: object, style: dict) -> None:
         if key == "font":
             text_strip.font = _load_font(value)
             continue
+        if is_color_key(key) and isinstance(value, str):
+            value = parse_hex_color(value)
         try:
             setattr(text_strip, key, value)
         except AttributeError:

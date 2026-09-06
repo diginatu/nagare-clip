@@ -260,3 +260,41 @@ def test_existing_passthrough_keys_still_work():
     assert strip.box_color == [0.2, 0.2, 0.2, 0.8]
     assert strip.color == [1.0, 1.0, 1.0, 1.0]
     assert strip.wrap_width == 0.8
+
+
+# --- colour keys accept a hex string from Blender's colour-picker Hex field --
+
+
+def test_apply_text_style_parses_hex_on_every_colour_key():
+    strip = FakeStrip()
+    apply_text_style(
+        strip,
+        {
+            "color": "#FFCC00",
+            "outline_color": "#000000FF",
+            "shadow_color": "#80808080",
+            "box_color": "#fff",
+        },
+    )
+    assert strip.color == pytest.approx((1.0, 0.8, 0.0, 1.0))
+    assert strip.outline_color == pytest.approx((0.0, 0.0, 0.0, 1.0))
+    assert strip.shadow_color == pytest.approx((128 / 255, 128 / 255, 128 / 255, 128 / 255))
+    assert strip.box_color == pytest.approx((1.0, 1.0, 1.0, 1.0))
+
+
+def test_apply_text_style_still_forwards_a_colour_list_verbatim():
+    strip = FakeStrip()
+    apply_text_style(strip, {"color": [1, 0.8, 0, 1]})
+    assert strip.color == [1, 0.8, 0, 1]
+
+
+def test_apply_text_style_raises_on_a_malformed_hex_colour():
+    strip = FakeStrip()
+    with pytest.raises(ValueError):
+        apply_text_style(strip, {"color": "#GGGGGG"})
+
+
+def test_apply_text_style_leaves_a_non_colour_string_alone():
+    strip = FakeStrip()
+    apply_text_style(strip, {"wrap_width": "#FFCC00"})
+    assert strip.wrap_width == "#FFCC00"

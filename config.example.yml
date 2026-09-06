@@ -248,10 +248,14 @@ blender:
     wrap_width: 0.9   # Text wrap width (0.0 = no wrap, 0.0 - 1.0)
     # font: /abs/path/to/MyFont.ttf   # Absolute path to a font file; loaded as a Blender VectorFont.
     # color: [1, 1, 1, 1]             # Font fill color (RGBA, 0.0 - 1.0); default white
+    # color: "#FFCC00"                # ...or a hex string, alpha optional (#RRGGBBAA)
     # use_outline: false              # Enable text outline
     # outline_color: [0, 0, 0, 1]     # Outline color (RGBA)
     # use_box: false                  # Enable background box behind text
     # box_color: [0, 0, 0, 0.5]       # Box color (RGBA)
+    # Any color key (color / *_color) takes either form. To copy a color OUT of
+    # Blender, use the color picker's Hex field -- NOT Ctrl-C on the swatch, which
+    # linearises the value and pastes back visibly darker (0.5 copies as 0.214).
     # Any other key is forwarded verbatim to the Blender TextStrip attribute of the
     # same name (see bpy.types.TextStrip), e.g. shadow_color / shadow_offset /
     # shadow_blur / box_margin. An unknown key is logged and skipped.
@@ -263,7 +267,7 @@ blender:
     # font_size: 50       # inherits from caption_style if omitted
     # alignment_x: CENTER
     # location_x: 0.5
-    # color: [1, 1, 1, 1]  # overrides caption_style
+    # color: [1, 1, 1, 1]  # overrides caption_style (or a hex string, e.g. "#FFCC00")
   # Speed-up mark: auto on-screen badge over every <speed> region.
   speed_mark:
     enabled: true   # set false to disable all speed badges
@@ -273,7 +277,7 @@ blender:
     anchor_y: TOP
     location_x: 0.95
     location_y: 0.95
-    # color: [1, 1, 1, 1]   # Font fill color (RGBA); overrides caption_style
+    # color: [1, 1, 1, 1]   # Font fill color (RGBA or hex); overrides caption_style
 
 # publish stage: runs once project-wide AFTER blender. An LLM turns the summaries
 # and the project brief into several title candidates, a description lead, chapter
