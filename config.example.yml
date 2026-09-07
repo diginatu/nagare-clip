@@ -26,7 +26,7 @@ general:
 # tell them: who the video is for, how long it should be, how it should feel, and
 # what happened previously in a series. Leave everything empty (the default) and
 # every prompt is byte-identical to a run without this section.
-project:
+project: {}
   # audience: "DIY hobbyists on YouTube, already familiar with the build"   # Who the video is for
   # purpose: "show whether the siphon overflow drain actually works"   # What the video is trying to achieve
   # target_duration: "about 12 minutes"   # Desired finished length (free text); guides how aggressively to cut
@@ -235,9 +235,49 @@ intervals:
 
 # blender stage: Blender VSE layout.
 blender:
-  default_fps: 30.0   # Fallback FPS when source metadata unavailable
   use_proxy: true   # Enable proxy on movie strips for smooth VSE playback
   proxy_size: 100   # Proxy render size percentage: 25 | 50 | 75 | 100
+  # Render/output settings, written onto the scene so the .blend opens ready to
+  # render instead of needing the encoder, resolution and audio set by hand every
+  # time. Empty by default: what is not set here keeps coming from the first
+  # source that plays (resolution and fps) or from Blender's own defaults.
+  #
+  # Every key is the Blender attribute name, forwarded verbatim to scene.render
+  # (see bpy.types.RenderSettings); a nested mapping recurses into the sub-struct
+  # of that name. Keys are applied in the order written, which matters where one
+  # setting widens another's choices (image_settings.media_type: VIDEO is what
+  # puts FFMPEG in file_format's enum at all). An unknown key is logged and
+  # skipped; an invalid VALUE (a misspelt enum member) is a hard error, because
+  # rendering with a codec other than the one asked for is a defect found only by
+  # playing the file.
+  #
+  # fps given without fps_base resets fps_base to 1.0 -- the scene otherwise
+  # carries the source's pulldown (1.001 for 29.97) and `fps: 30` would quietly
+  # stay 29.97.
+  render: {}
+    # To use any of these, delete the `{}` above and uncomment the keys you want.
+    # resolution_x: 1920
+    # resolution_y: 1080
+    # resolution_percentage: 100
+    # fps: 30                        # Overrides the first source's measured fps
+    # filepath: "//../renders/final"  # `//` is relative to the .blend, so `//../`
+    #                                 # is output/ (the .blend sits in
+    #                                 # output/blender/). Blender creates missing
+    #                                 # directories; an absolute path also works.
+    # image_settings:
+    #   media_type: VIDEO             # Blender 5.x: VIDEO before file_format, which
+    #   file_format: FFMPEG           # otherwise offers only the IMAGE formats.
+    #                                 # Keys are applied in the order written here.
+    # ffmpeg:
+    #   format: MPEG4
+    #   codec: H264
+    #   constant_rate_factor: HIGH    # LOSSLESS|PERC_LOSSLESS|HIGH|MEDIUM|LOW|...
+    #   ffmpeg_preset: GOOD           # BEST | GOOD | REALTIME
+    #   gopsize: 18
+    #   audio_codec: AAC              # NONE | AAC | AC3 | FLAC | MP2 | MP3 | OPUS | PCM | VORBIS
+    #   audio_bitrate: 192
+    #   audio_mixrate: 48000
+    #   audio_channels: STEREO
   caption_style:
     font_size: 50
     alignment_x: CENTER   # LEFT | CENTER | RIGHT

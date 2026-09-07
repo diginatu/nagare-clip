@@ -165,10 +165,12 @@ Auto-assembles the rough cut in headless Blender. References original media in-p
 
 The stage also records **its own** WARNING lines to `output/blender/blender_warnings.json` (`blender/warnings_file.py`: `capture_warnings()` attaches a WARNING-level root handler for the whole build, `write_warnings()` writes in a `finally` so a failed build still leaves what preceded it, and always writes — an empty list overwrites a stale file rather than letting it report warnings this scene never produced). The clamp/overlap notices are the only sign that a requested interval did not fit, and they print into the same stream as Blender's unrelated `bl_pkg`/`cattrs` extension tracebacks the operator is told to ignore, so in practice they scroll past unread; `cut_report` reads them back out of the file.
 
+**Render/output settings** (`blender.render`, empty by default) are written onto the scene by `render_settings.apply_render_settings()`, so the `.blend` opens ready to render instead of needing the encoder, resolution, audio and output path set by hand every time. Every key is forwarded 1:1 to the `scene.render` RNA attribute of the same name and a **dict** value recurses into the sub-struct of that name — which is why `image_settings`/`ffmpeg` need no special case and any setting Blender exposes is reachable with no code change here. Unknown **key** → logged and skipped (as `apply_text_style` does); invalid **value** → hard error, because a codec silently other than the one asked for is a defect found only by playing the file. Applied *after* the source-derived fps/resolution (so a stated value overrides the measurement) and *before* `effective_fps` is read back off the scene (so an overridden fps carries through every frame computation). `fps` without `fps_base` resets `fps_base` to `1.0` — the scene otherwise carries the source's pulldown and `fps: 30` would quietly stay 29.97; top-level only, since no sub-struct has an `fps_base`. `filepath` is handed over untouched so Blender's `//` (relative to the `.blend`, `..` included) works as in the UI. There is **no `blender.default_fps`**: it was a fallback for unreadable source metadata, which `scene.FALLBACK_FPS` now covers as a constant, and an fps the project actually wants is `render.fps`, which overrides the scene whatever was measured. The module imports no `bpy` (getattr/setattr only), so the contract is tested against `__slots__` fakes rather than a real Blender — enum names are Blender's business, not this pipeline's.
+
 Caption/overlay/speed-mark colour keys (`color`, `*_color`) accept either an RGBA list or a **hex string** (`color: "#FFCC00"`, alpha optional). The hex form exists because Blender's TextStrip colours are `PROP_COLOR_GAMMA` — the RNA value *is* the sRGB value the picker's sliders show — but `but_copy_color()` **linearises** a COLOR_GAMMA button on Ctrl-C and `but_paste_color()` un-linearises on Ctrl-V, so copy/paste round-trips inside Blender while the clipboard text is not the RNA value and pastes into config visibly darker (`0.5` copies as `0.214`; alpha is untouched, which is the tell-tale). The picker's **Hex** field skips that conversion for a gamma button, so hex is exactly `round(channel * 255)` and is the copy-paste-safe route. A malformed hex string is a hard error, like a bad `font` path.
 
 - **Inputs:** source video files, `{stem}_intervals.json` for each source
-- **Outputs:** `{stem}_edited.blend` — ready for human editing; `blender_warnings.json`
+- **Outputs:** `{stem}_edited.blend` — ready for human editing, with `blender.render`'s encoder/resolution/audio/output settings already on the scene; `blender_warnings.json`
 
 ### cut_report — Finished-Cut Metrics + Checks (deterministic, no LLM)
 
@@ -316,6 +318,7 @@ src/nagare_clip/          # Main Python package (src layout)
     timeline.py               # Strip and caption placement
     frames.py                 # Pure placement helpers, no bpy (clamp_frames, split_intervals_by_speed, slice_intervals_data, placement_order, ordered_sources -- shared with publish/cut_report)
     color.py                  # Hex -> RGBA for caption_style colour keys (Blender's Ctrl-C linearises; its Hex field does not)
+    render_settings.py        # blender.render -> scene.render RNA, forwarded 1:1 (no bpy; recurses into image_settings/ffmpeg)
     warnings_file.py          # capture_warnings()/write_warnings(): blender_warnings.json for cut_report
   cut_report/                 # finished-cut metrics + checks (no LLM; NOT a stage)
     metrics.py                # CutMetrics/SpeedSpan/SpanStats + measure() (pure)
@@ -371,7 +374,12 @@ All tunable parameters are defined as typed **pydantic-settings models** in
   CLI, then **validates**: unknown or wrongly-typed keys raise `ValidationError`
   (so a typo no longer vanishes silently). Exception: `blender.caption_style`,
   `overlay_style`, and `speed_mark` use `extra="allow"` — they are open-ended
-  Blender TextStrip pass-throughs (any RNA attribute incl. `font`).
+  Blender TextStrip pass-throughs (any RNA attribute incl. `font`) — and so does
+  `blender.render`, a pass-through to `scene.render` (a nested mapping recurses
+  into `image_settings`/`ffmpeg`). A section whose keys are ALL commented
+  examples (`blender.render`, `project`) is emitted by the example generator as
+  an explicit `{}`: a bare heading followed by comments parses as `null`, which
+  had made `config.example.yml` unloadable as a config.
 - It still returns a plain `dict` (the "dict boundary"), so all stage `run()`
   functions and `call_llm`/`llm_retry` are unchanged.
 - `config.example.yml` is **generated** from the models — run

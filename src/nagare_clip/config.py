@@ -1055,14 +1055,65 @@ class SpeedMarkConfig(BaseModel):
     location_y: float = Field(0.95)
 
 
+class BlenderRenderConfig(BaseModel):
+    # Open-ended: every key is forwarded 1:1 to the `scene.render` RNA attribute
+    # of the same name, and a nested mapping recurses into the sub-struct of
+    # that name (`image_settings`, `ffmpeg`), so extras must be allowed.
+    model_config = ConfigDict(extra="allow")
+    section_comment: ClassVar[str] = (
+        "Render/output settings, written onto the scene so the .blend opens ready to\n"
+        "render instead of needing the encoder, resolution and audio set by hand every\n"
+        "time. Empty by default: what is not set here keeps coming from the first\n"
+        "source that plays (resolution and fps) or from Blender's own defaults.\n"
+        "\n"
+        "Every key is the Blender attribute name, forwarded verbatim to scene.render\n"
+        "(see bpy.types.RenderSettings); a nested mapping recurses into the sub-struct\n"
+        "of that name. Keys are applied in the order written, which matters where one\n"
+        "setting widens another's choices (image_settings.media_type: VIDEO is what\n"
+        "puts FFMPEG in file_format's enum at all). An unknown key is logged and\n"
+        "skipped; an invalid VALUE (a misspelt enum member) is a hard error, because\n"
+        "rendering with a codec other than the one asked for is a defect found only by\n"
+        "playing the file.\n"
+        "\n"
+        "fps given without fps_base resets fps_base to 1.0 -- the scene otherwise\n"
+        "carries the source's pulldown (1.001 for 29.97) and `fps: 30` would quietly\n"
+        "stay 29.97."
+    )
+    example_extra: ClassVar[str] = (
+        "# To use any of these, delete the `{}` above and uncomment the keys you want.\n"
+        "# resolution_x: 1920\n"
+        "# resolution_y: 1080\n"
+        "# resolution_percentage: 100\n"
+        "# fps: 30                        # Overrides the first source's measured fps\n"
+        '# filepath: "//../renders/final"  # `//` is relative to the .blend, so `//../`\n'
+        "#                                 # is output/ (the .blend sits in\n"
+        "#                                 # output/blender/). Blender creates missing\n"
+        "#                                 # directories; an absolute path also works.\n"
+        "# image_settings:\n"
+        "#   media_type: VIDEO             # Blender 5.x: VIDEO before file_format, which\n"
+        "#   file_format: FFMPEG           # otherwise offers only the IMAGE formats.\n"
+        "#                                 # Keys are applied in the order written here.\n"
+        "# ffmpeg:\n"
+        "#   format: MPEG4\n"
+        "#   codec: H264\n"
+        "#   constant_rate_factor: HIGH    # LOSSLESS|PERC_LOSSLESS|HIGH|MEDIUM|LOW|...\n"
+        "#   ffmpeg_preset: GOOD           # BEST | GOOD | REALTIME\n"
+        "#   gopsize: 18\n"
+        "#   audio_codec: AAC              # NONE | AAC | AC3 | FLAC | MP2 | MP3 | OPUS | PCM | VORBIS\n"
+        "#   audio_bitrate: 192\n"
+        "#   audio_mixrate: 48000\n"
+        "#   audio_channels: STEREO"
+    )
+
+
 class BlenderConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
     section_comment: ClassVar[str] = "blender stage: Blender VSE layout."
-    default_fps: float = Field(30.0, description="Fallback FPS when source metadata unavailable")
     use_proxy: bool = Field(
         True, description="Enable proxy on movie strips for smooth VSE playback"
     )
     proxy_size: int = Field(100, description="Proxy render size percentage: 25 | 50 | 75 | 100")
+    render: BlenderRenderConfig = Field(default_factory=BlenderRenderConfig)
     caption_style: CaptionStyleConfig = Field(default_factory=CaptionStyleConfig)
     overlay_style: OverlayStyleConfig = Field(default_factory=OverlayStyleConfig)
     speed_mark: SpeedMarkConfig = Field(default_factory=SpeedMarkConfig)
@@ -1481,6 +1532,19 @@ def _fmt_scalar(value: object) -> str:
     return '"' + s.replace('"', '\\"') + '"'
 
 
+def _empty_suffix(rendered: list[str], indent: int) -> str:
+    """`" {}"` for a section whose keys are ALL commented examples.
+
+    ``project:`` and ``blender.render:`` render as a heading followed by nothing
+    but comments; YAML reads that as ``null``, and the example file then cannot
+    be loaded as a config at all.  An explicit empty mapping keeps it loadable
+    while the commented keys stay where a human can uncomment them.
+    """
+    pad = " " * indent
+    has_key = any(re.match(rf"^{pad}[A-Za-z_]", ln) for ln in rendered)
+    return "" if has_key else " {}"
+
+
 def _render_model(model_cls: type[BaseModel], indent: int) -> list[str]:
     """Render a model's fields (and nested models) as indented YAML lines."""
     pad = " " * indent
@@ -1491,8 +1555,9 @@ def _render_model(model_cls: type[BaseModel], indent: int) -> list[str]:
             sub_comment = getattr(ann, "section_comment", "")
             if sub_comment:
                 lines += [f"{pad}# {c}".rstrip() for c in sub_comment.split("\n")]
-            lines.append(f"{pad}{name}:")
-            lines += _render_model(ann, indent + 2)
+            sub_lines = _render_model(ann, indent + 2)
+            lines.append(f"{pad}{name}:{_empty_suffix(sub_lines, indent + 2)}")
+            lines += sub_lines
             continue
         extra = field.json_schema_extra if isinstance(field.json_schema_extra, dict) else {}
         desc = field.description or ""
@@ -1517,8 +1582,9 @@ def generate_example_yaml() -> str:
         section_comment = getattr(model_cls, "section_comment", "")
         if section_comment:
             out += [f"# {c}".rstrip() for c in section_comment.split("\n")]
-        out.append(f"{name}:")
-        out += _render_model(model_cls, 2)
+        section = _render_model(model_cls, 2)
+        out.append(f"{name}:{_empty_suffix(section, 2)}")
+        out += section
         out.append("")
     return "\n".join(out).rstrip("\n") + "\n"
 

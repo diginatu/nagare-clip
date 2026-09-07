@@ -54,6 +54,20 @@ def test_example_file_matches_generator():
     assert generate_example_yaml() == on_disk
 
 
+def test_a_section_of_only_commented_keys_renders_as_an_empty_mapping():
+    """`blender.render:` and `project:` have no uncommented keys at all. A bare
+    heading followed by comments parses as null and then fails validation, which
+    is why the example file could not be loaded as a config as it stood."""
+    text = generate_example_yaml()
+    for line in ("render: {}", "project: {}"):
+        assert re.search(rf"^\s*{re.escape(line)}\s*$", text, re.M), text
+    data = yaml.safe_load(text)
+    assert data["blender"]["render"] == {}
+    assert data["project"] == {}
+    # The whole example must load as a config, unedited.
+    get_effective_config(None, data)
+
+
 def test_generated_example_is_valid_yaml_covering_all_defaults():
     """Every DEFAULTS leaf appears in the generated example as a real key or a
     commented `# leaf:` line in its own top-level section."""
@@ -182,9 +196,9 @@ class TestGetEffectiveConfig:
 
     def test_partial_config(self, tmp_path: Path):
         cfg_file = tmp_path / "cfg.yml"
-        cfg_file.write_text(yaml.dump({"blender": {"default_fps": 24.0}}))
+        cfg_file.write_text(yaml.dump({"blender": {"proxy_size": 50}}))
         cfg = get_effective_config(cfg_file)
-        assert cfg["blender"]["default_fps"] == 24.0
+        assert cfg["blender"]["proxy_size"] == 50
         # All other sections still have defaults
         assert cfg["intervals"]["silence_threshold"] == 1.5
         assert cfg["general"]["log_level"] == "INFO"
@@ -197,6 +211,43 @@ class TestGetEffectiveConfig:
         assert cfg["intervals"]["caption"]["max_bunsetu"] == 20
         # Other caption defaults intact
         assert cfg["intervals"]["caption"]["max_duration"] == 4.0
+
+    def test_render_defaults_to_empty(self):
+        """Nothing under `render:` means nothing is written to the scene, so a
+        project that says nothing keeps the source-derived fps/resolution."""
+        cfg = get_effective_config(None)
+        assert cfg["blender"]["render"] == {}
+
+    def test_render_forwards_arbitrary_nested_keys(self, tmp_path: Path):
+        """The section is an open pass-through to Blender's render RNA: keys it
+        has never heard of must survive validation as plain dicts/scalars."""
+        cfg_file = tmp_path / "cfg.yml"
+        cfg_file.write_text(
+            yaml.dump(
+                {
+                    "blender": {
+                        "render": {
+                            "resolution_x": 1920,
+                            "filepath": "//../renders/final.mp4",
+                            "ffmpeg": {"codec": "H264", "audio_codec": "AAC"},
+                        }
+                    }
+                }
+            )
+        )
+        cfg = get_effective_config(cfg_file)
+        render = cfg["blender"]["render"]
+        assert render["resolution_x"] == 1920
+        assert render["filepath"] == "//../renders/final.mp4"
+        assert render["ffmpeg"] == {"codec": "H264", "audio_codec": "AAC"}
+
+    def test_default_fps_is_gone(self, tmp_path: Path):
+        """Folded into `render.fps`. A leftover key must fail loudly rather than
+        be silently ignored -- it would read as a working fps setting."""
+        cfg_file = tmp_path / "cfg.yml"
+        cfg_file.write_text(yaml.dump({"blender": {"default_fps": 24.0}}))
+        with pytest.raises(ValidationError):
+            get_effective_config(cfg_file)
 
     def test_caption_style_override(self, tmp_path: Path):
         cfg_file = tmp_path / "cfg.yml"

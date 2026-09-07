@@ -18,6 +18,7 @@ if str(_SRC) not in sys.path:
 import bpy
 
 from nagare_clip.blender.frames import ordered_sources, placement_order
+from nagare_clip.blender.render_settings import apply_render_settings
 from nagare_clip.blender.scene import load_source_metadata, reset_scene
 from nagare_clip.blender.timeline import (
     OVERLAY_CHANNEL,
@@ -140,9 +141,7 @@ def _build(args: argparse.Namespace) -> None:
     scene = reset_scene()
 
     # Scene metadata comes from whatever plays FIRST, which a reorder can change.
-    first_fps, first_width, first_height = load_source_metadata(
-        path_by_stem[segments[0][0]], default_fps=cfg["blender"]["default_fps"]
-    )
+    first_fps, first_width, first_height = load_source_metadata(path_by_stem[segments[0][0]])
     fps_int = max(1, int(round(first_fps)))
     fps_base = fps_int / first_fps
 
@@ -152,6 +151,11 @@ def _build(args: argparse.Namespace) -> None:
     scene.render.resolution_y = first_height
     scene.frame_start = 1
 
+    # Config last, so a stated resolution/fps/encoder overrides what the source
+    # measured -- and BEFORE effective_fps is read back, so an overridden fps
+    # carries through every frame computation below.
+    apply_render_settings(scene.render, cfg["blender"]["render"])
+
     sequence_editor = scene.sequence_editor
     sequence_collection = getattr(sequence_editor, "sequences", None)
     if sequence_collection is None:
@@ -160,7 +164,7 @@ def _build(args: argparse.Namespace) -> None:
 
     # Warn if subsequent sources differ in resolution/FPS
     for i, src in enumerate(sources[1:], start=1):
-        fps_i, w_i, h_i = load_source_metadata(src, default_fps=cfg["blender"]["default_fps"])
+        fps_i, w_i, h_i = load_source_metadata(src)
         if abs(fps_i - first_fps) > 0.01 or w_i != first_width or h_i != first_height:
             logging.warning(
                 "Source %d (%s) differs from first source: fps=%.3f vs %.3f, "

@@ -486,6 +486,38 @@ director:
   api_base: ""       # leave empty for cloud providers
 ```
 
+### blender.render: Render/Output Settings
+
+The `.blend` this pipeline hands you opens with the resolution and frame rate of whatever source plays first, and Blender's own defaults for everything else — so the encoder, the container, the audio codec and the output path are set by hand every time you render. `blender.render:` writes them onto the scene instead. Empty by default; nothing set here keeps today's behaviour exactly.
+
+Every key is the Blender attribute name, forwarded verbatim to `scene.render` (see [`bpy.types.RenderSettings`](https://docs.blender.org/api/current/bpy.types.RenderSettings.html)), and a nested mapping recurses into the sub-struct of that name — which is why `image_settings:` and `ffmpeg:` need no special support. Any render setting Blender exposes is reachable, including ones not shown here.
+
+```yaml
+blender:
+  render:
+    resolution_x: 1920
+    resolution_y: 1080
+    fps: 30                        # overrides the first source's measured fps
+    filepath: "//../renders/final" # see below
+    image_settings:
+      media_type: VIDEO              # see below
+      file_format: FFMPEG
+    ffmpeg:
+      format: MPEG4
+      codec: H264
+      constant_rate_factor: HIGH   # LOSSLESS | PERC_LOSSLESS | HIGH | MEDIUM | LOW | ...
+      ffmpeg_preset: GOOD          # BEST | GOOD | REALTIME
+      audio_codec: AAC             # NONE | AAC | AC3 | FLAC | MP2 | MP3 | OPUS | PCM | VORBIS
+      audio_bitrate: 192
+      audio_mixrate: 48000
+      audio_channels: STEREO
+```
+
+- **`filepath`** takes Blender's `//` prefix, which is relative to the `.blend` file. The `.blend` sits in `output/blender/`, so `//final.mp4` writes beside it, `//../renders/final.mp4` writes to `output/renders/`, and an absolute path works too. Blender creates missing directories. Paths are handed over untouched — `~` is not expanded, because Blender does not read it that way.
+- **`fps`** written without `fps_base` resets `fps_base` to `1.0`. The scene otherwise carries the first source's pulldown (`1.001` for 29.97), and `fps: 30` would quietly stay 29.97. Overriding it also changes every frame computation the stage does, so the cut lands where the new rate puts it.
+- Keys are applied **in the order you write them**, which matters where one setting widens another's choices. On Blender 5.x, `image_settings.file_format` offers only still-image formats until `media_type: VIDEO` is set — so `media_type` has to come first, or you get `enum "FFMPEG" not found`.
+- An **unknown key** is logged and skipped. An **invalid value** — a misspelt enum member such as `codec: H246` — is a hard error, because rendering with a codec other than the one you asked for is a defect you would only find by playing the file.
+
 ### audio_silence: Audio-Silence Detection
 
 The audio_silence stage runs ffmpeg `silencedetect` (inside the whisperx Docker image) on the waveform and writes an editable `{stem}_cuts.txt` cut list. Each non-comment line is a `START - END` silent span (seconds) that will be cut from the video; delete a line to keep that span, or adjust the times. The intervals stage unions these reviewed ranges into its keep-interval excludes. This is acoustic silence — distinct from `intervals.silence_threshold`, which is a WhisperX word-gap heuristic.
