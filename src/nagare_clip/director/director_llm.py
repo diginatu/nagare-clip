@@ -36,7 +36,7 @@ from nagare_clip.llm_report import (
 )
 from nagare_clip.llm_retry import cfg_for_attempt, retry_attempts
 from nagare_clip.text_filter.llm_filter import _call_llm, apply_patches_to_lines
-from nagare_clip.timing import format_dur_gap
+from nagare_clip.timing import bracket_seconds, format_dur_gap
 
 logger = logging.getLogger(__name__)
 
@@ -412,6 +412,25 @@ def speech_seconds(
         raw = end - start if start is not None and end is not None else None
         sil = silences[i] if silences is not None and i < len(silences) else None
         out.append(max(raw - sil, 0.0) if raw is not None and sil else raw)
+    return out
+
+
+def line_seconds(
+    seg_times: Sequence[tuple[float | None, float | None]],
+    silences: Sequence[float] | None = None,
+) -> list[float | None]:
+    """Each line's duration exactly as its transcript bracket prints it.
+
+    Differs from :func:`speech_seconds` only where a sub-second silence is
+    folded back in for display.  Per-line figures quoted back to the director
+    (the playback preview) read this, so a line never carries two numbers;
+    runtimes keep summing :func:`speech_seconds`, because the audio_silence cut
+    is applied regardless of what the bracket shows.
+    """
+    out: list[float | None] = []
+    for i, dur in enumerate(speech_seconds(seg_times, silences)):
+        sil = silences[i] if silences is not None and i < len(silences) else None
+        out.append(None if dur is None else bracket_seconds(dur, sil))
     return out
 
 

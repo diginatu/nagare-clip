@@ -85,10 +85,31 @@ def format_dur_gap(dur: float | None, gap: float | None, silence: float | None =
     """
     if dur is None:
         return ""
-    if silence is not None and silence >= MIN_SILENCE_SPLIT:
+    if silence_shown(silence):
         core = f"{dur:.1f}s speech, {silence:.1f}s silence"
     else:
-        core = f"{dur + (silence or 0.0):.1f}s"
-    if gap is None or f"{max(gap, 0.0):.1f}" == "0.0":
+        core = f"{bracket_seconds(dur, silence):.1f}s"
+    if not gap_shown(gap):
         return f"[{core}]"
     return f"[{core}, gap {gap:.1f}s]"
+
+
+def silence_shown(silence: float | None) -> bool:
+    """Whether a bracket splits this internal silence out as ``Ys silence``."""
+    return silence is not None and silence >= MIN_SILENCE_SPLIT
+
+
+def bracket_seconds(dur: float, silence: float | None = None) -> float:
+    """The one duration figure a line's bracket prints for it.
+
+    *dur* is net speech (span minus the audio_silence cut inside it); a silence
+    too short to be split out is folded back in (see :func:`format_dur_gap`).
+    Anything that quotes a line's duration back to the director reads it here,
+    so it can never see two numbers for one line.
+    """
+    return dur if silence_shown(silence) else dur + (silence or 0.0)
+
+
+def gap_shown(gap: float | None) -> bool:
+    """Whether a bracket prints this trailing gap (it would not read ``0.0s``)."""
+    return gap is not None and f"{max(gap, 0.0):.1f}" != "0.0"

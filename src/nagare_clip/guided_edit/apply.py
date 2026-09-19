@@ -16,7 +16,7 @@ from __future__ import annotations
 import logging
 import re
 from collections.abc import Callable
-from dataclasses import replace
+from dataclasses import dataclass, replace
 from typing import Any
 
 from nagare_clip.director.director_llm import DirectorOp
@@ -93,14 +93,17 @@ def blocked_lines(lines: list[str], op_type: str) -> set[int]:
     cut op is blocked by lines under ANY existing tag, and every op is blocked
     by lines under an existing ``<cut>`` span.
     """
-    if op_type == "cut":
-        types = ("cut", "keep", "speed", "overlay")
-    else:
-        types = (op_type, "cut")
     blocked: set[int] = set()
-    for t in types:
+    for t in blocking_types(op_type):
         blocked |= occupied_lines(lines, t)
     return blocked
+
+
+def blocking_types(op_type: str) -> tuple[str, ...]:
+    """The marker types whose lines an op of *op_type* may not touch."""
+    if op_type == "cut":
+        return ("cut", "keep", "speed", "overlay")
+    return (op_type, "cut")
 
 
 def clip_range(a: int, b: int, occupied: set[int]) -> tuple[int, int] | None:
@@ -118,6 +121,78 @@ def clip_range(a: int, b: int, occupied: set[int]) -> tuple[int, int] | None:
                 best = run
             start = None
     return best
+
+
+def span_op_order(ops: list[DirectorOp]) -> list[int]:
+    """Indices of *ops* in the order they are applied.
+
+    Cut ops go after everything else: ``<cut>`` deletes whatever it wraps, so
+    protective/annotation markers (keep/speed/overlay) must land first and the
+    cut then clips around them (the director may emit overlapping ops).
+    """
+    return sorted(range(len(ops)), key=lambda i: (ops[i].type == "cut", i))
+
+
+@dataclass(frozen=True)
+class SpanPlacement:
+    """Where one span/point op actually lands, given the markers already placed.
+
+    ``lines`` is the effective range (``None`` when it fully overlaps existing
+    markers), ``candidate`` the edit lines with it applied, and ``reason`` why
+    it was not applied (``None`` = applied).
+    """
+
+    lines: tuple[int, int] | None
+    candidate: list[str] | None = None
+    reason: str | None = None
+
+    @property
+    def applied(self) -> bool:
+        return self.reason is None
+
+
+def place_span_op(lines: list[str], op: DirectorOp) -> SpanPlacement:
+    """Clip one ``cut``/``keep``/``speed``/``overlay`` op and apply it.
+
+    The one deterministic clip decision: :func:`apply_ops` and the director's
+    playback preview both call it, so what the preview reports is what lands.
+    """
+    clipped = clip_range(op.lines[0], op.lines[1], blocked_lines(lines, op.type))
+    if clipped is None:
+        return SpanPlacement(None, reason=f"{op.type} op fully overlaps existing span(s)")
+    if op.type == "overlay":
+        # An overlay is a point: only the first free line matters, and the rest
+        # of the director's range is not a clip.
+        clipped = (clipped[0], clipped[0])
+    eff_op = replace(op, lines=clipped) if clipped != tuple(op.lines) else op
+    candidate = (
+        apply_point_op(lines, eff_op) if eff_op.type == "overlay" else apply_span_op(lines, eff_op)
+    )
+    return SpanPlacement(clipped, candidate, verify_op(lines, candidate, eff_op))
+
+
+def resolve_span_ops(lines: list[str], ops: list[DirectorOp]) -> dict[int, SpanPlacement]:
+    """Every non-``edit`` op's placement, applied in :func:`span_op_order`.
+
+    Exactly the span half of :func:`apply_ops`, with no LLM and no recorder:
+    ``edit`` ops only add ``{{old->new}}`` patches, which no clip reads.
+    """
+    placements: dict[int, SpanPlacement] = {}
+    for i in span_op_order(ops):
+        op = ops[i]
+        if op.type == "edit":
+            continue
+        if op.type == "timelapse":
+            placements[i] = SpanPlacement(None, reason=UNEXPANDED_TIMELAPSE)
+            continue
+        placed = place_span_op(lines, op)
+        placements[i] = placed
+        if placed.applied:
+            lines = placed.candidate
+    return placements
+
+
+UNEXPANDED_TIMELAPSE = "timelapse op reached apply_ops unexpanded"
 
 
 def _span_tags(op: DirectorOp) -> tuple[str, str]:
@@ -264,17 +339,14 @@ def apply_ops(
     recorder.begin(unit)
     cfg = with_trace_meta(cfg, stage=recorder.stage, unit=unit)
     attempts = retry_attempts(cfg)
-    # Apply cut ops after everything else: <cut> deletes whatever it wraps, so
-    # protective/annotation markers (keep/speed/overlay) must land first and the
-    # cut then clips around them (the director may emit overlapping ops).
-    ordered = sorted(enumerate(ops), key=lambda t: (t[1].type == "cut", t[0]))
-    for i, op in ordered:
+    for i in span_op_order(ops):
+        op = ops[i]
         section = f"op {i}: {op.type} [{op.lines[0]}-{op.lines[1]}]"
         if op.type == "timelapse":
             # run_guided_edit desugars these before we see them (see
             # guided_edit.timelapse); reaching here means a caller skipped that
             # step, and _span_tags has no marker pair for the type.
-            reason = "timelapse op reached apply_ops unexpanded"
+            reason = UNEXPANDED_TIMELAPSE
             recorder.attempt(
                 unit=unit,
                 attempt=0,
@@ -293,9 +365,10 @@ def apply_ops(
             # Span ops are a pure line-range wrap — no LLM judgement needed.
             # Clip the range to lines it may touch (see blocked_lines) so the
             # tags stay disjoint where the downstream extractors require it.
-            clipped = clip_range(op.lines[0], op.lines[1], blocked_lines(lines, op.type))
+            placed = place_span_op(lines, op)
+            clipped = placed.lines
             if clipped is None:
-                reason = f"{op.type} op fully overlaps existing span(s)"
+                reason = placed.reason or ""
                 recorder.attempt(
                     unit=unit,
                     attempt=0,
@@ -311,13 +384,9 @@ def apply_ops(
                 unapplied.append((op, reason))
                 continue
             if op.type == "overlay":
-                # An overlay is a point: only the first free line matters, and
-                # the rest of the director's range is not a clip.
-                clipped = (clipped[0], clipped[0])
                 moved = clipped[0] != op.lines[0]
             else:
                 moved = clipped != tuple(op.lines)
-            eff_op = replace(op, lines=clipped) if clipped != tuple(op.lines) else op
             if moved:
                 logger.warning(
                     "guided_edit: op %s clipped from %s to %s (span overlap)",
@@ -325,26 +394,21 @@ def apply_ops(
                     tuple(op.lines),
                     clipped,
                 )
-            candidate = (
-                apply_point_op(lines, eff_op)
-                if eff_op.type == "overlay"
-                else apply_span_op(lines, eff_op)
-            )
-            reason = verify_op(lines, candidate, eff_op)
+            reason = placed.reason
             recorder.attempt(
                 unit=unit,
                 attempt=0,
                 total=1,
                 messages=[],
-                response="\n".join(candidate[eff_op.lines[0] - 1 : eff_op.lines[1]]),
+                response="\n".join(placed.candidate[clipped[0] - 1 : clipped[1]]),
                 outcome=OK if reason is None else VERIFY_FAIL,
                 reason="" if reason is None else reason,
                 cfg=None,
                 deterministic=True,
                 section=section,
             )
-            if reason is None:
-                lines = candidate
+            if placed.applied:
+                lines = placed.candidate
             else:
                 unapplied.append((op, reason))
             continue

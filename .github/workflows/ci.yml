@@ -30,7 +30,7 @@ jobs:
         run: uv run ruff format --check src tests
 
       - name: Shell syntax check
-        run: bash -n scripts/run_pipeline.sh scripts/plan_say.sh
+        run: bash -n scripts/run_pipeline.sh scripts/plan_say.sh scripts/director_preview.sh
 
       - name: Tests
         run: uv run pytest -q
