@@ -192,6 +192,7 @@ director:
   max_keep_lines: 8   # Reject a "keep" op wider than this many lines (0 = no limit); a keep may span a continuous on-screen event, but one this wide is marking talking, not an event
   max_prior_captions: 100   # How many captions already shown earlier in the finished video the director is told about (0 = no limit); the most recent ones are kept
   seam_lines: 3   # How many lines of the videos playing immediately before/after this one the director is shown at each join (0 = off), so a sign-off or a greeting is visible as addressing an audience that is already mid-video
+  whole_project_context: false   # Show every segment's call the whole finished video's transcript (cached, with each segment's default runtime) and the edits already made to the segments playing earlier, instead of only their captions
   # prompt: "..."   # System prompt (has a sensible default)
 
 # guided_edit stage (Pass B2): a small local LLM applies each director op,

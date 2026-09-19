@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import pytest
 import yaml
 
+from nagare_clip import llm_client
 from nagare_clip.llm_report import (
     DROPPED_ITEMS,
     NULL_RECORDER,
@@ -338,3 +340,149 @@ class TestIndexNotes:
     def test_no_notes_dir_is_unchanged(self, tmp_path):
         rebuild_index(tmp_path)
         assert "## " not in (tmp_path / "index.md").read_text(encoding="utf-8").split("\n", 1)[1]
+
+
+class TestUsageRecording:
+    """Token counts travel from llm_client's thread-local slot into the report.
+
+    ``CallLLM`` must keep returning a plain ``str``, so ``call_llm`` parks the
+    provider's usage and ``Recorder.attempt`` picks it up here — no stage
+    signature changes.
+    """
+
+    @pytest.fixture(autouse=True)
+    def _clear_slot(self):
+        llm_client.take_last_usage()
+        yield
+        llm_client.take_last_usage()
+
+    def _attempt(self, rec, unit="u", **kw):
+        kw.setdefault("messages", [{"role": "user", "content": "x"}])
+        kw.setdefault("response", "y")
+        kw.setdefault("outcome", OK)
+        kw.setdefault("cfg", {"model": "claude-sonnet-5"})
+        rec.attempt(unit=unit, attempt=0, total=1, **kw)
+
+    def test_usage_lands_in_front_matter(self, tmp_path):
+        rec = Recorder("director", tmp_path, enabled=True)
+        llm_client._set_last_usage(
+            {
+                "prompt_tokens": 4000,
+                "completion_tokens": 120,
+                "total_tokens": 4120,
+                "cache_read_input_tokens": 3796,
+                "cache_creation_input_tokens": 0,
+            }
+        )
+        self._attempt(rec)
+        rec.flush_unit("u", outcome=OK)
+        fm = _front_matter(tmp_path / "director" / "u.md")
+        assert fm["prompt_tokens"] == 4000
+        assert fm["completion_tokens"] == 120
+        assert fm["total_tokens"] == 4120
+        assert fm["cache_read_input_tokens"] == 3796
+        assert fm["cache_creation_input_tokens"] == 0
+
+    def test_usage_is_summed_across_attempts(self, tmp_path):
+        rec = Recorder("director", tmp_path, enabled=True)
+        llm_client._set_last_usage(
+            {"prompt_tokens": 10, "completion_tokens": 1, "total_tokens": 11}
+        )
+        self._attempt(rec)
+        llm_client._set_last_usage(
+            {"prompt_tokens": 20, "completion_tokens": 2, "total_tokens": 22}
+        )
+        self._attempt(rec)
+        rec.flush_unit("u", outcome=OK)
+        fm = _front_matter(tmp_path / "director" / "u.md")
+        assert fm["prompt_tokens"] == 30
+        assert fm["completion_tokens"] == 3
+        assert fm["total_tokens"] == 33
+
+    def test_no_usage_omits_the_keys(self, tmp_path):
+        rec = Recorder("director", tmp_path, enabled=True)
+        self._attempt(rec)
+        rec.flush_unit("u", outcome=OK)
+        fm = _front_matter(tmp_path / "director" / "u.md")
+        assert "prompt_tokens" not in fm
+        assert "cache_read_input_tokens" not in fm
+
+    def test_usage_rendered_in_the_attempt_body(self, tmp_path):
+        rec = Recorder("director", tmp_path, enabled=True)
+        llm_client._set_last_usage(
+            {
+                "prompt_tokens": 4000,
+                "completion_tokens": 120,
+                "total_tokens": 4120,
+                "cache_read_input_tokens": 3796,
+                "cache_creation_input_tokens": 7,
+            }
+        )
+        self._attempt(rec)
+        rec.flush_unit("u", outcome=OK)
+        body = (tmp_path / "director" / "u.md").read_text(encoding="utf-8")
+        assert "**Tokens:**" in body
+        assert "prompt 4000" in body
+        assert "completion 120" in body
+        assert "cache read 3796" in body
+        assert "cache write 7" in body
+
+    def test_usage_is_consumed_so_a_later_attempt_without_a_call_records_none(self, tmp_path):
+        rec = Recorder("guided_edit", tmp_path, enabled=True)
+        llm_client._set_last_usage(
+            {"prompt_tokens": 10, "completion_tokens": 1, "total_tokens": 11}
+        )
+        self._attempt(rec)
+        # guided_edit's deterministic verification records an attempt with no
+        # LLM call behind it; it must not re-book the previous call's tokens.
+        rec.attempt(
+            unit="u", attempt=0, total=1, messages=[], response="r", outcome=OK, deterministic=True
+        )
+        rec.flush_unit("u", outcome=OK)
+        fm = _front_matter(tmp_path / "guided_edit" / "u.md")
+        assert fm["prompt_tokens"] == 10
+        body = (tmp_path / "guided_edit" / "u.md").read_text(encoding="utf-8")
+        assert body.count("**Tokens:**") == 1
+
+    def test_explicit_usage_argument_wins_over_the_slot(self, tmp_path):
+        rec = Recorder("director", tmp_path, enabled=True)
+        llm_client._set_last_usage(
+            {"prompt_tokens": 999, "completion_tokens": 9, "total_tokens": 1}
+        )
+        self._attempt(rec, usage={"prompt_tokens": 5, "completion_tokens": 1, "total_tokens": 6})
+        rec.flush_unit("u", outcome=OK)
+        fm = _front_matter(tmp_path / "director" / "u.md")
+        assert fm["prompt_tokens"] == 5
+
+    def test_index_shows_tokens_and_a_run_total(self, tmp_path):
+        rec = Recorder("director", tmp_path, enabled=True)
+        llm_client._set_last_usage(
+            {
+                "prompt_tokens": 4000,
+                "completion_tokens": 120,
+                "total_tokens": 4120,
+                "cache_read_input_tokens": 3796,
+                "cache_creation_input_tokens": 0,
+            }
+        )
+        self._attempt(rec, unit="vid_a")
+        rec.flush_unit("vid_a", outcome=OK)
+        rebuild_index(tmp_path)
+        index = (tmp_path / "index.md").read_text(encoding="utf-8")
+        assert "| Tokens |" in index
+        assert "4000+120" in index
+        assert "3796 cached" in index
+        # run-wide totals line, so a run's spend is readable at a glance
+        assert "prompt 4000" in index and "cache read 3796" in index
+
+    def test_index_without_usage_has_an_empty_token_cell_and_no_totals(self, tmp_path):
+        rec = Recorder("director", tmp_path, enabled=True)
+        self._attempt(rec, unit="vid_a")
+        rec.flush_unit("vid_a", outcome=OK)
+        rebuild_index(tmp_path)
+        index = (tmp_path / "index.md").read_text(encoding="utf-8")
+        assert "| Tokens |" in index  # the column exists for every run
+        # ... but the cell is empty, not a misleading 0+0
+        row = next(ln for ln in index.splitlines() if "vid_a" in ln)
+        assert row.endswith("|  | [detail](director/vid_a.md) |")
+        assert "Tokens —" not in index  # no run-total line when nothing measured

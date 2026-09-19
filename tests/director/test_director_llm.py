@@ -191,6 +191,28 @@ class TestGenerate:
         generate_director_ops(["あ"], {"prompt": "P"}, call_llm=fake_llm, overview_context="CTX")
         assert captured["system"] == "P\n\nCTX"
 
+    def test_the_cacheable_prefix_stops_where_the_segments_diverge(self):
+        """One run makes a call per segment; the prompt, brief and keep note are
+        byte-identical across them, the overview context never is. The client
+        can only cache what it is told is stable -- marking the whole message
+        made every call's prefix unique, so every call paid the cache-write
+        premium and none read."""
+        seen = []
+
+        def fake_llm(messages, cfg):
+            seen.append(messages[0])
+            return '{"ops": []}'
+
+        cfg = {"prompt": "P", "max_keep_lines": 3}
+        generate_director_ops(["あ"], cfg, call_llm=fake_llm, overview_context="segment 1 of 9")
+        generate_director_ops(["い"], cfg, call_llm=fake_llm, overview_context="segment 2 of 9")
+        first, second = seen
+        assert first["cacheable_prefix"] == second["cacheable_prefix"]
+        assert first["content"].startswith(first["cacheable_prefix"])
+        # The keep note is stable and belongs inside; the overview does not.
+        assert keep_limit_note(3) in first["cacheable_prefix"]
+        assert "segment 1 of 9" not in first["cacheable_prefix"]
+
 
 class TestKeepWidthLimit:
     """`keep` restores every silence in its range, so a wide one can double the
@@ -554,7 +576,7 @@ def test_generate_director_ops_annotates_the_transcript_with_gaps():
         ),
     )
     assert seen["user"] == (
-        "1: いち  [10.0s, gap 10.0s]\n    [silent gap 10.0s: ビルドが走る]\n2: に  [5.0s]"
+        "1: いち  [10.0s, gap 10.0s]\n    [silent gap: ビルドが走る]\n2: に  [5.0s]"
     )
 
 

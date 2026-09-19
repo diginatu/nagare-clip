@@ -464,6 +464,40 @@ def test_director_prompt_timelapse_states_its_price():
     assert "unintelligible" in bullet
 
 
+def test_director_prompt_asks_for_a_playback_before_settling_a_range():
+    """Every symptom a real run produced was correct as a spec and wrong on
+    playback: `timelapse [1,15] x5` reads fine, and plays as the speaker
+    announcing that very work at 5x, unintelligible. Enumerating the failures
+    one boundary rule at a time only closes the ones already seen, so the
+    prompt asks for the reconstruction instead — the director writes a spec and
+    never reads it back as the viewer."""
+    prompt = get_effective_config(None, {})["director"]["prompt"].lower()
+    assert "play it back" in prompt
+    assert "reads fine as a spec" in prompt
+
+
+def test_director_prompt_states_the_no_op_baseline():
+    """A playback needs a state to play FROM. Every delta was already in the
+    prompt (silences dropped, cut deletes, timelapse destroys speech) but the
+    ground state they are deltas to was not: "outside" appeared zero times, and
+    the two mentions of 1x offered it as a CHOICE ("leave it at 1x") rather
+    than as what an unmarked line already does. `speech is never dropped by
+    default` existed only inside the keep bullet, as an argument against
+    widening keeps."""
+    prompt = get_effective_config(None, {})["director"]["prompt"].lower()
+    assert "with no op at all" in prompt
+    assert "outside a range" in prompt
+
+
+def test_director_prompt_playback_rule_stays_out_of_the_timelapse_bullet():
+    """Improvement 16 again (see test_director_prompt_timelapse_bullet_stays_
+    cheap_to_choose): weight on THIS bullet pushes the director toward the
+    easier option. The playback rule applies to every op's range, so it belongs
+    in Rules where it costs the timelapse choice nothing. A first attempt put
+    it in this bullet and grew it 1026 -> 1684 characters."""
+    assert "play it back" not in _timelapse_bullet().lower()
+
+
 def test_director_prompt_timelapse_is_self_contained():
     """The whole point of the op: one op does the arrangement three ops used to.
     The prompt must not ask for a companion keep/speed/overlay, or the director
@@ -539,6 +573,11 @@ def test_prompt_documents_duration_and_gap_bracket(stage):
     assert format_dur_gap(4.2, 0.8) in prompt  # "[4.2s, gap 0.8s]"
     assert format_dur_gap(4.2, None) in prompt  # "[4.2s]" — last line/part, no gap
     assert format_dur_gap(13.0, None, 62.9) in prompt  # "[13.0s speech, 62.9s silence]"
+    # The four-part form is 17.0% of the director's real brackets and 20% of the
+    # plan's, yet went undocumented while `[4.2s, gap 0.8s]` -- which the legend
+    # leads with -- is the rarest at 4.4%.  A shape the prompt never shows is a
+    # shape the LLM has to guess at while it is being asked to judge pacing.
+    assert format_dur_gap(13.0, 0.8, 62.9) in prompt  # "[13.0s speech, 62.9s silence, gap 0.8s]"
     lowered = prompt.lower()
     assert "duration" in lowered
     assert "gap" in lowered
@@ -672,7 +711,7 @@ def test_director_prompt_gap_example_matches_the_real_formatter():
     rendered = annotate_numbered_transcript("1: x", [(1, gap)])
     annotation_line = rendered.split("\n")[1]
 
-    assert annotation_line == "    [silent gap 12.4s: a build runs and logs scroll past]"
+    assert annotation_line == "    [silent gap: a build runs and logs scroll past]"
     assert annotation_line in prompt
 
 
@@ -802,11 +841,47 @@ def test_director_prompt_scales_keep_width_to_what_is_on_screen():
     assert "editorial emphasis, NOT a " in prompt
 
 
+def test_director_prompt_states_each_keep_rule_in_exactly_one_place():
+    """An audit of the assembled prompt found the same rules restated across the
+    role line, the Timing legend, the Visual-context paragraph, the op menu and
+    the generated keep-limit note -- `dropped by default` four times, the
+    `[N, N+1]` mechanic three times, the overlay trigger list verbatim twice.
+
+    Repetition is not free here. The one rule that governs where an op's
+    boundary goes is stated ONCE, at 55% into the prompt, while the plan's
+    concrete line ranges arrive at 82% -- so the prompt's own emphasis is
+    inverted relative to what actually needs saying. Restating a mechanic in
+    four places also makes it four places to drift: the keep-limit note used to
+    assert that "a continuous on-screen event fits well inside" the 8-line cap,
+    which is false in exactly the case the whole-event keep rule exists for.
+
+    Each of these belongs to one owner: the keep op bullet owns keep mechanics,
+    the Timing legend owns bracket notation, the overlay bullet owns when to
+    caption."""
+    prompt = get_effective_config(None, {})["director"]["prompt"]
+    # The [N, N+1] rescue mechanic belongs to the keep bullet alone.
+    assert prompt.count("[N, N+1]") == 1
+    # "dropped by default" is the Timing legend's job; the keep bullet and the
+    # visual-context paragraph point at it rather than restating it.
+    assert prompt.count("dropped by default") <= 2
+    # The overlay trigger list is the overlay bullet's, not the role line's.
+    assert prompt.count("mishaps") == 1
+
+
 def test_director_prompt_lets_a_described_action_span_its_whole_run():
-    """The visual-context paragraph is where a described gap's keep width is
-    decided; ending every one at [N, N+1] is what lost the water-spill cleanup."""
-    cfg = get_effective_config(None, {})
-    assert "continues across several gaps" in cfg["director"]["prompt"]
+    """Ending every described gap's keep at [N, N+1] is what lost the
+    water-spill cleanup, so the whole-run rule has to survive -- but it now
+    lives once, in the keep bullet, rather than being restated in the
+    visual-context paragraph. The bullet states it more completely (it names
+    the accident/demo/result cases and the jump-cut consequence), and keeping
+    one owner is what stopped the two copies drifting apart."""
+    prompt = get_effective_config(None, {})["director"]["prompt"]
+    keep_bullet = next(ln for ln in prompt.splitlines() if ln.startswith("- keep:"))
+    assert "across several gaps" in keep_bullet
+    assert "WHOLE event in one keep" in keep_bullet
+    # And the visual-context paragraph must still send the reader there.
+    visual = next(ln for ln in prompt.splitlines() if "Annotation lines are not numbered" in ln)
+    assert "keep op below" in visual
 
 
 def test_director_max_keep_lines_default():

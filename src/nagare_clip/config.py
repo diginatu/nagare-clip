@@ -120,16 +120,16 @@ PLAN_PROMPT = (
     "(e.g. a part that repeats an earlier one can be removed). Reference "
     "parts by their 1-based index. Output ONLY a JSON object.\n"
     "\n"
-    "Timing: a part may carry a bracket after its line range — "
-    "[4.2s, gap 0.8s] means the part has a duration of 4.2 seconds and is "
-    "followed by a 0.8-second silent gap before the next part of the same "
-    "video. A negligible gap, and the last part of a video, show no gap "
-    "([4.2s]); a part with unknown timing has no "
-    "bracket. "
-    "A part containing long internal silences splits its duration — "
-    "[13.0s speech, 62.9s silence] means only 13.0 seconds are spoken; the "
-    "silent seconds are dropped by default. Judge "
-    "pacing from the speech figure. "
+    # Same four shapes as DIRECTOR_PROMPT's legend, for the same reason: the
+    # four-part form was 20% of a real run's part brackets and undocumented.
+    "Timing: a part may carry a bracket after its line range. [4.2s] is the "
+    "part's duration; [4.2s, gap 0.8s] adds the silent gap before the next "
+    "part of the same video. A part holding long internal silence splits it "
+    "instead — [13.0s speech, 62.9s silence] means only 13.0 seconds are "
+    "spoken and the 62.9 silent seconds are dropped by default — and may "
+    "carry a gap too: [13.0s speech, 62.9s silence, gap 0.8s]. Those are the "
+    "only four forms; a negligible gap is omitted; no timing, no bracket. "
+    "Judge pacing from the speech figure. "
     "Use these numbers to judge pacing: long parts are candidates "
     "for shortening or speeding up, and long gaps mean dead air.\n"
     "\n"
@@ -266,41 +266,51 @@ PLAN_REVISE_PROMPT = (
 DIRECTOR_PROMPT = (
     "You are a video editor. You receive a Japanese transcript as "
     "numbered lines (one line per subtitle segment). Decide high-level "
+    # No trigger list here: the overlay bullet already owns "turning points,
+    # conclusions, failures, and mishaps", and a list stated twice is two
+    # places to drift.
     "edits to tighten AND STAGE the video: cut what drags, but also mark "
-    "the moments that make it worth watching — turning points, payoffs, "
-    "failures, mishaps. Do NOT rewrite or output the "
+    "the moments that make it worth watching. Do NOT rewrite or output the "
     "transcript text. Output ONLY a JSON object.\n"
     "\n"
-    "Timing: a line may carry a bracket after its text — [4.2s, gap 0.8s] "
-    "means the line lasts 4.2 seconds and is followed by a 0.8-second silent "
-    "gap before the next line. A negligible gap, and the last line, show no "
-    "gap ([4.2s]); a line with "
-    "unknown timing has no bracket. "
-    "A line containing long internal silences splits its duration — "
-    "[13.0s speech, 62.9s silence] means only 13.0 seconds are spoken; the "
-    '62.9 silent seconds are dropped by default (a "keep" over the line '
-    "preserves them). Judge pacing from the speech figure, never from "
-    "speech+silence. "
-    "Use these numbers to judge pacing: a long speech duration is a "
+    # Every bracket shape the renderer can emit is shown, in one place.  The
+    # four-part form was 17.0% of a real run's brackets while going
+    # undocumented, and the three-part gap form the old legend led with was the
+    # rarest at 4.4% — so the shape the LLM met most often was the one it had
+    # to infer.  Enumerating them costs nothing: this paragraph is four
+    # characters shorter than the one it replaces.
+    "Timing: a line may carry a bracket after its text. [4.2s] is the line's "
+    "duration; [4.2s, gap 0.8s] adds the silent gap before the next line. A "
+    "line holding long internal silence splits it instead — "
+    "[13.0s speech, 62.9s silence] means only 13.0 seconds are spoken and the "
+    '62.9 silent seconds are dropped by default (a "keep" preserves them) — '
+    "and may carry a gap too: [13.0s speech, 62.9s silence, gap 0.8s]. Those "
+    "are the only four forms; a negligible gap is omitted; no timing, no "
+    "bracket. "
+    "Use these numbers to judge pacing, always from the speech figure and "
+    "never from speech+silence: a long speech duration is a "
     "candidate for cutting, not speeding up — a long stretch of manual "
-    "work is a timelapse candidate instead. A long gap is "
+    "work is a timelapse candidate. A long gap or silence is "
     "dead air by default, already dropped — but that is the fallback "
-    "reading, not the only one. Check the speech just before and after it: "
+    "reading, not the only one. Check the speech either side of it: "
     "if it announces something happening (an accident, a cleanup, a wait "
-    "for a result), the gap itself may be the most watchable moment in the "
-    'shot, and a "keep" spanning that line and the next (lines [N, N+1]) '
-    "preserves it.\n"
+    # How to rescue it belongs to the keep bullet; this legend's job is to say
+    # the silence may be worth rescuing at all.
+    "for a result), that silence may be the most watchable moment in the "
+    "shot.\n"
     "\n"
     "Visual context: an indented line like\n"
-    "    [silent gap 12.4s: a build runs and logs scroll past]\n"
+    "    [silent gap: a build runs and logs scroll past]\n"
+    # Not "the silence AFTER that line": gaps are anchored by midpoint, so an
+    # annotation lands on whichever line's bracket reports that silence — for
+    # 16 of a real run's 59 that is the line's own internal `Ys silence`, not
+    # its trailing gap.  The old wording was false for 54% of them.
+    # Both the rescue mechanic and the whole-run rule now live once, in the
+    # keep bullet, which states them more completely than this paragraph did.
     "may follow a numbered line. It describes what is VISIBLE on screen "
-    "during the silence after that line (nobody is speaking). Such gaps are "
-    "dropped by default. If the gap shows something worth watching, emit a "
-    '"keep" op spanning that line and the next one — a keep over lines '
-    "[N, N+1] preserves the silence between them. If the described action "
-    "continues across several gaps (it is still unfolding in the next "
-    "annotation, or the speech around it narrates the same event), span the "
-    "whole run in ONE keep instead of one narrow keep per gap. Annotation "
+    "during that line's own silence, gap or internal (nobody is speaking). "
+    'If one shows something worth watching, a "keep" rescues it — see the '
+    "keep op below for how wide to make it. Annotation "
     "lines are not numbered; never reference them as op lines.\n"
     "\n"
     "Operations (reference lines by their 1-based numbers, inclusive). "
@@ -312,18 +322,25 @@ DIRECTOR_PROMPT = (
     "that leave the throughline entirely (digressions, dead ends, "
     "redundant retakes with no payoff):\n"
     "- cut: remove a boring/redundant span entirely (deletes audio+video).\n"
-    '- timelapse: play a long stretch of manual work fast under one on-screen caption; give "factor" (4.0 or more) and "text". Compressing a stretch is a choice between two modes and this is the second one. LISTENING: the speech carries something the viewer needs — play it at 1x, and if it drags cut the weakest parts instead. TIMELAPSE: the speech is inessential — go genuinely fast and accept that the words become unintelligible; that sacrifice is the point of the mode and is why you must be sure first. Pick "factor" so the result runs about a minute on screen: a longer span needs a bigger number, and a span where little is happening can go faster still. One op does the whole arrangement: the work runs continuously (its internal pauses are preserved, so it is not chopped into jump cuts) and the caption stays on screen for the entire timelapse — do not add a separate "keep" or "overlay" over the same lines. To change the caption partway through, emit consecutive timelapse ops; a new caption means a new phase of work.\n'
+    '- timelapse: play a long stretch of manual work fast under one on-screen caption; give "factor" (4.0 or more) and "text". Compressing a stretch is a choice between two modes and this is the second one. LISTENING: the speech carries something the viewer needs — play it at 1x, and if it drags cut the weakest parts instead. TIMELAPSE: the speech is inessential — go genuinely fast and accept that the words become unintelligible; that sacrifice is the point of the mode and is why you must be sure first. Pick "factor" so the result runs about a minute on screen: a longer span needs a bigger number, and a span where little is happening can go faster still. One op does the whole arrangement: the work runs continuously and the caption stays on screen for the entire timelapse — do not add a separate "keep" or "overlay" over the same lines. To change the caption partway through, emit consecutive timelapse ops; a new caption means a new phase of work.\n'
     '- overlay: show an on-screen caption; give "text" and "duration" '
     "(how many seconds it stays on screen). Pick the duration from reading "
     "length — a short label needs about 2 seconds, a full sentence 4 to 6; "
     'never a fixed value. Its "lines" say WHERE it appears (the caption '
     "starts at the first line of the range), not how long it shows. Reach "
     "for it at turning points, conclusions, failures, and mishaps — "
-    "moments worth labeling on screen. Aim for roughly one overlay per "
-    "3-5 minutes of finished video as a loose default target; if an "
-    "editorial brief states otherwise, follow the brief instead.\n"
+    # Not "a loose default target" any more.  A real project's brief states
+    # the SAME 3-5 minutes as a floor, so the "if an editorial brief states
+    # otherwise" escape hatch could never fire — two statements of one number
+    # with opposite modality (a two-sided target vs a floor), and the softer
+    # one arriving first.
+    "moments worth labeling on screen. Aim for one overlay per 3-5 minutes "
+    "of finished video; an editorial brief may set a different rate.\n"
+    # The keep op owns keep mechanics outright: the width rule, the [N, N+1]
+    # rescue, and the whole-event span.  The Timing legend and the
+    # Visual-context paragraph now point here instead of restating them.
     "- keep: protect a span from cutting INCLUDING its silences/non-speech "
-    "gaps (which are dropped by default). Let its width follow what is ON "
+    "gaps. Let its width follow what is ON "
     "SCREEN. To rescue one silent gap, use the narrowest range covering it — "
     "the line before it and the next one ([N, N+1]). When a continuous event "
     "is playing out across several gaps — an accident and the cleanup after "
@@ -354,6 +371,17 @@ DIRECTOR_PROMPT = (
     '- Use "note" to describe in natural language precisely WHERE in the '
     "line(s) the edit starts and ends, so a downstream editor can place "
     "it exactly.\n"
+    "- Playing it back starts from what happens with no op at all: every "
+    "line's speech plays once, at 1x, in the order given, and the silences "
+    "inside and after it are dropped. Each op changes that for the lines in "
+    "its range only — a line you leave outside a range keeps the default.\n"
+    "- Before you settle a range, play it back as the viewer will get it — "
+    "what plays, at what speed, with what on screen — and check that against "
+    "what you meant. A range that reads fine as a spec can still play wrong, "
+    "and the usual way is a span that opens one line too early: the spec says "
+    '"timelapse the work", the playback has the viewer hearing the speaker '
+    "announce that very work at 5x, destroyed. Put each boundary where the "
+    "playback is what you meant.\n"
     "- Output only the JSON object, no other text."
 )
 
@@ -841,6 +869,14 @@ class DirectorConfig(BaseModel):
             "How many lines of the videos playing immediately before/after this one the "
             "director is shown at each join (0 = off), so a sign-off or a greeting is "
             "visible as addressing an audience that is already mid-video"
+        ),
+    )
+    whole_project_context: bool = Field(
+        False,
+        description=(
+            "Show every segment's call the whole finished video's transcript (cached, "
+            "with each segment's default runtime) and the edits already made to the "
+            "segments playing earlier, instead of only their captions"
         ),
     )
     prompt: str = _commented(

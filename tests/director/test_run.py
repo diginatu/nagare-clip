@@ -172,7 +172,7 @@ def test_run_director_annotates_the_transcript_from_the_gaps_file(tmp_path, monk
         json_path=jsonp,
         gaps=gapsp,
     )
-    assert "[silent gap 10.0s: デモが動く]" in seen["user"]
+    assert "[silent gap: デモが動く]" in seen["user"]
 
 
 def test_run_director_without_a_gaps_file_is_unchanged(tmp_path, monkeypatch):

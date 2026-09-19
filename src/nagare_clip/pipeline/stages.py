@@ -17,14 +17,14 @@ from nagare_clip.audio_silence.run import run_audio_silence
 from nagare_clip.blender.frames import ordered_sources
 from nagare_clip.blender.warnings_file import WARNINGS_FILENAME
 from nagare_clip.cut_report.report import build_cut_report
-from nagare_clip.director.context import Neighbour
+from nagare_clip.director.context import Neighbour, PriorEdits
 from nagare_clip.director.director_llm import (
     DirectorOp,
     collect_overlay_texts,
     ops_from_dict,
     ops_to_dict,
 )
-from nagare_clip.director.run import run_director
+from nagare_clip.director.run import SegmentInputs, run_director, whole_video_reference
 from nagare_clip.gap_context.describe import GapFrames
 from nagare_clip.gap_context.run import run_gap_context
 from nagare_clip.gap_context.snapshot import (
@@ -599,6 +599,22 @@ def _director_run(ctx: PipelineContext) -> None:
             return None
         return Neighbour(segments[n], _edits(segments[n].stem))
 
+    def _inputs(segment: Segment) -> SegmentInputs:
+        stem = segment.stem
+        return SegmentInputs(
+            segment,
+            _edits(stem),
+            json_path=ctx.stage_dir("sentence_split") / f"{stem}.json",
+            gaps=ctx.stage_dir("gap_context") / f"{stem}_gaps.json",
+            cuts_txt=ctx.stage_dir("audio_silence") / f"{stem}_cuts.txt",
+        )
+
+    # director.whole_project_context: the whole video's transcript is rendered
+    # ONCE, before any call — it sits in the cached prefix, so every segment's
+    # call must carry the very same string.
+    whole = ctx.cfg["director"].get("whole_project_context") is True
+    whole_video = whole_video_reference([_inputs(s) for s in segments]) if whole else ""
+
     # Nothing half-written survives: these are all about to be rewritten, and a
     # file from a previous run was built under a different segmentation anyway.
     for stem in mine:
@@ -621,20 +637,31 @@ def _director_run(ctx: PipelineContext) -> None:
             prior = collect_overlay_texts(
                 [op for earlier in segments[:index] for op in _segment_ops(ctx, earlier, done)]
             )
+            whole_kw = {}
+            if whole:
+                whole_kw = {
+                    "whole_video": whole_video,
+                    "prior_edits": [
+                        PriorEdits(i + 1, earlier, _segment_ops(ctx, earlier, done))
+                        for i, earlier in enumerate(segments[:index])
+                    ],
+                }
+            inputs = _inputs(segment)
             result = run_director(
-                _edits(segment.stem),
+                inputs.edits,
                 ctx.cfg,
                 segment=segment,
                 all_segments=segments,
                 summary=ctx.stage_dir("summary") / "summary.json",
                 plan=_effective_plan_json(ctx),
-                json_path=ctx.stage_dir("sentence_split") / f"{segment.stem}.json",
-                gaps=ctx.stage_dir("gap_context") / f"{segment.stem}_gaps.json",
-                cuts_txt=ctx.stage_dir("audio_silence") / f"{segment.stem}_cuts.txt",
+                json_path=inputs.json_path,
+                gaps=inputs.gaps,
+                cuts_txt=inputs.cuts_txt,
                 prior_captions=prior,
                 before=_neighbour(index, -1),
                 after=_neighbour(index, 1),
                 recorder=rec,
+                **whole_kw,
             )
             if not result.ok:
                 failed = True

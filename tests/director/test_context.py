@@ -421,3 +421,36 @@ def test_the_seam_note_says_the_lines_are_not_op_addressable():
     assert "not part of your transcript" in note
     # ops address this video's own numbering, which the seam text has no place in
     assert "your own numbered lines" in note
+
+
+def test_part_list_says_a_plan_range_is_not_an_op_boundary():
+    """The plan hands the director line-ranged directions, and the director
+    copies their boundaries. Measured on a real 9-segment project: 19 of 56 op
+    start lines sat exactly on a plan part boundary, and all three timelapses
+    began on one -- including two whose first line was the speaker announcing
+    the work, which the timelapse then rendered unintelligible.
+
+    The prompt already tells the director to play a range back before settling
+    it, but that rule sits at ~55% of the assembled prompt while these ranges
+    arrive at ~82%; the more concrete, later text won. So the correction has to
+    travel WITH the ranges, immediately above the list, not in the Rules block.
+
+    It also carries the fix for a second leak: PLAN_PROMPT forbids the word
+    "keep" in a direction, yet 7 of the 9 real directions used it anyway
+    ("keep light", "keep a short visual moment"). The director's existing
+    guardrail names only featured/retained/emphasised -- not the literal word
+    it exists to neutralise."""
+    summary = ProjectSummary(
+        summary="overall",
+        parts=[PartSummary("a", (1, 10), "work")],
+        video_summaries={"a": "vid"},
+    )
+    directions = [PartDirection("a", (1, 10), "timelapse (4x+) — long assembly")]
+    text = build_director_context(summary, directions, Segment(stem="a", lines=None))
+
+    marker = "section boundaries, not op boundaries"
+    assert marker in text
+    # It must land immediately before the ranges it governs, not after them.
+    assert text.index(marker) < text.index("- lines 1-10:")
+    # And it must name "keep" itself, which the keep bullet's list omits.
+    assert '"keep"' in text.split(marker)[1].split("- lines")[0]

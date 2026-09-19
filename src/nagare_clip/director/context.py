@@ -7,10 +7,11 @@ so ``summary`` can keep importing it without a cycle.
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 from pathlib import Path
 
-from nagare_clip.director.director_llm import clean_for_display
+from nagare_clip.director.director_llm import DirectorOp, clean_for_display
 from nagare_clip.order import Segment, segment_label
 from nagare_clip.plan.plan_llm import PartDirection
 from nagare_clip.summary.summarize import ProjectSummary
@@ -26,6 +27,98 @@ SEAM_NOTE = (
     "transcript and carry no numbering — every op you emit refers to your own "
     "numbered lines only."
 )
+
+
+#: Heads the whole-video reference block (``director.whole_project_context``).
+#: A rule, not an example, for the same reason as :data:`SEAM_NOTE`; and short,
+#: because every growth of instruction prose here has cost something
+#: (improvement 16).  The transcripts below it are data.
+WHOLE_VIDEO_NOTE = (
+    "The whole finished video, every segment in playback order, for reference. "
+    "[k]N is line N of segment k; default runtime is what plays if no op is "
+    "applied. Your ops address only the plain-numbered transcript in the user "
+    "message — never put a [k]N number in an op."
+)
+
+_NUMBERED_LINE_RE = re.compile(r"^(\d+):", re.MULTILINE)
+
+
+def qualify_line_numbers(transcript: str, index: int) -> str:
+    """Prefix every numbered line of a rendered transcript with ``[index]``.
+
+    A bare number in the whole-video reference would be ANOTHER segment's
+    coordinate, and the parser accepts any number inside this segment's own
+    range — so one copied into an op would silently edit an unrelated line of
+    this video (the hazard :class:`Seam` describes).  Indented annotation lines
+    carry no number and are left alone.
+    """
+    return _NUMBERED_LINE_RE.sub(rf"[{index}]\1:", transcript)
+
+
+def _minutes(seconds: float) -> str:
+    return f"{seconds / 60:.1f} min"
+
+
+def whole_video_block(sections: list[tuple[Segment, str, float | None]]) -> str:
+    """The whole finished video's transcript, for the cacheable prefix.
+
+    *sections* are ``(segment, qualified transcript, default runtime seconds)``
+    in playback order; a segment's index is its position there.  The closing
+    total is left out when any segment's runtime is unknown rather than
+    understating the video.
+    """
+    out = [WHOLE_VIDEO_NOTE]
+    for index, (segment, transcript, runtime) in enumerate(sections, start=1):
+        header = f"[{index}] {segment_label(segment)}"
+        if runtime is not None:
+            header += f" — default runtime {_minutes(runtime)}"
+        out.append(f"{header}\n{transcript}" if transcript else header)
+    runtimes = [runtime for _, _, runtime in sections]
+    if runtimes and all(r is not None for r in runtimes):
+        out.append(f"Whole video — default runtime {_minutes(sum(runtimes))}")
+    return "\n\n".join(out)
+
+
+@dataclass(frozen=True)
+class PriorEdits:
+    """The ops already made to one segment that plays earlier.
+
+    *index* is that segment's 1-based position in the finished video, the same
+    ``[k]`` the whole-video reference uses, so a line reference here points at
+    one line of the finished video and nowhere else.
+    """
+
+    index: int
+    segment: Segment
+    ops: list[DirectorOp]
+
+
+def _qualified_range(index: int, lines: tuple[int, int]) -> str:
+    first, last = lines
+    if first == last:
+        return f"[{index}]{first}"
+    return f"[{index}]{first}-[{index}]{last}"
+
+
+def _prior_op(index: int, op: DirectorOp) -> str:
+    out = f"{op.type} {_qualified_range(index, op.lines)}"
+    if op.factor is not None:
+        out += f" x{op.factor:g}"
+    text = (op.text or "").strip()
+    if text:
+        out += " 「" + " / ".join(t.strip() for t in text.split("\n") if t.strip()) + "」"
+    return out
+
+
+def format_prior_edits(prior: list[PriorEdits]) -> list[str]:
+    """One line per earlier segment: its ops (type, lines, factor, text — no
+    notes, which are long), line-ordered."""
+    out = []
+    for entry in prior:
+        ops = sorted(entry.ops, key=lambda op: op.lines)
+        body = "; ".join(_prior_op(entry.index, op) for op in ops) or "(no edits)"
+        out.append(f"[{entry.index}] {segment_label(entry.segment)}: {body}")
+    return out
 
 
 @dataclass(frozen=True)
@@ -163,6 +256,7 @@ def build_director_context(
     max_prior_captions: int = 0,
     seam_before: Seam | None = None,
     seam_after: Seam | None = None,
+    prior_edits: list[PriorEdits] | None = None,
 ) -> str:
     """Render the context for one SEGMENT: global summary + the parts this
     segment covers (line ranges, summaries, rough directions) + the sibling
@@ -189,6 +283,10 @@ def build_director_context(
     may be missing on a re-run), and with neither the block is byte-identical to
     before.
 
+    ``prior_edits`` (``director.whole_project_context``) replaces the caption
+    list with the ops every earlier segment actually got, so "this was already
+    shown fast once" is decidable.  ``None`` keeps the caption block.
+
     Returns ``""`` when there is nothing to inject (so the director prompt is
     unchanged when the overview is empty).
     """
@@ -205,9 +303,19 @@ def build_director_context(
     captions = list(prior_captions or [])
     if max_prior_captions > 0:
         captions = captions[-max_prior_captions:]
+    edits_block = format_prior_edits(prior_edits) if prior_edits is not None else []
+    if prior_edits is not None:
+        captions = []
     seams = _seam_block(seam_before, seam_after)
 
-    if not project_summary.summary and not own and not positioned and not captions and not seams:
+    if (
+        not project_summary.summary
+        and not own
+        and not positioned
+        and not captions
+        and not edits_block
+        and not seams
+    ):
         return ""
 
     dirs_by_part = _directions_by_part(own, [d for d in directions if _overlaps(d, segment)])
@@ -231,6 +339,20 @@ def build_director_context(
             elif index == total:
                 header += ", the LAST in the finished timeline"
         out.append(header + ":")
+        if dirs_by_part:
+            # Emitted HERE, immediately above the ranges, rather than in
+            # DIRECTOR_PROMPT's Rules block: the playback rule that should have
+            # prevented this sits at ~55% of the assembled prompt and these
+            # ranges arrive at ~82%, and the later, more concrete text won.  A
+            # real run copied a plan boundary into 19 of 56 op starts, and into
+            # all three timelapses — two of which therefore opened on the line
+            # announcing the work and played it back unintelligible.
+            out.append(
+                "These are section boundaries, not op boundaries: a direction "
+                "says what a stretch is FOR, and you choose where each op "
+                'actually starts and ends. A direction saying "keep" means '
+                "emphasis, not a keep op."
+            )
         own_summary = video_summaries.get(stem, "") if segment.lines is None else ""
         if own_summary:
             out.append(f"Summary: {own_summary}")
@@ -277,6 +399,11 @@ def build_director_context(
         out.append("")
         out.append("Captions already shown earlier in the finished video:")
         out.extend(f"- {c}" for c in captions)
+
+    if edits_block:
+        out.append("")
+        out.append("Edits already made to the segments playing earlier:")
+        out.extend(edits_block)
 
     out.extend(seams)
 

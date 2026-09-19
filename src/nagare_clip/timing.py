@@ -11,6 +11,15 @@ from __future__ import annotations
 
 from typing import Any
 
+#: Internal silence below this many seconds does not split a bracket into
+#: ``Xs speech, Ys silence``.  The split exists to flag dead air the editor
+#: will drop; a few tenths of a second is breath.  The previous de facto
+#: cut-off was ~0.05s (whatever survived rounding to one decimal), which split
+#: 77 of a real run's 312 silence figures into noise and printed
+#: ``0.0s speech, 0.1s silence`` on 8 lines whose WhisperX alignment had
+#: collapsed.  All 235 figures of a second or more are unaffected.
+MIN_SILENCE_SPLIT = 1.0
+
 
 def segment_times(json_data: dict[str, Any]) -> list[tuple[float | None, float | None]]:
     """Return ``(start, end)`` per WhisperX segment (``None`` when missing)."""
@@ -64,16 +73,22 @@ def format_dur_gap(dur: float | None, gap: float | None, silence: float | None =
     - ``gap is None`` -> no gap part.
     - a negligible gap (would render as ``0.0s``, incl. negative) is omitted
       the same way — "gap 0.0s" on every contiguous line/part is pure noise.
-    - a significant *silence* (audio_silence-cut seconds inside the span)
-      splits the duration into ``Xs speech, Ys silence`` — *dur* is then the
-      speech-only figure; a negligible/absent silence renders the plain form.
+    - a significant *silence* (audio_silence-cut seconds inside the span,
+      ``>= MIN_SILENCE_SPLIT``) splits the duration into
+      ``Xs speech, Ys silence`` — *dur* is then the speech-only figure.
+    - a shorter silence is folded back in: callers pass *dur* already net of
+      it, so the plain form has to add it back or the bracket under-reports
+      the span it claims to be the duration of.  Without this a
+      degenerate-alignment line (every word 0.020s, the whole span inside an
+      audio_silence cut) renders ``[0.0s]`` — a line the LLM is asked to judge
+      the pacing of, claiming to last no time at all.
     """
     if dur is None:
         return ""
-    if silence is not None and f"{max(silence, 0.0):.1f}" != "0.0":
+    if silence is not None and silence >= MIN_SILENCE_SPLIT:
         core = f"{dur:.1f}s speech, {silence:.1f}s silence"
     else:
-        core = f"{dur:.1f}s"
+        core = f"{dur + (silence or 0.0):.1f}s"
     if gap is None or f"{max(gap, 0.0):.1f}" == "0.0":
         return f"[{core}]"
     return f"[{core}, gap {gap:.1f}s]"

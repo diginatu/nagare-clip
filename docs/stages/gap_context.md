@@ -417,7 +417,7 @@ feature. `director/run.py` wires this: `gaps=Path | None` →
 gaps=gap_list)`.
 
 The default `DIRECTOR_PROMPT` (`config.py`) documents the annotation's exact
-rendering (`    [silent gap 12.4s: a build runs and logs scroll past]`) and
+rendering (`    [silent gap: a build runs and logs scroll past]`) and
 the rule the director is meant to act on: such gaps are dropped by default
 (same as any other non-speech gap), and if the visual content is worth
 watching, the director should emit a `keep` op spanning the annotated line and

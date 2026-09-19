@@ -24,7 +24,7 @@ from nagare_clip.intervals.sync_json import (
     OVERLAY_TAG_RE,
     SPEED_TAG_RE,
 )
-from nagare_clip.llm_client import with_trace_meta
+from nagare_clip.llm_client import CACHEABLE_PREFIX_KEY, with_trace_meta
 from nagare_clip.llm_report import (
     DROPPED_ITEMS,
     LLM_ERROR,
@@ -86,13 +86,24 @@ def keep_limit_note(max_keep_lines: int) -> str:
     Generated rather than written into ``DIRECTOR_PROMPT`` so the number the
     LLM is told is always the number the parser enforces.
     """
+    # The op menu tells the director to span a whole continuous event in ONE
+    # keep; this cap can make that impossible, and _apply_keep_cap DROPS the
+    # op rather than clamping it — so following the menu loses the keep
+    # entirely and jump-cuts the very event it was protecting.  The note used
+    # to paper over that with "a continuous on-screen event fits well inside
+    # that", which is false in exactly the case the whole-event rule exists
+    # for.  Saying what to do instead turns a silent drop into a usable route:
+    # consecutive keeps do not overlap, so they all survive.
+    #
+    # The "do not stretch a keep across a talking span" warning is gone from
+    # here too — the keep bullet states it more completely ("Never widen a
+    # keep to mark talking as important ... inflates the runtime for
+    # nothing"), and this note is appended far from the menu.
     return (
         f'A "keep" op may span at most {max_keep_lines} line(s); a wider one is '
-        "rejected and has no effect. A continuous on-screen event fits well "
-        "inside that, because nobody is talking through it. Do not stretch a "
-        "keep across a talking span to signal that it matters — say so in a "
-        '"note" on another op instead. A "timelapse" op needs no keep of its '
-        "own; it protects its whole range by itself."
+        "rejected and has no effect — to hold a longer event, emit consecutive "
+        'keeps that each stay within the cap. A "timelapse" op needs no keep of '
+        "its own; it protects its whole range by itself."
     )
 
 
@@ -386,6 +397,48 @@ def format_numbered_transcript(clean_lines: list[str], first_line: int = 1) -> s
     return "\n".join(f"{i + first_line}: {text}" for i, text in enumerate(clean_lines))
 
 
+def speech_seconds(
+    seg_times: Sequence[tuple[float | None, float | None]],
+    silences: Sequence[float] | None = None,
+) -> list[float | None]:
+    """Seconds each line plays with no op at all: its span minus the
+    audio_silence cut inside it (``None`` when the line is untimed).
+
+    The one definition of a line's playing time — the transcript brackets and
+    the whole-video "default runtime" both read it, so they cannot drift.
+    """
+    out: list[float | None] = []
+    for i, (start, end) in enumerate(seg_times):
+        raw = end - start if start is not None and end is not None else None
+        sil = silences[i] if silences is not None and i < len(silences) else None
+        out.append(max(raw - sil, 0.0) if raw is not None and sil else raw)
+    return out
+
+
+def render_transcript(
+    clean_lines: list[str],
+    seg_times: list[tuple[float | None, float | None]] | None = None,
+    silences: list[float] | None = None,
+    anchored_gaps: list[tuple[int, Gap]] | None = None,
+    first_line: int = 1,
+) -> str:
+    """One segment's numbered transcript exactly as the director is shown it.
+
+    Timed brackets when *seg_times* matches the lines, gap annotations on top of
+    those; plain ``N: text`` otherwise.  The editable user message and the
+    whole-video reference block are both rendered here, so the two views of one
+    segment can never disagree.
+    """
+    if seg_times is not None and len(seg_times) == len(clean_lines):
+        out = format_numbered_transcript_timed(
+            clean_lines, seg_times, silences=silences, first_line=first_line
+        )
+        if anchored_gaps:
+            out = annotate_numbered_transcript(out, anchored_gaps)
+        return out
+    return format_numbered_transcript(clean_lines, first_line=first_line)
+
+
 def format_numbered_transcript_timed(
     clean_lines: list[str],
     seg_times: list[tuple[float | None, float | None]],
@@ -404,11 +457,11 @@ def format_numbered_transcript_timed(
     :func:`format_dur_gap` (possibly to no bracket at all).
     """
     out: list[str] = []
+    speech = speech_seconds(seg_times, silences)
     for i, text in enumerate(clean_lines):
-        start, end = seg_times[i]
-        raw = end - start if start is not None and end is not None else None
+        _, end = seg_times[i]
         sil = silences[i] if silences is not None and i < len(silences) else None
-        dur = max(raw - sil, 0.0) if raw is not None and sil else raw
+        dur = speech[i]
         gap: float | None = None
         if i + 1 < len(clean_lines):
             nxt_start = seg_times[i + 1][0]
@@ -465,6 +518,8 @@ def generate_director_ops(
     anchored_gaps: list[tuple[int, Gap]] | None = None,
     silences: list[float] | None = None,
     first_line: int = 1,
+    reference: str = "",
+    user_header: str = "",
 ) -> DirectorResult:
     """Run the director LLM over one segment's transcript and return its ops.
 
@@ -492,24 +547,34 @@ def generate_director_ops(
     ``silences`` (per-line audio_silence overlap, same length as ``seg_times``)
     splits each bracket into speech/silence; ``None`` keeps the output
     byte-identical.
+
+    ``reference`` (``director.whole_project_context``) is the whole finished
+    video's transcript, appended INSIDE the cacheable prefix — the caller must
+    pass the same string on every segment's call of a run.  ``user_header`` is
+    one line put above the editable transcript.  Both empty (the default) leave
+    the request byte-identical.
     """
     clean_lines = clean_for_display(edit_lines)
     max_keep_lines = _max_keep_lines(cfg)
     system_prompt = cfg.get("prompt", "")
     if max_keep_lines > 0:
         system_prompt = f"{system_prompt}\n\n{keep_limit_note(max_keep_lines)}"
+    if reference:
+        # The whole video's transcript: identical on every segment's call of a
+        # run, so it belongs INSIDE the cached prefix.
+        system_prompt = f"{system_prompt}\n\n{reference}"
+    # Everything up to here is identical on every segment's call; the overview
+    # context is where they diverge.  Declared so the client caches exactly
+    # this much — a breakpoint after the overview would make every call's
+    # prefix unique and turn caching into a pure write premium.
+    stable_prefix = system_prompt
     if overview_context:
         system_prompt = f"{system_prompt}\n\n{overview_context}"
-    if seg_times is not None and len(seg_times) == len(clean_lines):
-        user_content = format_numbered_transcript_timed(
-            clean_lines, seg_times, silences=silences, first_line=first_line
-        )
-        if anchored_gaps:
-            user_content = annotate_numbered_transcript(user_content, anchored_gaps)
-    else:
-        user_content = format_numbered_transcript(clean_lines, first_line=first_line)
+    user_content = render_transcript(clean_lines, seg_times, silences, anchored_gaps, first_line)
+    if user_header:
+        user_content = f"{user_header}\n{user_content}"
     messages = [
-        {"role": "system", "content": system_prompt},
+        {"role": "system", "content": system_prompt, CACHEABLE_PREFIX_KEY: stable_prefix},
         {"role": "user", "content": user_content},
     ]
     recorder.begin(unit)
