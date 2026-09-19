@@ -357,7 +357,10 @@ def call_llm(messages: list[dict[str, Any]], cfg: dict[str, Any]) -> str:
 
     thinking = cfg.get("thinking", False)
     if thinking:
-        kwargs["reasoning_effort"] = thinking if isinstance(thinking, str) else "low"
+        # `true` is "thinking on at the normal effort", i.e. the API's own
+        # default `high` — not `low`, which is what it used to mean and what
+        # no config writing `true` intended.
+        kwargs["reasoning_effort"] = thinking if isinstance(thinking, str) else "high"
 
     if _ensure_tracing():
         metadata = dict(trace) if trace else {}

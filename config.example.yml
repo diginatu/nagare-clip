@@ -130,7 +130,7 @@ text_filter:
   retry_min_batch_size: 1   # Floor for the halving retry; set equal to batch_size to disable
   # prompt: "..."   # System prompt for LLM (has sensible default for Japanese)
   temperature: 0.1   # LLM sampling temperature
-  thinking: false   # Thinking mode: true/false, or "low"/"medium"/"high"
+  thinking: false   # Thinking mode: true (= "high") / false, or "low"/"medium"/"high"
   # keywords: []   # Constant keywords always injected into the filter LLM prompt
 
 # plan stage: runs once project-wide after summary, before director. A larger

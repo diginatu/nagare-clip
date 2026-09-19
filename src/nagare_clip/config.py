@@ -695,7 +695,7 @@ class TextFilterConfig(BaseModel):
     )
     temperature: float = Field(0.1, description="LLM sampling temperature")
     thinking: bool | str = Field(
-        False, description='Thinking mode: true/false, or "low"/"medium"/"high"'
+        False, description='Thinking mode: true (= "high") / false, or "low"/"medium"/"high"'
     )
     keywords: list[str] = _commented(
         [],

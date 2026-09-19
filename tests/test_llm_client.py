@@ -75,9 +75,14 @@ def test_thinking_level_maps_to_reasoning_effort():
     assert m.call_args.kwargs["reasoning_effort"] == "high"
 
 
-def test_thinking_true_maps_to_low():
+def test_thinking_true_maps_to_high():
+    """`true` means "thinking on, at the normal effort" -- the API's own default
+    is `high`. It used to mean `low`, and no config that wrote `true` meant
+    that: the director ran at the lowest effort for weeks while being asked to
+    simulate a playback in its head, and the plan stage, whose line ranges the
+    director copies, still did."""
     _, m = _call({"provider": "openai", "model": "x", "thinking": True})
-    assert m.call_args.kwargs["reasoning_effort"] == "low"
+    assert m.call_args.kwargs["reasoning_effort"] == "high"
 
 
 def test_thinking_false_omits_reasoning_effort():
