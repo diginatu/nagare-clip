@@ -535,6 +535,24 @@ class TestASilenceNobodyCanHear:
         # ...and the waits that ARE there still are.
         assert "11: [silent 29.9s" in text
 
+    def test_a_wait_the_segment_bounds_do_not_show_is_still_printed(self):
+        # WhisperX stretches a line's last word to the next line's start:
+        # source lines 49 and 50 touch (segment gap 0.0) while the wait the
+        # pipeline actually drops — the silence line's own interval — is
+        # 6.6 s.  The preview prices what will be dropped, not the bound.
+        op = DirectorOp(
+            type="timelapse", lines=(49, 50), factor=6.0, text="T", gap_start=True, gap_end=True
+        )
+        text = preview_segment(
+            WATER_T.edit_lines,
+            [op],
+            seg_times=WATER_T.seg_times,
+            silences=WATER_T.silences,
+            silence_lines=[SilenceLine(49, 456.415, 463.0)],
+            first_line=WATER_T.first_line,
+        ).text
+        assert "[silent 6.6s after line 49]" in text
+
 
 class TestWholeVideoRuntime:
     def test_the_footer_is_the_whole_video_not_this_segment(self):

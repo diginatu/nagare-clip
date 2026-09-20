@@ -657,15 +657,18 @@ def preview_segment(
         ]
         out.extend(unintelligible_over(speech_lines, factor))
         for n in gaps:
+            if n not in pb.gap_keep and n not in pb.gap_speed:
+                continue
+            silence = _silence_after(pb, n, silence_lines, anchored_gaps)
             # A wait of no length is not a wait: every line of a talking
             # stretch has a gap after it, and printing "[silent 0.0s]" for
-            # each is noise the director reads past on every turn.
-            if not gap_shown(pb.gap_after(n)):
+            # each is noise the director reads past on every turn.  Measured
+            # on the SILENCE, never on the segment bounds: WhisperX stretches
+            # a last word to the next line's start, so 5 of the real project's
+            # 49 waits are a real silence between two lines that touch.
+            if not gap_shown(silence.duration):
                 continue
-            if n in pb.gap_keep or n in pb.gap_speed:
-                out.append(
-                    _silence_render(_silence_after(pb, n, silence_lines, anchored_gaps), num)
-                )
+            out.append(_silence_render(silence, num))
         return out
 
     blocks: list[str] = []
