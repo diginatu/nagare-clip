@@ -273,6 +273,43 @@ class TestTheMessages:
         second = _run(monkeypatch, _ctx(project, chunk_lines=4))[1][-1]["content"]
         assert "note: x" in second
 
+    def test_a_refusal_reaches_the_model_above_the_state(self, project, monkeypatch):
+        """A refusal is about the reply just sent, not about the edit, so it
+        leads — and it is the only thing that tells the model its `done` (or
+        its join-crossing op) was not taken."""
+        seen = {"done": False}
+
+        def script(messages, cfg):
+            if not seen["done"]:
+                seen["done"] = True
+                return json.dumps({"done": True})
+            asked = _asked(messages[-1]["content"])
+            if asked is None:
+                return json.dumps({"done": True})
+            return json.dumps({"range": list(asked), "reviewed_through": asked[1], "ops": []})
+
+        calls = _run(monkeypatch, _ctx(project, chunk_lines=4), reply=script)
+        second = calls[1][-1]["content"]
+        assert "not done: lines 1-" in second
+        assert second.index("not done") < second.index(STATE_HEADER)
+
+    def test_a_parser_drop_reaches_the_next_turns_state(self, project, monkeypatch):
+        def script(messages, cfg):
+            asked = _asked(messages[-1]["content"])
+            if asked is None:
+                return json.dumps({"done": True})
+            first, last = asked
+            return json.dumps(
+                {
+                    "range": [first, last],
+                    "reviewed_through": last,
+                    "ops": [{"type": "sparkle", "lines": [first, first], "note": "x"}],
+                }
+            )
+
+        second = _run(monkeypatch, _ctx(project, chunk_lines=4), reply=script)[1][-1]["content"]
+        assert "dropped by the parser (no effect):" in second
+
 
 class TestTheOpsThatReachDisk:
     def test_every_source_is_written_in_source_coordinates(self, project, monkeypatch):
