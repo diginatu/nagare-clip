@@ -467,13 +467,14 @@ def test_director_prompt_timelapse_states_its_price():
 def test_director_prompt_asks_for_a_playback_before_settling_a_range():
     """Every symptom a real run produced was correct as a spec and wrong on
     playback: `timelapse [1,15] x5` reads fine, and plays as the speaker
-    announcing that very work at 5x, unintelligible. Enumerating the failures
-    one boundary rule at a time only closes the ones already seen, so the
-    prompt asks for the reconstruction instead — the director writes a spec and
-    never reads it back as the viewer."""
+    announcing that very work at 5x, unintelligible. The director used to be
+    asked to reconstruct that playback in its head; the conversation computes
+    it and hands it back every turn, so the rule is now to READ it — and the
+    one move that makes reading it worth anything is re-sending the range."""
     prompt = get_effective_config(None, {})["director"]["prompt"].lower()
-    assert "play it back" in prompt
+    assert "the playback you are shown" in prompt
     assert "reads fine as a spec" in prompt
+    assert "re-send the range" in prompt
 
 
 def test_director_prompt_states_the_no_op_baseline():
@@ -687,19 +688,19 @@ def test_gap_context_prompt_documents_the_markers_describe_parses():
 
 
 def test_director_prompt_documents_silence_lines_and_how_to_address_them():
-    # A silence line is the one thing in the transcript the director cannot
-    # name by number, so the prompt has to teach the "n~" form -- without it
-    # the whole feature is invisible to the model that would use it.
+    # A silence used to be the one thing in the transcript with no number, so
+    # the prompt had to teach the "n~" form.  Under the whole-video numbering
+    # it has a number like any other line -- and the loop REJECTS "n~" -- so
+    # the prompt must teach the number and nothing else.
     cfg = get_effective_config(None, {})
     prompt = cfg["director"]["prompt"]
     assert "[silent " in prompt
-    # The form itself, an op range written with it, and the rule that it may
-    # stand at EITHER end of a range -- an example alone would teach only the
-    # silence-alone case, which is one of the three shapes the parser takes.
-    assert '"53~"' in prompt
-    assert '["53~", "53~"]' in prompt
-    assert "either endpoint" in prompt
-    assert "keep" in prompt
+    assert "53~" not in prompt
+    assert "either endpoint" not in prompt
+    # What acts on it: the two ops that can, named where the line is shown.
+    silence = next(ln for ln in prompt.splitlines() if ln.startswith("is the wait"))
+    assert "put its number in an op" in silence
+    assert "keep" in silence and "timelapse" in silence
 
 
 def test_director_prompt_silence_example_matches_the_real_formatter():
@@ -712,7 +713,7 @@ def test_director_prompt_silence_example_matches_the_real_formatter():
     `[silent gap: ...]` annotation the silence line replaces for a between-line
     wait; that annotation survives for silence INSIDE a line, so its prefix is
     pinned too."""
-    from nagare_clip.director.silence_lines import SilenceLine
+    from nagare_clip.director.silence_lines import SilenceLine, silence_body
     from nagare_clip.gap_context.context import annotate_numbered_transcript
     from nagare_clip.gap_context.gaps import Gap
 
@@ -720,16 +721,12 @@ def test_director_prompt_silence_example_matches_the_real_formatter():
     prompt = cfg["director"]["prompt"]
 
     line = SilenceLine(53, 0.0, 29.9, ("a build runs and logs scroll past",))
-    assert line.render() == "    [silent 29.9s after line 53: a build runs and logs scroll past]"
-    assert line.render() in prompt
-
-    # The op form the example teaches must be the one the parser accepts.
-    from nagare_clip.director.director_llm import parse_director_response
-
-    ops = parse_director_response(
-        '{"ops": [{"type": "keep", "lines": ["53~", "53~"]}]}', num_lines=100
-    )
-    assert (ops[0].lines, ops[0].gap_start, ops[0].gap_end) == ((53, 53), True, True)
+    # The whole-video view numbers the silence, so it drops the "after line n"
+    # the un-numbered transcript line carries -- and that is the body the
+    # prompt's example must show.
+    body = silence_body(line.duration, line.descriptions)
+    assert body == "[silent 29.9s: a build runs and logs scroll past]"
+    assert f"54: {body}" in prompt
 
     gap = Gap(start=0.0, end=12.4, frames=[], description="x")
     prefix = annotate_numbered_transcript("1: x", [(1, gap)]).split("\n")[1].split("x]")[0]
@@ -748,7 +745,7 @@ def test_director_prompt_overlay_example_carries_a_duration():
     example = next(
         line.strip().rstrip(",") for line in prompt.splitlines() if '"type": "overlay"' in line
     )
-    ops = parse_director_response('{"ops": [' + example + "]}", num_lines=10)
+    ops = parse_director_response('{"ops": [' + example + "]}", num_lines=100)
     assert len(ops) == 1
     assert ops[0].type == "overlay"
     assert ops[0].duration is not None and ops[0].duration > 0
@@ -910,6 +907,14 @@ def test_director_prompt_lets_a_described_action_span_its_whole_run():
     silence = next(ln for ln in prompt.splitlines() if ln.startswith("is the wait"))
     assert "keep" in silence and "timelapse" in silence
     assert "WHOLE event" not in silence and "jump cuts" not in silence
+
+
+def test_director_chunk_lines_default():
+    """How many display lines one turn of the conversation is asked to review.
+    The turn cap is ceil(lines / chunk_lines) * 2, so this number sets both how
+    much the director holds at once and how many turns it may spend."""
+    cfg = get_effective_config(None, {})
+    assert cfg["director"]["chunk_lines"] == 40
 
 
 def test_director_max_keep_lines_default():
@@ -1200,6 +1205,58 @@ def test_director_prompt_did_not_grow_for_the_silence_lines():
     feature that adds a paragraph has to pay for it by deleting what it makes
     redundant -- here the gap-rescue mechanics in the Timing legend and the
     visual-context paragraph, and the [N, N+1] rule in the keep bullet.  6289
-    characters is what it measured before the silence lines went in."""
+    characters is what it measured before the silence lines went in.
+
+    The conversation raised the ceiling to 6600 ONCE, deliberately: the turn
+    protocol (an approximate range per turn, a reply that owns its range, and
+    `done`) is what the model is doing now, and no wording of it is free.  It
+    paid what it could -- the "53~" teaching (a silence is a numbered line
+    now), the transcript-echo rule the last Rules line already covers, the
+    1-based-numbering restatement above the menu, and half the playback rule
+    (the preview computes that playback now) -- which is 300 of the 604
+    characters the protocol cost.  Anything further must delete, not raise."""
     prompt = get_effective_config(None, {})["director"]["prompt"]
-    assert len(prompt) < 6289
+    assert len(prompt) < 6600
+
+
+def _display_view(n: int = 100):
+    """A flat one-segment view, enough for the loop to read a reply against."""
+    from nagare_clip.director.display import DisplayLine, DisplaySegment, DisplayView
+
+    return DisplayView(
+        lines=[
+            DisplayLine(number=i, segment=1, stem="x", source_line=i, is_silence=False, text="t")
+            for i in range(1, n + 1)
+        ],
+        segments=[DisplaySegment(index=1, stem="x", label="x", first=1, last=n)],
+    )
+
+
+def test_director_prompt_states_the_turn_protocol():
+    """The director is no longer one call over one segment: it is a
+    conversation over the whole video. A prompt describing the old shape is
+    not merely stale, it contradicts what every user message asks for."""
+    prompt = get_effective_config(None, {})["director"]["prompt"]
+    lowered = prompt.lower()
+    assert "one numbering" in lowered  # the whole video, numbered once
+    assert '"range"' in prompt and '"reviewed_through"' in prompt
+    assert '{"done": true}' in prompt
+    # Re-sending a range REPLACES its ops — the one move that makes the
+    # playback worth reading.
+    assert "replace" in lowered
+
+
+def test_director_prompt_turn_shape_is_the_one_the_loop_parses():
+    """Pin the documented reply to the real reader: a stale shape here is a
+    turn the loop rejects, and the retry ladder burns on it."""
+    from nagare_clip.director.loop import LoopState, apply_reply
+
+    prompt = get_effective_config(None, {})["director"]["prompt"]
+    start = prompt.index('{"range"')
+    shape = prompt[start : prompt.index("]}", start) + 2]
+    view = _display_view()
+    state = LoopState()
+    result = apply_reply(view, state, shape)
+    assert result.error is None and result.refusal is None
+    assert {op.type for op in result.ops} == {"cut", "timelapse", "overlay", "keep", "edit"}
+    assert state.reviewed_through == 78

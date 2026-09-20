@@ -27,6 +27,7 @@ from nagare_clip.director.director_llm import (
 from nagare_clip.director.run import (
     SegmentInputs,
     run_director,
+    run_director_conversation,
     silence_line_min,
     whole_video_reference,
 )
@@ -577,7 +578,76 @@ def _write_director_ops(ctx: PipelineContext, stem: str, ops: list[DirectorOp]) 
 
 
 def _director_run(ctx: PipelineContext) -> None:
-    """One LLM call per SEGMENT of the finished video.
+    """ONE conversation over the whole finished video.
+
+    Every segment's transcript is loaded once and numbered once; the director
+    is then asked for an approximate range per turn and answered with what its
+    ops will play (:func:`~nagare_clip.director.run.run_director_conversation`).
+    ``--source`` does not narrow it: one conversation owns the whole video, so
+    every source's ``_director.json`` is rewritten whatever this run was asked
+    to process.
+
+    The ops accepted so far are written even when the conversation ends badly
+    — the turn cap, or a turn that fails every retry — and only then does the
+    stage fail: the user inspects them and continues by hand from
+    ``guided_edit`` rather than losing the whole conversation.
+    """
+    rec = _recorder(ctx, "director")
+    rec.clear()
+    segments = _timeline_segments(ctx)
+    director_dir = ctx.stage_dir("director")
+    text_filter_dir = ctx.stage_dir("text_filter")
+    stems = sorted({segment.stem for segment in segments})
+    if set(ctx.stems) != set(stems):
+        logging.info(
+            "director: --source does not narrow the director; one conversation owns the "
+            "whole video, so every source's _director.json is rewritten"
+        )
+
+    inputs = [
+        SegmentInputs(
+            segment,
+            text_filter_dir / f"{segment.stem}_edits.txt",
+            json_path=ctx.stage_dir("sentence_split") / f"{segment.stem}.json",
+            gaps=ctx.stage_dir("gap_context") / f"{segment.stem}_gaps.json",
+            cuts_txt=ctx.stage_dir("audio_silence") / f"{segment.stem}_cuts.txt",
+            silence_line_min=silence_line_min(ctx.cfg["director"]),
+        )
+        for segment in segments
+    ]
+
+    # Nothing half-written survives: these are all about to be rewritten, and a
+    # file from a previous run was built under a different segmentation anyway.
+    for stem in stems:
+        path = director_dir / f"{stem}_director.json"
+        if path.is_file():
+            path.unlink()
+
+    print(f"[director] Edit operations: {len(segments)} segment(s) in one conversation")
+    try:
+        result = run_director_conversation(inputs, ctx.cfg, recorder=rec)
+        # Written BEFORE the failure, never after it: the ops are what the
+        # conversation is for, and a cap is not a reason to throw them away.
+        for stem in stems:
+            _write_director_ops(ctx, stem, result.ops.get(stem, []))
+        if not result.ok:
+            files = ", ".join(f"{stem}_director.json" for stem in stems)
+            raise PipelineError(
+                f"[director] {result.error}; reviewed through display line "
+                f"{result.reviewed_through}. The ops accepted so far are written to "
+                f"{director_dir} ({files}) — inspect them and continue by hand "
+                "(--from-stage guided_edit)"
+            )
+        _write_divergence_note(ctx)
+        write_order_note(ctx)
+    finally:
+        rec.rebuild_index()
+
+
+def _director_run_segments(ctx: PipelineContext) -> None:
+    """One LLM call per SEGMENT of the finished video — the path the
+    conversation replaced.  Unwired (see :func:`_director_run`) and deleted
+    with the rest of the per-segment path; its tests still drive it.
 
     The loop walks the whole project's order even when ``--source`` narrows the
     run, and calls only for the segments this run owns: narrowing changes what

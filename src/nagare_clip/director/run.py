@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import json
 import logging
+import math
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -36,12 +37,18 @@ from nagare_clip.director.context import (
     whole_video_block,
 )
 from nagare_clip.director.director_llm import (
+    DirectorOp,
     DirectorResult,
+    _max_keep_lines,
     clean_for_display,
     generate_director_ops,
+    keep_limit_note,
     render_transcript,
     speech_seconds,
 )
+from nagare_clip.director.display import DisplayView, build_display_view
+from nagare_clip.director.loop import LoopState, ReplyResult, apply_reply, next_request
+from nagare_clip.director.preview import preview_turn
 from nagare_clip.director.silence_lines import (
     DEFAULT_SILENCE_LINE_MIN,
     SilenceLine,
@@ -49,11 +56,28 @@ from nagare_clip.director.silence_lines import (
 )
 from nagare_clip.gap_context.context import anchor_gaps
 from nagare_clip.gap_context.gaps import Gap, load_gaps
-from nagare_clip.llm_report import NULL_RECORDER, Recorder
+from nagare_clip.llm_client import CACHEABLE_PREFIX_KEY, with_trace_meta
+from nagare_clip.llm_report import (
+    DROPPED_ITEMS,
+    LLM_ERROR,
+    NULL_RECORDER,
+    OK,
+    OK_EMPTY,
+    UNPARSEABLE,
+    Recorder,
+)
+from nagare_clip.llm_retry import cfg_for_attempt, retry_attempts
 from nagare_clip.order import Segment, segment_label, segment_unit
 from nagare_clip.plan.plan_llm import plan_from_dict
 from nagare_clip.summary.summarize import ProjectSummary, summary_from_dict
 from nagare_clip.timing import segment_silences, segment_times
+
+logger = logging.getLogger(__name__)
+
+#: Default for ``director.chunk_lines``: how many display lines one turn is
+#: asked to review.  Kept beside the loop that uses it rather than in the
+#: config schema alone, so an unconfigured call behaves like the stage.
+DEFAULT_CHUNK_LINES = 40
 
 #: Lines of a neighbouring video shown at each join when ``director.seam_lines``
 #: says nothing else.  Small on purpose: the prompt is already long, and a
@@ -357,3 +381,224 @@ def run_director(
     )
     logging.info("director: %s -> %d operation(s)", unit, len(result.ops))
     return result
+
+
+#: Heads the whole-video transcript inside the cached system prefix.  One line:
+#: what follows is data, and the protocol is stated in ``DIRECTOR_PROMPT``.
+VIEW_HEADER = (
+    "The whole finished video below, every segment in playback order under one "
+    "numbering. [k] heads each segment; your ops address these numbers."
+)
+
+
+@dataclass(frozen=True)
+class ConversationResult:
+    """What one director conversation produced.
+
+    *ops* are keyed by SOURCE stem in source coordinates — what
+    ``{stem}_director.json`` holds — and are complete for every source of the
+    video, empty list included, whatever *ok* says: the caller writes them
+    BEFORE it fails, so reaching the cap leaves a usable edit behind.
+    """
+
+    ops: dict[str, list[DirectorOp]]
+    ok: bool = True
+    error: str = ""
+    reviewed_through: int = 0
+    turns: int = 0
+
+
+def system_message(director_cfg: dict, view: DisplayView) -> dict[str, str]:
+    """The one system message, identical on every turn of the conversation.
+
+    Prompt, the keep-limit note and the whole video, in that order — and the
+    WHOLE of it is declared cacheable: nothing in it varies per turn, so the
+    breakpoint sits at its end and every turn after the first reads the cache
+    instead of paying for the transcript again.
+    """
+    prompt = director_cfg.get("prompt", "")
+    max_keep_lines = _max_keep_lines(director_cfg)
+    if max_keep_lines > 0:
+        prompt = f"{prompt}\n\n{keep_limit_note(max_keep_lines)}"
+    content = f"{prompt}\n\n{VIEW_HEADER}\n\n{view.render()}"
+    return {"role": "system", "content": content, CACHEABLE_PREFIX_KEY: content}
+
+
+def turn_cap(lines: int, chunk_lines: int) -> int:
+    """Two turns per chunk: one to review it, one to come back and fix it."""
+    return math.ceil(lines / max(chunk_lines, 1)) * 2
+
+
+def chunk_lines(director_cfg: dict) -> int:
+    """Read ``director.chunk_lines`` defensively (invalid = the default)."""
+    raw = director_cfg.get("chunk_lines", DEFAULT_CHUNK_LINES)
+    if isinstance(raw, bool) or not isinstance(raw, int) or raw < 1:
+        return DEFAULT_CHUNK_LINES
+    return raw
+
+
+def _answer(
+    view: DisplayView,
+    transcripts: list[SegmentTranscript],
+    state: LoopState,
+    result: ReplyResult,
+) -> str:
+    """What the code sends back after a reply: the refusals, then the playback."""
+    parts = [result.refusal] if result.refusal else []
+    parts.append(
+        preview_turn(view, transcripts, state.ops, segments=result.segments, drops=result.drops)
+    )
+    return "\n\n".join(parts)
+
+
+def run_director_conversation(
+    inputs: list[SegmentInputs],
+    cfg: dict,
+    *,
+    call_llm: director_llm_mod.CallLLM | None = None,
+    recorder: Recorder = NULL_RECORDER,
+    unit: str = "director",
+) -> ConversationResult:
+    """Edit the whole video in ONE conversation, and return its ops per source.
+
+    *inputs* are every segment of the finished video, in playback order.  The
+    transcripts are loaded once, numbered once (:func:`build_display_view`),
+    and rendered once into the system message; each turn then asks for an
+    approximate range (:func:`~.loop.next_request`), reads the reply into the
+    accumulated state (:func:`~.loop.apply_reply`) and answers with what those
+    ops will play (:func:`~.preview.preview_turn`).
+
+    Nothing is written here.  Ending badly — the turn cap, or a turn that fails
+    every retry — comes back as ``ok=False`` with the ops accepted so far, for
+    the caller to write BEFORE it fails the run: the user then continues by
+    hand from ``guided_edit`` instead of losing the conversation.
+    """
+    director_cfg = cfg["director"]
+    # Resolved at call time, never bound as a default: the stage and the tests
+    # both reach the real client by patching the module attribute.
+    call = call_llm or director_llm_mod._call_llm
+    ops_by_stem: dict[str, list[DirectorOp]] = {i.segment.stem: [] for i in inputs}
+    if not director_cfg.get("enabled", False):
+        logging.info("director: disabled, no ops for %d segment(s)", len(inputs))
+        return ConversationResult(ops_by_stem)
+
+    transcripts = [load_segment_transcript(i) for i in inputs]
+    view = build_display_view([(i.segment, t) for i, t in zip(inputs, transcripts)])
+    chunk = chunk_lines(director_cfg)
+    cap = turn_cap(len(view.lines), chunk)
+    max_keep_lines = _max_keep_lines(director_cfg)
+    logging.info(
+        "director: %d display line(s) over %d segment(s), %d line(s) per turn, cap %d turn(s)",
+        len(view.lines),
+        len(inputs),
+        chunk,
+        cap,
+    )
+
+    stage_cfg = apply_brief(director_cfg, cfg)
+    messages: list[dict[str, str]] = [system_message(stage_cfg, view)]
+    state = LoopState()
+    answer = ""
+    error = ""
+
+    recorder.begin(unit)
+    traced = with_trace_meta(stage_cfg, stage=recorder.stage, unit=unit)
+    attempts = retry_attempts(traced)
+    for turn in range(cap):
+        request = next_request(view, state, chunk)
+        base = f"{answer}\n\n{request}" if answer else request
+        section = f"turn {turn + 1}"
+        result: ReplyResult | None = None
+        complaint = ""
+        for attempt in range(attempts):
+            attempt_cfg = cfg_for_attempt(traced, attempt)
+            # The complaint is the previous attempt's own parse error, handed
+            # back: re-sending the identical message at a higher temperature is
+            # the one thing that cannot use what went wrong.
+            content = f"{base}\n\n{complaint}" if complaint else base
+            ask = {"role": "user", "content": content}
+            turn_messages = messages + [ask]
+            try:
+                reply = call(turn_messages, attempt_cfg)
+            except Exception as e:  # noqa: BLE001 - recoverable
+                logger.warning("director: turn %d call failed", turn + 1, exc_info=True)
+                recorder.attempt(
+                    unit=unit,
+                    attempt=attempt,
+                    total=attempts,
+                    section=section,
+                    messages=[ask],
+                    error=str(e),
+                    outcome=LLM_ERROR,
+                    reason="LLM call failed",
+                    cfg=attempt_cfg,
+                )
+                complaint = ""
+                continue
+            parsed = apply_reply(view, state, reply, max_keep_lines=max_keep_lines)
+            outcome, reason = OK, ""
+            if parsed.error:
+                outcome, reason = UNPARSEABLE, parsed.error
+            elif parsed.drops:
+                outcome, reason = DROPPED_ITEMS, "; ".join(parsed.drops)
+            elif not parsed.ops:
+                outcome, reason = OK_EMPTY, ""
+            recorder.attempt(
+                unit=unit,
+                attempt=attempt,
+                total=attempts,
+                section=section,
+                messages=[ask],
+                response=reply,
+                outcome=outcome,
+                reason=reason,
+                cfg=attempt_cfg,
+            )
+            if parsed.error:
+                complaint = f"That reply could not be used: {parsed.error}"
+                continue
+            messages = turn_messages + [{"role": "assistant", "content": reply}]
+            result = parsed
+            break
+        if result is None:
+            error = f"turn {turn + 1} failed after all {attempts} attempt(s)"
+            break
+        if result.done:
+            logging.info("director: done after %d turn(s)", turn + 1)
+            break
+        answer = _answer(view, transcripts, state, result)
+        recorder.attempt(
+            unit=unit,
+            attempt=0,
+            total=1,
+            section=f"{section} preview",
+            messages=[],
+            response=answer,
+            outcome=OK,
+            deterministic=True,
+            usage={},
+        )
+        logging.info(
+            "director: turn %d/%d reviewed through display line %d of %d (%d op(s))",
+            turn + 1,
+            cap,
+            state.reviewed_through,
+            len(view.lines),
+            sum(len(v) for v in state.ops.values()),
+        )
+    else:
+        error = f"the turn cap ({cap} turns) was reached"
+
+    for index, ops in state.ops.items():
+        ops_by_stem[inputs[index - 1].segment.stem].extend(ops)
+    outcome = LLM_ERROR if error else OK
+    recorder.flush_unit(unit, outcome=outcome, reason=error)
+    if error:
+        logger.error("director: %s", error)
+    return ConversationResult(
+        ops=ops_by_stem,
+        ok=not error,
+        error=error,
+        reviewed_through=state.reviewed_through,
+        turns=state.turns,
+    )

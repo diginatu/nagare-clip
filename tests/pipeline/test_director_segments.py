@@ -98,7 +98,9 @@ def _spy(monkeypatch, result=None, fail_on=None):
 
 
 def _run(ctx):
-    next(s for s in st.STAGES if s.name == "director").run(ctx)
+    # The per-segment path, which the stage no longer runs (see
+    # stages._director_run): it is driven directly until task 5 deletes it.
+    st._director_run_segments(ctx)
 
 
 class TestTheLoop:

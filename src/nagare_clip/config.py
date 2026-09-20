@@ -264,14 +264,27 @@ PLAN_REVISE_PROMPT = (
 
 
 DIRECTOR_PROMPT = (
-    "You are a video editor. You receive a Japanese transcript as "
-    "numbered lines (one line per subtitle segment). Decide high-level "
+    "You are a video editor. You are given the WHOLE finished video as "
+    "numbered lines — every segment of it in playback order, speech and "
+    "silence together, under ONE numbering — and you edit it over several "
+    "turns. Decide high-level "
     # No trigger list here: the overlay bullet already owns "turning points,
     # conclusions, failures, and mishaps", and a list stated twice is two
     # places to drift.
     "edits to tighten AND STAGE the video: cut what drags, but also mark "
-    "the moments that make it worth watching. Do NOT rewrite or output the "
-    "transcript text. Output ONLY a JSON object.\n"
+    "the moments that make it worth watching.\n"
+    "\n"
+    # The protocol, stated once.  Each user message repeats the exact reply
+    # shape (director.loop.REPLY_SHAPE), so what belongs here is what a turn
+    # MEANS: that the range is approximate, that a reply owns its range, and
+    # that the playback comes back — the three things that make rewriting an
+    # earlier range a normal move rather than an admission.
+    "Each turn asks you for an approximate range; you reply with the ops for "
+    "the stretch you really reviewed, and are shown what they will play. A "
+    "reply OWNS the range it names: re-send a range and its ops REPLACE the "
+    "ones you gave for it, so a playback you did not mean is fixed by sending "
+    'that range again. Reply {"done": true} once every line has been reviewed '
+    "and the playback is what you meant.\n"
     "\n"
     # Every bracket shape the renderer can emit is shown, in one place.  The
     # four-part form was 17.0% of a real run's brackets while going
@@ -298,23 +311,22 @@ DIRECTOR_PROMPT = (
     "candidate for cutting, not speeding up — a long stretch of manual "
     "work is a timelapse candidate.\n"
     "\n"
-    "Silence: an indented line like\n"
-    "    [silent 29.9s after line 53: a build runs and logs scroll past]\n"
-    # The one thing in the transcript that has no number, so the "n~" form has
-    # to be taught here or the silence is unaddressable in practice.  One
-    # example only (improvement 11: an example anchors harder than the prose
-    # around it, and three of them would read as three separate moves).
-    "is the wait between two lines — 29.9 s in which nobody speaks — "
-    "followed by what is VISIBLE on screen during it. It carries "
-    'no number: address it as "53~", the silence after line 53, which either '
-    'endpoint of an op\'s "lines" may be (["53~", "53~"] is that wait alone). '
-    'A "keep" restores it, a "timelapse" plays it fast. Dead air is the '
+    "Silence: a line like\n"
+    "54: [silent 29.9s: a build runs and logs scroll past]\n"
+    # It used to carry no number (the per-segment transcript numbered source
+    # lines only), so the prompt had to teach the "53~" form.  Under the
+    # whole-video numbering it is a line like any other, and the parser
+    # rejects "53~" — so the form is gone rather than kept as an alias.
+    "is the wait between the lines either side of it — 29.9 s in which nobody "
+    "speaks — followed by what is VISIBLE on screen during it. It is a line "
+    "like any other: put its number in an op — a timelapse plays that wait "
+    "fast, a keep restores it. Dead air is the "
     "fallback reading, not the only one: if the speech either side announces "
     "something happening (an accident, a cleanup, a wait for a result), that "
     "silence may be the most watchable moment in the shot. An indented "
     "[silent gap: …] with no seconds is silence INSIDE the line above.\n"
     "\n"
-    "Operations (reference lines by their 1-based numbers, inclusive). "
+    "Operations (line ranges are inclusive). "
     "Prefer a timelapse over a cut where the repetition is VISIBLE WORK building "
     "toward a payoff (failed attempts, assembly, waiting for a result) — "
     "the buildup is part of the story, so timelapse it rather than "
@@ -348,22 +360,22 @@ DIRECTOR_PROMPT = (
     "keep, so the payoff is not chopped into jump cuts. Never widen a keep "
     "to mark talking as important: speech is never dropped by default, so a "
     "keep over a talking span only restores its pauses and inflates the "
-    "runtime for nothing. A project-context direction saying a part should be "
-    '"featured", "retained" or "emphasised" is editorial emphasis, NOT a '
-    "request for a keep op.\n"
+    'runtime for nothing. A direction to "feature", "retain" or '
+    '"emphasise" something is editorial emphasis, NOT a request for a keep op.\n'
     '- edit: request a fine within-line text deletion/fix; describe it in "note".\n'
     "\n"
-    "JSON shape:\n"
-    '{"ops": [\n'
-    '  {"type": "cut", "lines": [12, 18], "note": "why / where precisely"},\n'
-    '  {"type": "timelapse", "lines": [60, 92], "factor": 8.0, "text": "配管の取り付け", "note": "..."},\n'
-    '  {"type": "overlay", "lines": [5, 5], "text": "ポイント", "duration": 2.0, "note": ""},\n'
-    '  {"type": "keep", "lines": [40, 42], "note": "..."},\n'
-    '  {"type": "edit", "lines": [7, 7], "note": "delete the redundant restatement"}\n'
+    "JSON shape, one object per turn:\n"
+    '{"range": [40, 78], "reviewed_through": 78, "ops": [\n'
+    '  {"type": "cut", "lines": [42, 48], "note": "why / where precisely"},\n'
+    '  {"type": "timelapse", "lines": [60, 72], "factor": 8.0, "text": "配管の取り付け", "note": "..."},\n'
+    '  {"type": "overlay", "lines": [45, 45], "text": "ポイント", "duration": 2.0, "note": ""},\n'
+    '  {"type": "keep", "lines": [50, 52], "note": "..."},\n'
+    '  {"type": "edit", "lines": [47, 47], "note": "delete the redundant restatement"}\n'
     "]}\n"
     "\n"
     "Rules:\n"
-    '- "lines" must be within the transcript range.\n'
+    '- "lines" are this transcript\'s numbers. One op stays inside one [k] '
+    "block — those are different footage, and an op across two is refused.\n"
     '- A "cut" range must not overlap any other op\'s range: cutting deletes '
     "the span, so never include a line you also keep/overlay/timelapse in "
     "a cut (e.g. to cut lines 12-18 but keep line 18, emit cut [12, 17]). "
@@ -375,13 +387,11 @@ DIRECTOR_PROMPT = (
     "line's speech plays once, at 1x, in the order given, and the silences "
     "inside and after it are dropped. Each op changes that for the lines in "
     "its range only — a line you leave outside a range keeps the default.\n"
-    "- Before you settle a range, play it back as the viewer will get it — "
-    "what plays, at what speed, with what on screen — and check that against "
-    "what you meant. A range that reads fine as a spec can still play wrong, "
-    "and the usual way is a span that opens one line too early: the spec says "
-    '"timelapse the work", the playback has the viewer hearing the speaker '
-    "announce that very work at 5x, destroyed. Put each boundary where the "
-    "playback is what you meant.\n"
+    "- The playback you are shown is the viewer's, not the spec's: a range "
+    "that reads fine as a spec can still play wrong, and the usual way is a "
+    'span that opens one line too early — the spec says "timelapse the work", '
+    "the playback has the viewer hearing that very work announced at 5x, "
+    "destroyed. Re-send the range with the boundary moved.\n"
     "- Output only the JSON object, no other text."
 )
 
@@ -849,6 +859,15 @@ class DirectorConfig(BaseModel):
     )
     retry_temp_step: float = Field(0.2, description="Temperature increment added on each retry")
     retry_temp_cap: float = Field(0.8, description="Maximum temperature any retry uses")
+    chunk_lines: int = Field(
+        40,
+        description=(
+            "How many lines of the whole-video transcript one turn of the director's "
+            "conversation is asked to review (approximately — it stops where the footage "
+            "breaks). The turn cap is ceil(display lines / this) * 2, and reaching it "
+            "fails the stage after writing the ops accepted so far"
+        ),
+    )
     max_keep_lines: int = Field(
         8,
         description=(

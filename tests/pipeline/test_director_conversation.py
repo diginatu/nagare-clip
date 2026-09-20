@@ -1,0 +1,332 @@
+"""The director as ONE conversation over the whole finished video.
+
+Driven through the real stage with only the LLM faked, because what matters
+here is the assembled conversation — what is cached, what each turn carries,
+what reaches disk when it ends badly — not any one function's return value.
+
+The project is the same shape as ``test_director_whole_video``'s: ``dev``
+whole, then ``mix`` split into three stretches and reordered, so one source
+plays as three segments and a source line number is never a display number.
+"""
+
+from __future__ import annotations
+
+import json
+import re
+
+import pytest
+
+from nagare_clip.audio_silence.cuts_file import write_cuts
+from nagare_clip.config import get_effective_config
+from nagare_clip.director import director_llm as dl
+from nagare_clip.director.display import build_display_view
+from nagare_clip.director.run import SegmentInputs, load_segment_transcript
+from nagare_clip.llm_client import CACHEABLE_PREFIX_KEY
+from nagare_clip.pipeline import stages as st
+from nagare_clip.pipeline.errors import PipelineError
+from nagare_clip.pipeline.runner import PipelineContext
+from nagare_clip.pipeline.sources import SourceMedia
+
+TIMES = {
+    "dev": [(0.0, 2.0), (3.0, 7.0), (8.0, 9.5), (10.0, 13.0)],
+    "mix": [
+        (0.0, 4.0),
+        (10.0, 12.0),
+        (12.5, 15.0),
+        (16.0, 18.0),
+        (19.0, 29.0),
+        (30.0, 31.0),
+        (32.0, 35.0),
+        (36.0, 38.0),
+        (39.0, 41.0),
+    ],
+}
+
+
+class _Rec:
+    """A recorder that remembers what the stage asked it to write."""
+
+    stage = "director"
+
+    def __init__(self):
+        self.units: list[str] = []
+        self.attempts: list[dict] = []
+        self.flushed: list[tuple[str, str]] = []
+
+    def clear(self): ...
+    def rebuild_index(self): ...
+
+    def begin(self, unit):
+        self.units.append(unit)
+
+    def attempt(self, **kw):
+        self.attempts.append(kw)
+
+    def flush_unit(self, unit, **kw):
+        self.flushed.append((unit, kw.get("outcome", "")))
+
+
+def _ctx(tmp_path, stems=("mix", "dev"), **director):
+    cfg = get_effective_config(None, {})
+    cfg["director"].update({"enabled": True, "prompt": "P", "max_retries": 0, **director})
+    sources = [
+        SourceMedia(abs_path=tmp_path / f"{s}.mp4", stem=s, relative=f"{s}.mp4") for s in stems
+    ]
+    return PipelineContext(
+        cfg=cfg,
+        project_root=tmp_path,
+        config_path=None,
+        input_videos_dir=tmp_path / "in",
+        output_dir=tmp_path / "out",
+        sources=sources,
+        from_index=0,
+        to_index=len(st.STAGE_NAMES) - 1,
+    )
+
+
+@pytest.fixture
+def project(tmp_path, monkeypatch):
+    out = tmp_path / "out"
+    (tmp_path / "in").mkdir()
+    for sub in ("text_filter", "sentence_split", "audio_silence", "gap_context", "plan"):
+        (out / sub).mkdir(parents=True)
+    for stem, times in TIMES.items():
+        (tmp_path / "in" / f"{stem}.mp4").touch()
+        (out / "text_filter" / f"{stem}_edits.txt").write_text(
+            "\n".join(f"{stem}の{i}行目" for i in range(1, len(times) + 1)) + "\n",
+            encoding="utf-8",
+        )
+        (out / "sentence_split" / f"{stem}.json").write_text(
+            json.dumps({"segments": [{"start": s, "end": e} for s, e in times]}),
+            encoding="utf-8",
+        )
+    write_cuts(out / "audio_silence" / "mix_cuts.txt", [(22.0, 25.0)])
+    (out / "gap_context" / "mix_gaps.json").write_text(
+        json.dumps(
+            {"gaps": [{"start": 4.0, "end": 10.0, "frames": [], "description": "バルブを外す"}]}
+        ),
+        encoding="utf-8",
+    )
+    (out / "plan" / "plan.json").write_text(
+        json.dumps(
+            {
+                "directions": [],
+                "order": [
+                    {"stem": "dev"},
+                    {"stem": "mix", "lines": [4, 6]},
+                    {"stem": "mix", "lines": [1, 3]},
+                    {"stem": "mix", "lines": [7, 9]},
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    return tmp_path
+
+
+def _view(ctx):
+    """The view the stage will build, for a test that needs its line count."""
+    segments = st._timeline_segments(ctx)
+    pairs = []
+    for segment in segments:
+        stem = segment.stem
+        inputs = SegmentInputs(
+            segment,
+            ctx.stage_dir("text_filter") / f"{stem}_edits.txt",
+            json_path=ctx.stage_dir("sentence_split") / f"{stem}.json",
+            gaps=ctx.stage_dir("gap_context") / f"{stem}_gaps.json",
+            cuts_txt=ctx.stage_dir("audio_silence") / f"{stem}_cuts.txt",
+        )
+        pairs.append((segment, load_segment_transcript(inputs)))
+    return build_display_view(pairs)
+
+
+_RANGE = re.compile(r"around lines (\d+) to (\d+)")
+
+
+def _asked(user: str) -> tuple[int, int] | None:
+    m = _RANGE.search(user)
+    return (int(m.group(1)), int(m.group(2))) if m else None
+
+
+def _run(monkeypatch, ctx, reply=None, calls=None):
+    """Run the real director stage with a scripted model; return every call."""
+    calls = [] if calls is None else calls
+
+    def script(messages, cfg):
+        asked = _asked(messages[-1]["content"])
+        if asked is None:
+            return json.dumps({"done": True})
+        first, last = asked
+        return json.dumps(
+            {
+                "range": [first, last],
+                "reviewed_through": last,
+                "ops": [{"type": "cut", "lines": [first, first], "note": "x"}],
+            }
+        )
+
+    def fake(messages, cfg):
+        calls.append([dict(m) for m in messages])
+        return (reply or script)(messages, cfg)
+
+    monkeypatch.setattr(dl, "_call_llm", fake)
+    next(s for s in st.STAGES if s.name == "director").run(ctx)
+    return calls
+
+
+class TestTheMessages:
+    """Four lines a turn, so the conversation really has several of them."""
+
+    def test_one_system_message_byte_identical_on_every_turn(self, project, monkeypatch):
+        calls = _run(monkeypatch, _ctx(project, chunk_lines=4))
+        assert len(calls) > 2
+        assert len({c[0]["content"] for c in calls}) == 1
+        assert all(c[0]["role"] == "system" for c in calls)
+
+    def test_the_whole_system_message_is_the_cacheable_prefix(self, project, monkeypatch):
+        calls = _run(monkeypatch, _ctx(project, chunk_lines=4))
+        assert all(c[0][CACHEABLE_PREFIX_KEY] == c[0]["content"] for c in calls)
+
+    def test_it_carries_the_prompt_the_keep_note_and_the_whole_video(self, project, monkeypatch):
+        ctx = _ctx(project, chunk_lines=4)
+        system = _run(monkeypatch, ctx)[0][0]["content"]
+        assert system.startswith("P\n")
+        assert "keep" in system  # the keep-limit note
+        assert system.rstrip().endswith(_view(ctx).render().rstrip())
+
+    def test_the_turns_alternate_user_and_assistant(self, project, monkeypatch):
+        last = _run(monkeypatch, _ctx(project, chunk_lines=4))[-1]
+        roles = [m["role"] for m in last[1:]]
+        assert roles == ["user", "assistant"] * (len(roles) // 2) + ["user"]
+
+    def test_nothing_but_role_and_content_goes_over_the_wire(self, project, monkeypatch):
+        # Plain chat: no tool definitions, no tool_choice, no tool messages.
+        for call in _run(monkeypatch, _ctx(project, chunk_lines=4)):
+            for message in call[1:]:
+                assert set(message) == {"role", "content"}
+
+    def test_each_user_turn_is_the_previous_preview_then_the_next_request(
+        self, project, monkeypatch
+    ):
+        calls = _run(monkeypatch, _ctx(project, chunk_lines=4))
+        first, second = calls[0][-1]["content"], calls[1][-1]["content"]
+        assert "Playback of these ops" not in first
+        assert first.startswith("Reviewed through line 0")
+        assert second.startswith("Playback of these ops")
+        assert "Reviewed through line" in second
+        assert second.index("Playback") < second.index("Reviewed through line")
+
+    def test_the_preview_prices_what_the_model_just_sent(self, project, monkeypatch):
+        second = _run(monkeypatch, _ctx(project, chunk_lines=4))[1][-1]["content"]
+        assert "cut [1,1]" in second
+        assert "whole video so far" in second
+
+
+class TestTheOpsThatReachDisk:
+    def test_every_source_is_written_in_source_coordinates(self, project, monkeypatch):
+        ctx = _ctx(project, chunk_lines=4)
+        _run(monkeypatch, ctx)
+        for stem in ("dev", "mix"):
+            path = ctx.stage_dir("director") / f"{stem}_director.json"
+            ops = json.loads(path.read_text(encoding="utf-8"))["ops"]
+            assert ops
+            for op in ops:
+                assert 1 <= op["lines"][0] <= len(TIMES[stem])
+
+    def test_source_no_longer_narrows_the_director(self, project, monkeypatch):
+        # Only dev is being processed, but one conversation owns the whole
+        # video: mix is REVIEWED (it is in the transcript the model reads, all
+        # three of its segments) and its ops are written, not blanked.
+        ctx = _ctx(project, stems=("dev",), chunk_lines=4)
+        calls = _run(monkeypatch, ctx)
+        assert calls[0][0]["content"].count("] mix") == 3
+        path = ctx.stage_dir("director") / "mix_director.json"
+        assert json.loads(path.read_text(encoding="utf-8"))["ops"]
+
+
+def _run_failing(monkeypatch, ctx, reply):
+    """Run the stage expecting it to fail; return (calls, the error message)."""
+    calls: list[list[dict]] = []
+    with pytest.raises(PipelineError) as e:
+        _run(monkeypatch, ctx, reply=reply, calls=calls)
+    return calls, str(e.value)
+
+
+class TestTheCap:
+    def _silent(self, messages, cfg):
+        """A model that reviews nothing: every turn is a legal no-op reply."""
+        first, last = _asked(messages[-1]["content"]) or (1, 1)
+        return json.dumps({"range": [first, last], "reviewed_through": 1, "ops": []})
+
+    def test_it_is_two_turns_per_chunk(self, project, monkeypatch):
+        ctx = _ctx(project, chunk_lines=4)
+        lines = len(_view(ctx).lines)
+        calls, _error = _run_failing(monkeypatch, ctx, self._silent)
+        assert len(calls) == -(-lines // 4) * 2
+
+    def test_the_ops_are_written_before_it_raises(self, project, monkeypatch):
+        ctx = _ctx(project, chunk_lines=4)
+        _run_failing(monkeypatch, ctx, self._one_op)
+        for stem in ("dev", "mix"):
+            path = ctx.stage_dir("director") / f"{stem}_director.json"
+            assert path.is_file()
+        ops = json.loads(
+            (ctx.stage_dir("director") / "dev_director.json").read_text(encoding="utf-8")
+        )["ops"]
+        assert ops == [{"type": "cut", "lines": [1, 1], "note": "x"}]
+
+    def _one_op(self, messages, cfg):
+        """One op on the first turn, then no progress at all.
+
+        Later turns must not own line 1 again — a reply owns its range, so
+        re-sending [1, 1] with no ops would delete the very op under test.
+        """
+        first, _last = _asked(messages[-1]["content"]) or (1, 1)
+        if first == 1:
+            return json.dumps(
+                {
+                    "range": [1, 1],
+                    "reviewed_through": 1,
+                    "ops": [{"type": "cut", "lines": [1, 1], "note": "x"}],
+                }
+            )
+        return json.dumps({"range": [2, 2], "reviewed_through": 1, "ops": []})
+
+    def test_the_error_names_the_last_reviewed_line_and_the_files(self, project, monkeypatch):
+        ctx = _ctx(project, chunk_lines=4)
+        _calls, message = _run_failing(monkeypatch, ctx, self._silent)
+        assert "line 1" in message
+        assert "dev_director.json" in message and "mix_director.json" in message
+
+
+class TestATurnThatNeverParses:
+    def _garbage(self, messages, cfg):
+        return "sorry, no JSON today"
+
+    def test_it_writes_what_was_accepted_then_raises(self, project, monkeypatch):
+        ctx = _ctx(project)
+        _run_failing(monkeypatch, ctx, self._garbage)
+        assert (ctx.stage_dir("director") / "dev_director.json").is_file()
+        assert (ctx.stage_dir("director") / "mix_director.json").is_file()
+
+
+class TestRecording:
+    def test_one_unit_and_one_attempt_per_turn(self, project, monkeypatch):
+        rec = _Rec()
+        monkeypatch.setattr(st, "recorder_from_config", lambda *a, **k: rec)
+        calls = _run(monkeypatch, _ctx(project, chunk_lines=4))
+        assert rec.units == ["director"]
+        llm = [a for a in rec.attempts if not a.get("deterministic")]
+        assert len(llm) == len(calls)
+        assert [a["unit"] for a in llm] == ["director"] * len(calls)
+
+    def test_a_turn_records_only_what_it_added(self, project, monkeypatch):
+        rec = _Rec()
+        monkeypatch.setattr(st, "recorder_from_config", lambda *a, **k: rec)
+        _run(monkeypatch, _ctx(project, chunk_lines=4))
+        llm = [a for a in rec.attempts if not a.get("deterministic")]
+        # Not the growing transcript: one message, this turn's request.
+        assert all(len(a["messages"]) == 1 for a in llm)
+        assert all(a["messages"][0]["role"] == "user" for a in llm)
+        assert llm[1]["response"] is not None

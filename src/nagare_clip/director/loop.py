@@ -91,6 +91,12 @@ class ReplyResult:
     done: bool = False
     refusal: str | None = None
     error: str | None = None
+    #: The segments this reply is about: the ones its range covers, plus the
+    #: ones its ops landed in.  The caller previews exactly these back, and it
+    #: cannot work them out from *ops* alone — those are source coordinates,
+    #: and one source may play as several segments.  A range with no ops still
+    #: counts: it owns that stretch, so what plays there just changed.
+    segments: tuple[int, ...] = ()
 
 
 def next_request(view: DisplayView, state: LoopState, chunk_lines: int) -> str:
@@ -257,8 +263,13 @@ def apply_reply(
 
     state.reviewed_through = max(state.reviewed_through, reviewed)
     state.turns += 1
+    touched = {index for index, _op in accepted}
+    touched.update(
+        line.segment for n in range(span[0], span[1] + 1) if (line := view.line(n)) is not None
+    )
     return ReplyResult(
         ops=[op for _index, op in accepted],
         drops=drops,
         refusal="\n".join(refusals) if refusals else None,
+        segments=tuple(sorted(touched)),
     )

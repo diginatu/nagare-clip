@@ -8,6 +8,7 @@ import pytest
 
 from nagare_clip.config import get_effective_config
 from nagare_clip.director.director_llm import DirectorResult, ops_from_dict
+from nagare_clip.director.run import ConversationResult
 from nagare_clip.order import Segment
 from nagare_clip.pipeline import stages as st
 from nagare_clip.pipeline.runner import PipelineContext
@@ -165,8 +166,9 @@ def test_director_adapter_passes_context_paths(tmp_path, monkeypatch):
         "run_director",
         lambda edits, cfg, **kw: (seen.update(edits=edits, **kw), DirectorResult([]))[1],
     )
-    by_name = {s.name: s for s in st.STAGES}
-    by_name["director"].run(_ctx(tmp_path, stems=("a",)))
+    # The per-segment path the stage no longer runs; driven directly here
+    # until task 5 deletes it with the rest of it.
+    st._director_run_segments(_ctx(tmp_path, stems=("a",)))
     out = tmp_path / "out"
     assert seen["edits"] == out / "text_filter" / "a_edits.txt"
     assert seen["summary"] == out / "summary" / "summary.json"
@@ -840,8 +842,9 @@ def test_director_adapter_passes_the_timeline_position(tmp_path, monkeypatch):
     for s in ("a", "b", "c"):
         (in_dir / f"{s}.mp4").touch()
 
-    by_name = {s.name: s for s in st.STAGES}
-    by_name["director"].run(_ctx(tmp_path, stems=("a", "b", "c")))
+    # The per-segment path the stage no longer runs; driven directly here
+    # until task 5 deletes it with the rest of it.
+    st._director_run_segments(_ctx(tmp_path, stems=("a", "b", "c")))
 
     order = [Segment("a", None), Segment("b", None), Segment("c", None)]
     assert [s[0] for s in seen] == order
@@ -872,8 +875,9 @@ def test_director_adapter_passes_the_neighbouring_transcripts(tmp_path, monkeypa
     for s in ("a", "b", "c"):
         (in_dir / f"{s}.mp4").touch()
 
-    by_name = {s.name: s for s in st.STAGES}
-    by_name["director"].run(_ctx(tmp_path, stems=("a", "b", "c")))
+    # The per-segment path the stage no longer runs; driven directly here
+    # until task 5 deletes it with the rest of it.
+    st._director_run_segments(_ctx(tmp_path, stems=("a", "b", "c")))
 
     tf = tmp_path / "out" / "text_filter"
     assert seen == [
@@ -897,8 +901,9 @@ def test_director_adapter_recovers_the_order_for_a_single_source_run(tmp_path, m
     for s in ("a", "b", "c"):
         (in_dir / f"{s}.mp4").touch()
 
-    by_name = {s.name: s for s in st.STAGES}
-    by_name["director"].run(_ctx(tmp_path, stems=("b",)))
+    # The per-segment path the stage no longer runs; driven directly here
+    # until task 5 deletes it with the rest of it.
+    st._director_run_segments(_ctx(tmp_path, stems=("b",)))
 
     assert seen["all_segments"] == [
         Segment("a", None),
@@ -920,8 +925,9 @@ def test_director_adapter_falls_back_to_the_processed_stems(tmp_path, monkeypatc
     monkeypatch.setattr(
         st, "run_director", lambda edits, cfg, **kw: (seen.update(kw), DirectorResult([]))[1]
     )
-    by_name = {s.name: s for s in st.STAGES}
-    by_name["director"].run(_ctx(tmp_path, stems=("a",)))
+    # The per-segment path the stage no longer runs; driven directly here
+    # until task 5 deletes it with the rest of it.
+    st._director_run_segments(_ctx(tmp_path, stems=("a",)))
     assert seen["all_segments"] == [Segment("a", None)]
 
 
@@ -942,15 +948,15 @@ def test_plan_adapter_passes_history_path(tmp_path, monkeypatch):
 
 
 def _director_returning(ops):
-    """A fake director that emits *ops*.
+    """A fake director conversation that emits *ops* for source ``a``.
 
     The divergence note is built from what this run wrote, and the adapter
-    deletes a stale file before the loop (so a failure cannot leave one
+    deletes a stale file before the conversation (so a failure cannot leave one
     standing), so the ops have to come from the call, not from disk.
     """
 
-    def fake(edits, cfg, *, segment, **kw):
-        return DirectorResult(ops_from_dict({"ops": ops}, None))
+    def fake(inputs, cfg, **kw):
+        return ConversationResult(ops={"a": ops_from_dict({"ops": ops}, None)})
 
     return fake
 
@@ -970,7 +976,7 @@ def _plan_and_ops(tmp_path, direction, ops):
 def test_director_adapter_writes_plan_divergence_note(tmp_path, monkeypatch):
     monkeypatch.setattr(st, "recorder_from_config", lambda *a, **k: _NullRec())
     ops = [{"type": "cut", "lines": [1, 9], "note": "a long digression"}]
-    monkeypatch.setattr(st, "run_director", _director_returning(ops))
+    monkeypatch.setattr(st, "run_director_conversation", _director_returning(ops))
     note = _plan_and_ops(tmp_path, "feature — the payoff", ops)
     by_name = {s.name: s for s in st.STAGES}
     by_name["director"].run(_ctx(tmp_path, stems=("a",)))
@@ -981,7 +987,7 @@ def test_director_adapter_writes_plan_divergence_note(tmp_path, monkeypatch):
 
 def test_director_adapter_clears_a_stale_divergence_note(tmp_path, monkeypatch):
     monkeypatch.setattr(st, "recorder_from_config", lambda *a, **k: _NullRec())
-    monkeypatch.setattr(st, "run_director", _director_returning([]))
+    monkeypatch.setattr(st, "run_director_conversation", _director_returning([]))
     note = _plan_and_ops(tmp_path, "feature — the payoff", [])
     note.parent.mkdir(parents=True, exist_ok=True)
     note.write_text("stale", encoding="utf-8")
@@ -992,7 +998,7 @@ def test_director_adapter_clears_a_stale_divergence_note(tmp_path, monkeypatch):
 
 def test_director_adapter_survives_a_missing_plan(tmp_path, monkeypatch):
     monkeypatch.setattr(st, "recorder_from_config", lambda *a, **k: _NullRec())
-    monkeypatch.setattr(st, "run_director", _director_returning([]))
+    monkeypatch.setattr(st, "run_director_conversation", _director_returning([]))
     by_name = {s.name: s for s in st.STAGES}
     by_name["director"].run(_ctx(tmp_path, stems=("a",)))  # no plan.json, no ops on disk
 
