@@ -27,7 +27,7 @@ from nagare_clip.director.director_llm import (
     try_parse_director_response,
 )
 from nagare_clip.director.preview import SegmentPreview, preview_segment
-from nagare_clip.director.run import SegmentInputs, load_segment_transcript
+from nagare_clip.director.run import SegmentInputs, load_segment_transcript, silence_line_min
 from nagare_clip.order import Segment, segment_label, segment_unit
 from nagare_clip.pipeline.runner import PipelineContext
 from nagare_clip.pipeline.sources import SourceMedia
@@ -82,6 +82,7 @@ def _segment_preview(
             json_path=ctx.stage_dir("sentence_split") / f"{stem}.json",
             gaps=ctx.stage_dir("gap_context") / f"{stem}_gaps.json",
             cuts_txt=ctx.stage_dir("audio_silence") / f"{stem}_cuts.txt",
+            silence_line_min=silence_line_min(ctx.cfg["director"]),
         )
     )
     first = transcript.first_line

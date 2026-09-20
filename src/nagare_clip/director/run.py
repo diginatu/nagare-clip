@@ -20,7 +20,7 @@ from __future__ import annotations
 
 import json
 import logging
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
 from nagare_clip.audio_silence.cuts_file import read_cuts
@@ -41,6 +41,11 @@ from nagare_clip.director.director_llm import (
     generate_director_ops,
     render_transcript,
     speech_seconds,
+)
+from nagare_clip.director.silence_lines import (
+    DEFAULT_SILENCE_LINE_MIN,
+    SilenceLine,
+    build_silence_lines,
 )
 from nagare_clip.gap_context.context import anchor_gaps
 from nagare_clip.gap_context.gaps import Gap, load_gaps
@@ -133,6 +138,18 @@ def _slice(values: list | None, first: int, last: int) -> list | None:
     return None if values is None else values[first - 1 : last]
 
 
+def silence_line_min(director_cfg: dict) -> float:
+    """Read ``director.silence_line_min`` defensively (invalid = the default).
+
+    ``0`` is honoured as "every between-line silence gets a line"; a negative
+    or non-numeric value is a broken config, not an instruction.
+    """
+    raw = director_cfg.get("silence_line_min", DEFAULT_SILENCE_LINE_MIN)
+    if isinstance(raw, bool) or not isinstance(raw, (int, float)) or raw < 0:
+        return DEFAULT_SILENCE_LINE_MIN
+    return float(raw)
+
+
 @dataclass(frozen=True)
 class SegmentInputs:
     """Where one segment's transcript and its timing annotations live."""
@@ -142,6 +159,9 @@ class SegmentInputs:
     json_path: Path | None = None
     gaps: Path | None = None
     cuts_txt: Path | None = None
+    #: ``director.silence_line_min``: the shortest wait between two lines the
+    #: transcript shows as a silence line of its own.
+    silence_line_min: float = DEFAULT_SILENCE_LINE_MIN
 
 
 @dataclass(frozen=True)
@@ -151,6 +171,11 @@ class SegmentTranscript:
     ``seg_times``/``silences`` cover the segment only; ``gaps`` are anchored
     against the WHOLE source's times and then restricted to the segment, so one
     anchoring rule serves a whole source and a slice of one alike.
+
+    ``silence_lines`` are the waits between this segment's lines long enough to
+    be shown as lines of their own; the ``gaps`` left here are the descriptions
+    none of them claimed (a silence INSIDE a line), still annotated above the
+    line whose bracket reports it.
     """
 
     edit_lines: list[str]
@@ -158,6 +183,7 @@ class SegmentTranscript:
     seg_times: list | None
     silences: list | None
     gaps: list[tuple[int, Gap]]
+    silence_lines: list[SilenceLine] = field(default_factory=list)
 
     def render(self) -> str:
         """The numbered transcript exactly as this segment's own call shows it."""
@@ -167,6 +193,7 @@ class SegmentTranscript:
             self.silences,
             self.gaps,
             self.first_line,
+            silence_lines=self.silence_lines,
         )
 
     def default_runtime(self) -> float | None:
@@ -188,10 +215,12 @@ def load_segment_transcript(inputs: SegmentInputs) -> SegmentTranscript:
     segment = inputs.segment
     all_lines = inputs.edits.read_text(encoding="utf-8").splitlines()
     first, last = segment.lines or (1, len(all_lines))
+    data: dict = {}
     seg_times = None
     if inputs.json_path and inputs.json_path.is_file():
         try:
-            seg_times = segment_times(json.loads(inputs.json_path.read_text(encoding="utf-8")))
+            data = json.loads(inputs.json_path.read_text(encoding="utf-8"))
+            seg_times = segment_times(data)
         except (ValueError, OSError):
             logging.warning("director: could not read --json %s", inputs.json_path)
     silences = None
@@ -200,12 +229,23 @@ def load_segment_transcript(inputs: SegmentInputs) -> SegmentTranscript:
     gap_list = (
         anchor_gaps(load_gaps(inputs.gaps), seg_times or [], segment.lines) if seg_times else []
     )
+    silence_lines: list[SilenceLine] = []
+    if seg_times:
+        # The word times, not the segment bounds: this is the silence the
+        # intervals stage drops and "n~" edits.
+        silence_lines, gap_list = build_silence_lines(
+            data,
+            gap_list,
+            min_seconds=inputs.silence_line_min,
+            lines=(first, last),
+        )
     return SegmentTranscript(
         edit_lines=all_lines[first - 1 : last],
         first_line=first,
         seg_times=_slice(seg_times, first, last),
         silences=_slice(silences, first, last),
         gaps=gap_list,
+        silence_lines=silence_lines,
     )
 
 
@@ -285,7 +325,14 @@ def run_director(
         prior_edits=prior_edits,
     )
     transcript = load_segment_transcript(
-        SegmentInputs(segment, edits_txt, json_path=json_path, gaps=gaps, cuts_txt=cuts_txt)
+        SegmentInputs(
+            segment,
+            edits_txt,
+            json_path=json_path,
+            gaps=gaps,
+            cuts_txt=cuts_txt,
+            silence_line_min=silence_line_min(director_cfg),
+        )
     )
     user_header = ""
     if whole_video:
@@ -304,6 +351,7 @@ def run_director(
         anchored_gaps=transcript.gaps,
         silences=transcript.silences,
         first_line=transcript.first_line,
+        silence_lines=transcript.silence_lines,
         reference=whole_video,
         user_header=user_header,
     )

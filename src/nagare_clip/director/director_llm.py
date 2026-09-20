@@ -622,6 +622,7 @@ def generate_director_ops(
     first_line: int = 1,
     reference: str = "",
     user_header: str = "",
+    silence_lines: Sequence[SilenceLine] | None = None,
 ) -> DirectorResult:
     """Run the director LLM over one segment's transcript and return its ops.
 
@@ -650,6 +651,10 @@ def generate_director_ops(
     splits each bracket into speech/silence; ``None`` keeps the output
     byte-identical.
 
+    ``silence_lines`` are the waits between lines shown as lines of their own,
+    each addressable as ``"n~"``; empty/absent leaves the transcript as it was
+    before the feature existed.
+
     ``reference`` (``director.whole_project_context``) is the whole finished
     video's transcript, appended INSIDE the cacheable prefix — the caller must
     pass the same string on every segment's call of a run.  ``user_header`` is
@@ -672,7 +677,9 @@ def generate_director_ops(
     stable_prefix = system_prompt
     if overview_context:
         system_prompt = f"{system_prompt}\n\n{overview_context}"
-    user_content = render_transcript(clean_lines, seg_times, silences, anchored_gaps, first_line)
+    user_content = render_transcript(
+        clean_lines, seg_times, silences, anchored_gaps, first_line, silence_lines
+    )
     if user_header:
         user_content = f"{user_header}\n{user_content}"
     messages = [

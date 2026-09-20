@@ -871,6 +871,15 @@ class DirectorConfig(BaseModel):
             "visible as addressing an audience that is already mid-video"
         ),
     )
+    silence_line_min: float = Field(
+        5.0,
+        description=(
+            "Shortest wait between two lines (seconds) shown to the director as a "
+            'silence line of its own, addressable as "n~"; a shorter one stays a '
+            "`gap Xs` figure in the preceding line's bracket. Matches gap_context."
+            "min_gap by default, so every described gap has a line to land in"
+        ),
+    )
     whole_project_context: bool = Field(
         False,
         description=(

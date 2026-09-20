@@ -24,7 +24,12 @@ from nagare_clip.director.director_llm import (
     ops_from_dict,
     ops_to_dict,
 )
-from nagare_clip.director.run import SegmentInputs, run_director, whole_video_reference
+from nagare_clip.director.run import (
+    SegmentInputs,
+    run_director,
+    silence_line_min,
+    whole_video_reference,
+)
 from nagare_clip.gap_context.describe import GapFrames
 from nagare_clip.gap_context.run import run_gap_context
 from nagare_clip.gap_context.snapshot import (
@@ -608,6 +613,7 @@ def _director_run(ctx: PipelineContext) -> None:
             json_path=ctx.stage_dir("sentence_split") / f"{stem}.json",
             gaps=ctx.stage_dir("gap_context") / f"{stem}_gaps.json",
             cuts_txt=ctx.stage_dir("audio_silence") / f"{stem}_cuts.txt",
+            silence_line_min=silence_line_min(ctx.cfg["director"]),
         )
 
     # director.whole_project_context: the whole video's transcript is rendered
