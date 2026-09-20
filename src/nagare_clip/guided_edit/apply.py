@@ -21,6 +21,7 @@ from typing import Any
 
 from nagare_clip.director.director_llm import DirectorOp
 from nagare_clip.guided_edit.reconcile import verify_op
+from nagare_clip.intervals.op_times import RESOLVED_TYPES
 from nagare_clip.intervals.sync_json import (
     _SPEED_OPEN_RE,
     OVERLAY_TAG_RE,
@@ -151,13 +152,33 @@ class SpanPlacement:
         return self.reason is None
 
 
-def place_span_op(lines: list[str], op: DirectorOp) -> SpanPlacement:
+def is_time_resolved(op: DirectorOp) -> bool:
+    """Is this op applied as a TIME range instead of a text marker?
+
+    An op with a ``"n~"`` edge addresses the silence between two lines, where
+    there are no words to wrap and a tag at a line's edge falls the wrong way.
+    :mod:`nagare_clip.intervals.op_times` resolves those to times and hands
+    them to ``run_intervals`` directly, so guided_edit must not also write a
+    marker for them — but they still occupy their lines (see
+    :func:`place_span_op`'s *occupied*), or a cut would delete the audio of a
+    span they are keeping.
+    """
+    return (op.gap_start or op.gap_end) and op.type in RESOLVED_TYPES
+
+
+def place_span_op(
+    lines: list[str], op: DirectorOp, occupied: set[int] | None = None
+) -> SpanPlacement:
     """Clip one ``cut``/``keep``/``speed``/``overlay`` op and apply it.
 
     The one deterministic clip decision: :func:`apply_ops` and the director's
     playback preview both call it, so what the preview reports is what lands.
+
+    *occupied* are lines held by ops that leave no marker behind
+    (:func:`is_time_resolved`); they block exactly as a marker would.
     """
-    clipped = clip_range(op.lines[0], op.lines[1], blocked_lines(lines, op.type))
+    blocked = blocked_lines(lines, op.type) | (occupied or set())
+    clipped = clip_range(op.lines[0], op.lines[1], blocked)
     if clipped is None:
         return SpanPlacement(None, reason=f"{op.type} op fully overlaps existing span(s)")
     if op.type == "overlay":
@@ -178,6 +199,7 @@ def resolve_span_ops(lines: list[str], ops: list[DirectorOp]) -> dict[int, SpanP
     ``edit`` ops only add ``{{old->new}}`` patches, which no clip reads.
     """
     placements: dict[int, SpanPlacement] = {}
+    occupied: set[int] = set()
     for i in span_op_order(ops):
         op = ops[i]
         if op.type == "edit":
@@ -185,7 +207,11 @@ def resolve_span_ops(lines: list[str], ops: list[DirectorOp]) -> dict[int, SpanP
         if op.type == "timelapse":
             placements[i] = SpanPlacement(None, reason=UNEXPANDED_TIMELAPSE)
             continue
-        placed = place_span_op(lines, op)
+        if is_time_resolved(op):
+            occupied.update(range(op.lines[0], op.lines[1] + 1))
+            placements[i] = SpanPlacement(tuple(op.lines), candidate=lines, reason=None)
+            continue
+        placed = place_span_op(lines, op, occupied)
         placements[i] = placed
         if placed.applied:
             lines = placed.candidate
@@ -336,6 +362,7 @@ def apply_ops(
     """
     lines = list(edit_lines)
     unapplied: list[Unapplied] = []
+    occupied: set[int] = set()
     recorder.begin(unit)
     cfg = with_trace_meta(cfg, stage=recorder.stage, unit=unit)
     attempts = retry_attempts(cfg)
@@ -361,11 +388,16 @@ def apply_ops(
             logger.warning("guided_edit: op %s dropped: %s", op.type, reason)
             unapplied.append((op, reason))
             continue
+        if is_time_resolved(op):
+            # Applied as a time range by the intervals stage, not as a marker;
+            # it still holds its lines so a cut clips around it.
+            occupied.update(range(op.lines[0], op.lines[1] + 1))
+            continue
         if op.type != "edit":
             # Span ops are a pure line-range wrap — no LLM judgement needed.
             # Clip the range to lines it may touch (see blocked_lines) so the
             # tags stay disjoint where the downstream extractors require it.
-            placed = place_span_op(lines, op)
+            placed = place_span_op(lines, op, occupied)
             clipped = placed.lines
             if clipped is None:
                 reason = placed.reason or ""
