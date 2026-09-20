@@ -129,13 +129,13 @@ class TestBoundaryGaps:
         op = _op("timelapse", 53, 53, factor=5.0, text="予備水を用意している")
         text = _preview(WATER, WATER_FIRST, [op], WATER_GAPS).text
         block = _block(text, "timelapse [53,53] x5.0 「予備水を用意している」")
-        assert (
-            "  after line 53: the 29.9 s gap before line 54 is outside this op — dropped" in block
-        )
+        # Named as the transcript names it, so the director can tie the two
+        # together — and address it as "53~".
+        assert "  the silence after line 53 is outside this op — dropped" in block
         # The vision description of that gap goes with it.
-        assert f"    [silent gap: {PUMP_DESC}]" in block
+        assert f"    [silent 29.9s after line 53: {PUMP_DESC}]" in block
         # 52 -> 53 is contiguous: its bracket shows no gap, so neither does this.
-        assert "before line 53" not in block
+        assert "after line 52" not in block
 
     def test_what_the_one_line_timelapse_plays(self):
         op = _op("timelapse", 53, 53, factor=5.0, text="予備水を用意している")
@@ -154,11 +154,14 @@ class TestBoundaryGaps:
             _preview(WATER, WATER_FIRST, [op], WATER_GAPS).text,
             "timelapse [47,47] x4.0 「パイプを外して呼び水の準備中」",
         )
+        assert "  the silence after line 47 is outside this op — dropped" in block
+        # Two descriptions fall in that one wait; the transcript joins them
+        # with " / " and so does this.
         assert (
-            "  after line 47: the 22.0 s gap before line 48 is outside this op — dropped" in block
+            "    [silent 22.0s after line 47: The camera shifts to a closer view inside the "
+            "aquarium. / The camera view shifts to the pipe opening.]" in block
         )
-        assert "    [silent gap: The camera view shifts to the pipe opening.]" in block
-        assert "before line 47" not in block
+        assert "after line 46" not in block
         assert "  plays 3.6 s of footage in 0.9 s (default for line 47: 1.2 s)" in block
 
     def test_a_range_ending_one_line_later_plays_that_gap(self):
@@ -171,7 +174,7 @@ class TestBoundaryGaps:
         assert "29.9 s gaps between lines" in block
         # ... and pays for it with line 54's 16.4 s of speech.
         assert "    54 16.4 s 「この状態で今予備水持ってきたんでこれをちょっと難…」" in block
-        assert "  after line 54: the 3.2 s gap before line 55 is outside this op — dropped" in block
+        assert "  the silence after line 54 is outside this op — dropped" in block
         assert "  plays 60.6 s of footage in 12.1 s" in block
 
     def test_a_description_of_silence_inside_the_last_line_is_not_the_gap(self):
@@ -182,7 +185,8 @@ class TestBoundaryGaps:
         block = _block(
             _preview(WATER, WATER_FIRST, [op], gaps).text, "timelapse [53,54] x5.0 「T」"
         )
-        assert "after line 54: the 3.2 s gap" in block
+        assert "the silence after line 54 is outside this op" in block
+        assert "    [silent 3.2s after line 54]" in block
         assert "inside line 54" not in block
 
     def test_the_gap_before_a_range(self):
@@ -191,14 +195,14 @@ class TestBoundaryGaps:
             _preview(FISH, FISH_FIRST, [op]).text,
             "timelapse [6,15] x12.0 「暗闇の中、網で悪戦苦闘」",
         )
-        assert "  before line 6: the 29.6 s gap after line 5 is outside this op — dropped" in block
-        assert "  after line 15: the 5.3 s gap before line 16 is outside this op — dropped" in block
+        assert "  the silence after line 5 is outside this op — dropped" in block
+        assert "  the silence after line 15 is outside this op — dropped" in block
 
     def test_a_keep_reports_its_boundary_gaps_too(self):
         block = _block(
             _preview(WATER, WATER_FIRST, [_op("keep", 52, 53)], WATER_GAPS).text, "keep [52,53]"
         )
-        assert "after line 53: the 29.9 s gap before line 54 is outside this op — dropped" in block
+        assert "the silence after line 53 is outside this op — dropped" in block
         assert "  plays 5.6 s of footage in 5.6 s (default for lines 52-53: 3.6 s)" in block
 
 

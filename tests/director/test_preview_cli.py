@@ -68,7 +68,7 @@ def test_every_segment_in_playback_order(project, capsys):
     out = _run(capsys, "--config", str(project / "nagare_config.yml"))
     assert out.index("=== [1] a ===") < out.index("=== [2] b ===")
     assert "timelapse [1,1] x4.0 「待つ」" in out
-    assert "after line 1: the 28.0 s gap before line 2 is outside this op — dropped" in out
+    assert "the silence after line 1 is outside this op — dropped" in out
     # b has no ops on disk; it still plays, and the whole video adds up.
     assert "no b_director.json" in out
     assert "segment [2]: default 5.0 s → with these ops 5.0 s" in out

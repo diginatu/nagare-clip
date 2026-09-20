@@ -16,6 +16,12 @@ Line granularity, from segment times: a line with no op plays its bracket
 figure; a kept line plays its whole span; a gap between two lines plays only
 when one kept range holds both; a sped line/gap plays over its factor.
 
+An op with a silence edge (``"53~"``) is the exception: it is applied as a TIME
+range, so it is priced from its resolved times — the silence line's interval
+where the transcript shows one — and its line range says only where it hangs.
+``["53~","53~"]`` therefore plays 29.9 s of footage in 6.0 s at x5 and makes no
+speech unintelligible, which is the whole reason the form exists.
+
 Overlap resolution is not modelled here: :func:`resolve_placements` runs
 guided_edit's own :func:`~nagare_clip.guided_edit.apply.resolve_span_ops` (after
 the real timelapse expansion), so an op is reported where it will actually land.
@@ -39,8 +45,9 @@ from nagare_clip.director.director_llm import (
     line_seconds,
     speech_seconds,
 )
+from nagare_clip.director.silence_lines import SilenceLine
 from nagare_clip.gap_context.gaps import Gap
-from nagare_clip.guided_edit.apply import blocking_types, resolve_span_ops
+from nagare_clip.guided_edit.apply import blocking_types, is_time_resolved, resolve_span_ops
 from nagare_clip.guided_edit.timelapse import expand_timelapse_ops
 from nagare_clip.timing import gap_shown, silence_shown
 
@@ -147,9 +154,25 @@ class _Playback:
         self.cut: set[int] = set()
         self.keep: dict[int, tuple[int, int]] = {}
         self.speed: dict[int, tuple[float, tuple[int, int]]] = {}
+        # A "n~" op is applied as a TIME range, so what it holds is not its
+        # whole line range: with gap_start the first line's speech is outside
+        # it, and the silence after that line — which no line map can express
+        # — is inside.  Those gaps are tracked separately.
+        self.gap_keep: dict[int, tuple[int, int]] = {}
+        self.gap_speed: dict[int, tuple[float, tuple[int, int]]] = {}
         for i, per_op in enumerate(placements):
             for j, p in enumerate(per_op):
                 if p.lines is None:
+                    continue
+                if is_time_resolved(p.op):
+                    lines, gaps = covered(p.op)
+                    if p.kind == "keep":
+                        self.keep.update({n: (i, j) for n in lines})
+                        self.gap_keep.update({n: (i, j) for n in gaps})
+                    elif p.kind == "speed":
+                        factor = p.op.factor or 1.0
+                        self.speed.update({n: (factor, (i, j)) for n in lines})
+                        self.gap_speed.update({n: (factor, (i, j)) for n in gaps})
                     continue
                 span = range(p.lines[0], p.lines[1] + 1)
                 if p.kind == "cut":
@@ -187,6 +210,8 @@ class _Playback:
         return self.speed[n][0] if n in self.speed else 1.0
 
     def gap_plays(self, n: int) -> bool:
+        if n in self.gap_keep:
+            return True
         return (
             n in self.keep
             and n + 1 in self.keep
@@ -196,6 +221,8 @@ class _Playback:
         )
 
     def gap_factor(self, n: int) -> float:
+        if n in self.gap_speed:
+            return self.gap_speed[n][0]
         if n in self.speed and n + 1 in self.speed and self.speed[n][1] == self.speed[n + 1][1]:
             return self.speed[n][0]
         return 1.0
@@ -236,25 +263,56 @@ class _Playback:
         return onscreen
 
 
+def covered(op: DirectorOp) -> tuple[list[int], list[int]]:
+    """A time-resolved op's (speech lines, gaps-after-line) — see :class:`_Playback`.
+
+    ``["53~","53~"]`` holds no speech at all and one gap; ``[53,"53~"]`` holds
+    line 53 and the gap after it; ``["53~",55]`` holds lines 54-55 and the gaps
+    after 53 and 54.
+    """
+    first, last = op.lines
+    lines = list(range(first + 1 if op.gap_start else first, last + 1))
+    gaps = [n for n in range(first, last)]
+    if op.gap_start and first not in gaps:
+        gaps.append(first)
+    if op.gap_end:
+        gaps.append(last)
+    return lines, sorted(set(gaps))
+
+
 def _fate(pb: _Playback, n: int, ops: list[DirectorOp]) -> str:
     """What happens to the gap after line *n*: dropped, or which op keeps it."""
     if pb.gap_plays(n):
-        i, _ = pb.keep[n]
+        i, _ = pb.gap_keep[n] if n in pb.gap_keep else pb.keep[n]
         return f"covered by {_op_ref(ops[i], i)}"
     return "dropped"
 
 
-def _gap_descriptions(
-    pb: _Playback, n: int, anchored: list[tuple[int, Gap]] | None, first: int
-) -> list[str]:
-    """``[silent gap: …]`` lines the transcript shows for the gap after line *n*."""
-    out = []
-    for anchor, gap in anchored or []:
-        if anchor + first - 1 != n:
-            continue
-        if (gap.start + gap.end) / 2 >= pb.end(n):
-            out.append(f"    [silent gap: {gap.description}]")
-    return out
+def _silence_after(
+    pb: _Playback,
+    n: int,
+    silence_lines: Sequence[SilenceLine],
+    anchored: list[tuple[int, Gap]] | None,
+) -> SilenceLine:
+    """The silence after line *n*, as the transcript shows it.
+
+    The transcript's own line when there is one — so the preview quotes the
+    same seconds and the same description, and the director can tie the two
+    together (and address it as ``"n~"``).  A wait under
+    ``director.silence_line_min`` has no line of its own; it is still outside
+    somebody's op, so one is built from the segment times, with any gap
+    description that falls inside it.
+    """
+    for line in silence_lines:
+        if line.after_line == n:
+            return line
+    start, end = pb.end(n), pb.start(n + 1)
+    descriptions = tuple(
+        gap.description
+        for _anchor, gap in anchored or []
+        if start <= (gap.start + gap.end) / 2 <= end
+    )
+    return SilenceLine(n, start, end, descriptions)
 
 
 def _clip_note(
@@ -316,6 +374,7 @@ def preview_segment(
     seg_times: SegTimes | None,
     silences: Sequence[float] | None = None,
     anchored_gaps: list[tuple[int, Gap]] | None = None,
+    silence_lines: Sequence[SilenceLine] | None = None,
     first_line: int = 1,
     drops: Sequence[str] = (),
     label: str = "segment",
@@ -325,10 +384,12 @@ def preview_segment(
 
     Takes what :func:`~.director_llm.generate_director_ops` holds: the raw
     segment *edit_lines*, *seg_times*/*silences* for those lines,
-    *anchored_gaps* with segment-relative anchors, the segment's *first_line*,
-    and the parsed *ops* plus the parser's *drops*.  *elsewhere_seconds* (the
-    rest of the finished video's runtime) adds a whole-video estimate.
+    *anchored_gaps* with segment-relative anchors, the *silence_lines* the
+    transcript shows, the segment's *first_line*, and the parsed *ops* plus the
+    parser's *drops*.  *elsewhere_seconds* (the rest of the finished video's
+    runtime) adds a whole-video estimate.
     """
+    silence_lines = list(silence_lines or [])
     footer_drops = [f"dropped by the parser (no effect): {d}" for d in drops]
     timed = (
         seg_times is not None
@@ -377,35 +438,43 @@ def preview_segment(
                     )
         return out
 
+    def silence_note(n: int) -> list[str]:
+        """The silence after line *n*, named and priced as the transcript does."""
+        silence = _silence_after(pb, n, silence_lines, anchored_gaps)
+        return [
+            f"  the silence after line {n} is outside this op — {_fate(pb, n, ops)}",
+            silence.render(),
+        ]
+
     def boundary_lines(keep: Placement | None) -> list[str]:
+        """The silences just outside a span op — the reason this module exists.
+
+        Only reached for an op WITHOUT a silence edge: one that has an edge is
+        reported by :func:`resolved_body`, where the neighbouring silence is
+        inside the op rather than outside it.
+        """
         rng = _range(keep)
         if not rng:
             return []
         a, b = rng[0], rng[-1]
         out = []
         if a > first_line and gap_shown(pb.gap_after(a - 1)):
-            fate = _fate(pb, a - 1, ops)
-            out.append(
-                f"  before line {a}: the {_s(pb.gap_after(a - 1))} gap after line {a - 1} "
-                f"is outside this op — {fate}"
-            )
-            out.extend(_gap_descriptions(pb, a - 1, anchored_gaps, first_line))
+            out.extend(silence_note(a - 1))
         if b < pb.last and gap_shown(pb.gap_after(b)):
-            fate = _fate(pb, b, ops)
-            out.append(
-                f"  after line {b}: the {_s(pb.gap_after(b))} gap before line {b + 1} "
-                f"is outside this op — {fate}"
-            )
-            out.extend(_gap_descriptions(pb, b, anchored_gaps, first_line))
+            out.extend(silence_note(b))
         return out
 
     def unintelligible_lines(speed: Placement | None) -> list[str]:
         if speed is None or speed.lines is None:
             return []
-        factor = speed.op.factor or 1.0
+        return unintelligible_over(_range(speed), speed.op.factor or 1.0)
+
+    def unintelligible_over(span: list[int], factor: float) -> list[str]:
         if factor < UNINTELLIGIBLE_FACTOR:
             return []
-        lines = [n for n in _range(speed) if n not in pb.cut]
+        lines = [n for n in span if n not in pb.cut]
+        if not lines:
+            return []
         total = sum(pb.figure(n) for n in lines)
         if len(lines) == 1:
             n = lines[0]
@@ -438,11 +507,75 @@ def preview_segment(
             )
         return out
 
+    def resolved_bounds(op: DirectorOp) -> tuple[float, float] | None:
+        """A ``"n~"`` op's real time range: its silence edges are times, not lines."""
+        first, last = op.lines
+        if not (first_line <= first <= pb.last and first_line <= last <= pb.last):
+            return None
+        if (op.gap_start and first >= pb.last) or (op.gap_end and last >= pb.last):
+            return None  # no following line, so no silence to end at
+        start = (
+            _silence_after(pb, first, silence_lines, anchored_gaps).start
+            if op.gap_start
+            else pb.start(first)
+        )
+        end = (
+            _silence_after(pb, last, silence_lines, anchored_gaps).end
+            if op.gap_end
+            else pb.end(last)
+        )
+        return (start, end) if end > start else None
+
+    def covers_phrase(op: DirectorOp) -> str:
+        first, last = op.lines
+        if op.gap_start and op.gap_end and first == last:
+            return f"the silence after line {first}"
+        head = (
+            f"the silence after line {first}"
+            if op.gap_start
+            else _lines_phrase(
+                list(range(first, last + 1)) if not op.gap_end or first != last else [first]
+            )
+        )
+        if not op.gap_end:
+            return f"{head} through line {last}" if op.gap_start else head
+        tail = "the silence after it" if first == last else f"the silence after line {last}"
+        return f"{head} and {tail}"
+
+    def resolved_body(op: DirectorOp) -> list[str]:
+        """A ``"n~"`` op plays a TIME range; its lines are only where it hangs."""
+        bounds = resolved_bounds(op)
+        if bounds is None:
+            return ["  this op's silence is outside the segment — it cannot be applied"]
+        start, end = bounds
+        footage = end - start
+        factor = op.factor or 1.0 if op.type in ("speed", "timelapse") else 1.0
+        speech_lines, gaps = covered(op)
+        onscreen = footage / factor
+        default = sum(pb.figure(n) for n in speech_lines)
+        cost = (
+            f"default for {_lines_phrase(speech_lines)}: {_s(default)}"
+            if speech_lines
+            else "dropped by default"
+        )
+        out = [
+            f"  covers {covers_phrase(op)} ({start:.1f}-{end:.1f} s)",
+            f"  plays {_s(footage)} of footage in {_s(onscreen)} ({cost})"
+            + (f"; caption on screen {_s(onscreen)}" if op.text else ""),
+        ]
+        out.extend(unintelligible_over(speech_lines, factor))
+        for n in gaps:
+            if n in pb.gap_keep or n in pb.gap_speed:
+                out.append(_silence_after(pb, n, silence_lines, anchored_gaps).render())
+        return out
+
     blocks: list[str] = []
     for i, op in enumerate(ops):
         body: list[str] = []
         per = {p.kind: p for p in placements[i]}
-        if op.type == "edit":
+        if is_time_resolved(op):
+            body.extend(resolved_body(op))
+        elif op.type == "edit":
             body.append("  no runtime change (a text edit within the line)")
         elif op.type == "overlay":
             p = per["overlay"]

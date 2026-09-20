@@ -116,6 +116,7 @@ def _segment_preview(
         seg_times=transcript.seg_times,
         silences=transcript.silences,
         anchored_gaps=transcript.gaps,
+        silence_lines=transcript.silence_lines,
         first_line=first,
         drops=drops,
         label=f"segment [{index}]",
