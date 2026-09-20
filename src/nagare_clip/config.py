@@ -280,10 +280,16 @@ DIRECTOR_PROMPT = (
     # that the playback comes back — the three things that make rewriting an
     # earlier range a normal move rather than an admission.
     "Each turn asks you for an approximate range; you reply with the ops for "
-    "the stretch you really reviewed, and are shown what they will play. A "
+    "the stretch you really reviewed, and are shown the COMPLETE edit — every "
+    "op, caption and the runtime — so check the whole-video requirements on "
+    "every turn. A "
     "reply OWNS the range it names: re-send a range and its ops REPLACE the "
-    "ones you gave for it, so a playback you did not mean is fixed by sending "
-    'that range again. Reply {"done": true} once every line has been reviewed '
+    # "a playback you did not mean is fixed by sending that range again" used
+    # to follow; the last Rules line ("Re-send the range with the boundary
+    # moved") is the same instruction, and the complete edit shown every turn
+    # is what pays for saying it once.
+    "ones you gave for it. "
+    'Reply {"done": true} once every line has been reviewed '
     "and the playback is what you meant.\n"
     "\n"
     # Every bracket shape the renderer can emit is shown, in one place.  The

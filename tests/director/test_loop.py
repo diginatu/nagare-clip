@@ -11,7 +11,7 @@ import json
 
 from nagare_clip.director.director_llm import DirectorOp
 from nagare_clip.director.display import build_display_view
-from nagare_clip.director.loop import LoopState, apply_reply, next_request
+from nagare_clip.director.loop import LoopState, apply_reply, next_request, request_summary
 
 from .test_display import SEGMENTS
 
@@ -52,6 +52,37 @@ class TestNextRequest:
         message = next_request(view, state, 4)
         assert "around lines" not in message
         assert '"done"' in message
+
+
+class TestTheHistoryLine:
+    """What an earlier turn's ask is trimmed to once its state is stale.
+
+    The conversation keeps its replies, so each one needs the ask it answered —
+    but only enough of it to read the reply against: the range. The
+    approximation wording and the reply shape are in the system prompt and in
+    the LIVE request; repeated through the history they are noise re-sent
+    uncached on every turn.
+    """
+
+    def test_it_is_one_short_line_naming_the_range(self):
+        assert request_summary(_view(), LoopState(), 4) == "Review around lines 1 to 4."
+
+    def test_it_names_the_same_range_the_live_request_asks_for(self):
+        view, state = _view(), LoopState()
+        apply_reply(view, state, _reply((1, 6), 6, []))
+        assert "around lines 7 to 10" in next_request(view, state, 4)
+        assert request_summary(view, state, 4) == "Review around lines 7 to 10."
+
+    def test_it_drops_the_wording_the_live_request_carries(self):
+        line = request_summary(_view(), LoopState(), 4)
+        assert "approximately" not in line
+        assert "JSON" not in line
+        assert "\n" not in line
+
+    def test_once_everything_is_reviewed_it_says_that_instead(self):
+        view, state = _view(), LoopState()
+        apply_reply(view, state, _reply((1, 10), 10, []))
+        assert request_summary(view, state, 4) == "Every line has been reviewed."
 
 
 class TestFirstPass:
@@ -285,29 +316,3 @@ class TestMalformedReply:
         fenced = "```json\n" + _reply((1, 4), 4, [_cut((1, 1))]) + "\n```"
         result = apply_reply(view, state, fenced)
         assert result.error is None and [op.lines for op in result.ops] == [(4, 4)]
-
-
-class TestWhichSegmentsTheTurnTouched:
-    """What the caller previews back: the footage this reply is about.
-
-    The ops alone do not say it — one source plays as several segments, so an
-    op in source coordinates cannot name which one it landed in — and a reply
-    with no ops still changed a stretch of the video (from whatever was there
-    to nothing), so the range counts too.
-    """
-
-    def test_it_is_the_segments_the_range_covers(self):
-        view, state = _view(), LoopState()
-        # Display 4 is the last line of segment 1, display 5 the first of 2.
-        result = apply_reply(view, state, _reply((4, 5), 5, []))
-        assert result.segments == (1, 2)
-
-    def test_an_op_outside_the_range_still_counts_its_segment(self):
-        view, state = _view(), LoopState()
-        result = apply_reply(view, state, _reply((1, 2), 2, [_cut((8, 9))]))
-        assert result.segments == (1, 3)
-
-    def test_a_done_reply_touches_nothing(self):
-        view, state = _view(), LoopState()
-        apply_reply(view, state, _reply((1, 10), 10, []))
-        assert apply_reply(view, state, json.dumps({"done": True})).segments == ()

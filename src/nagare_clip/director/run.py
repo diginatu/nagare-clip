@@ -35,8 +35,14 @@ from nagare_clip.director.director_llm import (
     speech_seconds,
 )
 from nagare_clip.director.display import DisplayView, build_display_view
-from nagare_clip.director.loop import LoopState, ReplyResult, apply_reply, next_request
-from nagare_clip.director.preview import preview_turn
+from nagare_clip.director.loop import (
+    LoopState,
+    ReplyResult,
+    apply_reply,
+    next_request,
+    request_summary,
+)
+from nagare_clip.director.preview import edit_state
 from nagare_clip.director.silence_lines import (
     DEFAULT_SILENCE_LINE_MIN,
     SilenceLine,
@@ -253,17 +259,28 @@ def chunk_lines(director_cfg: dict) -> int:
     return raw
 
 
-def _answer(
+def _ask(
     view: DisplayView,
     transcripts: list[SegmentTranscript],
     state: LoopState,
-    result: ReplyResult,
+    previous: ReplyResult | None,
+    request: str,
 ) -> str:
-    """What the code sends back after a reply: the refusals, then the playback."""
-    parts = [result.refusal] if result.refusal else []
-    parts.append(
-        preview_turn(view, transcripts, state.ops, segments=result.segments, drops=result.drops)
-    )
+    """The live user message: what the edit IS, then what to do next.
+
+    The conversation carries no preview of its own past any more — the earlier
+    asks are trimmed to one line each (:func:`~.loop.request_summary`) — so
+    this block is the whole picture, recomputed from the accumulated ops every
+    turn.  It leads, because it is what the request is about.
+
+    *previous* is the reply this message answers: its refusals belong at the
+    top (they are about what was just sent, not about the edit), and its
+    parser drops go in the state's footer where they always did.
+    """
+    parts = [previous.refusal] if previous is not None and previous.refusal else []
+    drops = previous.drops if previous is not None else ()
+    parts.append(edit_state(view, transcripts, state.ops, drops=drops))
+    parts.append(request)
     return "\n\n".join(parts)
 
 
@@ -318,9 +335,15 @@ def run_director_conversation(
 
     stage_cfg = apply_brief(director_cfg, cfg)
     context = project_context(summary, plan, [i.segment for i in inputs], view)
-    messages: list[dict[str, str]] = [system_message(stage_cfg, view, context)]
+    system = system_message(stage_cfg, view, context)
+    # The model's own replies, each under the one line of the ask it answered.
+    # The replies are its trajectory — which turn made which op, what it has
+    # already rewritten — and no recomputed state can show that.  The asks are
+    # trimmed because what they carried IS recomputed: a stale state block read
+    # as current is the exact failure this design removes.
+    history: list[dict[str, str]] = []
     state = LoopState()
-    answer = ""
+    previous: ReplyResult | None = None
     error = ""
 
     recorder.begin(unit)
@@ -328,7 +351,8 @@ def run_director_conversation(
     attempts = retry_attempts(traced)
     for turn in range(cap):
         request = next_request(view, state, chunk)
-        base = f"{answer}\n\n{request}" if answer else request
+        summary_line = request_summary(view, state, chunk)
+        base = _ask(view, transcripts, state, previous, request)
         section = f"turn {turn + 1}"
         result: ReplyResult | None = None
         complaint = ""
@@ -339,7 +363,7 @@ def run_director_conversation(
             # the one thing that cannot use what went wrong.
             content = f"{base}\n\n{complaint}" if complaint else base
             ask = {"role": "user", "content": content}
-            turn_messages = messages + [ask]
+            turn_messages = [system] + history + [ask]
             try:
                 reply = call(turn_messages, attempt_cfg)
             except Exception as e:  # noqa: BLE001 - recoverable
@@ -379,7 +403,14 @@ def run_director_conversation(
             if parsed.error:
                 complaint = f"That reply could not be used: {parsed.error}"
                 continue
-            messages = turn_messages + [{"role": "assistant", "content": reply}]
+            # The ask goes into the history TRIMMED: one line naming the range,
+            # so the reply under it stays readable and nothing else is re-sent.
+            history.extend(
+                [
+                    {"role": "user", "content": summary_line},
+                    {"role": "assistant", "content": reply},
+                ]
+            )
             result = parsed
             break
         if result is None:
@@ -388,18 +419,9 @@ def run_director_conversation(
         if result.done:
             logging.info("director: done after %d turn(s)", turn + 1)
             break
-        answer = _answer(view, transcripts, state, result)
-        recorder.attempt(
-            unit=unit,
-            attempt=0,
-            total=1,
-            section=f"{section} preview",
-            messages=[],
-            response=answer,
-            outcome=OK,
-            deterministic=True,
-            usage={},
-        )
+        # No separate record for the playback: it is the next turn's ask, and
+        # that ask is recorded in full.  Writing it twice doubled the report.
+        previous = result
         logging.info(
             "director: turn %d/%d reviewed through display line %d of %d (%d op(s))",
             turn + 1,

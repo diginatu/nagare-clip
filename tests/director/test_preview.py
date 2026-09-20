@@ -21,9 +21,10 @@ from nagare_clip.director.director_llm import (
 )
 from nagare_clip.director.display import build_display_view
 from nagare_clip.director.preview import (
+    NOTE_CHARS,
+    edit_state,
     numbering_for,
     preview_segment,
-    preview_turn,
     resolve_placements,
 )
 from nagare_clip.director.run import SegmentTranscript
@@ -567,7 +568,7 @@ class TestWholeVideoRuntime:
             first_line=WATER_T.first_line,
         )
         expected = water.runtime_seconds + FISH_T.default_runtime()
-        text = preview_turn(view, [WATER_T, FISH_T], ops, segments=[1])
+        text = edit_state(view, [WATER_T, FISH_T], ops)
         assert f"with the ops accepted so far {expected:.1f} s" in text
         # The segment's own runtime is a different number, and it is reported
         # as the segment's, not as the video's.
@@ -576,17 +577,15 @@ class TestWholeVideoRuntime:
 
     def test_a_segment_with_no_accepted_ops_counts_at_its_default(self):
         view = _view()
-        text = preview_turn(view, [WATER_T, FISH_T], {}, segments=[1])
+        text = edit_state(view, [WATER_T, FISH_T], {})
         total = WATER_T.default_runtime() + FISH_T.default_runtime()
         assert f"whole video so far: default {total:.1f} s" in text
         assert f"with the ops accepted so far {total:.1f} s" in text
 
-    def test_a_segment_the_turn_did_not_touch_is_priced_but_not_printed(self):
+    def test_every_segment_is_priced_into_the_whole(self):
         view = _view()
         ops = {1: [_op("cut", 45, 47)], 2: [_op("cut", 5, 7)]}
-        text = preview_turn(view, [WATER_T, FISH_T], ops, segments=[2])
-        assert "segment [1] water" not in text
-        assert "segment [2] fish" in text
+        text = edit_state(view, [WATER_T, FISH_T], ops)
         fish = preview_segment(
             FISH_T.edit_lines,
             ops[2],
@@ -605,14 +604,83 @@ class TestWholeVideoRuntime:
         expected = water.runtime_seconds + fish.runtime_seconds
         assert f"with the ops accepted so far {expected:.1f} s" in text
 
-    def test_the_turns_ops_are_shown_in_display_numbers(self):
+    def test_the_ops_are_shown_in_display_numbers(self):
         view = _view()
-        text = preview_turn(view, [WATER_T, FISH_T], {2: [_op("cut", 5, 7)]}, segments=[2])
+        text = edit_state(view, [WATER_T, FISH_T], {2: [_op("cut", 5, 7)]})
         assert "cut [14,16]" in text
 
     def test_the_parsers_drops_are_reported_once(self):
         view = _view()
-        text = preview_turn(
-            view, [WATER_T, FISH_T], {1: [], 2: []}, segments=[1, 2], drops=["bad op"]
-        )
+        text = edit_state(view, [WATER_T, FISH_T], {1: [], 2: []}, drops=["bad op"])
         assert text.count("dropped by the parser (no effect): bad op") == 1
+
+
+class TestTheCompleteEditState:
+    """The whole current edit, every turn: with no preview history in the
+    conversation this block is the only thing that says what the edit IS."""
+
+    def test_it_covers_every_segment_not_only_the_ones_with_ops(self):
+        view = _view()
+        text = edit_state(view, [WATER_T, FISH_T], {2: [_op("cut", 5, 7)]})
+        assert "segment [1] water" in text
+        assert "segment [2] fish" in text
+
+    def test_a_segment_with_no_ops_says_so_rather_than_going_missing(self):
+        view = _view()
+        text = edit_state(view, [WATER_T, FISH_T], {2: [_op("cut", 5, 7)]})
+        water = text[: text.index("segment [1] water")]
+        assert "(no ops: every line plays its default)" in water
+
+    def test_every_op_carries_its_note(self):
+        view = _view()
+        ops = {1: [_op("cut", 45, 47, note="the preamble repeats the title")]}
+        text = edit_state(view, [WATER_T, FISH_T], ops)
+        assert "note: the preamble repeats the title" in text
+
+    def test_a_long_note_is_truncated_not_dropped(self):
+        view = _view()
+        note = "x" * (NOTE_CHARS + 50)
+        text = edit_state(view, [WATER_T, FISH_T], {1: [_op("cut", 45, 47, note=note)]})
+        assert f"note: {'x' * NOTE_CHARS}…" in text
+        assert note not in text
+
+    def test_a_note_sits_under_its_own_op(self):
+        view = _view()
+        ops = {1: [_op("cut", 45, 45, note="first"), _op("cut", 47, 47, note="second")]}
+        text = edit_state(view, [WATER_T, FISH_T], ops)
+        assert text.index("cut [1,1]") < text.index("note: first") < text.index("cut [3,3]")
+        assert text.index("cut [3,3]") < text.index("note: second")
+
+    def test_the_captions_are_listed_in_playback_order_with_a_count(self):
+        view = _view()
+        ops = {
+            1: [_op("overlay", 47, 47, text="水を注ぐ", duration=2.0)],
+            2: [_op("overlay", 6, 6, text="網ですくう", duration=2.0)],
+        }
+        text = edit_state(view, [WATER_T, FISH_T], ops)
+        assert "Captions in playback order (2):" in text
+        assert text.index("水を注ぐ」 (2.0 s)") < text.index("網ですくう」 (2.0 s)")
+
+    def test_a_caption_is_placed_on_its_display_line(self):
+        view = _view()
+        ops = {2: [_op("overlay", 6, 6, text="網ですくう", duration=2.0)]}
+        text = edit_state(view, [WATER_T, FISH_T], ops)
+        assert "line 15: 「網ですくう」 (2.0 s)" in text
+
+    def test_a_timelapse_caption_is_in_the_list_too(self):
+        view = _view()
+        ops = {1: [_op("timelapse", 48, 50, factor=8.0, text="注水")]}
+        text = edit_state(view, [WATER_T, FISH_T], ops)
+        assert "Captions in playback order (1):" in text
+        assert "「注水」" in text.split("Captions in playback order")[1]
+
+    def test_no_captions_says_none(self):
+        view = _view()
+        text = edit_state(view, [WATER_T, FISH_T], {})
+        assert "Captions in playback order (0): none" in text
+
+    def test_the_captions_come_before_the_whole_video_runtime(self):
+        view = _view()
+        ops = {1: [_op("overlay", 47, 47, text="水を注ぐ", duration=2.0)]}
+        text = edit_state(view, [WATER_T, FISH_T], ops)
+        assert text.index("Captions in playback order") < text.index("whole video so far")

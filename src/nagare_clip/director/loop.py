@@ -91,30 +91,54 @@ class ReplyResult:
     done: bool = False
     refusal: str | None = None
     error: str | None = None
-    #: The segments this reply is about: the ones its range covers, plus the
-    #: ones its ops landed in.  The caller previews exactly these back, and it
-    #: cannot work them out from *ops* alone — those are source coordinates,
-    #: and one source may play as several segments.  A range with no ops still
-    #: counts: it owns that stretch, so what plays there just changed.
-    segments: tuple[int, ...] = ()
+
+
+def _next_span(view: DisplayView, state: LoopState, chunk_lines: int) -> tuple[int, int] | None:
+    """The lines the next turn is asked for; ``None`` once none are left.
+
+    The start is the line after the one the MODEL said it reviewed through,
+    never the end of the range the code asked for last time.
+    """
+    total = len(view.lines)
+    start = state.reviewed_through + 1
+    if start > total:
+        return None
+    return (start, min(start + max(chunk_lines, 1) - 1, total))
+
+
+def request_summary(view: DisplayView, state: LoopState, chunk_lines: int) -> str:
+    """The one line an ask is trimmed to once it is no longer the live turn.
+
+    The conversation keeps the model's own replies — which turn made which op,
+    what it rewrote — and a reply is unreadable without the ask it answered.
+    But only the RANGE of that ask is needed to read it: the approximation
+    wording and the reply shape are in the system prompt and in the live
+    request, and the state block that ask carried is stale the moment the next
+    turn recomputes it.  Repeating either through the history is uncached
+    tokens on every turn for nothing.
+    """
+    span = _next_span(view, state, chunk_lines)
+    if span is None:
+        return "Every line has been reviewed."
+    return f"Review around lines {span[0]} to {span[1]}."
 
 
 def next_request(view: DisplayView, state: LoopState, chunk_lines: int) -> str:
-    """The user message for the next turn.
+    """The live user message for the next turn.
 
     The range is deliberately vague — "around lines X to Y" — and X is the line
     after the one the MODEL said it reviewed through, never the end of the
     range the code asked for last time.
     """
     total = len(view.lines)
-    start = state.reviewed_through + 1
-    if start > total:
+    span = _next_span(view, state, chunk_lines)
+    if span is None:
         return (
             f"Every line (1-{total}) has been reviewed. "
             'Reply {"done": true} to finish, or send one more range to rewrite '
             "a stretch you want to change.\n\n" + REPLY_SHAPE
         )
-    end = min(start + max(chunk_lines, 1) - 1, total)
+    start, end = span
     return (
         f"Reviewed through line {state.reviewed_through} of {total}. "
         f"Next, review around lines {start} to {end} — approximately: stop "
@@ -263,13 +287,8 @@ def apply_reply(
 
     state.reviewed_through = max(state.reviewed_through, reviewed)
     state.turns += 1
-    touched = {index for index, _op in accepted}
-    touched.update(
-        line.segment for n in range(span[0], span[1] + 1) if (line := view.line(n)) is not None
-    )
     return ReplyResult(
         ops=[op for _index, op in accepted],
         drops=drops,
         refusal="\n".join(refusals) if refusals else None,
-        segments=tuple(sorted(touched)),
     )

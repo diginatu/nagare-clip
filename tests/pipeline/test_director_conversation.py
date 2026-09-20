@@ -20,6 +20,7 @@ from nagare_clip.audio_silence.cuts_file import write_cuts
 from nagare_clip.config import get_effective_config
 from nagare_clip.director import director_llm as dl
 from nagare_clip.director.display import build_display_view
+from nagare_clip.director.preview import STATE_HEADER
 from nagare_clip.director.run import VIEW_HEADER, SegmentInputs, load_segment_transcript
 from nagare_clip.llm_client import CACHEABLE_PREFIX_KEY
 from nagare_clip.pipeline import stages as st
@@ -149,9 +150,10 @@ def _asked(user: str) -> tuple[int, int] | None:
     return (int(m.group(1)), int(m.group(2))) if m else None
 
 
-def _run(monkeypatch, ctx, reply=None, calls=None):
+def _run(monkeypatch, ctx, reply=None, calls=None, replies=None):
     """Run the real director stage with a scripted model; return every call."""
     calls = [] if calls is None else calls
+    replies = [] if replies is None else replies
 
     def script(messages, cfg):
         asked = _asked(messages[-1]["content"])
@@ -168,15 +170,25 @@ def _run(monkeypatch, ctx, reply=None, calls=None):
 
     def fake(messages, cfg):
         calls.append([dict(m) for m in messages])
-        return (reply or script)(messages, cfg)
+        out = (reply or script)(messages, cfg)
+        replies.append(out)
+        return out
 
     monkeypatch.setattr(dl, "_call_llm", fake)
     next(s for s in st.STAGES if s.name == "director").run(ctx)
     return calls
 
 
+HISTORY_LINE = re.compile(r"^(Review around lines \d+ to \d+\.|Every line has been reviewed\.)$")
+
+
 class TestTheMessages:
-    """Four lines a turn, so the conversation really has several of them."""
+    """Four lines a turn, so the conversation really has several of them.
+
+    Each turn sends: the system message, then every earlier ask trimmed to one
+    line with the reply it got, then ONE user message carrying the complete
+    current edit and the live request.
+    """
 
     def test_one_system_message_byte_identical_on_every_turn(self, project, monkeypatch):
         calls = _run(monkeypatch, _ctx(project, chunk_lines=4))
@@ -206,21 +218,60 @@ class TestTheMessages:
             for message in call[1:]:
                 assert set(message) == {"role", "content"}
 
-    def test_each_user_turn_is_the_previous_preview_then_the_next_request(
-        self, project, monkeypatch
-    ):
-        calls = _run(monkeypatch, _ctx(project, chunk_lines=4))
-        first, second = calls[0][-1]["content"], calls[1][-1]["content"]
-        assert "Playback of these ops" not in first
-        assert first.startswith("Reviewed through line 0")
-        assert second.startswith("Playback of these ops")
-        assert "Reviewed through line" in second
-        assert second.index("Playback") < second.index("Reviewed through line")
+    def test_the_models_own_replies_stay_verbatim_and_in_order(self, project, monkeypatch):
+        replies: list[str] = []
+        calls = _run(monkeypatch, _ctx(project, chunk_lines=4), replies=replies)
+        said = [m["content"] for m in calls[-1] if m["role"] == "assistant"]
+        assert said == replies[: len(calls) - 1]
+        assert len(said) >= 2
 
-    def test_the_preview_prices_what_the_model_just_sent(self, project, monkeypatch):
+    def test_only_the_newest_user_message_carries_the_state(self, project, monkeypatch):
+        calls = _run(monkeypatch, _ctx(project, chunk_lines=4))
+        last = calls[-1]
+        assert last[-1]["content"].count(STATE_HEADER) == 1
+        assert sum(m["content"].count(STATE_HEADER) for m in last) == 1
+        assert sum(m["content"].count("Playback of these ops") for m in last[:-1]) == 0
+
+    def test_an_earlier_ask_is_trimmed_to_one_line_naming_its_range(self, project, monkeypatch):
+        calls = _run(monkeypatch, _ctx(project, chunk_lines=4))
+        earlier = [m["content"] for m in calls[-1][1:-1] if m["role"] == "user"]
+        assert len(earlier) >= 2
+        assert all(HISTORY_LINE.match(text) for text in earlier)
+
+    def test_the_newest_user_message_is_the_state_then_the_request(self, project, monkeypatch):
+        newest = _run(monkeypatch, _ctx(project, chunk_lines=4))[1][-1]["content"]
+        assert "Reviewed through line" in newest
+        assert newest.index(STATE_HEADER) < newest.index("Reviewed through line")
+
+    def test_the_very_first_turn_already_carries_the_whole_state(self, project, monkeypatch):
+        first = _run(monkeypatch, _ctx(project, chunk_lines=4))[0]
+        assert len(first) == 2
+        assert first[-1]["content"].startswith(STATE_HEADER)
+        assert "(no ops: every line plays its default)" in first[-1]["content"]
+
+    def test_the_state_covers_every_segment_on_every_turn(self, project, monkeypatch):
+        ctx = _ctx(project, chunk_lines=4)
+        calls = _run(monkeypatch, ctx)
+        segments = len(_view(ctx).segments)
+        assert segments == 4
+        for call in calls:
+            newest = call[-1]["content"]
+            for index in range(1, segments + 1):
+                assert f"segment [{index}] " in newest
+
+    def test_the_state_carries_the_whole_video_runtime_and_the_captions(self, project, monkeypatch):
+        newest = _run(monkeypatch, _ctx(project, chunk_lines=4))[-1][-1]["content"]
+        assert "whole video so far" in newest
+        assert "Captions in playback order" in newest
+
+    def test_the_state_prices_what_the_model_just_sent(self, project, monkeypatch):
         second = _run(monkeypatch, _ctx(project, chunk_lines=4))[1][-1]["content"]
         assert "cut [1,1]" in second
         assert "whole video so far" in second
+
+    def test_an_op_note_survives_into_the_next_turns_state(self, project, monkeypatch):
+        second = _run(monkeypatch, _ctx(project, chunk_lines=4))[1][-1]["content"]
+        assert "note: x" in second
 
 
 class TestTheOpsThatReachDisk:

@@ -62,9 +62,25 @@ UNINTELLIGIBLE_FACTOR = 2.0
 #: How much of a swallowed line's text is quoted to identify it.
 QUOTE_CHARS = 24
 
+#: How much of an op's ``note`` the edit state carries.  The note is the
+#: model's own record of what it meant an op to do, and the state block is
+#: where it reads it back, so a long one is TRUNCATED rather than dropped.
+NOTE_CHARS = 120
+
 HEADER = "Playback of these ops, computed from line timings (approximate):"
 
 WHOLE_VIDEO = "whole video so far"
+
+#: Heads the edit state: what follows is the whole current edit, not a diff.
+STATE_HEADER = (
+    "THE COMPLETE EDIT AS IT STANDS. Every segment of the video, every op "
+    "accepted so far and what it plays, then every caption in order and the "
+    "runtime. This block is the whole state of the edit: it is recomputed "
+    "from scratch each turn, so nothing earlier in this conversation "
+    "describes the edit as it is now."
+)
+
+CAPTIONS_HEADER = "Captions in playback order"
 
 SegTimes = Sequence[tuple[float | None, float | None]]
 
@@ -148,6 +164,10 @@ class SegmentPreview:
     text: str
     default_seconds: float | None
     runtime_seconds: float | None
+    #: ``(display line, text, on-screen seconds)`` per caption this segment
+    #: shows, in playback order — the overlays an ``overlay`` op places and the
+    #: ones a ``timelapse`` expands into, which is every caption there is.
+    captions: tuple[tuple[int, str, float], ...] = ()
 
 
 def _s(sec: float) -> str:
@@ -191,6 +211,21 @@ def _op_title(op: DirectorOp, num: Numbering = IDENTITY) -> str:
 
 def _op_ref(op: DirectorOp, index: int, num: Numbering = IDENTITY) -> str:
     return f"{op.type} {_op_range(op, num)} (op {index + 1})"
+
+
+def _note_lines(op: DirectorOp) -> list[str]:
+    """The op's own note, truncated — never dropped.
+
+    With no preview history in the conversation, the note is the only record
+    the model has of WHY it made an op; losing it to length would leave a range
+    of the edit it can no longer account for.
+    """
+    note = op.note.replace("\n", " ").strip()
+    if not note:
+        return []
+    if len(note) > NOTE_CHARS:
+        note = note[:NOTE_CHARS] + "…"
+    return [f"  note: {note}"]
 
 
 class _Playback:
@@ -724,7 +759,7 @@ def preview_segment(
                 body.extend(boundary_lines(keep))
                 if caption is not None:
                     body.extend(caption_lines(i))
-        blocks.append("\n".join([_op_title(op, num)] + body))
+        blocks.append("\n".join([_op_title(op, num)] + _note_lines(op) + body))
 
     default = sum(pb.speech)
     runtime = pb.played(pb.all_lines(), "speech")[1]
@@ -735,7 +770,8 @@ def preview_segment(
             f"= {_s(elsewhere_seconds + runtime)}"
         )
     parts = [HEADER] + (blocks or ["(no ops: every line plays its default)"]) + ["\n".join(footer)]
-    return SegmentPreview("\n\n".join(parts), default, runtime)
+    rows = tuple(sorted((num.of(line), ops[i].text or "", dur) for i, line, dur in captions))
+    return SegmentPreview("\n\n".join(parts), default, runtime, rows)
 
 
 def segment_preview(
@@ -759,36 +795,49 @@ def segment_preview(
     )
 
 
-def preview_turn(
+def _caption_block(rows: Sequence[tuple[int, str, float]]) -> str:
+    """Every caption of the finished video, in playback order, with a count.
+
+    The brief's cadence rule ("a caption every 3-5 minutes, never fewer") is a
+    WHOLE-VIDEO rule: it cannot be checked against one segment's ops, and the
+    op blocks scatter the captions across nine of them.  Listed together with
+    a count, it is checkable at a glance on every turn.
+    """
+    if not rows:
+        return f"{CAPTIONS_HEADER} (0): none yet."
+    out = [f"{CAPTIONS_HEADER} ({len(rows)}):"]
+    out.extend(f"  line {line}: 「{text}」 ({_s(seconds)})" for line, text, seconds in rows)
+    return "\n".join(out)
+
+
+def edit_state(
     view: DisplayView,
     transcripts: Sequence[SegmentTranscript],
     ops: Mapping[int, Sequence[DirectorOp]],
     *,
-    segments: Sequence[int] = (),
     drops: Sequence[str] = (),
 ) -> str:
-    """The answer to one turn of the conversation.
+    """The complete current edit: what one turn's user message carries.
 
     *ops* are every op accepted so far, keyed by the segment's 1-based index in
-    the playback order; *segments* are the ones this turn touched, and only
-    those are printed — a segment is priced with its WHOLE op list, because a
-    new cut is clipped by a keep an earlier turn placed, but the turns that
-    reviewed other footage do not get replayed on every message.
+    the playback order.  EVERY segment is rendered, touched this turn or not,
+    with its whole op list — a reader who has seen nothing but the system
+    message could continue the job from this block alone, which is the point:
+    the conversation no longer carries a preview of its own past, so anything
+    missing here is a fact the model does not have.
 
-    The footer is the whole video, not this stretch of it: every segment with
-    accepted ops at its edited runtime and every other at its default, so the
-    running total answers "how long is this video now" rather than "how long is
-    the part I just looked at".
+    Whole-video facts the brief is written in — total runtime, the captions in
+    order and how many there are — are otherwise uncheckable: no single
+    segment's preview can answer them.
     """
-    previews = {
-        index: segment_preview(view, transcripts, index, ops.get(index, ()))
-        for index in sorted(set(ops) | set(segments))
-    }
-    blocks = [previews[index].text for index in sorted(set(segments))]
+    previews = [
+        segment_preview(view, transcripts, index, ops.get(index, ()))
+        for index in range(1, len(transcripts) + 1)
+    ]
     default = _total(t.default_runtime() for t in transcripts)
     runtime = _total(
-        previews[i].runtime_seconds if i in previews else t.default_runtime()
-        for i, t in enumerate(transcripts, start=1)
+        p.runtime_seconds if p.runtime_seconds is not None else t.default_runtime()
+        for p, t in zip(previews, transcripts)
     )
     footer = [f"dropped by the parser (no effect): {d}" for d in drops]
     if default is None or runtime is None:
@@ -798,7 +847,9 @@ def preview_turn(
             f"{WHOLE_VIDEO}: default {_s(default)} ({_m(default)}) → with the ops "
             f"accepted so far {_s(runtime)} ({_m(runtime)})"
         )
-    return "\n\n".join([*blocks, "\n".join(footer)])
+    captions = [row for p in previews for row in p.captions]
+    blocks = [p.text for p in previews]
+    return "\n\n".join([STATE_HEADER, *blocks, _caption_block(captions), "\n".join(footer)])
 
 
 def _total(values: Iterable[float | None]) -> float | None:
