@@ -1,18 +1,18 @@
-"""director stage (Pass A): high-level LLM edit operations, one SEGMENT at a time.
+"""director stage (Pass A): high-level LLM edit operations for the whole video.
 
-A segment is one stretch of one source, as the plan ordered it.  Running per
-segment rather than per source makes an op crossing a reorder boundary
-unrepresentable, gives improvement 19's position a meaning when one source
-plays at two places, and makes improvement 22's seams the *neighbouring
-segment* rather than the neighbouring source.
+ONE conversation reads the finished video under one display numbering
+(:mod:`nagare_clip.director.display`), asks for an approximate range per turn
+(:mod:`nagare_clip.director.loop`) and answers each reply with what those ops
+will play (:mod:`nagare_clip.director.preview`).  The per-segment path it
+replaced -- nine independent calls, each with the seam lines of its
+neighbours and the ops already made before it -- is gone.
 
-Line numbers stay absolute: ``guided_edit`` and ``intervals`` apply ops to the
-whole source file, so a segment starting at line 31 presents its first line as
-``31:`` and emits ops in that numbering.
+Line numbers on DISK stay absolute and per source: ``guided_edit`` and
+``intervals`` apply ops to the whole source file, so every op is converted back
+out of display coordinates before it is written.
 
-The stage does not write ``{stem}_director.json`` — the orchestrator merges a
-source's segments and writes it once.  When ``director.enabled`` is false
-(default) every segment returns no ops, which merges to the empty op list the
+Nothing is written here; the orchestrator writes one file per source.  When
+``director.enabled`` is false (default) every source returns no ops, which the
 downstream guided_edit stage treats as a no-op.
 """
 
@@ -27,24 +27,11 @@ from pathlib import Path
 from nagare_clip.audio_silence.cuts_file import read_cuts
 from nagare_clip.brief import apply_brief
 from nagare_clip.director import director_llm as director_llm_mod
-from nagare_clip.director.context import (
-    Neighbour,
-    PriorEdits,
-    Seam,
-    build_director_context,
-    project_context_block,
-    qualify_line_numbers,
-    seam_lines,
-    whole_video_block,
-)
+from nagare_clip.director.context import project_context_block
 from nagare_clip.director.director_llm import (
     DirectorOp,
-    DirectorResult,
     _max_keep_lines,
-    clean_for_display,
-    generate_director_ops,
     keep_limit_note,
-    render_transcript,
     speech_seconds,
 )
 from nagare_clip.director.display import DisplayView, build_display_view
@@ -68,7 +55,7 @@ from nagare_clip.llm_report import (
     Recorder,
 )
 from nagare_clip.llm_retry import cfg_for_attempt, retry_attempts
-from nagare_clip.order import Segment, segment_label, segment_unit
+from nagare_clip.order import Segment
 from nagare_clip.plan.plan_llm import plan_from_dict
 from nagare_clip.summary.summarize import ProjectSummary, summary_from_dict
 from nagare_clip.timing import segment_silences, segment_times
@@ -79,84 +66,6 @@ logger = logging.getLogger(__name__)
 #: asked to review.  Kept beside the loop that uses it rather than in the
 #: config schema alone, so an unconfigured call behaves like the stage.
 DEFAULT_CHUNK_LINES = 40
-
-#: Lines of a neighbouring video shown at each join when ``director.seam_lines``
-#: says nothing else.  Small on purpose: the prompt is already long, and a
-#: sign-off or a greeting is one or two lines.
-DEFAULT_SEAM_LINES = 3
-
-
-def _seam_line_count(director_cfg: dict) -> int:
-    """Read ``director.seam_lines`` defensively (invalid = the default, ``0`` = off)."""
-    raw = director_cfg.get("seam_lines", DEFAULT_SEAM_LINES)
-    if isinstance(raw, bool) or not isinstance(raw, int) or raw < 0:
-        return DEFAULT_SEAM_LINES
-    return raw
-
-
-def _seam(neighbour: Neighbour | None, count: int, *, last: bool) -> Seam | None:
-    """The neighbouring SEGMENT's lines at one join, read off its ``_edits.txt``.
-
-    The neighbour is a segment, not a source, so the file is sliced to the lines
-    that segment actually plays — which is what makes a join with another
-    stretch of this very source read correctly.
-
-    Optional throughout: the first segment has no predecessor and the last no
-    successor, and a ``--source`` re-run may have neither file on disk — every
-    one of those degrades to no seam rather than failing the stage.
-    """
-    if not neighbour or count <= 0:
-        return None
-    path = Path(neighbour.edits)
-    try:
-        all_lines = path.read_text(encoding="utf-8").splitlines()
-    except OSError:
-        logging.warning("director: no readable seam transcript at %s", path)
-        return None
-    first, last_line = neighbour.segment.lines or (1, len(all_lines))
-    lines = seam_lines(all_lines[first - 1 : last_line], count, last=last)
-    return Seam(segment_label(neighbour.segment), lines) if lines else None
-
-
-def _max_prior_captions(director_cfg: dict) -> int:
-    """Read ``director.max_prior_captions`` defensively (``0``/invalid = no limit)."""
-    raw = director_cfg.get("max_prior_captions", 0)
-    if isinstance(raw, bool) or not isinstance(raw, int) or raw < 0:
-        return 0
-    return raw
-
-
-def _build_overview_context(
-    summary: Path | None,
-    plan: Path | None,
-    segment: Segment,
-    *,
-    all_segments: list[Segment] | None = None,
-    prior_captions: list[str] | None = None,
-    max_prior_captions: int = 0,
-    seam_before: Seam | None = None,
-    seam_after: Seam | None = None,
-    prior_edits: list[PriorEdits] | None = None,
-) -> str:
-    """Load summary/plan artifacts (tolerating missing/empty) and render the
-    cross-video context for this segment.  Returns ``""`` if unavailable."""
-    project_summary = ProjectSummary(summary="", parts=[])
-    if summary and summary.is_file():
-        project_summary = summary_from_dict(json.loads(summary.read_text(encoding="utf-8")))
-    directions = []
-    if plan and plan.is_file():
-        directions = plan_from_dict(json.loads(plan.read_text(encoding="utf-8")))
-    return build_director_context(
-        project_summary,
-        directions,
-        segment,
-        all_segments=all_segments,
-        prior_captions=prior_captions,
-        max_prior_captions=max_prior_captions,
-        seam_before=seam_before,
-        seam_after=seam_after,
-        prior_edits=prior_edits,
-    )
 
 
 def _slice(values: list | None, first: int, last: int) -> list | None:
@@ -210,17 +119,6 @@ class SegmentTranscript:
     gaps: list[tuple[int, Gap]]
     silence_lines: list[SilenceLine] = field(default_factory=list)
 
-    def render(self) -> str:
-        """The numbered transcript exactly as this segment's own call shows it."""
-        return render_transcript(
-            clean_for_display(self.edit_lines),
-            self.seg_times,
-            self.silences,
-            self.gaps,
-            self.first_line,
-            silence_lines=self.silence_lines,
-        )
-
     def default_runtime(self) -> float | None:
         """Seconds the segment plays with no op at all; ``None`` if untimed."""
         if self.seg_times is None or len(self.seg_times) != len(self.edit_lines):
@@ -272,116 +170,6 @@ def load_segment_transcript(inputs: SegmentInputs) -> SegmentTranscript:
         gaps=gap_list,
         silence_lines=silence_lines,
     )
-
-
-def whole_video_reference(segments: list[SegmentInputs]) -> str:
-    """The whole finished video's transcript, rendered ONCE per run.
-
-    Every segment is rendered by :meth:`SegmentTranscript.render` — the same
-    renderer as its own call's editable transcript — with each numbered line
-    qualified by its segment index (see :func:`qualify_line_numbers`).  The
-    result goes inside the cacheable prefix, so it must be passed unchanged to
-    every segment's call.  A segment whose transcript cannot be read keeps its
-    header, so the indices stay the finished video's positions.
-    """
-    sections = []
-    for index, inputs in enumerate(segments, start=1):
-        try:
-            transcript = load_segment_transcript(inputs)
-        except OSError:
-            logging.warning("director: no readable transcript at %s", inputs.edits)
-            sections.append((inputs.segment, "", None))
-            continue
-        sections.append(
-            (
-                inputs.segment,
-                qualify_line_numbers(transcript.render(), index),
-                transcript.default_runtime(),
-            )
-        )
-    return whole_video_block(sections)
-
-
-def run_director(
-    edits_txt: Path,
-    cfg: dict,
-    *,
-    segment: Segment,
-    all_segments: list[Segment] | None = None,
-    summary: Path | None = None,
-    plan: Path | None = None,
-    json_path: Path | None = None,
-    gaps: Path | None = None,
-    cuts_txt: Path | None = None,
-    prior_captions: list[str] | None = None,
-    before: Neighbour | None = None,
-    after: Neighbour | None = None,
-    whole_video: str = "",
-    prior_edits: list[PriorEdits] | None = None,
-    recorder: Recorder = NULL_RECORDER,
-) -> DirectorResult:
-    """One LLM call over one segment.  Returns its ops and whether it succeeded.
-
-    Nothing is written here: a source split across several segments has its ops
-    merged by the orchestrator and written once, so a partially edited
-    ``{stem}_director.json`` can never reach disk.
-
-    ``whole_video`` (from :func:`whole_video_reference`) and ``prior_edits`` are
-    ``director.whole_project_context``'s additions; the orchestrator passes them
-    only when that flag is on, and absent they leave the request unchanged.
-    """
-    director_cfg = cfg["director"]
-    unit = segment_unit(segment)
-
-    if not director_cfg.get("enabled", False):
-        logging.info("director: disabled, no ops for %s", unit)
-        return DirectorResult([], ok=True)
-
-    seam_count = _seam_line_count(director_cfg)
-    overview_context = _build_overview_context(
-        summary,
-        plan,
-        segment,
-        all_segments=all_segments,
-        prior_captions=prior_captions,
-        max_prior_captions=_max_prior_captions(director_cfg),
-        seam_before=_seam(before, seam_count, last=True),
-        seam_after=_seam(after, seam_count, last=False),
-        prior_edits=prior_edits,
-    )
-    transcript = load_segment_transcript(
-        SegmentInputs(
-            segment,
-            edits_txt,
-            json_path=json_path,
-            gaps=gaps,
-            cuts_txt=cuts_txt,
-            silence_line_min=silence_line_min(director_cfg),
-        )
-    )
-    user_header = ""
-    if whole_video:
-        index = (all_segments or [segment]).index(segment) + 1
-        user_header = f"Edit segment [{index}] — its lines below are the ones your ops address:"
-
-    logging.info("director: analysing %s (%d line(s)) with LLM", unit, len(transcript.edit_lines))
-    result = generate_director_ops(
-        transcript.edit_lines,
-        apply_brief(director_cfg, cfg),
-        call_llm=director_llm_mod._call_llm,
-        overview_context=overview_context,
-        recorder=recorder,
-        unit=unit,
-        seg_times=transcript.seg_times,
-        anchored_gaps=transcript.gaps,
-        silences=transcript.silences,
-        first_line=transcript.first_line,
-        silence_lines=transcript.silence_lines,
-        reference=whole_video,
-        user_header=user_header,
-    )
-    logging.info("director: %s -> %d operation(s)", unit, len(result.ops))
-    return result
 
 
 #: Heads the whole-video transcript inside the cached system prefix.  One line:

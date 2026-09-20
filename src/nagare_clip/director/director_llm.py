@@ -663,7 +663,7 @@ def generate_director_ops(
     each addressable as ``"n~"``; empty/absent leaves the transcript as it was
     before the feature existed.
 
-    ``reference`` (``director.whole_project_context``) is the whole finished
+    ``reference`` is the whole finished
     video's transcript, appended INSIDE the cacheable prefix — the caller must
     pass the same string on every segment's call of a run.  ``user_header`` is
     one line put above the editable transcript.  Both empty (the default) leave

@@ -1,15 +1,19 @@
-"""What the director's own call shows for a wait between two lines.
+"""What the director's transcript shows for a wait between two lines.
 
 The real numbers are PXL_20260426_090431216's lines 53-54: the 29.9 s wait the
 whole "n~" feature exists for.
+
+Read off the display view the conversation actually renders, since the
+per-segment call these were written against is gone; the silence lines
+themselves are the same ones ``load_segment_transcript`` builds.
 """
 
 from __future__ import annotations
 
 import json
 
-import nagare_clip.director.director_llm as dl
 import nagare_clip.director.run as director_run
+from nagare_clip.director.display import build_display_view
 from nagare_clip.order import Segment
 
 CFG = {"director": {"enabled": True, "prompt": "P", "max_retries": 0}}
@@ -50,22 +54,29 @@ def _gaps(tmp_path, start, end, description):
     return path
 
 
+def _rendered(edits, js, cfg=CFG, gaps=None):
+    """The whole video as the conversation renders it, for this one segment."""
+    segment = Segment("a", None)
+    inputs = director_run.SegmentInputs(
+        segment,
+        edits,
+        json_path=js,
+        gaps=gaps,
+        silence_line_min=director_run.silence_line_min(cfg["director"]),
+    )
+    transcript = director_run.load_segment_transcript(inputs)
+    return build_display_view([(segment, transcript)]).render()
+
+
 def _run(tmp_path, monkeypatch, cfg=CFG, gaps=None):
-    seen = {}
-
-    def fake_llm(messages, cfg):
-        seen["user"] = messages[1]["content"]
-        return '{"ops": []}'
-
-    monkeypatch.setattr(dl, "_call_llm", fake_llm)
     edits, js = _project(tmp_path)
-    director_run.run_director(edits, cfg, segment=Segment("a", None), json_path=js, gaps=gaps)
-    return seen["user"]
+    return _rendered(edits, js, cfg=cfg, gaps=gaps)
 
 
 def test_the_wait_between_two_lines_is_shown_as_its_own_line(tmp_path, monkeypatch):
     user = _run(tmp_path, monkeypatch)
-    assert "    [silent 29.9s after line 1]" in user
+    # Line 1 of the source is display line 1; the wait after it is display 2.
+    assert "2: [silent 29.9s]" in user
     # ...and the line it follows no longer counts it a second time.
     assert "gap 29.9s" not in user
 
@@ -74,7 +85,7 @@ def test_the_gap_description_becomes_the_silence_lines_text(tmp_path, monkeypatc
     # The very annotation that used to be printed above the line.
     gaps = _gaps(tmp_path, 505.0, 525.0, "デモが動く")
     user = _run(tmp_path, monkeypatch, gaps=gaps)
-    assert "    [silent 29.9s after line 1: デモが動く]" in user
+    assert "2: [silent 29.9s: デモが動く]" in user
     assert "[silent gap:" not in user
 
 
@@ -89,7 +100,7 @@ def test_the_threshold_is_the_configured_one(tmp_path, monkeypatch):
     assert "    [silent gap: デモが動く]" in user
 
 
-def test_the_silence_is_measured_from_the_words_not_the_segment_bounds(tmp_path, monkeypatch):
+def test_the_silence_is_measured_from_the_words_not_the_segment_bounds(tmp_path):
     # A segment whose last word ends well before the segment does: the drop
     # logic reads the words, so the director must see the words' silence.
     words = [
@@ -110,15 +121,7 @@ def test_the_silence_is_measured_from_the_words_not_the_segment_bounds(tmp_path,
     ]
     js = tmp_path / "a.json"
     js.write_text(json.dumps({"segments": segments}), encoding="utf-8")
-    seen = {}
-
-    def fake_llm(messages, cfg):
-        seen["user"] = messages[1]["content"]
-        return '{"ops": []}'
-
-    monkeypatch.setattr(dl, "_call_llm", fake_llm)
-    director_run.run_director(edits, CFG, segment=Segment("a", None), json_path=js)
-    assert "    [silent 29.9s after line 1]" in seen["user"]
+    assert "2: [silent 29.9s]" in _rendered(edits, js)
 
 
 def test_the_default_threshold_is_the_configured_one():

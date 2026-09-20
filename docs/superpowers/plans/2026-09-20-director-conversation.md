@@ -148,7 +148,7 @@ Keep: `render_transcript`, `speech_seconds`, `qualify_line_numbers` if the
 display view still uses it, the parser, `_write_director_ops`, the preview,
 caching and usage.
 
-- [ ] Steps as above; the suite must be green with nothing referring to the
+- [x] Steps as above; the suite must be green with nothing referring to the
   deleted names (`grep` for each in `src` and `tests` as a step).
 
 ---

@@ -11,7 +11,6 @@ import pytest
 import yaml
 from pydantic import ValidationError
 
-import nagare_clip.director.run as director_run
 from nagare_clip.config import (
     DEFAULTS,
     deep_merge,
@@ -920,23 +919,6 @@ def test_director_chunk_lines_default():
 def test_director_max_keep_lines_default():
     cfg = get_effective_config(None, {})
     assert cfg["director"]["max_keep_lines"] == 8
-
-
-def test_director_max_prior_captions_default():
-    """How many of the captions already shown earlier in the finished video the
-    director is handed. Generous by default — a modern context window swallows
-    100 short lines — but tunable for long projects."""
-    cfg = get_effective_config(None, {})
-    assert cfg["director"]["max_prior_captions"] == 100
-
-
-def test_director_seam_lines_default():
-    """How many of a neighbouring video's lines the director sees at each join.
-    Small on purpose: the prompt is already long and a sign-off is one or two
-    lines. Must match the fallback run_director uses when the key is absent."""
-    cfg = get_effective_config(None, {})
-    assert cfg["director"]["seam_lines"] == 3
-    assert cfg["director"]["seam_lines"] == director_run.DEFAULT_SEAM_LINES
 
 
 def test_text_filter_prompt_repeated_phrase_example_is_valid_patch_syntax():

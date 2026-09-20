@@ -417,6 +417,18 @@ class TestTheProjectContext:
         assert all("Overall: ポンプの修理" in c[0][CACHEABLE_PREFIX_KEY] for c in calls)
         assert len({c[0]["content"] for c in calls}) == 1
 
+    def test_the_project_brief_precedes_it(self, planned, monkeypatch):
+        """The editorial brief is appended to the PROMPT, so it lands above the
+        project context, which is above the transcript.
+
+        Inherited from the per-segment path, where the brief had to precede the
+        summary/plan overview block for the same reason."""
+        ctx = _ctx(planned, chunk_lines=4)
+        ctx.cfg["project"] = {"audience": "DIY viewers"}
+        system = _run(monkeypatch, ctx)[0][0]["content"]
+        assert "- Audience: DIY viewers" in system
+        assert system.index("- Audience: DIY viewers") < system.index("Overall: ")
+
     def test_the_revised_plan_wins(self, planned, monkeypatch):
         revised = planned / "out" / "plan_revise"
         revised.mkdir(parents=True, exist_ok=True)
