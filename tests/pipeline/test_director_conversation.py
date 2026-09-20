@@ -20,7 +20,7 @@ from nagare_clip.audio_silence.cuts_file import write_cuts
 from nagare_clip.config import get_effective_config
 from nagare_clip.director import director_llm as dl
 from nagare_clip.director.display import build_display_view
-from nagare_clip.director.run import SegmentInputs, load_segment_transcript
+from nagare_clip.director.run import VIEW_HEADER, SegmentInputs, load_segment_transcript
 from nagare_clip.llm_client import CACHEABLE_PREFIX_KEY
 from nagare_clip.pipeline import stages as st
 from nagare_clip.pipeline.errors import PipelineError
@@ -330,3 +330,107 @@ class TestRecording:
         assert all(len(a["messages"]) == 1 for a in llm)
         assert all(a["messages"][0]["role"] == "user" for a in llm)
         assert llm[1]["response"] is not None
+
+
+# --- the project context in the cached prefix ---------------------------------
+
+
+ORDER = [
+    {"stem": "dev"},
+    {"stem": "mix", "lines": [4, 6]},
+    {"stem": "mix", "lines": [1, 3]},
+    {"stem": "mix", "lines": [7, 9]},
+]
+
+
+@pytest.fixture
+def planned(project):
+    """The same project, with a summary and a plan that has real directions."""
+    out = project / "out"
+    (out / "summary").mkdir(parents=True, exist_ok=True)
+    (out / "summary" / "summary.json").write_text(
+        json.dumps(
+            {
+                "summary": "ポンプの修理",
+                "parts": [{"stem": "mix", "lines": [1, 9], "summary": "作業"}],
+                "video_summaries": {"mix": "mixの全体"},
+            }
+        ),
+        encoding="utf-8",
+    )
+    (out / "plan" / "plan.json").write_text(
+        json.dumps(
+            {
+                "order": ORDER,
+                "directions": [
+                    {"stem": "mix", "lines": [4, 6], "direction": "keep the fitting"},
+                    {"stem": "dev", "lines": [1, 4], "direction": "trim the preamble"},
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    return project
+
+
+class TestTheProjectContext:
+    """The plan's directions and the project summary, which the conversation
+    dropped when it stopped calling ``build_director_context``.
+
+    Without them the model edits a transcript with no brief at all -- and
+    without the section-boundaries sentence that travels with them, a measured
+    run copied plan boundaries into 19 of 56 op starts and into all three
+    timelapses.
+    """
+
+    def test_the_overall_summary_reaches_the_model(self, planned, monkeypatch):
+        system = _run(monkeypatch, _ctx(planned, chunk_lines=4))[0][0]["content"]
+        assert "Overall: ポンプの修理" in system
+
+    def test_a_direction_arrives_in_display_numbers(self, planned, monkeypatch):
+        ctx = _ctx(planned, chunk_lines=4)
+        system = _run(monkeypatch, ctx)[0][0]["content"]
+        view = _view(ctx)
+        # mix's source lines 4-6 play SECOND, so they are not display 4-6.
+        first = view.from_source(2, 4)
+        last = view.from_source(2, 6)
+        assert (first, last) != (4, 6)
+        assert f"- lines {first}-{last}: keep the fitting" in system
+        assert "lines 4-6: keep the fitting" not in system
+
+    def test_the_boundary_note_travels_with_them(self, planned, monkeypatch):
+        system = _run(monkeypatch, _ctx(planned, chunk_lines=4))[0][0]["content"]
+        marker = "section boundaries, not op boundaries"
+        assert marker in system
+        assert system.index(marker) < system.index("- lines ")
+
+    def test_it_sits_between_the_prompt_and_the_transcript(self, planned, monkeypatch):
+        ctx = _ctx(planned, chunk_lines=4)
+        system = _run(monkeypatch, ctx)[0][0]["content"]
+        assert system.startswith("P\n")
+        assert system.rstrip().endswith(_view(ctx).render().rstrip())
+        assert system.index("Overall: ") < system.index(VIEW_HEADER)
+
+    def test_it_is_in_the_cacheable_prefix_and_never_changes(self, planned, monkeypatch):
+        calls = _run(monkeypatch, _ctx(planned, chunk_lines=4))
+        assert len(calls) > 2
+        assert all("Overall: ポンプの修理" in c[0][CACHEABLE_PREFIX_KEY] for c in calls)
+        assert len({c[0]["content"] for c in calls}) == 1
+
+    def test_the_revised_plan_wins(self, planned, monkeypatch):
+        revised = planned / "out" / "plan_revise"
+        revised.mkdir(parents=True, exist_ok=True)
+        (revised / "plan.json").write_text(
+            json.dumps(
+                {
+                    "order": ORDER,
+                    "directions": [
+                        {"stem": "mix", "lines": [4, 6], "direction": "人間が直した指示"}
+                    ],
+                }
+            ),
+            encoding="utf-8",
+        )
+        system = _run(monkeypatch, _ctx(planned, chunk_lines=4))[0][0]["content"]
+        assert "人間が直した指示" in system
+        assert "keep the fitting" not in system

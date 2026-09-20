@@ -7,14 +7,19 @@ so ``summary`` can keep importing it without a cycle.
 
 from __future__ import annotations
 
+import logging
 import re
+from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
 
 from nagare_clip.director.director_llm import DirectorOp, clean_for_display
+from nagare_clip.director.display import DisplayView
 from nagare_clip.order import Segment, segment_label
 from nagare_clip.plan.plan_llm import PartDirection
 from nagare_clip.summary.summarize import ProjectSummary
+
+logger = logging.getLogger(__name__)
 
 #: Why the neighbouring lines are in the prompt.  Deliberately a rule and not a
 #: worked example: an example in this prompt anchors harder than the instruction
@@ -38,6 +43,24 @@ WHOLE_VIDEO_NOTE = (
     "[k]N is line N of segment k; default runtime is what plays if no op is "
     "applied. Your ops address only the plain-numbered transcript in the user "
     "message — never put a [k]N number in an op."
+)
+
+#: Travels WITH the plan's line ranges, immediately above them, wherever they
+#: are rendered.  A measured 9-segment run copied plan part boundaries into 19
+#: of 56 op starts and into all three timelapses -- two of which therefore
+#: opened on the line where the speaker announces the work and played that
+#: announcement at 8-20x, unintelligible.  The rule that should have prevented
+#: it sits in ``DIRECTOR_PROMPT``'s Rules block at ~55% of the assembled
+#: prompt, and the more concrete, later ranges won; so the correction is
+#: emitted here and nowhere else.  It also names the literal word "keep",
+#: which ``PLAN_PROMPT`` forbids in a direction and 7 of 9 real directions used
+#: anyway, and which the director's own guardrail (featured/retained/
+#: emphasised) does not cover.
+SECTION_BOUNDARY_NOTE = (
+    "These are section boundaries, not op boundaries: a direction "
+    "says what a stretch is FOR, and you choose where each op "
+    'actually starts and ends. A direction saying "keep" means '
+    "emphasis, not a keep op."
 )
 
 _NUMBERED_LINE_RE = re.compile(r"^(\d+):", re.MULTILINE)
@@ -347,12 +370,7 @@ def build_director_context(
             # real run copied a plan boundary into 19 of 56 op starts, and into
             # all three timelapses — two of which therefore opened on the line
             # announcing the work and played it back unintelligible.
-            out.append(
-                "These are section boundaries, not op boundaries: a direction "
-                "says what a stretch is FOR, and you choose where each op "
-                'actually starts and ends. A direction saying "keep" means '
-                "emphasis, not a keep op."
-            )
+            out.append(SECTION_BOUNDARY_NOTE)
         own_summary = video_summaries.get(stem, "") if segment.lines is None else ""
         if own_summary:
             out.append(f"Summary: {own_summary}")
@@ -408,3 +426,77 @@ def build_director_context(
     out.extend(seams)
 
     return "\n".join(out)
+
+
+def _direction_rows(
+    directions: list[PartDirection],
+    segment: Segment,
+    index: int,
+    view: DisplayView,
+) -> list[str]:
+    """One segment's directions, ranged in DISPLAY numbers.
+
+    Each direction is clipped to the lines this segment actually plays and then
+    mapped through :meth:`DisplayView.from_source` -- the model reads one global
+    numbering, and a source number rendered into it would name unrelated
+    footage.  A range the view cannot map (a plan that claims more lines than
+    the transcript has) is skipped with a warning rather than rendered raw.
+    """
+    rows: list[tuple[int, str]] = []
+    for direction in sorted(directions, key=lambda d: d.lines):
+        if not _overlaps(direction, segment):
+            continue
+        first, last = _clipped(direction.lines, segment)
+        if first > last:
+            continue
+        start = view.from_source(index, first)
+        end = view.from_source(index, last)
+        if start is None or end is None:
+            logger.warning(
+                "director: no display line for %s lines %d-%d; direction skipped (%s)",
+                direction.stem,
+                direction.lines[0],
+                direction.lines[1],
+                direction.direction,
+            )
+            continue
+        rows.append((start, f"- lines {start}-{end}: {direction.direction}"))
+    return [row for _, row in sorted(rows, key=lambda item: item[0])]
+
+
+def project_context_block(
+    project_summary: ProjectSummary,
+    directions: list[PartDirection],
+    segments: Sequence[Segment],
+    view: DisplayView,
+) -> str:
+    """The project's context for the WHOLE video, for the cacheable prefix.
+
+    The overall summary once, then every segment in playback order with the
+    plan's directions covering it, every range in the display numbering the
+    conversation reads -- and :data:`SECTION_BOUNDARY_NOTE` immediately above
+    that list, which is the only place it is emitted.
+
+    *segments* is the playback order, positionally the same as ``view.segments``
+    (``[k]`` is a position in both).
+
+    What the per-segment block also carried is gone: the "Earlier/Later in the
+    finished video" sibling summaries described segments from outside, and the
+    view below this block now contains their transcripts in full.
+
+    ``""`` when there is nothing to say, so an empty overview leaves the system
+    message exactly as it was.
+    """
+    blocks: list[str] = []
+    for index, segment in enumerate(segments, start=1):
+        label = view.segments[index - 1].label if index <= len(view.segments) else "?"
+        rows = _direction_rows(directions, segment, index, view)
+        blocks.append("\n".join([f"[{index}] {label}:", *(rows or ["- (no directions)"])]))
+    listed = any("- lines " in block for block in blocks)
+
+    out: list[str] = []
+    if project_summary.summary:
+        out.append(f"Project context (all videos):\nOverall: {project_summary.summary}")
+    if listed:
+        out.append("\n".join([SECTION_BOUNDARY_NOTE, *blocks]))
+    return "\n\n".join(out)

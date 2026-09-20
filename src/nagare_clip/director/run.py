@@ -32,6 +32,7 @@ from nagare_clip.director.context import (
     PriorEdits,
     Seam,
     build_director_context,
+    project_context_block,
     qualify_line_numbers,
     seam_lines,
     whole_video_block,
@@ -408,19 +409,46 @@ class ConversationResult:
     turns: int = 0
 
 
-def system_message(director_cfg: dict, view: DisplayView) -> dict[str, str]:
+def project_context(
+    summary: Path | None,
+    plan: Path | None,
+    segments: list[Segment],
+    view: DisplayView,
+) -> str:
+    """The project's summary and the plan's directions, for the whole video.
+
+    Read off the same artifacts the per-segment director read — the summary
+    stage's ``summary.json`` and the EFFECTIVE plan (the revised one when the
+    human wrote one, which the caller resolves) — and rendered once, in display
+    numbers (:func:`~.context.project_context_block`).  Missing or empty
+    artifacts give ``""``, which leaves the system message exactly as it was.
+    """
+    project_summary = ProjectSummary(summary="", parts=[])
+    if summary and summary.is_file():
+        project_summary = summary_from_dict(json.loads(summary.read_text(encoding="utf-8")))
+    directions = []
+    if plan and plan.is_file():
+        directions = plan_from_dict(json.loads(plan.read_text(encoding="utf-8")))
+    return project_context_block(project_summary, directions, segments, view)
+
+
+def system_message(director_cfg: dict, view: DisplayView, context: str = "") -> dict[str, str]:
     """The one system message, identical on every turn of the conversation.
 
-    Prompt, the keep-limit note and the whole video, in that order — and the
-    WHOLE of it is declared cacheable: nothing in it varies per turn, so the
-    breakpoint sits at its end and every turn after the first reads the cache
-    instead of paying for the transcript again.
+    Prompt, the keep-limit note, the project context and the whole video, in
+    that order — and the WHOLE of it is declared cacheable: nothing in it varies
+    per turn, so the breakpoint sits at its end and every turn after the first
+    reads the cache instead of paying for the transcript again.
+
+    *context* is :func:`project_context`'s block.  It is instruction, so it
+    goes ABOVE the transcript, which is data; and it is the same on every turn,
+    which is why it belongs in here rather than in a user message.
     """
     prompt = director_cfg.get("prompt", "")
     max_keep_lines = _max_keep_lines(director_cfg)
     if max_keep_lines > 0:
         prompt = f"{prompt}\n\n{keep_limit_note(max_keep_lines)}"
-    content = f"{prompt}\n\n{VIEW_HEADER}\n\n{view.render()}"
+    content = "\n\n".join(p for p in (prompt, context, VIEW_HEADER, view.render()) if p)
     return {"role": "system", "content": content, CACHEABLE_PREFIX_KEY: content}
 
 
@@ -455,11 +483,16 @@ def run_director_conversation(
     inputs: list[SegmentInputs],
     cfg: dict,
     *,
+    summary: Path | None = None,
+    plan: Path | None = None,
     call_llm: director_llm_mod.CallLLM | None = None,
     recorder: Recorder = NULL_RECORDER,
     unit: str = "director",
 ) -> ConversationResult:
     """Edit the whole video in ONE conversation, and return its ops per source.
+
+    *summary*/*plan* are the summary stage's ``summary.json`` and the effective
+    plan; they become the project context block inside the cached prefix.
 
     *inputs* are every segment of the finished video, in playback order.  The
     transcripts are loaded once, numbered once (:func:`build_display_view`),
@@ -496,7 +529,8 @@ def run_director_conversation(
     )
 
     stage_cfg = apply_brief(director_cfg, cfg)
-    messages: list[dict[str, str]] = [system_message(stage_cfg, view)]
+    context = project_context(summary, plan, [i.segment for i in inputs], view)
+    messages: list[dict[str, str]] = [system_message(stage_cfg, view, context)]
     state = LoopState()
     answer = ""
     error = ""

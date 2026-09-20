@@ -625,7 +625,13 @@ def _director_run(ctx: PipelineContext) -> None:
 
     print(f"[director] Edit operations: {len(segments)} segment(s) in one conversation")
     try:
-        result = run_director_conversation(inputs, ctx.cfg, recorder=rec)
+        result = run_director_conversation(
+            inputs,
+            ctx.cfg,
+            summary=ctx.stage_dir("summary") / "summary.json",
+            plan=_effective_plan_json(ctx),
+            recorder=rec,
+        )
         # Written BEFORE the failure, never after it: the ops are what the
         # conversation is for, and a cap is not a reason to throw them away.
         for stem in stems:
