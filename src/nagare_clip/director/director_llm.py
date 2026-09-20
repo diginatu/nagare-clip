@@ -344,6 +344,18 @@ def _drop_off_menu_ops(
     return kept
 
 
+def strip_code_fence(response: str) -> str:
+    """*response* without the ```` ```json ```` fence models keep wrapping it in.
+
+    Shared with :mod:`nagare_clip.director.loop`, whose reply is a JSON object
+    with more in it than ``ops`` — so the two readers of one model's JSON
+    cannot disagree about what a fenced reply is.
+    """
+    text = response.strip()
+    fence = _FENCE_RE.match(text)
+    return fence.group(1) if fence else text
+
+
 def try_parse_director_response(
     response: str,
     num_lines: int,
@@ -365,12 +377,8 @@ def try_parse_director_response(
     a span's worth of dead air. Applied as a post-pass (:func:`_apply_keep_cap`)
     after every op is parsed.
     """
-    text = response.strip()
-    fence = _FENCE_RE.match(text)
-    if fence:
-        text = fence.group(1)
     try:
-        data = json.loads(text)
+        data = json.loads(strip_code_fence(response))
     except (ValueError, TypeError):
         logger.warning("Director response is not valid JSON; ignoring")
         return None
