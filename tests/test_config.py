@@ -686,33 +686,55 @@ def test_gap_context_prompt_documents_the_markers_describe_parses():
     assert "ACTION:" in prompt
 
 
-def test_director_prompt_documents_gap_annotations():
-    # The director must be told what the `[silent gap ...]` annotation line means
-    # and that a `keep` op spanning the adjacent lines rescues the moment.
+def test_director_prompt_documents_silence_lines_and_how_to_address_them():
+    # A silence line is the one thing in the transcript the director cannot
+    # name by number, so the prompt has to teach the "n~" form -- without it
+    # the whole feature is invisible to the model that would use it.
     cfg = get_effective_config(None, {})
     prompt = cfg["director"]["prompt"]
-    assert "[silent gap" in prompt
+    assert "[silent " in prompt
+    # The form itself, an op range written with it, and the rule that it may
+    # stand at EITHER end of a range -- an example alone would teach only the
+    # silence-alone case, which is one of the three shapes the parser takes.
+    assert '"53~"' in prompt
+    assert '["53~", "53~"]' in prompt
+    assert "either endpoint" in prompt
     assert "keep" in prompt
 
 
-def test_director_prompt_gap_example_matches_the_real_formatter():
+def test_director_prompt_silence_example_matches_the_real_formatter():
     """The DIRECTOR_PROMPT's documented example line must be exactly what
-    gap_context.context.annotate_numbered_transcript renders for the
-    corresponding Gap -- pins the doc example to the real formatter so a
-    rendering change (indent, decimal places, wording) fails loudly here
-    instead of silently going stale in the prompt."""
+    director.silence_lines.SilenceLine renders -- pins the doc example to the
+    real formatter so a rendering change (indent, decimal places, wording)
+    fails loudly here instead of silently going stale in the prompt.
+
+    Was pinned to gap_context.annotate_numbered_transcript, which rendered the
+    `[silent gap: ...]` annotation the silence line replaces for a between-line
+    wait; that annotation survives for silence INSIDE a line, so its prefix is
+    pinned too."""
+    from nagare_clip.director.silence_lines import SilenceLine
     from nagare_clip.gap_context.context import annotate_numbered_transcript
     from nagare_clip.gap_context.gaps import Gap
 
     cfg = get_effective_config(None, {})
     prompt = cfg["director"]["prompt"]
 
-    gap = Gap(start=0.0, end=12.4, frames=[], description="a build runs and logs scroll past")
-    rendered = annotate_numbered_transcript("1: x", [(1, gap)])
-    annotation_line = rendered.split("\n")[1]
+    line = SilenceLine(53, 0.0, 29.9, ("a build runs and logs scroll past",))
+    assert line.render() == "    [silent 29.9s after line 53: a build runs and logs scroll past]"
+    assert line.render() in prompt
 
-    assert annotation_line == "    [silent gap: a build runs and logs scroll past]"
-    assert annotation_line in prompt
+    # The op form the example teaches must be the one the parser accepts.
+    from nagare_clip.director.director_llm import parse_director_response
+
+    ops = parse_director_response(
+        '{"ops": [{"type": "keep", "lines": ["53~", "53~"]}]}', num_lines=100
+    )
+    assert (ops[0].lines, ops[0].gap_start, ops[0].gap_end) == ((53, 53), True, True)
+
+    gap = Gap(start=0.0, end=12.4, frames=[], description="x")
+    prefix = annotate_numbered_transcript("1: x", [(1, gap)]).split("\n")[1].split("x]")[0]
+    assert prefix == "    [silent gap: "
+    assert prefix.strip() in prompt
 
 
 def test_director_prompt_overlay_example_carries_a_duration():
@@ -829,10 +851,12 @@ def test_director_prompt_scales_keep_width_to_what_is_on_screen():
     as important stays forbidden — that abuse took a 22.3-minute cut to 53.9."""
     cfg = get_effective_config(None, {})
     prompt = cfg["director"]["prompt"]
-    # Rescuing one gap keeps its narrow example...
-    assert "narrowest range" in prompt
-    assert "[N, N+1]" in prompt
-    # ...but a continuous event may be spanned whole.
+    # Rescuing one silence no longer needs a keep over the lines around it:
+    # the silence is addressable on its own ("53~"), so the [N, N+1] mechanic
+    # -- which could only ever approximate it -- is gone.
+    assert "[N, N+1]" not in prompt
+    assert "narrowest range" not in prompt
+    # A continuous event may still be spanned whole.
     assert "WHOLE event" in prompt
     assert "jump cuts" in prompt
     # Talking is never a reason to widen one.
@@ -859,8 +883,10 @@ def test_director_prompt_states_each_keep_rule_in_exactly_one_place():
     the Timing legend owns bracket notation, the overlay bullet owns when to
     caption."""
     prompt = get_effective_config(None, {})["director"]["prompt"]
-    # The [N, N+1] rescue mechanic belongs to the keep bullet alone.
-    assert prompt.count("[N, N+1]") == 1
+    # The [N, N+1] rescue mechanic is gone entirely: a silence line is
+    # addressed as "53~", exactly, so an approximation of it in a second
+    # vocabulary is one more place to drift.  It must not creep back.
+    assert prompt.count("[N, N+1]") == 0
     # "dropped by default" is the Timing legend's job; the keep bullet and the
     # visual-context paragraph point at it rather than restating it.
     assert prompt.count("dropped by default") <= 2
@@ -879,9 +905,11 @@ def test_director_prompt_lets_a_described_action_span_its_whole_run():
     keep_bullet = next(ln for ln in prompt.splitlines() if ln.startswith("- keep:"))
     assert "across several gaps" in keep_bullet
     assert "WHOLE event in one keep" in keep_bullet
-    # And the visual-context paragraph must still send the reader there.
-    visual = next(ln for ln in prompt.splitlines() if "Annotation lines are not numbered" in ln)
-    assert "keep op below" in visual
+    # And the silence paragraph must not restate it: it names the ops that
+    # act on a silence and leaves how wide to the bullet that owns it.
+    silence = next(ln for ln in prompt.splitlines() if ln.startswith("is the wait"))
+    assert "keep" in silence and "timelapse" in silence
+    assert "WHOLE event" not in silence and "jump cuts" not in silence
 
 
 def test_director_max_keep_lines_default():
@@ -1165,3 +1193,13 @@ def test_revise_prompt_documents_the_ids_and_the_split():
     assert "id" in prompt.lower()
     assert "split" in prompt.lower()
     assert '"message"' in prompt
+
+
+def test_director_prompt_did_not_grow_for_the_silence_lines():
+    """Improvement 16: every round that grew this prompt cost something, so a
+    feature that adds a paragraph has to pay for it by deleting what it makes
+    redundant -- here the gap-rescue mechanics in the Timing legend and the
+    visual-context paragraph, and the [N, N+1] rule in the keep bullet.  6289
+    characters is what it measured before the silence lines went in."""
+    prompt = get_effective_config(None, {})["director"]["prompt"]
+    assert len(prompt) < 6289

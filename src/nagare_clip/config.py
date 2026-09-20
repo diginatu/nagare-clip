@@ -283,35 +283,36 @@ DIRECTOR_PROMPT = (
     "duration; [4.2s, gap 0.8s] adds the silent gap before the next line. A "
     "line holding long internal silence splits it instead — "
     "[13.0s speech, 62.9s silence] means only 13.0 seconds are spoken and the "
-    '62.9 silent seconds are dropped by default (a "keep" preserves them) — '
+    "62.9 silent seconds are dropped by default — "
     "and may carry a gap too: [13.0s speech, 62.9s silence, gap 0.8s]. Those "
     "are the only four forms; a negligible gap is omitted; no timing, no "
-    "bracket. "
+    "bracket. A bracket's gap is a SHORT one — a longer wait is a "
+    # The gap-rescue reading used to live here, because a 29.9 s wait reached
+    # the director only as `gap 29.9s` inside the preceding line's bracket and
+    # nothing else could be said about it.  It is a line of its own now, which
+    # is where the "this may be the best moment in the shot" reading belongs.
+    "[silent …] line of its own, below.\n"
+    "\n"
     "Use these numbers to judge pacing, always from the speech figure and "
     "never from speech+silence: a long speech duration is a "
     "candidate for cutting, not speeding up — a long stretch of manual "
-    "work is a timelapse candidate. A long gap or silence is "
-    "dead air by default, already dropped — but that is the fallback "
-    "reading, not the only one. Check the speech either side of it: "
-    "if it announces something happening (an accident, a cleanup, a wait "
-    # How to rescue it belongs to the keep bullet; this legend's job is to say
-    # the silence may be worth rescuing at all.
-    "for a result), that silence may be the most watchable moment in the "
-    "shot.\n"
+    "work is a timelapse candidate.\n"
     "\n"
-    "Visual context: an indented line like\n"
-    "    [silent gap: a build runs and logs scroll past]\n"
-    # Not "the silence AFTER that line": gaps are anchored by midpoint, so an
-    # annotation lands on whichever line's bracket reports that silence — for
-    # 16 of a real run's 59 that is the line's own internal `Ys silence`, not
-    # its trailing gap.  The old wording was false for 54% of them.
-    # Both the rescue mechanic and the whole-run rule now live once, in the
-    # keep bullet, which states them more completely than this paragraph did.
-    "may follow a numbered line. It describes what is VISIBLE on screen "
-    "during that line's own silence, gap or internal (nobody is speaking). "
-    'If one shows something worth watching, a "keep" rescues it — see the '
-    "keep op below for how wide to make it. Annotation "
-    "lines are not numbered; never reference them as op lines.\n"
+    "Silence: an indented line like\n"
+    "    [silent 29.9s after line 53: a build runs and logs scroll past]\n"
+    # The one thing in the transcript that has no number, so the "n~" form has
+    # to be taught here or the silence is unaddressable in practice.  One
+    # example only (improvement 11: an example anchors harder than the prose
+    # around it, and three of them would read as three separate moves).
+    "is the wait between two lines — 29.9 s in which nobody speaks — "
+    "followed by what is VISIBLE on screen during it. It carries "
+    'no number: address it as "53~", the silence after line 53, which either '
+    'endpoint of an op\'s "lines" may be (["53~", "53~"] is that wait alone). '
+    'A "keep" restores it, a "timelapse" plays it fast. Dead air is the '
+    "fallback reading, not the only one: if the speech either side announces "
+    "something happening (an accident, a cleanup, a wait for a result), that "
+    "silence may be the most watchable moment in the shot. An indented "
+    "[silent gap: …] with no seconds is silence INSIDE the line above.\n"
     "\n"
     "Operations (reference lines by their 1-based numbers, inclusive). "
     "Prefer a timelapse over a cut where the repetition is VISIBLE WORK building "
@@ -336,13 +337,12 @@ DIRECTOR_PROMPT = (
     # one arriving first.
     "moments worth labeling on screen. Aim for one overlay per 3-5 minutes "
     "of finished video; an editorial brief may set a different rate.\n"
-    # The keep op owns keep mechanics outright: the width rule, the [N, N+1]
-    # rescue, and the whole-event span.  The Timing legend and the
-    # Visual-context paragraph now point here instead of restating them.
+    # The keep op owns keep mechanics outright: the width rule and the
+    # whole-event span.  Rescuing ONE silence is no longer a keep-width
+    # question at all — "53~" addresses it exactly — so the [N, N+1]
+    # approximation that used to live here is gone.
     "- keep: protect a span from cutting INCLUDING its silences/non-speech "
-    "gaps. Let its width follow what is ON "
-    "SCREEN. To rescue one silent gap, use the narrowest range covering it — "
-    "the line before it and the next one ([N, N+1]). When a continuous event "
+    "gaps. When a continuous event "
     "is playing out across several gaps — an accident and the cleanup after "
     "it, a demo running, a result arriving — span the WHOLE event in one "
     "keep, so the payoff is not chopped into jump cuts. Never widen a keep "
