@@ -212,7 +212,9 @@ def test_intervals_adapter_calls_run_per_source(tmp_path, monkeypatch):
     monkeypatch.setattr(
         st,
         "run_intervals",
-        lambda edits, jsonp, out, cfg, *, cuts_txt=None: seen.append((edits, jsonp, out, cuts_txt)),
+        lambda edits, jsonp, out, cfg, *, cuts_txt=None, extra=None: seen.append(
+            (edits, jsonp, out, cuts_txt)
+        ),
     )
     by_name = {s.name: s for s in st.STAGES}
     by_name["intervals"].run(_ctx(tmp_path, stems=("a",)))

@@ -36,6 +36,7 @@ from nagare_clip.gap_context.snapshot import (
 )
 from nagare_clip.guided_edit.run import run_guided_edit
 from nagare_clip.intervals.manifest import build_manifest
+from nagare_clip.intervals.op_times import OpTimes, resolve_op_times
 from nagare_clip.intervals.run import run_intervals
 from nagare_clip.llm_report import recorder_from_config
 from nagare_clip.order import (
@@ -750,6 +751,27 @@ def _guided_edit_required(ctx: PipelineContext) -> list[Path]:
 # --- intervals ---------------------------------------------------------------
 
 
+def _silence_op_times(ctx: PipelineContext, stem: str) -> OpTimes | None:
+    """Time ranges for this source's ops that address a silence (``"n~"``).
+
+    Those carry no marker in ``_edits.txt`` — there are no words in a silence
+    to wrap — so they are resolved here and handed to ``run_intervals``.
+    ``None`` when there is no director output to read, which is the state a
+    project without the director stage enabled is in.
+    """
+    director_json = ctx.stage_dir("director") / f"{stem}_director.json"
+    json_path = ctx.stage_dir("sentence_split") / f"{stem}.json"
+    if not director_json.is_file() or not json_path.is_file():
+        return None
+    try:
+        ops = ops_from_dict(json.loads(director_json.read_text(encoding="utf-8")), None)
+        whisperx = json.loads(json_path.read_text(encoding="utf-8"))
+    except (ValueError, OSError):
+        logging.warning("intervals: could not read %s for silence refs", director_json)
+        return None
+    return resolve_op_times(ops, whisperx)
+
+
 def _intervals_run(ctx: PipelineContext) -> None:
     for src in ctx.sources:
         print(f"[intervals] Patch application + keep intervals: {src.stem}")
@@ -759,6 +781,7 @@ def _intervals_run(ctx: PipelineContext) -> None:
             ctx.stage_dir("intervals") / f"{src.stem}_intervals.json",
             ctx.cfg,
             cuts_txt=ctx.stage_dir("audio_silence") / f"{src.stem}_cuts.txt",
+            extra=_silence_op_times(ctx, src.stem),
         )
     write_order_note(ctx)
     _write_manifest(ctx)
