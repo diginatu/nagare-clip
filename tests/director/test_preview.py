@@ -512,6 +512,30 @@ class TestDisplayNumbering:
         assert "  clipped to [5,5]: lines 6-7 are under keep [6,7] (op 2)" in text
 
 
+class TestASilenceNobodyCanHear:
+    def test_a_zero_second_gap_inside_a_time_resolved_op_is_not_printed(self):
+        # A timelapse over a stretch whose lines run into each other holds a
+        # gap after every one of them.  Printing "[silent 0.0s after line 6]"
+        # for each is noise the director has to read past every turn: six of
+        # the seven gap lines in the real project's first timelapse were this.
+        view = _view()
+        op = DirectorOp(
+            type="timelapse", lines=(47, 53), factor=6.0, text="T", gap_start=True, gap_end=True
+        )
+        text = preview_segment(
+            WATER_T.edit_lines,
+            [op],
+            seg_times=WATER_T.seg_times,
+            silences=WATER_T.silences,
+            silence_lines=WATER_T.silence_lines,
+            first_line=WATER_T.first_line,
+            numbering=numbering_for(view, 1),
+        ).text
+        assert "0.0s" not in text
+        # ...and the waits that ARE there still are.
+        assert "11: [silent 29.9s" in text
+
+
 class TestWholeVideoRuntime:
     def test_the_footer_is_the_whole_video_not_this_segment(self):
         view = _view()
