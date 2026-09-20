@@ -40,6 +40,21 @@ def build_speech_spans(whisperx_data: dict) -> list[tuple[float, float]]:
     return spans
 
 
+def line_speech_spans(whisperx_data: dict) -> list[list[tuple[float, float]]]:
+    """One :func:`build_speech_spans` list per WhisperX segment (= per line).
+
+    ``build_speech_spans`` only ever looks at the next word *within* a segment,
+    so running it per segment yields exactly the spans the whole-file call
+    produces for that segment.  The space between line ``n``'s last span and
+    line ``n+1``'s first is therefore the silence the pipeline drops — the one
+    definition :mod:`nagare_clip.intervals.op_times` resolves ``"n~"`` to and
+    :mod:`nagare_clip.director.silence_lines` shows the director.
+    """
+    return [
+        build_speech_spans({"segments": [segment]}) for segment in whisperx_data.get("segments", [])
+    ]
+
+
 def get_duration_sec(whisperx_data: dict, words: Sequence[tuple[float, float, str]]) -> float:
     max_end = 0.0
     if words:

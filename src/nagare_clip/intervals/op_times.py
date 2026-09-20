@@ -27,7 +27,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from nagare_clip.director.director_llm import DirectorOp
-from nagare_clip.intervals.speech import build_speech_spans
+from nagare_clip.intervals.speech import line_speech_spans
 
 logger = logging.getLogger(__name__)
 
@@ -52,18 +52,6 @@ class OpTimes:
     keeps: list[tuple[float, float]] = field(default_factory=list)
     speeds: list[tuple[float, float, float]] = field(default_factory=list)
     overlays: list[tuple[float, float, str]] = field(default_factory=list)
-
-
-def _line_spans(whisperx_data: dict[str, Any]) -> list[list[tuple[float, float]]]:
-    """Each line's speech spans, by the same rule the drop logic uses.
-
-    ``build_speech_spans`` only ever looks at the next word *within* a segment,
-    so running it per segment gives exactly the spans the whole-file call would
-    produce for that segment.
-    """
-    return [
-        build_speech_spans({"segments": [segment]}) for segment in whisperx_data.get("segments", [])
-    ]
 
 
 def _span_bounds(
@@ -103,7 +91,7 @@ def resolve_op_times(ops: list[DirectorOp], whisperx_data: dict[str, Any]) -> Op
     is skipped with a warning rather than guessed at.
     """
     out = OpTimes()
-    spans = _line_spans(whisperx_data)
+    spans = line_speech_spans(whisperx_data)
     for op in ops:
         if not (op.gap_start or op.gap_end) or op.type not in RESOLVED_TYPES:
             continue
