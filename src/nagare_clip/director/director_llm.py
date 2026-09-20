@@ -16,6 +16,7 @@ from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
 from typing import Any
 
+from nagare_clip.director.silence_lines import SilenceLine, insert_silence_lines
 from nagare_clip.gap_context.context import annotate_numbered_transcript
 from nagare_clip.gap_context.gaps import Gap
 from nagare_clip.intervals.sync_json import (
@@ -501,6 +502,7 @@ def render_transcript(
     silences: list[float] | None = None,
     anchored_gaps: list[tuple[int, Gap]] | None = None,
     first_line: int = 1,
+    silence_lines: Sequence[SilenceLine] | None = None,
 ) -> str:
     """One segment's numbered transcript exactly as the director is shown it.
 
@@ -508,14 +510,24 @@ def render_transcript(
     those; plain ``N: text`` otherwise.  The editable user message and the
     whole-video reference block are both rendered here, so the two views of one
     segment can never disagree.
+
+    *silence_lines* (:mod:`nagare_clip.director.silence_lines`) are the waits
+    between lines long enough to be shown as lines of their own.  Each one
+    states its duration, so the line it follows drops the ``gap`` part of its
+    bracket: one silence is never two numbers.  They need brackets to sit
+    beside, so an untimed transcript ignores them.
     """
     if seg_times is not None and len(seg_times) == len(clean_lines):
         out = format_numbered_transcript_timed(
-            clean_lines, seg_times, silences=silences, first_line=first_line
+            clean_lines,
+            seg_times,
+            silences=silences,
+            first_line=first_line,
+            silence_after={line.after_line for line in silence_lines or []},
         )
         if anchored_gaps:
             out = annotate_numbered_transcript(out, anchored_gaps)
-        return out
+        return insert_silence_lines(out, silence_lines or [])
     return format_numbered_transcript(clean_lines, first_line=first_line)
 
 
@@ -524,6 +536,7 @@ def format_numbered_transcript_timed(
     seg_times: list[tuple[float | None, float | None]],
     silences: list[float] | None = None,
     first_line: int = 1,
+    silence_after: set[int] | None = None,
 ) -> str:
     """``N: text  [dur, gap]`` (1-based), gap = time to the next line.
 
@@ -535,6 +548,10 @@ def format_numbered_transcript_timed(
     never judges pacing from span time that is mostly already-dropped silence.
     A missing ``start``/``end`` degrades that line's bracket via
     :func:`format_dur_gap` (possibly to no bracket at all).
+
+    *silence_after* are the line numbers a silence line follows: that wait is
+    stated there, in seconds of its own, so printing it here too would give one
+    silence two numbers the director has to reconcile.
     """
     out: list[str] = []
     speech = speech_seconds(seg_times, silences)
@@ -543,7 +560,9 @@ def format_numbered_transcript_timed(
         sil = silences[i] if silences is not None and i < len(silences) else None
         dur = speech[i]
         gap: float | None = None
-        if i + 1 < len(clean_lines):
+        if silence_after and i + first_line in silence_after:
+            pass
+        elif i + 1 < len(clean_lines):
             nxt_start = seg_times[i + 1][0]
             if end is not None and nxt_start is not None:
                 gap = nxt_start - end
