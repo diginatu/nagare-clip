@@ -69,6 +69,14 @@ class DirectorOp:
     factor: float | None = None
     text: str | None = None
     duration: float | None = None  # overlay: on-screen seconds (edited timeline)
+    # True when that edge of the range is the SILENCE after the line, written
+    # "n~" in _director.json.  ``lines`` stays the speech-line numbers, so
+    # everything that blocks, clips, sorts or reports by line keeps working;
+    # only the resolver that turns an op into times reads these.  A span
+    # otherwise ends at its last line's last word, which is why "compress the
+    # wait after line 53" was unexpressible.
+    gap_start: bool = False
+    gap_end: bool = False
     extra: dict = field(default_factory=dict)
 
 
@@ -139,6 +147,51 @@ def _coerce_lines(value: Any, num_lines: int | None, first_line: int = 1) -> tup
     return (start, end)
 
 
+#: ``"53~"`` — the silence after source line 53.  Anchored at both ends so a
+#: bare ``"~53"`` or a trailing-space variant is a malformed op, not a silent
+#: reinterpretation of which line it names.
+_SILENCE_REF_RE = re.compile(r"^(\d+)~$")
+
+
+def _coerce_endpoint(value: Any) -> tuple[int, bool] | None:
+    """One range endpoint: ``12`` -> ``(12, False)``; ``"12~"`` -> ``(12, True)``."""
+    if isinstance(value, bool):  # bool is an int subclass; reject explicitly
+        return None
+    if isinstance(value, int):
+        return (value, False)
+    if isinstance(value, str):
+        m = _SILENCE_REF_RE.match(value)
+        if m:
+            return (int(m.group(1)), True)
+    return None
+
+
+def _coerce_line_range(
+    value: Any, num_lines: int | None, first_line: int = 1
+) -> tuple[tuple[int, int], bool, bool] | None:
+    """A director op's ``lines``: the same range as :func:`_coerce_lines`, plus
+    which edges name the silence after their line.
+
+    Separate from :func:`_coerce_lines` because ``summary`` shares that one for
+    part ranges, where a silence reference has no meaning.  Every range check
+    is the same: a silence edge is an edge of the SAME line, so it relaxes
+    nothing.
+    """
+    if isinstance(value, (list, tuple)) and len(value) == 2:
+        first, last = value
+    else:
+        first = last = value
+    start = _coerce_endpoint(first)
+    end = _coerce_endpoint(last)
+    if start is None or end is None:
+        return None
+    if not (max(1, first_line) <= start[0] <= end[0]):
+        return None
+    if num_lines is not None and end[0] > num_lines:
+        return None
+    return ((start[0], end[0]), start[1], end[1])
+
+
 def _parse_op(
     raw: Any,
     num_lines: int | None,
@@ -156,10 +209,11 @@ def _parse_op(
     if op_type not in VALID_TYPES:
         _drop(f"unknown type {op_type!r}")
         return None
-    lines = _coerce_lines(raw.get("lines"), num_lines, first_line)
-    if lines is None:
+    coerced = _coerce_line_range(raw.get("lines"), num_lines, first_line)
+    if coerced is None:
         _drop(f"bad lines {raw.get('lines')!r}")
         return None
+    lines, gap_start, gap_end = coerced
 
     # The max_keep_lines cap itself is enforced as a post-pass over the whole
     # op list (see _apply_keep_cap), not here.
@@ -221,7 +275,14 @@ def _parse_op(
             return None
 
     return DirectorOp(
-        type=op_type, lines=lines, note=note, factor=factor, text=text, duration=duration
+        type=op_type,
+        lines=lines,
+        note=note,
+        factor=factor,
+        text=text,
+        duration=duration,
+        gap_start=gap_start,
+        gap_end=gap_end,
     )
 
 
@@ -497,7 +558,10 @@ def ops_to_dict(ops: list[DirectorOp]) -> dict[str, Any]:
     for op in ops:
         entry: dict[str, Any] = {
             "type": op.type,
-            "lines": [op.lines[0], op.lines[1]],
+            "lines": [
+                f"{op.lines[0]}~" if op.gap_start else op.lines[0],
+                f"{op.lines[1]}~" if op.gap_end else op.lines[1],
+            ],
         }
         if op.factor is not None:
             entry["factor"] = op.factor
