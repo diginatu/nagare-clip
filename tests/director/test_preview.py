@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import json
 import re
+from dataclasses import replace
 
 import pytest
 
@@ -18,11 +19,20 @@ from nagare_clip.director.director_llm import (
     speech_seconds,
     try_parse_director_response,
 )
-from nagare_clip.director.preview import preview_segment, resolve_placements
+from nagare_clip.director.display import build_display_view
+from nagare_clip.director.preview import (
+    numbering_for,
+    preview_segment,
+    preview_turn,
+    resolve_placements,
+)
+from nagare_clip.director.run import SegmentTranscript
+from nagare_clip.director.silence_lines import SilenceLine
 from nagare_clip.gap_context.gaps import Gap
 from nagare_clip.guided_edit.apply import apply_ops
 from nagare_clip.guided_edit.timelapse import caption_duration, expand_timelapse_ops
 from nagare_clip.intervals.sync_json import OVERLAY_TAG_RE
+from nagare_clip.order import Segment
 
 # PXL_20260426_090431216 lines 45-55: (start, end, silence inside, clean text).
 WATER = [
@@ -401,3 +411,166 @@ def test_apply_ops_and_the_preview_clip_identically(ops):
         (p.kind, p.lines[0], p.lines[1]) for per_op in placed for p in per_op if p.lines is not None
     }
     assert previewed == _tag_ranges(applied)
+
+
+# --- the conversation's view: display numbering and the whole video ------------
+
+
+WATER_SILENCES = [
+    SilenceLine(
+        47,
+        412.695,
+        434.647,
+        (
+            "The camera shifts to a closer view inside the aquarium.",
+            "The camera view shifts to the pipe opening.",
+        ),
+    ),
+    SilenceLine(53, 501.897, 531.779, (PUMP_DESC,)),
+]
+
+
+def _transcript(rows, first, silence_lines=()):
+    return SegmentTranscript(
+        edit_lines=[r[3] for r in rows],
+        first_line=first,
+        seg_times=[(r[0], r[1]) for r in rows],
+        silences=[r[2] for r in rows],
+        gaps=[],
+        silence_lines=list(silence_lines),
+    )
+
+
+WATER_T = _transcript(WATER, WATER_FIRST, WATER_SILENCES)
+FISH_T = _transcript(FISH, FISH_FIRST)
+
+
+def _view():
+    """Two segments, so a source line number is never its display number."""
+    return build_display_view(
+        [(Segment("water", (45, 55)), WATER_T), (Segment("fish", (5, 16)), FISH_T)]
+    )
+
+
+def _numbered(ops, **kw):
+    """The water segment's preview under the whole video's numbering."""
+    return preview_segment(
+        WATER_T.edit_lines,
+        ops,
+        seg_times=WATER_T.seg_times,
+        silences=WATER_T.silences,
+        silence_lines=WATER_T.silence_lines,
+        first_line=WATER_T.first_line,
+        numbering=numbering_for(_view(), 1),
+        **kw,
+    ).text
+
+
+class TestDisplayNumbering:
+    """Source line 45 is display line 1, and the 29.9 s wait after 53 is 11."""
+
+    def test_the_view_numbers_this_fixture_the_way_the_assertions_assume(self):
+        view = _view()
+        assert view.from_source(1, 45) == 1
+        assert view.from_source(1, 53) == 10
+        assert view.from_source(1, 53, silence=True) == 11
+        assert view.from_source(2, 5) == 14
+
+    def test_an_op_is_titled_in_display_numbers(self):
+        text = _numbered([_op("timelapse", 48, 50, factor=8.0, text="T")])
+        assert "timelapse [5,7] x8.0 「T」" in text
+        assert "timelapse [48,50]" not in text
+
+    def test_the_lines_an_op_plays_are_display_numbers(self):
+        text = _numbered([_op("timelapse", 48, 50, factor=8.0, text="T")])
+        assert "(default for lines 5-7:" in text
+
+    def test_speech_made_unintelligible_is_listed_by_display_number(self):
+        text = _numbered([_op("timelapse", 48, 50, factor=8.0, text="T")])
+        assert "    5 5.4 s 「ここに水を注ぎます」" in text
+
+    def test_a_silence_op_is_titled_by_the_silence_lines_own_number(self):
+        op = DirectorOp(type="timelapse", lines=(53, 53), factor=5.0, text="T")
+        text = _numbered([replace(op, gap_start=True, gap_end=True)])
+        assert "timelapse [11,11] x5.0 「T」" in text
+        assert "  covers line 11 (501.9-531.8 s)" in text
+
+    def test_a_dropped_silence_is_named_by_its_display_line(self):
+        text = _numbered([_op("keep", 53, 53)])
+        assert "  line 11 is outside this op — dropped" in text
+        # ...and shown exactly as the transcript shows line 11.
+        assert f"    11: {_view().line(11).text}" in text
+
+    def test_a_silence_with_no_line_of_its_own_still_names_a_display_line(self):
+        # The 3.2 s after source line 54 (display 12) is under the threshold.
+        text = _numbered([_op("keep", 54, 54)])
+        assert "  the silence after line 12 is outside this op — dropped" in text
+        assert "    [silent 3.2s after line 12]" in text
+
+    def test_a_clip_note_and_its_op_reference_are_display_numbers(self):
+        text = _numbered([_op("cut", 48, 50), _op("keep", 49, 50)])
+        assert "  clipped to [5,5]: lines 6-7 are under keep [6,7] (op 2)" in text
+
+
+class TestWholeVideoRuntime:
+    def test_the_footer_is_the_whole_video_not_this_segment(self):
+        view = _view()
+        ops = {1: [_op("cut", 45, 47)]}
+        water = preview_segment(
+            WATER_T.edit_lines,
+            ops[1],
+            seg_times=WATER_T.seg_times,
+            silences=WATER_T.silences,
+            silence_lines=WATER_T.silence_lines,
+            first_line=WATER_T.first_line,
+        )
+        expected = water.runtime_seconds + FISH_T.default_runtime()
+        text = preview_turn(view, [WATER_T, FISH_T], ops, segments=[1])
+        assert f"with the ops accepted so far {expected:.1f} s" in text
+        # The segment's own runtime is a different number, and it is reported
+        # as the segment's, not as the video's.
+        assert f"{water.runtime_seconds:.1f} s" != f"{expected:.1f} s"
+        assert f"segment [1] water [45-55]: default {water.default_seconds:.1f} s" in text
+
+    def test_a_segment_with_no_accepted_ops_counts_at_its_default(self):
+        view = _view()
+        text = preview_turn(view, [WATER_T, FISH_T], {}, segments=[1])
+        total = WATER_T.default_runtime() + FISH_T.default_runtime()
+        assert f"whole video so far: default {total:.1f} s" in text
+        assert f"with the ops accepted so far {total:.1f} s" in text
+
+    def test_a_segment_the_turn_did_not_touch_is_priced_but_not_printed(self):
+        view = _view()
+        ops = {1: [_op("cut", 45, 47)], 2: [_op("cut", 5, 7)]}
+        text = preview_turn(view, [WATER_T, FISH_T], ops, segments=[2])
+        assert "segment [1] water" not in text
+        assert "segment [2] fish" in text
+        fish = preview_segment(
+            FISH_T.edit_lines,
+            ops[2],
+            seg_times=FISH_T.seg_times,
+            silences=FISH_T.silences,
+            first_line=FISH_T.first_line,
+        )
+        water = preview_segment(
+            WATER_T.edit_lines,
+            ops[1],
+            seg_times=WATER_T.seg_times,
+            silences=WATER_T.silences,
+            silence_lines=WATER_T.silence_lines,
+            first_line=WATER_T.first_line,
+        )
+        expected = water.runtime_seconds + fish.runtime_seconds
+        assert f"with the ops accepted so far {expected:.1f} s" in text
+
+    def test_the_turns_ops_are_shown_in_display_numbers(self):
+        view = _view()
+        text = preview_turn(view, [WATER_T, FISH_T], {2: [_op("cut", 5, 7)]}, segments=[2])
+        assert "cut [14,16]" in text
+
+    def test_the_parsers_drops_are_reported_once(self):
+        view = _view()
+        text = preview_turn(
+            view, [WATER_T, FISH_T], {1: [], 2: []}, segments=[1, 2], drops=["bad op"]
+        )
+        assert text.count("dropped by the parser (no effect): bad op") == 1

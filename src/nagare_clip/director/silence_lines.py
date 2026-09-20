@@ -67,18 +67,40 @@ class SilenceLine:
     def duration(self) -> float:
         return self.end - self.start
 
-    def render(self) -> str:
+    def render(self, after_line: int | None = None) -> str:
         """The transcript line, indented and un-numbered.
 
         The duration is stated HERE and nowhere else: the preceding line's
         bracket drops its ``gap`` part when a silence line follows it
         (:func:`~nagare_clip.director.director_llm.format_numbered_transcript_timed`),
         so one silence never shows up as two numbers.
+
+        *after_line* overrides the line number named, for a view that numbers
+        its lines differently (increment 3's whole-video display numbering);
+        the default names this silence's own source line.
         """
-        body = f"silent {self.duration:.1f}s after line {self.after_line}"
-        if self.descriptions:
-            body += ": " + JOIN.join(self.descriptions)
-        return f"{INDENT}[{body}]"
+        anchor = self.after_line if after_line is None else after_line
+        return f"{INDENT}{silence_body(self.duration, self.descriptions, after_line=anchor)}"
+
+
+def silence_body(
+    seconds: float, descriptions: Sequence[str] = (), after_line: int | None = None
+) -> str:
+    """``[silent 29.9s: …]`` — the bracket every view of a silence prints.
+
+    The one formatter: the un-numbered transcript line (:meth:`SilenceLine.
+    render`), the numbered display line
+    (:func:`~nagare_clip.director.display.build_display_view`) and the playback
+    preview all render a silence through it, so its seconds and its
+    descriptions cannot drift between the three.  *after_line* is included only
+    where the silence has no number of its own to be addressed by.
+    """
+    body = f"silent {seconds:.1f}s"
+    if after_line is not None:
+        body += f" after line {after_line}"
+    if descriptions:
+        body += ": " + JOIN.join(descriptions)
+    return f"[{body}]"
 
 
 def gap_spans(whisperx_data: dict[str, Any]) -> dict[int, tuple[float, float]]:

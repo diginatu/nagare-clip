@@ -49,6 +49,7 @@ from nagare_clip.director.director_llm import (
     format_numbered_transcript,
     format_numbered_transcript_timed,
 )
+from nagare_clip.director.silence_lines import silence_body
 from nagare_clip.order import Segment, segment_label
 
 if TYPE_CHECKING:  # pragma: no cover - typing only, and run.py may import us
@@ -171,15 +172,6 @@ def _bodies(transcript: SegmentTranscript) -> list[str]:
     return [text.split(": ", 1)[1] if ": " in text else "" for text in block.split("\n")]
 
 
-def _silence_text(descriptions: Sequence[str], seconds: float) -> str:
-    """A silence line's body.  It has a number of its own now, so it no longer
-    says which line it follows — that is the line above it."""
-    body = f"silent {seconds:.1f}s"
-    if descriptions:
-        body += ": " + " / ".join(descriptions)
-    return f"[{body}]"
-
-
 def build_display_view(
     segments: Sequence[tuple[Segment, SegmentTranscript]],
 ) -> DisplayView:
@@ -221,7 +213,9 @@ def build_display_view(
                         stem=segment.stem,
                         source_line=source_line,
                         is_silence=True,
-                        text=_silence_text(silence.descriptions, silence.duration),
+                        # No "after line n" here: the line above it is that
+                        # line, and this one has a number of its own.
+                        text=silence_body(silence.duration, silence.descriptions),
                     )
                 )
         blocks.append(

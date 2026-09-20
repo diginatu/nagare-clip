@@ -36,8 +36,9 @@ Markers already in the edit lines steer the clipping but are not played back.
 
 from __future__ import annotations
 
-from collections.abc import Sequence
-from dataclasses import dataclass
+from collections.abc import Iterable, Mapping, Sequence
+from dataclasses import dataclass, field
+from typing import TYPE_CHECKING
 
 from nagare_clip.director.director_llm import (
     DirectorOp,
@@ -45,11 +46,15 @@ from nagare_clip.director.director_llm import (
     line_seconds,
     speech_seconds,
 )
-from nagare_clip.director.silence_lines import SilenceLine
+from nagare_clip.director.display import DisplayView
+from nagare_clip.director.silence_lines import INDENT, SilenceLine, silence_body
 from nagare_clip.gap_context.gaps import Gap
 from nagare_clip.guided_edit.apply import blocking_types, is_time_resolved, resolve_span_ops
 from nagare_clip.guided_edit.timelapse import expand_timelapse_ops
 from nagare_clip.timing import gap_shown, silence_shown
+
+if TYPE_CHECKING:  # pragma: no cover - typing only; run.py imports this module
+    from nagare_clip.director.run import SegmentTranscript
 
 #: Speech in a span sped up this much or more cannot be followed (user's rule).
 UNINTELLIGIBLE_FACTOR = 2.0
@@ -59,7 +64,48 @@ QUOTE_CHARS = 24
 
 HEADER = "Playback of these ops, computed from line timings (approximate):"
 
+WHOLE_VIDEO = "whole video so far"
+
 SegTimes = Sequence[tuple[float | None, float | None]]
+
+
+@dataclass(frozen=True)
+class Numbering:
+    """One segment's source line numbers translated to the numbers the model
+    reads (:mod:`nagare_clip.director.display`).
+
+    Ops stay in SOURCE coordinates everywhere — that is what ``_director.json``
+    holds and what every later stage applies — so the translation happens here,
+    at the last moment, on the way out.  Empty (:data:`IDENTITY`) is the
+    per-segment view, where the two numberings are the same one.
+
+    A silence has a display number of its own; in source coordinates it has
+    none, which is why ``"n~"`` exists, so the two tables are separate.
+    """
+
+    speech: dict[int, int] = field(default_factory=dict)
+    silence: dict[int, int] = field(default_factory=dict)
+
+    def of(self, line: int, *, silence: bool = False) -> int:
+        return (self.silence if silence else self.speech).get(line, line)
+
+    def numbered(self, line: int, silence: bool) -> bool:
+        """Does that edge have a line of its own in this numbering?"""
+        return not silence or line in self.silence
+
+
+#: The per-segment view: a source line number is the number shown.
+IDENTITY = Numbering()
+
+
+def numbering_for(view: DisplayView, segment: int) -> Numbering:
+    """The display numbers of one segment's lines."""
+    speech: dict[int, int] = {}
+    silence: dict[int, int] = {}
+    for line in view.lines:
+        if line.segment == segment:
+            (silence if line.is_silence else speech)[line.source_line] = line.number
+    return Numbering(speech, silence)
 
 
 @dataclass(frozen=True)
@@ -108,12 +154,18 @@ def _s(sec: float) -> str:
     return f"{sec:.1f} s"
 
 
-def _lines_phrase(lines: list[int]) -> str:
+def _lines_phrase(lines: list[int], num: Numbering = IDENTITY) -> str:
+    """*lines* (source numbers) named as the reader numbers them.
+
+    A contiguous source range is named by its two ends, so the silence lines
+    the display numbering interleaves are inside the range rather than holes in
+    it — which is what the op does to them too.
+    """
     if len(lines) == 1:
-        return f"line {lines[0]}"
+        return f"line {num.of(lines[0])}"
     if lines == list(range(lines[0], lines[-1] + 1)):
-        return f"lines {lines[0]}-{lines[-1]}"
-    return "lines " + ", ".join(str(n) for n in lines)
+        return f"lines {num.of(lines[0])}-{num.of(lines[-1])}"
+    return "lines " + ", ".join(str(num.of(n)) for n in lines)
 
 
 def _quote(text: str) -> str:
@@ -121,8 +173,15 @@ def _quote(text: str) -> str:
     return f"「{text[:QUOTE_CHARS]}…」" if len(text) > QUOTE_CHARS else f"「{text}」"
 
 
-def _op_title(op: DirectorOp) -> str:
-    head = f"{op.type} [{op.lines[0]},{op.lines[1]}]"
+def _op_range(op: DirectorOp, num: Numbering) -> str:
+    """An op's range as the reader numbers it: a silence edge is its own line."""
+    first = num.of(op.lines[0], silence=op.gap_start)
+    last = num.of(op.lines[1], silence=op.gap_end)
+    return f"[{first},{last}]"
+
+
+def _op_title(op: DirectorOp, num: Numbering = IDENTITY) -> str:
+    head = f"{op.type} {_op_range(op, num)}"
     if op.type in ("timelapse", "speed") and op.factor is not None:
         head += f" x{op.factor}"
     if op.text and op.type in ("timelapse", "overlay"):
@@ -130,8 +189,8 @@ def _op_title(op: DirectorOp) -> str:
     return head
 
 
-def _op_ref(op: DirectorOp, index: int) -> str:
-    return f"{op.type} [{op.lines[0]},{op.lines[1]}] (op {index + 1})"
+def _op_ref(op: DirectorOp, index: int, num: Numbering = IDENTITY) -> str:
+    return f"{op.type} {_op_range(op, num)} (op {index + 1})"
 
 
 class _Playback:
@@ -280,12 +339,26 @@ def covered(op: DirectorOp) -> tuple[list[int], list[int]]:
     return lines, sorted(set(gaps))
 
 
-def _fate(pb: _Playback, n: int, ops: list[DirectorOp]) -> str:
+def _fate(pb: _Playback, n: int, ops: list[DirectorOp], num: Numbering = IDENTITY) -> str:
     """What happens to the gap after line *n*: dropped, or which op keeps it."""
     if pb.gap_plays(n):
         i, _ = pb.gap_keep[n] if n in pb.gap_keep else pb.keep[n]
-        return f"covered by {_op_ref(ops[i], i)}"
+        return f"covered by {_op_ref(ops[i], i, num)}"
     return "dropped"
+
+
+def _silence_render(silence: SilenceLine, num: Numbering) -> str:
+    """One silence as the transcript the model reads shows it.
+
+    With a display numbering the wait is a numbered line of its own, so it is
+    quoted with that number; a wait too short to have earned a line (or the
+    per-segment view, where no silence has a number) still names the line it
+    follows.
+    """
+    number = num.silence.get(silence.after_line)
+    if number is None:
+        return silence.render(num.of(silence.after_line))
+    return f"{INDENT}{number}: {silence_body(silence.duration, silence.descriptions)}"
 
 
 def _silence_after(
@@ -321,6 +394,7 @@ def _clip_note(
     own: int,
     p: Placement,
     label: str,
+    num: Numbering = IDENTITY,
 ) -> list[str]:
     """Why *p* landed on fewer lines than sent (empty when it did not clip)."""
     sent = p.op.lines
@@ -330,12 +404,12 @@ def _clip_note(
         if p.lines[0] == sent[0]:
             return []
         lost = [sent[0]]
-        verb = f"moved to line {p.lines[0]}"
+        verb = f"moved to line {num.of(p.lines[0])}"
     else:
         if p.lines == tuple(sent):
             return []
         lost = [n for n in range(sent[0], sent[1] + 1) if not p.lines[0] <= n <= p.lines[1]]
-        verb = f"clipped to [{p.lines[0]},{p.lines[1]}]"
+        verb = f"clipped to [{num.of(p.lines[0])},{num.of(p.lines[1])}]"
     by: dict[int, list[int]] = {}
     unexplained: list[int] = []
     types = blocking_types(p.kind)
@@ -354,10 +428,10 @@ def _clip_note(
     reasons = []
     for k, lines in by.items():
         verb_be = "is" if len(lines) == 1 else "are"
-        reasons.append(f"{_lines_phrase(lines)} {verb_be} under {_op_ref(ops[k], k)}")
+        reasons.append(f"{_lines_phrase(lines, num)} {verb_be} under {_op_ref(ops[k], k, num)}")
     if unexplained:
         verb_be = "is" if len(unexplained) == 1 else "are"
-        reasons.append(f"{_lines_phrase(unexplained)} {verb_be} not free in the transcript")
+        reasons.append(f"{_lines_phrase(unexplained, num)} {verb_be} not free in the transcript")
     return [f"  {label}{verb}: " + "; ".join(reasons)]
 
 
@@ -379,6 +453,7 @@ def preview_segment(
     drops: Sequence[str] = (),
     label: str = "segment",
     elsewhere_seconds: float | None = None,
+    numbering: Numbering = IDENTITY,
 ) -> SegmentPreview:
     """The playback facts for one segment's *ops*, as the director holds them.
 
@@ -388,7 +463,13 @@ def preview_segment(
     transcript shows, the segment's *first_line*, and the parsed *ops* plus the
     parser's *drops*.  *elsewhere_seconds* (the rest of the finished video's
     runtime) adds a whole-video estimate.
+
+    *numbering* (:func:`numbering_for`) renames every line number printed here
+    into the whole video's display numbering — the numbers the model's ops
+    arrive in.  The ops themselves stay in source coordinates; only what is
+    SAID about them changes, so nothing downstream sees the display numbers.
     """
+    num = numbering
     silence_lines = list(silence_lines or [])
     footer_drops = [f"dropped by the parser (no effect): {d}" for d in drops]
     timed = (
@@ -433,7 +514,7 @@ def preview_segment(
                 overlap = min(start + dur, start2 + dur2) - max(start, start2)
                 if overlap > 0 and f"{overlap:.1f}" != "0.0":
                     out.append(
-                        f"  on screen together with the caption of {_op_ref(ops[k2], k2)} "
+                        f"  on screen together with the caption of {_op_ref(ops[k2], k2, num)} "
                         f"for {_s(overlap)}"
                     )
         return out
@@ -441,9 +522,14 @@ def preview_segment(
     def silence_note(n: int) -> list[str]:
         """The silence after line *n*, named and priced as the transcript does."""
         silence = _silence_after(pb, n, silence_lines, anchored_gaps)
+        number = num.silence.get(n)
+        # Under the display numbering the silence is a line the model can name;
+        # without one (a wait under director.silence_line_min, or the
+        # per-segment view) it is still only "the silence after line n".
+        head = f"line {number}" if number is not None else f"the silence after line {num.of(n)}"
         return [
-            f"  the silence after line {n} is outside this op — {_fate(pb, n, ops)}",
-            silence.render(),
+            f"  {head} is outside this op — {_fate(pb, n, ops, num)}",
+            _silence_render(silence, num),
         ]
 
     def boundary_lines(keep: Placement | None) -> list[str]:
@@ -479,13 +565,13 @@ def preview_segment(
         if len(lines) == 1:
             n = lines[0]
             return [
-                f"  speech at x{factor} — unintelligible: line {n} {_s(pb.figure(n))} "
+                f"  speech at x{factor} — unintelligible: line {num.of(n)} {_s(pb.figure(n))} "
                 f"{_quote(text_of(n))} (total {_s(total)})"
             ]
         out = [
             f"  speech at x{factor} — unintelligible (total {_s(total)} over {len(lines)} lines):"
         ]
-        out.extend(f"    {n} {_s(pb.figure(n))} {_quote(text_of(n))}" for n in lines)
+        out.extend(f"    {num.of(n)} {_s(pb.figure(n))} {_quote(text_of(n))}" for n in lines)
         return out
 
     def plays_line(lines: list[int], caption: float | None) -> list[str]:
@@ -493,7 +579,7 @@ def preview_segment(
         default = sum(pb.figure(n) for n in lines)
         line = (
             f"  plays {_s(footage)} of footage in {_s(onscreen)} "
-            f"(default for {_lines_phrase(lines)}: {_s(default)})"
+            f"(default for {_lines_phrase(lines, num)}: {_s(default)})"
         )
         if caption is not None:
             line += f"; caption on screen {_s(caption)}"
@@ -528,18 +614,24 @@ def preview_segment(
 
     def covers_phrase(op: DirectorOp) -> str:
         first, last = op.lines
+        if num.numbered(first, op.gap_start) and num.numbered(last, op.gap_end):
+            # Every edge has a line of its own here, so the range names itself.
+            a = num.of(first, silence=op.gap_start)
+            b = num.of(last, silence=op.gap_end)
+            return _lines_phrase(list(range(a, b + 1)))
         if op.gap_start and op.gap_end and first == last:
-            return f"the silence after line {first}"
+            return f"the silence after line {num.of(first)}"
         head = (
-            f"the silence after line {first}"
+            f"the silence after line {num.of(first)}"
             if op.gap_start
             else _lines_phrase(
-                list(range(first, last + 1)) if not op.gap_end or first != last else [first]
+                list(range(first, last + 1)) if not op.gap_end or first != last else [first],
+                num,
             )
         )
         if not op.gap_end:
-            return f"{head} through line {last}" if op.gap_start else head
-        tail = "the silence after it" if first == last else f"the silence after line {last}"
+            return f"{head} through line {num.of(last)}" if op.gap_start else head
+        tail = "the silence after it" if first == last else f"the silence after line {num.of(last)}"
         return f"{head} and {tail}"
 
     def resolved_body(op: DirectorOp) -> list[str]:
@@ -554,7 +646,7 @@ def preview_segment(
         onscreen = footage / factor
         default = sum(pb.figure(n) for n in speech_lines)
         cost = (
-            f"default for {_lines_phrase(speech_lines)}: {_s(default)}"
+            f"default for {_lines_phrase(speech_lines, num)}: {_s(default)}"
             if speech_lines
             else "dropped by default"
         )
@@ -566,7 +658,9 @@ def preview_segment(
         out.extend(unintelligible_over(speech_lines, factor))
         for n in gaps:
             if n in pb.gap_keep or n in pb.gap_speed:
-                out.append(_silence_after(pb, n, silence_lines, anchored_gaps).render())
+                out.append(
+                    _silence_render(_silence_after(pb, n, silence_lines, anchored_gaps), num)
+                )
         return out
 
     blocks: list[str] = []
@@ -579,23 +673,23 @@ def preview_segment(
             body.append("  no runtime change (a text edit within the line)")
         elif op.type == "overlay":
             p = per["overlay"]
-            body.extend(_clip_note(placements, ops, i, p, ""))
+            body.extend(_clip_note(placements, ops, i, p, "", num))
             if p.lines is not None:
                 body.append(
                     f"  no runtime change; caption on screen {_s(op.duration or 0.0)} "
-                    f"from line {p.lines[0]}"
+                    f"from line {num.of(p.lines[0])}"
                 )
                 body.extend(caption_lines(i))
         elif op.type == "cut":
             p = per["cut"]
-            body.extend(_clip_note(placements, ops, i, p, ""))
+            body.extend(_clip_note(placements, ops, i, p, "", num))
             lines = _range(p)
             if lines:
                 removed = sum(pb.figure(n) for n in lines)
-                body.append(f"  removes {_lines_phrase(lines)}: {_s(removed)}")
+                body.append(f"  removes {_lines_phrase(lines, num)}: {_s(removed)}")
         elif op.type in ("keep", "speed"):
             p = per[op.type]
-            body.extend(_clip_note(placements, ops, i, p, ""))
+            body.extend(_clip_note(placements, ops, i, p, "", num))
             lines = _range(p)
             if lines:
                 body.extend(plays_line(lines, None))
@@ -606,14 +700,14 @@ def preview_segment(
         elif op.type == "timelapse":
             keep, speed, cap = per.get("keep"), per.get("speed"), per.get("overlay")
             if keep and speed and keep.lines and keep.lines == speed.lines:
-                body.extend(_clip_note(placements, ops, i, keep, ""))
+                body.extend(_clip_note(placements, ops, i, keep, "", num))
             else:
                 if keep:
-                    body.extend(_clip_note(placements, ops, i, keep, "its keep: "))
+                    body.extend(_clip_note(placements, ops, i, keep, "its keep: ", num))
                 if speed:
-                    body.extend(_clip_note(placements, ops, i, speed, "its speed-up: "))
+                    body.extend(_clip_note(placements, ops, i, speed, "its speed-up: ", num))
             if cap:
-                body.extend(_clip_note(placements, ops, i, cap, "its caption: "))
+                body.extend(_clip_note(placements, ops, i, cap, "its caption: ", num))
             lines = sorted(set(_range(keep)) | set(_range(speed)))
             if lines:
                 caption = cap.op.duration if cap and cap.lines else None
@@ -622,7 +716,7 @@ def preview_segment(
                 body.extend(boundary_lines(keep))
                 if caption is not None:
                     body.extend(caption_lines(i))
-        blocks.append("\n".join([_op_title(op)] + body))
+        blocks.append("\n".join([_op_title(op, num)] + body))
 
     default = sum(pb.speech)
     runtime = pb.played(pb.all_lines(), "speech")[1]
@@ -634,3 +728,80 @@ def preview_segment(
         )
     parts = [HEADER] + (blocks or ["(no ops: every line plays its default)"]) + ["\n".join(footer)]
     return SegmentPreview("\n\n".join(parts), default, runtime)
+
+
+def segment_preview(
+    view: DisplayView,
+    transcripts: Sequence[SegmentTranscript],
+    index: int,
+    ops: Sequence[DirectorOp],
+) -> SegmentPreview:
+    """One segment of the finished video, priced under the display numbering."""
+    t = transcripts[index - 1]
+    return preview_segment(
+        t.edit_lines,
+        list(ops),
+        seg_times=t.seg_times,
+        silences=t.silences,
+        anchored_gaps=t.gaps,
+        silence_lines=t.silence_lines,
+        first_line=t.first_line,
+        label=f"segment [{index}] {view.segments[index - 1].label}",
+        numbering=numbering_for(view, index),
+    )
+
+
+def preview_turn(
+    view: DisplayView,
+    transcripts: Sequence[SegmentTranscript],
+    ops: Mapping[int, Sequence[DirectorOp]],
+    *,
+    segments: Sequence[int] = (),
+    drops: Sequence[str] = (),
+) -> str:
+    """The answer to one turn of the conversation.
+
+    *ops* are every op accepted so far, keyed by the segment's 1-based index in
+    the playback order; *segments* are the ones this turn touched, and only
+    those are printed — a segment is priced with its WHOLE op list, because a
+    new cut is clipped by a keep an earlier turn placed, but the turns that
+    reviewed other footage do not get replayed on every message.
+
+    The footer is the whole video, not this stretch of it: every segment with
+    accepted ops at its edited runtime and every other at its default, so the
+    running total answers "how long is this video now" rather than "how long is
+    the part I just looked at".
+    """
+    previews = {
+        index: segment_preview(view, transcripts, index, ops.get(index, ()))
+        for index in sorted(set(ops) | set(segments))
+    }
+    blocks = [previews[index].text for index in sorted(set(segments))]
+    default = _total(t.default_runtime() for t in transcripts)
+    runtime = _total(
+        previews[i].runtime_seconds if i in previews else t.default_runtime()
+        for i, t in enumerate(transcripts, start=1)
+    )
+    footer = [f"dropped by the parser (no effect): {d}" for d in drops]
+    if default is None or runtime is None:
+        footer.append(f"{WHOLE_VIDEO}: not computable (a segment has no line timings)")
+    else:
+        footer.append(
+            f"{WHOLE_VIDEO}: default {_s(default)} ({_m(default)}) → with the ops "
+            f"accepted so far {_s(runtime)} ({_m(runtime)})"
+        )
+    return "\n\n".join([*blocks, "\n".join(footer)])
+
+
+def _total(values: Iterable[float | None]) -> float | None:
+    """The sum, or ``None`` as soon as one part is unknown."""
+    out = 0.0
+    for value in values:
+        if value is None:
+            return None
+        out += value
+    return out
+
+
+def _m(sec: float) -> str:
+    return f"{sec / 60:.1f} min"
