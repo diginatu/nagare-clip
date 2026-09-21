@@ -1218,7 +1218,12 @@ def test_director_prompt_did_not_grow_for_the_silence_lines():
     now), the transcript-echo rule the last Rules line already covers, the
     1-based-numbering restatement above the menu, and half the playback rule
     (the preview computes that playback now) -- which is 300 of the 604
-    characters the protocol cost.  Anything further must delete, not raise."""
+    characters the protocol cost.  Anything further must delete, not raise.
+
+    6495 -> 6595: the seam fact (a [k] block was recorded as its own video, so
+    it can open with a greeting or end with a sign-off) took 100 of the 104
+    characters that were left, inside the ceiling rather than over it.  Four
+    characters remain: the next addition here deletes something first."""
     prompt = get_effective_config(None, {})["director"]["prompt"]
     assert len(prompt) < 6600
 
@@ -1234,6 +1239,27 @@ def _display_view(n: int = 100):
         ],
         segments=[DisplaySegment(index=1, stem="x", label="x", first=1, last=n)],
     )
+
+
+def test_director_prompt_says_a_join_is_where_two_recordings_meet():
+    """`SEAM_NOTE` went out in f197206 with the per-segment seam block, on the
+    reasoning that a whole-video view makes every join visible.  The finished
+    cut still carried a sign-off at every join: SEEING a join is not the same
+    as KNOWING it is one.  The fact goes back -- a [k] block was recorded as
+    its own video, so it can open with a greeting or end with a sign-off --
+    adapted to the whole-video view, where there is no seam block to put it in.
+
+    The fact, not the rule: whether to cut one is the model's call, and a
+    prompt that decided it for the model would be the editorial judgement this
+    stage exists to make."""
+    prompt = get_effective_config(None, {})["director"]["prompt"]
+    bullet = next(line for line in prompt.split("\n") if "sign-off" in line)
+    sentence = next(s for s in bullet.split(". ") if "sign-off" in s)
+    lowered = sentence.lower()
+    assert "[k]" in sentence
+    assert "recorded as its own video" in lowered
+    assert "greeting" in lowered
+    assert not any(word in lowered for word in ("cut", "remove", "delete", "must", "never"))
 
 
 def test_director_prompt_states_the_turn_protocol():

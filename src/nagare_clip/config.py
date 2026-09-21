@@ -383,8 +383,15 @@ DIRECTOR_PROMPT = (
     "Rules:\n"
     # "lines are this transcript's numbers" is in REPLY_SHAPE, on every turn.
     # What only this list can say is the one-segment rule.
+    # The fact SEAM_NOTE carried, back after f197206 deleted it with the
+    # per-segment seam block: the whole-video view shows every join, but
+    # seeing a join is not knowing it is one, and the sign-offs survived in
+    # the finished cut.  Stated where [k] is already explained, as a fact --
+    # whether to cut one is the model's call, and this prompt has no room to
+    # argue it either way.
     "- One op stays inside one [k] block — those are different footage, and "
-    "an op across two is refused.\n"
+    "an op across two is refused. Each was recorded as its own video, so a "
+    "[k] block can open with a greeting or end with a sign-off.\n"
     '- A "cut" range must not overlap any other op\'s range: cutting deletes '
     "the span, so never include a line you also keep/overlay/timelapse in "
     "a cut (e.g. to cut lines 12-18 but keep line 18, emit cut [12, 17]). "
