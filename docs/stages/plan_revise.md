@@ -164,6 +164,46 @@ not pile dividers up; the trailing `## human` heading is where to type.
 **Do not re-run `plan` to apply a turn** — it retires the turn you just wrote.
 Re-run `--from-stage plan_revise --to-stage plan_revise`.
 
+## `plan` enforces that instead of asking
+
+The line above was advice for a while, and it was not enough. A human copied a
+lost instruction back into `history.md` and re-ran `plan` to "apply" it; `plan`
+appended a new divider, retired it again, and `plan_revise` then reported
+nothing unanswered and made no call. Nothing failed. The instruction was simply
+not in the edit.
+
+So `pipeline.stages.check_unanswered_turns()` refuses the run:
+
+```
+plan: refusing to run over an unanswered conversation.
+
+…/plan_dialogue/history.md has 1 unanswered human turn(s) below the last
+'--- plan re-ran ... ---' divider.  Re-running plan appends a new divider,
+which retires all 2 turn(s) below the current one: …
+
+To apply them instead, run only the stage that answers them:
+    --from-stage plan_revise --to-stage plan_revise
+
+To discard them on purpose, re-run this command with --retire-turns.
+```
+
+Three things about how it is wired:
+
+- It asks the **same** two functions `plan_revise` fires on —
+  `read_active_history()` and `has_unanswered_human()`, wrapped as
+  `dialogue.unanswered_turns()`. A second parser of this file would be a second
+  definition of "unanswered", and the guard would eventually disagree with the
+  stage it protects.
+- It counts **every** active turn, not only the human's, because that is what
+  the divider retires. The message gives both numbers.
+- It runs in `cli.main()` before `run_stages`, not inside `_plan_run`. A
+  `--from-stage summary --to-stage blender` reaches `plan` too, and should not
+  spend the summary stage on the way to a refusal.
+
+`--retire-turns` is the deliberate way through, for when the turns really are
+spent. It is a CLI flag and **not** a config key: it decides what one run may
+throw away, which is not a thing to leave sitting in a YAML file.
+
 ## The file header is refreshed, not just written once
 
 `history.md` opens with an HTML comment explaining how to use it — stripped when

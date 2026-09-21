@@ -19,6 +19,7 @@ from nagare_clip.plan.dialogue import (
     read_history,
     refresh_header,
     render_history,
+    unanswered_turns,
 )
 
 
@@ -305,3 +306,46 @@ class TestHeaderRefresh:
 
 def text_has_one_header(text: str) -> bool:
     return text.count("plan_dialogue/history.md — the plan_revise stage's conversation") == 1
+
+
+class TestUnansweredTurns:
+    """What a ``plan`` re-run would retire, counted for the guard's message."""
+
+    def _write(self, tmp_path, text):
+        path = tmp_path / "history.md"
+        path.write_text(text, encoding="utf-8")
+        return path
+
+    def test_all_active_turns_when_the_human_spoke_last(self, tmp_path):
+        # The divider retires everything below the previous one, not only the
+        # unanswered turn -- so that is what the count has to be.
+        path = self._write(
+            tmp_path,
+            "## human\n\nold\n\n"
+            "--- plan re-ran 2026-08-24T01:56 — turns above this line no longer apply ---\n\n"
+            "## plan\n\naccount\n\n## human\n\nsplit part 21\n",
+        )
+        assert unanswered_turns(path) == [
+            DialogueTurn("plan", "account"),
+            DialogueTurn("human", "split part 21"),
+        ]
+
+    def test_empty_when_the_plan_answered_last(self, tmp_path):
+        path = self._write(tmp_path, "## human\n\nsplit\n\n## plan\n\ndone\n")
+        assert unanswered_turns(path) == []
+
+    def test_empty_when_the_reply_slot_is_still_blank(self, tmp_path):
+        # plan leaves a bare '## human' heading to type under; an empty heading
+        # is not a turn and must not look like an unapplied instruction.
+        path = self._write(tmp_path, "## plan\n\naccount\n\n## human\n")
+        assert unanswered_turns(path) == []
+
+    def test_empty_when_the_file_does_not_exist(self, tmp_path):
+        assert unanswered_turns(tmp_path / "nope.md") == []
+
+    def test_empty_for_no_path(self):
+        assert unanswered_turns(None) == []
+
+    def test_header_comment_is_not_a_turn(self, tmp_path):
+        path = self._write(tmp_path, FILE_HEADER + "\n## plan\n\naccount\n")
+        assert unanswered_turns(path) == []

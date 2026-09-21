@@ -60,6 +60,8 @@ FILE_HEADER = (
     "\n"
     "Do NOT re-run the plan stage to apply a turn: plan rebuilds the whole plan\n"
     "from the summaries and retires the turns above it (see the divider below).\n"
+    "The plan stage refuses to start while a turn below the last divider is\n"
+    "unanswered and says so; --retire-turns is how you say you meant it.\n"
     "\n"
     "Refer to parts by source stem and line range, e.g. 'foo [31,83]'.\n"
     "\n"
@@ -176,6 +178,21 @@ def has_unanswered_human(turns: list[DialogueTurn]) -> bool:
     human's" is exactly "there is something not yet answered".
     """
     return bool(turns) and turns[-1].role == HUMAN
+
+
+def unanswered_turns(path: Path | None) -> list[DialogueTurn]:
+    """The turns a ``plan`` re-run would retire while one is still unanswered.
+
+    Empty when the conversation is answered: the turns below the divider have
+    already had their effect on ``plan_revise/plan.json``, so retiring them
+    loses nothing.  Otherwise it is **every** active turn, not just the human's
+    -- ``append_divider`` retires the lot, and the guard quotes that number.
+
+    The same two functions ``plan_revise`` fires on, asked the same question
+    from the other side; there is deliberately no second parser of this file.
+    """
+    turns = read_active_history(path)
+    return turns if has_unanswered_human(turns) else []
 
 
 def format_turn(role: str, text: str) -> str:
