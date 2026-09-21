@@ -130,7 +130,7 @@ text_filter:
   retry_min_batch_size: 1   # Floor for the halving retry; set equal to batch_size to disable
   # prompt: "..."   # System prompt for LLM (has sensible default for Japanese)
   temperature: 0.1   # LLM sampling temperature
-  thinking: false   # Thinking mode: true/false, or "low"/"medium"/"high"
+  thinking: false   # Thinking mode: true (= "high") / false, or "low"/"medium"/"high"
   # keywords: []   # Constant keywords always injected into the filter LLM prompt
 
 # plan stage: runs once project-wide after summary, before director. A larger
@@ -189,9 +189,9 @@ director:
   max_retries: 2   # Extra attempts on LLM error / unparseable JSON (0 = single attempt)
   retry_temp_step: 0.2   # Temperature increment added on each retry
   retry_temp_cap: 0.8   # Maximum temperature any retry uses
+  chunk_lines: 40   # How many lines of the whole-video transcript one turn of the director's conversation is asked to review (approximately — it stops where the footage breaks). The turn cap is ceil(display lines / this) * 2, and reaching it fails the stage after writing the ops accepted so far
   max_keep_lines: 8   # Reject a "keep" op wider than this many lines (0 = no limit); a keep may span a continuous on-screen event, but one this wide is marking talking, not an event
-  max_prior_captions: 100   # How many captions already shown earlier in the finished video the director is told about (0 = no limit); the most recent ones are kept
-  seam_lines: 3   # How many lines of the videos playing immediately before/after this one the director is shown at each join (0 = off), so a sign-off or a greeting is visible as addressing an audience that is already mid-video
+  silence_line_min: 5.0   # Shortest wait between two lines (seconds) shown to the director as a silence line of its own, addressable as "n~"; a shorter one stays a `gap Xs` figure in the preceding line's bracket. Matches gap_context.min_gap by default, so every described gap has a line to land in
   # prompt: "..."   # System prompt (has a sensible default)
 
 # guided_edit stage (Pass B2): a small local LLM applies each director op,

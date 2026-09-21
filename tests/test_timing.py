@@ -96,3 +96,42 @@ class TestFormatDurGapSilence:
 
     def test_dur_none_still_empty(self):
         assert format_dur_gap(None, None, 62.9) == ""
+
+    def test_sub_second_silence_does_not_split_the_bracket(self):
+        # The split exists to flag a LONG internal silence the editor will drop.
+        # A few tenths of a second is breath, not dead air: it was splitting
+        # 77 of the corpus's 312 silence figures into noise.  Unsplit, the
+        # breath stays part of the span (4.2 speech + 0.3 silence = 4.5).
+        assert format_dur_gap(4.2, 0.8, 0.3) == "[4.5s, gap 0.8s]"
+        assert format_dur_gap(4.2, None, 0.9) == "[5.1s]"
+
+    def test_silence_boundary_is_one_second(self):
+        # Either side of the threshold, so the constant cannot drift silently.
+        # The SPAN is continuous across it — 4.2+0.99 renders as 5.2s, and one
+        # hundredth later the same 5.2 seconds render as 4.2 speech + 1.0
+        # silence.  Only the presentation changes at the boundary, never the
+        # amount of time the bracket claims the line occupies.
+        assert format_dur_gap(4.2, None, 0.99) == "[5.2s]"
+        assert format_dur_gap(4.2, None, 1.0) == "[4.2s speech, 1.0s silence]"
+
+    def test_degenerate_alignment_line_renders_no_speech_figure(self):
+        # WhisperX alignment failure gives every word exactly 0.020s, the span
+        # lands inside an audio_silence cut, and the caller's
+        # max(raw - sil, 0) collapses to 0.0.  The old 0.05s de facto cut-off
+        # still took the split branch and printed "0.0s speech, 0.1s silence".
+        assert "speech" not in format_dur_gap(0.0, 8.0, 0.14)
+
+    def test_sub_threshold_silence_is_folded_back_into_the_duration(self):
+        # The caller has already subtracted the silence (director_llm's
+        # `dur = max(raw - sil, 0.0)`), so *dur* is speech-only on arrival.
+        # Not splitting is only half the job: printing the speech-only figure
+        # as if it were the line's duration under-reports every line the
+        # subtraction touched, and on the 8 degenerate-alignment lines it
+        # reports a line that exists as lasting no time at all.  Below the
+        # threshold the two halves are one span again.
+        assert format_dur_gap(0.0, None, 0.14) == "[0.1s]"
+        assert format_dur_gap(0.0, 8.0, 0.30) == "[0.3s, gap 8.0s]"
+        # Above it the split still wins, and the speech figure stays raw.
+        assert format_dur_gap(13.0, None, 62.9) == "[13.0s speech, 62.9s silence]"
+        # An absent silence is not a zero one: nothing to fold, nothing added.
+        assert format_dur_gap(4.2, None, None) == "[4.2s]"

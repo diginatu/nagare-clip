@@ -1,3 +1,5 @@
+import re
+
 from nagare_clip.gap_context.context import (
     anchor_gaps,
     annotate_numbered_transcript,
@@ -9,7 +11,7 @@ SEG_TIMES = [(0.0, 10.0), (20.0, 25.0), (25.5, 30.0)]
 GAP = Gap(start=10.0, end=20.0, frames=[], description="ビルドが走る")
 
 
-def test_anchor_gaps_attaches_to_the_last_line_ending_before_the_gap():
+def test_anchor_gaps_attaches_to_the_last_line_starting_before_the_gap_midpoint():
     assert anchor_gaps([GAP], SEG_TIMES) == [(1, GAP)]
 
 
@@ -60,7 +62,7 @@ def test_annotate_numbered_transcript_inserts_after_the_anchor_line():
     out = annotate_numbered_transcript(transcript, [(1, GAP)])
     assert out == (
         "1: いち  [10.0s, gap 10.0s]\n"
-        "    [silent gap 10.0s: ビルドが走る]\n"
+        "    [silent gap: ビルドが走る]\n"
         "2: に  [5.0s, gap 0.5s]\n"
         "3: さん  [4.5s]"
     )
@@ -69,7 +71,25 @@ def test_annotate_numbered_transcript_inserts_after_the_anchor_line():
 def test_annotate_numbered_transcript_anchor_zero_goes_first():
     g = Gap(start=0.0, end=5.0, frames=[], description="タイトル画面")
     out = annotate_numbered_transcript("1: いち", [(0, g)])
-    assert out == "    [silent gap 5.0s: タイトル画面]\n1: いち"
+    assert out == "    [silent gap: タイトル画面]\n1: いち"
+
+
+def test_annotate_numbered_transcript_carries_no_duration_of_its_own():
+    """One number per silence, and the line bracket owns it.
+
+    The annotation's seconds came from ffmpeg ``silencedetect`` while the
+    line's ``gap``/``silence`` figure comes from WhisperX timestamps: two
+    different measurements of overlapping intervals, which never agreed on the
+    real corpus (0 of 41 co-occurrences within 0.05s).  Reusing the line's own
+    figure is not an option either -- the mapping is one-to-many (one real
+    line carries four annotations under a single ``gap 37.0s``).  So the
+    annotation describes and does not measure.
+    """
+    out = annotate_numbered_transcript("1: いち  [10.0s, gap 10.0s]", [(1, GAP)])
+    annotation = out.split("\n")[1]
+    assert annotation == "    [silent gap: ビルドが走る]"
+    # No seconds figure anywhere between "silent gap" and the description.
+    assert re.search(r"silent gap[^:]", annotation) is None
 
 
 def test_annotate_numbered_transcript_is_byte_identical_when_empty():
@@ -82,23 +102,59 @@ def test_annotate_numbered_transcript_ignores_out_of_range_anchors():
     assert annotate_numbered_transcript(transcript, [(9, GAP)]) == transcript
 
 
-def test_anchor_gaps_picks_the_last_qualifying_line_not_first():
-    """Regression: anchor_gaps should pick LAST matching line, not first."""
-    # Multiple lines end before the gap start—should anchor to the LAST one
+def test_anchor_gaps_picks_the_last_line_before_the_midpoint_not_the_first():
+    """Regression: anchor_gaps should pick the LAST matching line, not the first."""
+    # Several lines start before the gap's midpoint (15.0)—take the LAST one.
     seg_times = [(0.0, 3.0), (3.5, 6.0), (6.5, 10.0), (20.0, 25.0)]
     gap = Gap(start=10.0, end=20.0, frames=[], description="test")
     anchored = anchor_gaps([gap], seg_times)
-    # Line 3 (ends at 10.0) is the last to match, not line 1 (ends at 3.0)
+    # Line 3 (starts at 6.5) is the last to match, not line 1 (starts at 0.0)
     assert anchored == [(3, gap)]
 
 
-def test_anchor_gaps_epsilon_allows_slight_overshoot():
-    """Regression: _EPS epsilon must be load-bearing in the anchor condition."""
-    # Line ends at 10.005, gap starts at 10.0—within _EPS, should still anchor
-    seg_times = [(0.0, 10.005), (20.0, 25.0)]
-    gap = Gap(start=10.0, end=20.0, frames=[], description="test")
-    anchored = anchor_gaps([gap], seg_times)
-    assert anchored == [(1, gap)]
+def test_anchor_gaps_midpoint_not_start_decides_the_anchor():
+    """The midpoint, not the start, picks the line.
+
+    Two gaps that begin at the same instant but end in different places belong
+    to different lines: the one that is mostly over before line 2 gets going
+    belongs to line 1, the one that mostly runs on through line 2 belongs to
+    line 2.  The old rule keyed on ``gap.start`` alone and put both on line 1.
+    """
+    seg_times = [(0.0, 10.0), (11.0, 40.0)]
+    short = Gap(start=10.0, end=11.5, frames=[], description="short")
+    long = Gap(start=10.0, end=30.0, frames=[], description="long")
+    assert anchor_gaps([short], seg_times) == [(1, short)]
+    assert anchor_gaps([long], seg_times) == [(2, long)]
+
+
+def test_anchor_gaps_line_starting_exactly_on_the_midpoint_owns_the_gap():
+    """Tie boundary: half the gap is line 2's lead-in, so line 2 takes it."""
+    seg_times = [(0.0, 10.0), (15.0, 40.0)]
+    gap = Gap(start=10.0, end=20.0, frames=[], description="exactly halfway")
+    assert anchor_gaps([gap], seg_times) == [(2, gap)]
+
+
+def test_anchor_gaps_a_gap_inside_a_line_span_anchors_to_that_line():
+    """Bucket (ii): sentence_split declines to split a silence whose midpoint
+    falls inside a stretched word, so the silence stays INSIDE the following
+    line's span, where format_dur_gap reports it as that line's own
+    ``Ys silence``.  The annotation must sit on that line, not above it."""
+    seg_times = [(0.0, 10.0), (12.0, 40.0)]
+    gap = Gap(start=20.0, end=30.0, frames=[], description="inside line 2")
+    assert anchor_gaps([gap], seg_times) == [(2, gap)]
+
+
+def test_anchor_gaps_gap_starting_inside_a_stretched_tail_anchors_after_it():
+    """Bucket (iii), the real line-64/65 fixture from PXL_20260328_082352713.
+
+    WhisperX stretched line 65's final word 0.157s past the start of the 35s
+    silence that follows it.  Under the old ``end <= gap.start`` rule line 65
+    failed to qualify and 35 seconds of footage belonging to the gap AFTER
+    line 65 were advertised under line 64's 12.1s gap.
+    """
+    seg_times = [(626.693, 629.016), (641.163, 645.047), (695.197, 700.0)]
+    gap = Gap(start=644.890, end=680.160, frames=[], description="unscrews a fitting")
+    assert anchor_gaps([gap], seg_times) == [(2, gap)]
 
 
 def test_annotate_numbered_transcript_gap_after_final_line():
@@ -107,7 +163,7 @@ def test_annotate_numbered_transcript_gap_after_final_line():
     gap = Gap(start=30.0, end=35.0, frames=[], description="outro")
     # Anchor = 2, which equals len(lines); should append after the final line
     out = annotate_numbered_transcript(transcript, [(2, gap)])
-    assert out == ("1: いち\n2: に\n    [silent gap 5.0s: outro]")
+    assert out == ("1: いち\n2: に\n    [silent gap: outro]")
 
 
 def test_annotate_numbered_transcript_never_injects_a_fake_numbered_line():
@@ -145,7 +201,7 @@ def test_annotate_numbered_transcript_multiple_gaps_same_line():
     gap2 = Gap(start=15.0, end=20.0, frames=[], description="second")
     out = annotate_numbered_transcript(transcript, [(1, gap1), (1, gap2)])
     # Both gaps should appear after line 1, in order
-    assert out == ("1: いち\n    [silent gap 5.0s: first]\n    [silent gap 5.0s: second]\n2: に")
+    assert out == ("1: いち\n    [silent gap: first]\n    [silent gap: second]\n2: に")
 
 
 class TestAnchorGapsOnASegment:

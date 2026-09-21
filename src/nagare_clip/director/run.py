@@ -1,18 +1,18 @@
-"""director stage (Pass A): high-level LLM edit operations, one SEGMENT at a time.
+"""director stage (Pass A): high-level LLM edit operations for the whole video.
 
-A segment is one stretch of one source, as the plan ordered it.  Running per
-segment rather than per source makes an op crossing a reorder boundary
-unrepresentable, gives improvement 19's position a meaning when one source
-plays at two places, and makes improvement 22's seams the *neighbouring
-segment* rather than the neighbouring source.
+ONE conversation reads the finished video under one display numbering
+(:mod:`nagare_clip.director.display`), asks for an approximate range per turn
+(:mod:`nagare_clip.director.loop`) and answers each reply with what those ops
+will play (:mod:`nagare_clip.director.preview`).  The per-segment path it
+replaced -- nine independent calls, each with the seam lines of its
+neighbours and the ops already made before it -- is gone.
 
-Line numbers stay absolute: ``guided_edit`` and ``intervals`` apply ops to the
-whole source file, so a segment starting at line 31 presents its first line as
-``31:`` and emits ops in that numbering.
+Line numbers on DISK stay absolute and per source: ``guided_edit`` and
+``intervals`` apply ops to the whole source file, so every op is converted back
+out of display coordinates before it is written.
 
-The stage does not write ``{stem}_director.json`` — the orchestrator merges a
-source's segments and writes it once.  When ``director.enabled`` is false
-(default) every segment returns no ops, which merges to the empty op list the
+Nothing is written here; the orchestrator writes one file per source.  When
+``director.enabled`` is false (default) every source returns no ops, which the
 downstream guided_edit stage treats as a no-op.
 """
 
@@ -20,176 +20,429 @@ from __future__ import annotations
 
 import json
 import logging
+import math
+from dataclasses import dataclass, field
 from pathlib import Path
 
 from nagare_clip.audio_silence.cuts_file import read_cuts
 from nagare_clip.brief import apply_brief
 from nagare_clip.director import director_llm as director_llm_mod
-from nagare_clip.director.context import (
-    Neighbour,
-    Seam,
-    build_director_context,
-    seam_lines,
+from nagare_clip.director.context import project_context_block
+from nagare_clip.director.director_llm import (
+    DirectorOp,
+    _max_keep_lines,
+    keep_limit_note,
+    speech_seconds,
 )
-from nagare_clip.director.director_llm import DirectorResult, generate_director_ops
+from nagare_clip.director.display import DisplayView, build_display_view
+from nagare_clip.director.loop import (
+    LoopState,
+    ReplyResult,
+    apply_reply,
+    next_request,
+    request_summary,
+)
+from nagare_clip.director.preview import edit_state
+from nagare_clip.director.silence_lines import (
+    DEFAULT_SILENCE_LINE_MIN,
+    SilenceLine,
+    build_silence_lines,
+)
 from nagare_clip.gap_context.context import anchor_gaps
-from nagare_clip.gap_context.gaps import load_gaps
-from nagare_clip.llm_report import NULL_RECORDER, Recorder
-from nagare_clip.order import Segment, segment_label, segment_unit
+from nagare_clip.gap_context.gaps import Gap, load_gaps
+from nagare_clip.llm_client import CACHEABLE_PREFIX_KEY, with_trace_meta
+from nagare_clip.llm_report import (
+    DROPPED_ITEMS,
+    LLM_ERROR,
+    NULL_RECORDER,
+    OK,
+    OK_EMPTY,
+    UNPARSEABLE,
+    Recorder,
+)
+from nagare_clip.llm_retry import cfg_for_attempt, retry_attempts
+from nagare_clip.order import Segment
 from nagare_clip.plan.plan_llm import plan_from_dict
 from nagare_clip.summary.summarize import ProjectSummary, summary_from_dict
 from nagare_clip.timing import segment_silences, segment_times
 
-#: Lines of a neighbouring video shown at each join when ``director.seam_lines``
-#: says nothing else.  Small on purpose: the prompt is already long, and a
-#: sign-off or a greeting is one or two lines.
-DEFAULT_SEAM_LINES = 3
+logger = logging.getLogger(__name__)
 
-
-def _seam_line_count(director_cfg: dict) -> int:
-    """Read ``director.seam_lines`` defensively (invalid = the default, ``0`` = off)."""
-    raw = director_cfg.get("seam_lines", DEFAULT_SEAM_LINES)
-    if isinstance(raw, bool) or not isinstance(raw, int) or raw < 0:
-        return DEFAULT_SEAM_LINES
-    return raw
-
-
-def _seam(neighbour: Neighbour | None, count: int, *, last: bool) -> Seam | None:
-    """The neighbouring SEGMENT's lines at one join, read off its ``_edits.txt``.
-
-    The neighbour is a segment, not a source, so the file is sliced to the lines
-    that segment actually plays — which is what makes a join with another
-    stretch of this very source read correctly.
-
-    Optional throughout: the first segment has no predecessor and the last no
-    successor, and a ``--source`` re-run may have neither file on disk — every
-    one of those degrades to no seam rather than failing the stage.
-    """
-    if not neighbour or count <= 0:
-        return None
-    path = Path(neighbour.edits)
-    try:
-        all_lines = path.read_text(encoding="utf-8").splitlines()
-    except OSError:
-        logging.warning("director: no readable seam transcript at %s", path)
-        return None
-    first, last_line = neighbour.segment.lines or (1, len(all_lines))
-    lines = seam_lines(all_lines[first - 1 : last_line], count, last=last)
-    return Seam(segment_label(neighbour.segment), lines) if lines else None
-
-
-def _max_prior_captions(director_cfg: dict) -> int:
-    """Read ``director.max_prior_captions`` defensively (``0``/invalid = no limit)."""
-    raw = director_cfg.get("max_prior_captions", 0)
-    if isinstance(raw, bool) or not isinstance(raw, int) or raw < 0:
-        return 0
-    return raw
-
-
-def _build_overview_context(
-    summary: Path | None,
-    plan: Path | None,
-    segment: Segment,
-    *,
-    all_segments: list[Segment] | None = None,
-    prior_captions: list[str] | None = None,
-    max_prior_captions: int = 0,
-    seam_before: Seam | None = None,
-    seam_after: Seam | None = None,
-) -> str:
-    """Load summary/plan artifacts (tolerating missing/empty) and render the
-    cross-video context for this segment.  Returns ``""`` if unavailable."""
-    project_summary = ProjectSummary(summary="", parts=[])
-    if summary and summary.is_file():
-        project_summary = summary_from_dict(json.loads(summary.read_text(encoding="utf-8")))
-    directions = []
-    if plan and plan.is_file():
-        directions = plan_from_dict(json.loads(plan.read_text(encoding="utf-8")))
-    return build_director_context(
-        project_summary,
-        directions,
-        segment,
-        all_segments=all_segments,
-        prior_captions=prior_captions,
-        max_prior_captions=max_prior_captions,
-        seam_before=seam_before,
-        seam_after=seam_after,
-    )
+#: Default for ``director.chunk_lines``: how many display lines one turn is
+#: asked to review.  Kept beside the loop that uses it rather than in the
+#: config schema alone, so an unconfigured call behaves like the stage.
+DEFAULT_CHUNK_LINES = 40
 
 
 def _slice(values: list | None, first: int, last: int) -> list | None:
     return None if values is None else values[first - 1 : last]
 
 
-def run_director(
-    edits_txt: Path,
+def silence_line_min(director_cfg: dict) -> float:
+    """Read ``director.silence_line_min`` defensively (invalid = the default).
+
+    ``0`` is honoured as "every between-line silence gets a line"; a negative
+    or non-numeric value is a broken config, not an instruction.
+    """
+    raw = director_cfg.get("silence_line_min", DEFAULT_SILENCE_LINE_MIN)
+    if isinstance(raw, bool) or not isinstance(raw, (int, float)) or raw < 0:
+        return DEFAULT_SILENCE_LINE_MIN
+    return float(raw)
+
+
+@dataclass(frozen=True)
+class SegmentInputs:
+    """Where one segment's transcript and its timing annotations live."""
+
+    segment: Segment
+    edits: Path
+    json_path: Path | None = None
+    gaps: Path | None = None
+    cuts_txt: Path | None = None
+    #: ``director.silence_line_min``: the shortest wait between two lines the
+    #: transcript shows as a silence line of its own.
+    silence_line_min: float = DEFAULT_SILENCE_LINE_MIN
+
+
+@dataclass(frozen=True)
+class SegmentTranscript:
+    """One segment's lines and annotations, sliced to the lines it plays.
+
+    ``seg_times``/``silences`` cover the segment only; ``gaps`` are anchored
+    against the WHOLE source's times and then restricted to the segment, so one
+    anchoring rule serves a whole source and a slice of one alike.
+
+    ``silence_lines`` are the waits between this segment's lines long enough to
+    be shown as lines of their own; the ``gaps`` left here are the descriptions
+    none of them claimed (a silence INSIDE a line), still annotated above the
+    line whose bracket reports it.
+    """
+
+    edit_lines: list[str]
+    first_line: int
+    seg_times: list | None
+    silences: list | None
+    gaps: list[tuple[int, Gap]]
+    silence_lines: list[SilenceLine] = field(default_factory=list)
+
+    def default_runtime(self) -> float | None:
+        """Seconds the segment plays with no op at all; ``None`` if untimed."""
+        if self.seg_times is None or len(self.seg_times) != len(self.edit_lines):
+            return None
+        speech = speech_seconds(self.seg_times, self.silences)
+        if any(sec is None for sec in speech):
+            return None
+        return sum(speech)
+
+
+def load_segment_transcript(inputs: SegmentInputs) -> SegmentTranscript:
+    """Read one segment's transcript and annotations off disk.
+
+    Every annotation is optional: a missing ``--json`` means no brackets, a
+    missing cuts file no speech/silence split, a missing gaps file no gap lines.
+    """
+    segment = inputs.segment
+    all_lines = inputs.edits.read_text(encoding="utf-8").splitlines()
+    first, last = segment.lines or (1, len(all_lines))
+    data: dict = {}
+    seg_times = None
+    if inputs.json_path and inputs.json_path.is_file():
+        try:
+            data = json.loads(inputs.json_path.read_text(encoding="utf-8"))
+            seg_times = segment_times(data)
+        except (ValueError, OSError):
+            logging.warning("director: could not read --json %s", inputs.json_path)
+    silences = None
+    if seg_times and inputs.cuts_txt and Path(inputs.cuts_txt).is_file():
+        silences = segment_silences(seg_times, read_cuts(Path(inputs.cuts_txt)))
+    gap_list = (
+        anchor_gaps(load_gaps(inputs.gaps), seg_times or [], segment.lines) if seg_times else []
+    )
+    silence_lines: list[SilenceLine] = []
+    if seg_times:
+        # The word times, not the segment bounds: this is the silence the
+        # intervals stage drops and "n~" edits.
+        silence_lines, gap_list = build_silence_lines(
+            data,
+            gap_list,
+            min_seconds=inputs.silence_line_min,
+            lines=(first, last),
+        )
+    return SegmentTranscript(
+        edit_lines=all_lines[first - 1 : last],
+        first_line=first,
+        seg_times=_slice(seg_times, first, last),
+        silences=_slice(silences, first, last),
+        gaps=gap_list,
+        silence_lines=silence_lines,
+    )
+
+
+#: Heads the whole-video transcript inside the cached system prefix.  One line:
+#: what follows is data, and the protocol is stated in ``DIRECTOR_PROMPT``.
+VIEW_HEADER = (
+    "The whole finished video below, every segment in playback order under one "
+    "numbering. [k] heads each segment; your ops address these numbers."
+)
+
+
+@dataclass(frozen=True)
+class ConversationResult:
+    """What one director conversation produced.
+
+    *ops* are keyed by SOURCE stem in source coordinates — what
+    ``{stem}_director.json`` holds — and are complete for every source of the
+    video, empty list included, whatever *ok* says: the caller writes them
+    BEFORE it fails, so reaching the cap leaves a usable edit behind.
+    """
+
+    ops: dict[str, list[DirectorOp]]
+    ok: bool = True
+    error: str = ""
+    reviewed_through: int = 0
+    turns: int = 0
+
+
+def project_context(
+    summary: Path | None,
+    plan: Path | None,
+    segments: list[Segment],
+    view: DisplayView,
+) -> str:
+    """The project's summary and the plan's directions, for the whole video.
+
+    Read off the same artifacts the per-segment director read — the summary
+    stage's ``summary.json`` and the EFFECTIVE plan (the revised one when the
+    human wrote one, which the caller resolves) — and rendered once, in display
+    numbers (:func:`~.context.project_context_block`).  Missing or empty
+    artifacts give ``""``, which leaves the system message exactly as it was.
+    """
+    project_summary = ProjectSummary(summary="", parts=[])
+    if summary and summary.is_file():
+        project_summary = summary_from_dict(json.loads(summary.read_text(encoding="utf-8")))
+    directions = []
+    if plan and plan.is_file():
+        directions = plan_from_dict(json.loads(plan.read_text(encoding="utf-8")))
+    return project_context_block(project_summary, directions, segments, view)
+
+
+def system_message(director_cfg: dict, view: DisplayView, context: str = "") -> dict[str, str]:
+    """The one system message, identical on every turn of the conversation.
+
+    Prompt, the keep-limit note, the project context and the whole video, in
+    that order — and the WHOLE of it is declared cacheable: nothing in it varies
+    per turn, so the breakpoint sits at its end and every turn after the first
+    reads the cache instead of paying for the transcript again.
+
+    *context* is :func:`project_context`'s block.  It is instruction, so it
+    goes ABOVE the transcript, which is data; and it is the same on every turn,
+    which is why it belongs in here rather than in a user message.
+    """
+    prompt = director_cfg.get("prompt", "")
+    max_keep_lines = _max_keep_lines(director_cfg)
+    if max_keep_lines > 0:
+        prompt = f"{prompt}\n\n{keep_limit_note(max_keep_lines)}"
+    content = "\n\n".join(p for p in (prompt, context, VIEW_HEADER, view.render()) if p)
+    return {"role": "system", "content": content, CACHEABLE_PREFIX_KEY: content}
+
+
+def turn_cap(lines: int, chunk_lines: int) -> int:
+    """Two turns per chunk: one to review it, one to come back and fix it."""
+    return math.ceil(lines / max(chunk_lines, 1)) * 2
+
+
+def chunk_lines(director_cfg: dict) -> int:
+    """Read ``director.chunk_lines`` defensively (invalid = the default)."""
+    raw = director_cfg.get("chunk_lines", DEFAULT_CHUNK_LINES)
+    if isinstance(raw, bool) or not isinstance(raw, int) or raw < 1:
+        return DEFAULT_CHUNK_LINES
+    return raw
+
+
+def _ask(
+    view: DisplayView,
+    transcripts: list[SegmentTranscript],
+    state: LoopState,
+    previous: ReplyResult | None,
+    request: str,
+) -> str:
+    """The live user message: what the edit IS, then what to do next.
+
+    The conversation carries no preview of its own past any more — the earlier
+    asks are trimmed to one line each (:func:`~.loop.request_summary`) — so
+    this block is the whole picture, recomputed from the accumulated ops every
+    turn.  It leads, because it is what the request is about.
+
+    *previous* is the reply this message answers: its refusals belong at the
+    top (they are about what was just sent, not about the edit), and its
+    parser drops go in the state's footer where they always did.
+    """
+    parts = [previous.refusal] if previous is not None and previous.refusal else []
+    drops = previous.drops if previous is not None else ()
+    parts.append(edit_state(view, transcripts, state.ops, drops=drops))
+    parts.append(request)
+    return "\n\n".join(parts)
+
+
+def run_director_conversation(
+    inputs: list[SegmentInputs],
     cfg: dict,
     *,
-    segment: Segment,
-    all_segments: list[Segment] | None = None,
     summary: Path | None = None,
     plan: Path | None = None,
-    json_path: Path | None = None,
-    gaps: Path | None = None,
-    cuts_txt: Path | None = None,
-    prior_captions: list[str] | None = None,
-    before: Neighbour | None = None,
-    after: Neighbour | None = None,
+    call_llm: director_llm_mod.CallLLM | None = None,
     recorder: Recorder = NULL_RECORDER,
-) -> DirectorResult:
-    """One LLM call over one segment.  Returns its ops and whether it succeeded.
+    unit: str = "director",
+) -> ConversationResult:
+    """Edit the whole video in ONE conversation, and return its ops per source.
 
-    Nothing is written here: a source split across several segments has its ops
-    merged by the orchestrator and written once, so a partially edited
-    ``{stem}_director.json`` can never reach disk.
+    *summary*/*plan* are the summary stage's ``summary.json`` and the effective
+    plan; they become the project context block inside the cached prefix.
+
+    *inputs* are every segment of the finished video, in playback order.  The
+    transcripts are loaded once, numbered once (:func:`build_display_view`),
+    and rendered once into the system message; each turn then asks for an
+    approximate range (:func:`~.loop.next_request`), reads the reply into the
+    accumulated state (:func:`~.loop.apply_reply`) and answers with what those
+    ops will play (:func:`~.preview.preview_turn`).
+
+    Nothing is written here.  Ending badly — the turn cap, or a turn that fails
+    every retry — comes back as ``ok=False`` with the ops accepted so far, for
+    the caller to write BEFORE it fails the run: the user then continues by
+    hand from ``guided_edit`` instead of losing the conversation.
     """
     director_cfg = cfg["director"]
-    all_lines = edits_txt.read_text(encoding="utf-8").splitlines()
-    first, last = segment.lines or (1, len(all_lines))
-    edit_lines = all_lines[first - 1 : last]
-    unit = segment_unit(segment)
-
+    # Resolved at call time, never bound as a default: the stage and the tests
+    # both reach the real client by patching the module attribute.
+    call = call_llm or director_llm_mod._call_llm
+    ops_by_stem: dict[str, list[DirectorOp]] = {i.segment.stem: [] for i in inputs}
     if not director_cfg.get("enabled", False):
-        logging.info("director: disabled, no ops for %s", unit)
-        return DirectorResult([], ok=True)
+        logging.info("director: disabled, no ops for %d segment(s)", len(inputs))
+        return ConversationResult(ops_by_stem)
 
-    seam_count = _seam_line_count(director_cfg)
-    overview_context = _build_overview_context(
-        summary,
-        plan,
-        segment,
-        all_segments=all_segments,
-        prior_captions=prior_captions,
-        max_prior_captions=_max_prior_captions(director_cfg),
-        seam_before=_seam(before, seam_count, last=True),
-        seam_after=_seam(after, seam_count, last=False),
+    transcripts = [load_segment_transcript(i) for i in inputs]
+    view = build_display_view([(i.segment, t) for i, t in zip(inputs, transcripts)])
+    chunk = chunk_lines(director_cfg)
+    cap = turn_cap(len(view.lines), chunk)
+    max_keep_lines = _max_keep_lines(director_cfg)
+    logging.info(
+        "director: %d display line(s) over %d segment(s), %d line(s) per turn, cap %d turn(s)",
+        len(view.lines),
+        len(inputs),
+        chunk,
+        cap,
     )
-    seg_times = None
-    if json_path and json_path.is_file():
-        try:
-            seg_times = segment_times(json.loads(json_path.read_text(encoding="utf-8")))
-        except (ValueError, OSError):
-            logging.warning("director: could not read --json %s", json_path)
-    silences = None
-    if seg_times and cuts_txt and Path(cuts_txt).is_file():
-        silences = segment_silences(seg_times, read_cuts(Path(cuts_txt)))
-    # Gaps are anchored against the WHOLE source's times and then restricted to
-    # this segment, so one anchoring rule serves a whole source and a slice of
-    # one alike.
-    gap_list = anchor_gaps(load_gaps(gaps), seg_times or [], segment.lines) if seg_times else []
 
-    logging.info("director: analysing %s (%d line(s)) with LLM", unit, len(edit_lines))
-    result = generate_director_ops(
-        edit_lines,
-        apply_brief(director_cfg, cfg),
-        call_llm=director_llm_mod._call_llm,
-        overview_context=overview_context,
-        recorder=recorder,
-        unit=unit,
-        seg_times=_slice(seg_times, first, last),
-        anchored_gaps=gap_list,
-        silences=_slice(silences, first, last),
-        first_line=first,
+    stage_cfg = apply_brief(director_cfg, cfg)
+    context = project_context(summary, plan, [i.segment for i in inputs], view)
+    system = system_message(stage_cfg, view, context)
+    # The model's own replies, each under the one line of the ask it answered.
+    # The replies are its trajectory — which turn made which op, what it has
+    # already rewritten — and no recomputed state can show that.  The asks are
+    # trimmed because what they carried IS recomputed: a stale state block read
+    # as current is the exact failure this design removes.
+    history: list[dict[str, str]] = []
+    state = LoopState()
+    previous: ReplyResult | None = None
+    error = ""
+
+    recorder.begin(unit)
+    traced = with_trace_meta(stage_cfg, stage=recorder.stage, unit=unit)
+    attempts = retry_attempts(traced)
+    for turn in range(cap):
+        request = next_request(view, state, chunk)
+        summary_line = request_summary(view, state, chunk)
+        base = _ask(view, transcripts, state, previous, request)
+        section = f"turn {turn + 1}"
+        result: ReplyResult | None = None
+        complaint = ""
+        for attempt in range(attempts):
+            attempt_cfg = cfg_for_attempt(traced, attempt)
+            # The complaint is the previous attempt's own parse error, handed
+            # back: re-sending the identical message at a higher temperature is
+            # the one thing that cannot use what went wrong.
+            content = f"{base}\n\n{complaint}" if complaint else base
+            ask = {"role": "user", "content": content}
+            turn_messages = [system] + history + [ask]
+            try:
+                reply = call(turn_messages, attempt_cfg)
+            except Exception as e:  # noqa: BLE001 - recoverable
+                logger.warning("director: turn %d call failed", turn + 1, exc_info=True)
+                recorder.attempt(
+                    unit=unit,
+                    attempt=attempt,
+                    total=attempts,
+                    section=section,
+                    messages=[ask],
+                    error=str(e),
+                    outcome=LLM_ERROR,
+                    reason="LLM call failed",
+                    cfg=attempt_cfg,
+                )
+                complaint = ""
+                continue
+            parsed = apply_reply(view, state, reply, max_keep_lines=max_keep_lines)
+            outcome, reason = OK, ""
+            if parsed.error:
+                outcome, reason = UNPARSEABLE, parsed.error
+            elif parsed.drops:
+                outcome, reason = DROPPED_ITEMS, "; ".join(parsed.drops)
+            elif not parsed.ops:
+                outcome, reason = OK_EMPTY, ""
+            recorder.attempt(
+                unit=unit,
+                attempt=attempt,
+                total=attempts,
+                section=section,
+                messages=[ask],
+                response=reply,
+                outcome=outcome,
+                reason=reason,
+                cfg=attempt_cfg,
+            )
+            if parsed.error:
+                complaint = f"That reply could not be used: {parsed.error}"
+                continue
+            # The ask goes into the history TRIMMED: one line naming the range,
+            # so the reply under it stays readable and nothing else is re-sent.
+            history.extend(
+                [
+                    {"role": "user", "content": summary_line},
+                    {"role": "assistant", "content": reply},
+                ]
+            )
+            result = parsed
+            break
+        if result is None:
+            error = f"turn {turn + 1} failed after all {attempts} attempt(s)"
+            break
+        if result.done:
+            logging.info("director: done after %d turn(s)", turn + 1)
+            break
+        # No separate record for the playback: it is the next turn's ask, and
+        # that ask is recorded in full.  Writing it twice doubled the report.
+        previous = result
+        logging.info(
+            "director: turn %d/%d reviewed through display line %d of %d (%d op(s))",
+            turn + 1,
+            cap,
+            state.reviewed_through,
+            len(view.lines),
+            sum(len(v) for v in state.ops.values()),
+        )
+    else:
+        error = f"the turn cap ({cap} turns) was reached"
+
+    for index, ops in state.ops.items():
+        ops_by_stem[inputs[index - 1].segment.stem].extend(ops)
+    outcome = LLM_ERROR if error else OK
+    recorder.flush_unit(unit, outcome=outcome, reason=error)
+    if error:
+        logger.error("director: %s", error)
+    return ConversationResult(
+        ops=ops_by_stem,
+        ok=not error,
+        error=error,
+        reviewed_through=state.reviewed_through,
+        turns=state.turns,
     )
-    logging.info("director: %s -> %d operation(s)", unit, len(result.ops))
-    return result

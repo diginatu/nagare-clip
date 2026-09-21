@@ -17,14 +17,17 @@ from nagare_clip.audio_silence.run import run_audio_silence
 from nagare_clip.blender.frames import ordered_sources
 from nagare_clip.blender.warnings_file import WARNINGS_FILENAME
 from nagare_clip.cut_report.report import build_cut_report
-from nagare_clip.director.context import Neighbour
 from nagare_clip.director.director_llm import (
     DirectorOp,
     collect_overlay_texts,
     ops_from_dict,
     ops_to_dict,
 )
-from nagare_clip.director.run import run_director
+from nagare_clip.director.run import (
+    SegmentInputs,
+    run_director_conversation,
+    silence_line_min,
+)
 from nagare_clip.gap_context.describe import GapFrames
 from nagare_clip.gap_context.run import run_gap_context
 from nagare_clip.gap_context.snapshot import (
@@ -36,6 +39,7 @@ from nagare_clip.gap_context.snapshot import (
 )
 from nagare_clip.guided_edit.run import run_guided_edit
 from nagare_clip.intervals.manifest import build_manifest
+from nagare_clip.intervals.op_times import OpTimes, resolve_op_times
 from nagare_clip.intervals.run import run_intervals
 from nagare_clip.llm_report import recorder_from_config
 from nagare_clip.order import (
@@ -45,7 +49,6 @@ from nagare_clip.order import (
     identity_segments,
     normalise,
     read_manifest,
-    segment_unit,
     validate_segments,
     write_manifest,
 )
@@ -531,33 +534,6 @@ def _plan_revise_run(ctx: PipelineContext) -> None:
 # --- director ----------------------------------------------------------------
 
 
-def _segment_ops(
-    ctx: PipelineContext, segment: Segment, done: dict[Segment, list[DirectorOp]]
-) -> list[DirectorOp]:
-    """One earlier segment's ops: from this run when it ran, else off disk.
-
-    A source this run is not processing still has its whole-source
-    ``_director.json`` on disk from an earlier run; filtering it to the
-    segment's line range is what makes "the captions shown before this point"
-    exact rather than approximate.  ``num_lines=None`` skips the range check —
-    those ops belong to another transcript.
-    """
-    if segment in done:
-        return done[segment]
-    path = ctx.stage_dir("director") / f"{segment.stem}_director.json"
-    if not path.is_file():
-        return []
-    try:
-        ops = ops_from_dict(json.loads(path.read_text(encoding="utf-8")), None)
-    except (ValueError, OSError):
-        logging.warning("director: could not read prior ops %s", path)
-        return []
-    if segment.lines is None:
-        return ops
-    first, last = segment.lines
-    return [op for op in ops if first <= op.lines[0] <= last]
-
-
 def _write_director_ops(ctx: PipelineContext, stem: str, ops: list[DirectorOp]) -> None:
     """One source's merged ops, line-sorted, written once."""
     path = ctx.stage_dir("director") / f"{stem}_director.json"
@@ -571,88 +547,75 @@ def _write_director_ops(ctx: PipelineContext, stem: str, ops: list[DirectorOp]) 
 
 
 def _director_run(ctx: PipelineContext) -> None:
-    """One LLM call per SEGMENT of the finished video.
+    """ONE conversation over the whole finished video.
 
-    The loop walks the whole project's order even when ``--source`` narrows the
-    run, and calls only for the segments this run owns: narrowing changes what
-    is processed, not what the finished video contains, so every segment keeps
-    its real position and its real neighbours.
+    Every segment's transcript is loaded once and numbered once; the director
+    is then asked for an approximate range per turn and answered with what its
+    ops will play (:func:`~nagare_clip.director.run.run_director_conversation`).
+    ``--source`` does not narrow it: one conversation owns the whole video, so
+    every source's ``_director.json`` is rewritten whatever this run was asked
+    to process.
 
-    A source's segments are merged in memory and written once, when its last
-    segment in the order completes.  Every file this run is about to rewrite is
-    deleted first, so a failure cannot leave a stale one standing as if it were
-    current.
+    The ops accepted so far are written even when the conversation ends badly
+    — the turn cap, or a turn that fails every retry — and only then does the
+    stage fail: the user inspects them and continues by hand from
+    ``guided_edit`` rather than losing the whole conversation.
     """
     rec = _recorder(ctx, "director")
     rec.clear()
     segments = _timeline_segments(ctx)
     director_dir = ctx.stage_dir("director")
     text_filter_dir = ctx.stage_dir("text_filter")
-    mine = set(ctx.stems)
+    stems = sorted({segment.stem for segment in segments})
+    if set(ctx.stems) != set(stems):
+        logging.info(
+            "director: --source does not narrow the director; one conversation owns the "
+            "whole video, so every source's _director.json is rewritten"
+        )
 
-    def _edits(stem: str) -> Path:
-        return text_filter_dir / f"{stem}_edits.txt"
-
-    def _neighbour(index: int, offset: int) -> Neighbour | None:
-        n = index + offset
-        if not 0 <= n < len(segments):
-            return None
-        return Neighbour(segments[n], _edits(segments[n].stem))
+    inputs = [
+        SegmentInputs(
+            segment,
+            text_filter_dir / f"{segment.stem}_edits.txt",
+            json_path=ctx.stage_dir("sentence_split") / f"{segment.stem}.json",
+            gaps=ctx.stage_dir("gap_context") / f"{segment.stem}_gaps.json",
+            cuts_txt=ctx.stage_dir("audio_silence") / f"{segment.stem}_cuts.txt",
+            silence_line_min=silence_line_min(ctx.cfg["director"]),
+        )
+        for segment in segments
+    ]
 
     # Nothing half-written survives: these are all about to be rewritten, and a
     # file from a previous run was built under a different segmentation anyway.
-    for stem in mine:
+    for stem in stems:
         path = director_dir / f"{stem}_director.json"
         if path.is_file():
             path.unlink()
 
-    # The last position in the order at which each source still has a segment,
-    # so its file is written as soon as it is complete rather than at the end.
-    last_index = {seg.stem: i for i, seg in enumerate(segments) if seg.stem in mine}
-    done: dict[Segment, list[DirectorOp]] = {}
-    pending: dict[str, list[DirectorOp]] = {stem: [] for stem in mine}
-    failed = False
+    print(f"[director] Edit operations: {len(segments)} segment(s) in one conversation")
     try:
-        for index, segment in enumerate(segments):
-            if segment.stem not in mine:
-                continue
-            unit = segment_unit(segment)
-            print(f"[director] Edit operations: {unit}")
-            prior = collect_overlay_texts(
-                [op for earlier in segments[:index] for op in _segment_ops(ctx, earlier, done)]
+        result = run_director_conversation(
+            inputs,
+            ctx.cfg,
+            summary=ctx.stage_dir("summary") / "summary.json",
+            plan=_effective_plan_json(ctx),
+            recorder=rec,
+        )
+        # Written BEFORE the failure, never after it: the ops are what the
+        # conversation is for, and a cap is not a reason to throw them away.
+        for stem in stems:
+            _write_director_ops(ctx, stem, result.ops.get(stem, []))
+        if not result.ok:
+            files = ", ".join(f"{stem}_director.json" for stem in stems)
+            raise PipelineError(
+                f"[director] {result.error}; reviewed through display line "
+                f"{result.reviewed_through}. The ops accepted so far are written to "
+                f"{director_dir} ({files}) — inspect them and continue by hand "
+                "(--from-stage guided_edit)"
             )
-            result = run_director(
-                _edits(segment.stem),
-                ctx.cfg,
-                segment=segment,
-                all_segments=segments,
-                summary=ctx.stage_dir("summary") / "summary.json",
-                plan=_effective_plan_json(ctx),
-                json_path=ctx.stage_dir("sentence_split") / f"{segment.stem}.json",
-                gaps=ctx.stage_dir("gap_context") / f"{segment.stem}_gaps.json",
-                cuts_txt=ctx.stage_dir("audio_silence") / f"{segment.stem}_cuts.txt",
-                prior_captions=prior,
-                before=_neighbour(index, -1),
-                after=_neighbour(index, 1),
-                recorder=rec,
-            )
-            if not result.ok:
-                failed = True
-                raise PipelineError(
-                    f"[director] {unit} failed after every retry; "
-                    f"{segment.stem}_director.json not written "
-                    "(re-run with --source "
-                    f"{segment.stem} --from-stage director --to-stage director)"
-                )
-            done[segment] = result.ops
-            pending[segment.stem].extend(result.ops)
-            if index == last_index.get(segment.stem):
-                _write_director_ops(ctx, segment.stem, pending[segment.stem])
+        _write_divergence_note(ctx)
+        write_order_note(ctx)
     finally:
-        # A note describing ops that are not there is worse than no note.
-        if not failed:
-            _write_divergence_note(ctx)
-            write_order_note(ctx)
         rec.rebuild_index()
 
 
@@ -723,6 +686,27 @@ def _guided_edit_required(ctx: PipelineContext) -> list[Path]:
 # --- intervals ---------------------------------------------------------------
 
 
+def _silence_op_times(ctx: PipelineContext, stem: str) -> OpTimes | None:
+    """Time ranges for this source's ops that address a silence (``"n~"``).
+
+    Those carry no marker in ``_edits.txt`` — there are no words in a silence
+    to wrap — so they are resolved here and handed to ``run_intervals``.
+    ``None`` when there is no director output to read, which is the state a
+    project without the director stage enabled is in.
+    """
+    director_json = ctx.stage_dir("director") / f"{stem}_director.json"
+    json_path = ctx.stage_dir("sentence_split") / f"{stem}.json"
+    if not director_json.is_file() or not json_path.is_file():
+        return None
+    try:
+        ops = ops_from_dict(json.loads(director_json.read_text(encoding="utf-8")), None)
+        whisperx = json.loads(json_path.read_text(encoding="utf-8"))
+    except (ValueError, OSError):
+        logging.warning("intervals: could not read %s for silence refs", director_json)
+        return None
+    return resolve_op_times(ops, whisperx)
+
+
 def _intervals_run(ctx: PipelineContext) -> None:
     for src in ctx.sources:
         print(f"[intervals] Patch application + keep intervals: {src.stem}")
@@ -732,6 +716,7 @@ def _intervals_run(ctx: PipelineContext) -> None:
             ctx.stage_dir("intervals") / f"{src.stem}_intervals.json",
             ctx.cfg,
             cuts_txt=ctx.stage_dir("audio_silence") / f"{src.stem}_cuts.txt",
+            extra=_silence_op_times(ctx, src.stem),
         )
     write_order_note(ctx)
     _write_manifest(ctx)

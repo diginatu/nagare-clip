@@ -16,6 +16,7 @@ from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
 from typing import Any
 
+from nagare_clip.director.silence_lines import SilenceLine, insert_silence_lines
 from nagare_clip.gap_context.context import annotate_numbered_transcript
 from nagare_clip.gap_context.gaps import Gap
 from nagare_clip.intervals.sync_json import (
@@ -24,7 +25,7 @@ from nagare_clip.intervals.sync_json import (
     OVERLAY_TAG_RE,
     SPEED_TAG_RE,
 )
-from nagare_clip.llm_client import with_trace_meta
+from nagare_clip.llm_client import CACHEABLE_PREFIX_KEY, with_trace_meta
 from nagare_clip.llm_report import (
     DROPPED_ITEMS,
     LLM_ERROR,
@@ -36,7 +37,7 @@ from nagare_clip.llm_report import (
 )
 from nagare_clip.llm_retry import cfg_for_attempt, retry_attempts
 from nagare_clip.text_filter.llm_filter import _call_llm, apply_patches_to_lines
-from nagare_clip.timing import format_dur_gap
+from nagare_clip.timing import bracket_seconds, format_dur_gap
 
 logger = logging.getLogger(__name__)
 
@@ -69,6 +70,14 @@ class DirectorOp:
     factor: float | None = None
     text: str | None = None
     duration: float | None = None  # overlay: on-screen seconds (edited timeline)
+    # True when that edge of the range is the SILENCE after the line, written
+    # "n~" in _director.json.  ``lines`` stays the speech-line numbers, so
+    # everything that blocks, clips, sorts or reports by line keeps working;
+    # only the resolver that turns an op into times reads these.  A span
+    # otherwise ends at its last line's last word, which is why "compress the
+    # wait after line 53" was unexpressible.
+    gap_start: bool = False
+    gap_end: bool = False
     extra: dict = field(default_factory=dict)
 
 
@@ -86,13 +95,24 @@ def keep_limit_note(max_keep_lines: int) -> str:
     Generated rather than written into ``DIRECTOR_PROMPT`` so the number the
     LLM is told is always the number the parser enforces.
     """
+    # The op menu tells the director to span a whole continuous event in ONE
+    # keep; this cap can make that impossible, and _apply_keep_cap DROPS the
+    # op rather than clamping it — so following the menu loses the keep
+    # entirely and jump-cuts the very event it was protecting.  The note used
+    # to paper over that with "a continuous on-screen event fits well inside
+    # that", which is false in exactly the case the whole-event rule exists
+    # for.  Saying what to do instead turns a silent drop into a usable route:
+    # consecutive keeps do not overlap, so they all survive.
+    #
+    # The "do not stretch a keep across a talking span" warning is gone from
+    # here too — the keep bullet states it more completely ("Never widen a
+    # keep to mark talking as important ... inflates the runtime for
+    # nothing"), and this note is appended far from the menu.
     return (
         f'A "keep" op may span at most {max_keep_lines} line(s); a wider one is '
-        "rejected and has no effect. A continuous on-screen event fits well "
-        "inside that, because nobody is talking through it. Do not stretch a "
-        "keep across a talking span to signal that it matters — say so in a "
-        '"note" on another op instead. A "timelapse" op needs no keep of its '
-        "own; it protects its whole range by itself."
+        "rejected and has no effect — to hold a longer event, emit consecutive "
+        'keeps that each stay within the cap. A "timelapse" op needs no keep of '
+        "its own; it protects its whole range by itself."
     )
 
 
@@ -128,6 +148,51 @@ def _coerce_lines(value: Any, num_lines: int | None, first_line: int = 1) -> tup
     return (start, end)
 
 
+#: ``"53~"`` — the silence after source line 53.  Anchored at both ends so a
+#: bare ``"~53"`` or a trailing-space variant is a malformed op, not a silent
+#: reinterpretation of which line it names.
+_SILENCE_REF_RE = re.compile(r"^(\d+)~$")
+
+
+def _coerce_endpoint(value: Any) -> tuple[int, bool] | None:
+    """One range endpoint: ``12`` -> ``(12, False)``; ``"12~"`` -> ``(12, True)``."""
+    if isinstance(value, bool):  # bool is an int subclass; reject explicitly
+        return None
+    if isinstance(value, int):
+        return (value, False)
+    if isinstance(value, str):
+        m = _SILENCE_REF_RE.match(value)
+        if m:
+            return (int(m.group(1)), True)
+    return None
+
+
+def _coerce_line_range(
+    value: Any, num_lines: int | None, first_line: int = 1
+) -> tuple[tuple[int, int], bool, bool] | None:
+    """A director op's ``lines``: the same range as :func:`_coerce_lines`, plus
+    which edges name the silence after their line.
+
+    Separate from :func:`_coerce_lines` because ``summary`` shares that one for
+    part ranges, where a silence reference has no meaning.  Every range check
+    is the same: a silence edge is an edge of the SAME line, so it relaxes
+    nothing.
+    """
+    if isinstance(value, (list, tuple)) and len(value) == 2:
+        first, last = value
+    else:
+        first = last = value
+    start = _coerce_endpoint(first)
+    end = _coerce_endpoint(last)
+    if start is None or end is None:
+        return None
+    if not (max(1, first_line) <= start[0] <= end[0]):
+        return None
+    if num_lines is not None and end[0] > num_lines:
+        return None
+    return ((start[0], end[0]), start[1], end[1])
+
+
 def _parse_op(
     raw: Any,
     num_lines: int | None,
@@ -145,10 +210,11 @@ def _parse_op(
     if op_type not in VALID_TYPES:
         _drop(f"unknown type {op_type!r}")
         return None
-    lines = _coerce_lines(raw.get("lines"), num_lines, first_line)
-    if lines is None:
+    coerced = _coerce_line_range(raw.get("lines"), num_lines, first_line)
+    if coerced is None:
         _drop(f"bad lines {raw.get('lines')!r}")
         return None
+    lines, gap_start, gap_end = coerced
 
     # The max_keep_lines cap itself is enforced as a post-pass over the whole
     # op list (see _apply_keep_cap), not here.
@@ -210,7 +276,14 @@ def _parse_op(
             return None
 
     return DirectorOp(
-        type=op_type, lines=lines, note=note, factor=factor, text=text, duration=duration
+        type=op_type,
+        lines=lines,
+        note=note,
+        factor=factor,
+        text=text,
+        duration=duration,
+        gap_start=gap_start,
+        gap_end=gap_end,
     )
 
 
@@ -271,6 +344,18 @@ def _drop_off_menu_ops(
     return kept
 
 
+def strip_code_fence(response: str) -> str:
+    """*response* without the ```` ```json ```` fence models keep wrapping it in.
+
+    Shared with :mod:`nagare_clip.director.loop`, whose reply is a JSON object
+    with more in it than ``ops`` — so the two readers of one model's JSON
+    cannot disagree about what a fenced reply is.
+    """
+    text = response.strip()
+    fence = _FENCE_RE.match(text)
+    return fence.group(1) if fence else text
+
+
 def try_parse_director_response(
     response: str,
     num_lines: int,
@@ -292,12 +377,8 @@ def try_parse_director_response(
     a span's worth of dead air. Applied as a post-pass (:func:`_apply_keep_cap`)
     after every op is parsed.
     """
-    text = response.strip()
-    fence = _FENCE_RE.match(text)
-    if fence:
-        text = fence.group(1)
     try:
-        data = json.loads(text)
+        data = json.loads(strip_code_fence(response))
     except (ValueError, TypeError):
         logger.warning("Director response is not valid JSON; ignoring")
         return None
@@ -386,11 +467,84 @@ def format_numbered_transcript(clean_lines: list[str], first_line: int = 1) -> s
     return "\n".join(f"{i + first_line}: {text}" for i, text in enumerate(clean_lines))
 
 
+def speech_seconds(
+    seg_times: Sequence[tuple[float | None, float | None]],
+    silences: Sequence[float] | None = None,
+) -> list[float | None]:
+    """Seconds each line plays with no op at all: its span minus the
+    audio_silence cut inside it (``None`` when the line is untimed).
+
+    The one definition of a line's playing time — the transcript brackets and
+    the whole-video "default runtime" both read it, so they cannot drift.
+    """
+    out: list[float | None] = []
+    for i, (start, end) in enumerate(seg_times):
+        raw = end - start if start is not None and end is not None else None
+        sil = silences[i] if silences is not None and i < len(silences) else None
+        out.append(max(raw - sil, 0.0) if raw is not None and sil else raw)
+    return out
+
+
+def line_seconds(
+    seg_times: Sequence[tuple[float | None, float | None]],
+    silences: Sequence[float] | None = None,
+) -> list[float | None]:
+    """Each line's duration exactly as its transcript bracket prints it.
+
+    Differs from :func:`speech_seconds` only where a sub-second silence is
+    folded back in for display.  Per-line figures quoted back to the director
+    (the playback preview) read this, so a line never carries two numbers;
+    runtimes keep summing :func:`speech_seconds`, because the audio_silence cut
+    is applied regardless of what the bracket shows.
+    """
+    out: list[float | None] = []
+    for i, dur in enumerate(speech_seconds(seg_times, silences)):
+        sil = silences[i] if silences is not None and i < len(silences) else None
+        out.append(None if dur is None else bracket_seconds(dur, sil))
+    return out
+
+
+def render_transcript(
+    clean_lines: list[str],
+    seg_times: list[tuple[float | None, float | None]] | None = None,
+    silences: list[float] | None = None,
+    anchored_gaps: list[tuple[int, Gap]] | None = None,
+    first_line: int = 1,
+    silence_lines: Sequence[SilenceLine] | None = None,
+) -> str:
+    """One segment's numbered transcript exactly as the director is shown it.
+
+    Timed brackets when *seg_times* matches the lines, gap annotations on top of
+    those; plain ``N: text`` otherwise.  The editable user message and the
+    whole-video reference block are both rendered here, so the two views of one
+    segment can never disagree.
+
+    *silence_lines* (:mod:`nagare_clip.director.silence_lines`) are the waits
+    between lines long enough to be shown as lines of their own.  Each one
+    states its duration, so the line it follows drops the ``gap`` part of its
+    bracket: one silence is never two numbers.  They need brackets to sit
+    beside, so an untimed transcript ignores them.
+    """
+    if seg_times is not None and len(seg_times) == len(clean_lines):
+        out = format_numbered_transcript_timed(
+            clean_lines,
+            seg_times,
+            silences=silences,
+            first_line=first_line,
+            silence_after={line.after_line for line in silence_lines or []},
+        )
+        if anchored_gaps:
+            out = annotate_numbered_transcript(out, anchored_gaps)
+        return insert_silence_lines(out, silence_lines or [])
+    return format_numbered_transcript(clean_lines, first_line=first_line)
+
+
 def format_numbered_transcript_timed(
     clean_lines: list[str],
     seg_times: list[tuple[float | None, float | None]],
     silences: list[float] | None = None,
     first_line: int = 1,
+    silence_after: set[int] | None = None,
 ) -> str:
     """``N: text  [dur, gap]`` (1-based), gap = time to the next line.
 
@@ -402,15 +556,21 @@ def format_numbered_transcript_timed(
     never judges pacing from span time that is mostly already-dropped silence.
     A missing ``start``/``end`` degrades that line's bracket via
     :func:`format_dur_gap` (possibly to no bracket at all).
+
+    *silence_after* are the line numbers a silence line follows: that wait is
+    stated there, in seconds of its own, so printing it here too would give one
+    silence two numbers the director has to reconcile.
     """
     out: list[str] = []
+    speech = speech_seconds(seg_times, silences)
     for i, text in enumerate(clean_lines):
-        start, end = seg_times[i]
-        raw = end - start if start is not None and end is not None else None
+        _, end = seg_times[i]
         sil = silences[i] if silences is not None and i < len(silences) else None
-        dur = max(raw - sil, 0.0) if raw is not None and sil else raw
+        dur = speech[i]
         gap: float | None = None
-        if i + 1 < len(clean_lines):
+        if silence_after and i + first_line in silence_after:
+            pass
+        elif i + 1 < len(clean_lines):
             nxt_start = seg_times[i + 1][0]
             if end is not None and nxt_start is not None:
                 gap = nxt_start - end
@@ -425,7 +585,10 @@ def ops_to_dict(ops: list[DirectorOp]) -> dict[str, Any]:
     for op in ops:
         entry: dict[str, Any] = {
             "type": op.type,
-            "lines": [op.lines[0], op.lines[1]],
+            "lines": [
+                f"{op.lines[0]}~" if op.gap_start else op.lines[0],
+                f"{op.lines[1]}~" if op.gap_end else op.lines[1],
+            ],
         }
         if op.factor is not None:
             entry["factor"] = op.factor
@@ -465,6 +628,9 @@ def generate_director_ops(
     anchored_gaps: list[tuple[int, Gap]] | None = None,
     silences: list[float] | None = None,
     first_line: int = 1,
+    reference: str = "",
+    user_header: str = "",
+    silence_lines: Sequence[SilenceLine] | None = None,
 ) -> DirectorResult:
     """Run the director LLM over one segment's transcript and return its ops.
 
@@ -492,24 +658,40 @@ def generate_director_ops(
     ``silences`` (per-line audio_silence overlap, same length as ``seg_times``)
     splits each bracket into speech/silence; ``None`` keeps the output
     byte-identical.
+
+    ``silence_lines`` are the waits between lines shown as lines of their own,
+    each addressable as ``"n~"``; empty/absent leaves the transcript as it was
+    before the feature existed.
+
+    ``reference`` is the whole finished
+    video's transcript, appended INSIDE the cacheable prefix — the caller must
+    pass the same string on every segment's call of a run.  ``user_header`` is
+    one line put above the editable transcript.  Both empty (the default) leave
+    the request byte-identical.
     """
     clean_lines = clean_for_display(edit_lines)
     max_keep_lines = _max_keep_lines(cfg)
     system_prompt = cfg.get("prompt", "")
     if max_keep_lines > 0:
         system_prompt = f"{system_prompt}\n\n{keep_limit_note(max_keep_lines)}"
+    if reference:
+        # The whole video's transcript: identical on every segment's call of a
+        # run, so it belongs INSIDE the cached prefix.
+        system_prompt = f"{system_prompt}\n\n{reference}"
+    # Everything up to here is identical on every segment's call; the overview
+    # context is where they diverge.  Declared so the client caches exactly
+    # this much — a breakpoint after the overview would make every call's
+    # prefix unique and turn caching into a pure write premium.
+    stable_prefix = system_prompt
     if overview_context:
         system_prompt = f"{system_prompt}\n\n{overview_context}"
-    if seg_times is not None and len(seg_times) == len(clean_lines):
-        user_content = format_numbered_transcript_timed(
-            clean_lines, seg_times, silences=silences, first_line=first_line
-        )
-        if anchored_gaps:
-            user_content = annotate_numbered_transcript(user_content, anchored_gaps)
-    else:
-        user_content = format_numbered_transcript(clean_lines, first_line=first_line)
+    user_content = render_transcript(
+        clean_lines, seg_times, silences, anchored_gaps, first_line, silence_lines
+    )
+    if user_header:
+        user_content = f"{user_header}\n{user_content}"
     messages = [
-        {"role": "system", "content": system_prompt},
+        {"role": "system", "content": system_prompt, CACHEABLE_PREFIX_KEY: stable_prefix},
         {"role": "user", "content": user_content},
     ]
     recorder.begin(unit)

@@ -1,92 +1,48 @@
-"""Build the cross-video context block the director injects into its prompt.
+"""The project's brief for the whole finished video, for the director's prefix.
 
 Lives in the ``director`` package (not ``director_llm``) because it depends on
 the ``summary`` and ``plan`` stages; ``director_llm`` stays free of those imports
 so ``summary`` can keep importing it without a cycle.
+
+One conversation reads the whole video under one numbering
+(:mod:`nagare_clip.director.display`), so this block is rendered once, for
+every segment at once, and every line range in it is a DISPLAY number.  What
+the per-segment version also carried is gone with that path: the seam lines at
+each join (the view now contains both sides of every join), the ops already
+made to earlier segments (one conversation remembers its own), the captions
+already shown, and the "Earlier/Later in the finished video" sibling summaries
+(the view carries those segments' transcripts in full).
 """
 
 from __future__ import annotations
 
-from dataclasses import dataclass
-from pathlib import Path
+import logging
+from collections.abc import Sequence
 
-from nagare_clip.director.director_llm import clean_for_display
-from nagare_clip.order import Segment, segment_label
+from nagare_clip.director.display import DisplayView
+from nagare_clip.order import Segment
 from nagare_clip.plan.plan_llm import PartDirection
 from nagare_clip.summary.summarize import ProjectSummary
 
-#: Why the neighbouring lines are in the prompt.  Deliberately a rule and not a
-#: worked example: an example in this prompt anchors harder than the instruction
-#: around it (improvement 11).
-SEAM_NOTE = (
-    "Your footage is NOT a standalone episode — it plays inside one longer finished "
-    "video, and the lines below are what the viewer hears immediately before and "
-    "after it. An opening greeting or a closing sign-off in your footage is "
-    "addressing an audience that is already mid-video. They are NOT part of your "
-    "transcript and carry no numbering — every op you emit refers to your own "
-    "numbered lines only."
+logger = logging.getLogger(__name__)
+
+#: Travels WITH the plan's line ranges, immediately above them, wherever they
+#: are rendered.  A measured 9-segment run copied plan part boundaries into 19
+#: of 56 op starts and into all three timelapses -- two of which therefore
+#: opened on the line where the speaker announces the work and played that
+#: announcement at 8-20x, unintelligible.  The rule that should have prevented
+#: it sits in ``DIRECTOR_PROMPT``'s Rules block at ~55% of the assembled
+#: prompt, and the more concrete, later ranges won; so the correction is
+#: emitted here and nowhere else.  It also names the literal word "keep",
+#: which ``PLAN_PROMPT`` forbids in a direction and 7 of 9 real directions used
+#: anyway, and which the director's own guardrail (featured/retained/
+#: emphasised) does not cover.
+SECTION_BOUNDARY_NOTE = (
+    "These are section boundaries, not op boundaries: a direction "
+    "says what a stretch is FOR, and you choose where each op "
+    'actually starts and ends. A direction saying "keep" means '
+    "emphasis, not a keep op."
 )
-
-
-@dataclass(frozen=True)
-class Seam:
-    """A neighbouring SEGMENT's lines at the join with this one.
-
-    *lines* is that segment's own text — its last lines on the BEFORE side, its
-    first ones on the AFTER side.  Text only, deliberately: a line number here
-    would be the NEIGHBOUR's coordinate, and every op the director emits
-    addresses its own transcript, so a number it copied out of the seam would
-    silently edit an unrelated line of this video.
-
-    *label* names the neighbour the way :func:`order.segment_label` does, so a
-    join with another stretch of this very source reads as what it is.
-    """
-
-    label: str
-    lines: list[str]
-
-
-@dataclass(frozen=True)
-class Neighbour:
-    """The segment playing next to this one, and where to read its text.
-
-    Both sides are readable because ``text_filter`` has run for every source
-    before ``director`` starts — unlike the prior captions, which can only look
-    backwards.
-    """
-
-    segment: Segment
-    edits: Path
-
-
-def seam_lines(edit_lines: list[str], count: int, *, last: bool) -> list[str]:
-    """The *count* lines at one end of a neighbour's ``_edits.txt``.
-
-    Editing markers and ``{{old->new}}`` patches are stripped (the same view the
-    director gets of its own transcript) and blank lines are skipped.  Line
-    numbers are deliberately dropped — see :class:`Seam`.
-    """
-    if count <= 0:
-        return []
-    lines = [text.strip() for text in clean_for_display(edit_lines) if text.strip()]
-    return lines[-count:] if last else lines[:count]
-
-
-def _seam_block(before: Seam | None, after: Seam | None) -> list[str]:
-    """Render the seam context; ``[]`` when neither side exists."""
-    if not (before and before.lines) and not (after and after.lines):
-        return []
-    out = ["", SEAM_NOTE]
-    if before and before.lines:
-        out.append(
-            "Immediately BEFORE this segment in the finished video "
-            f"({before.label}, its last lines):"
-        )
-        out.extend(f"- {text}" for text in before.lines)
-    if after and after.lines:
-        out.append(f"Immediately AFTER this segment ({after.label}, its first lines):")
-        out.extend(f"- {text}" for text in after.lines)
-    return out
 
 
 def _overlaps(part, segment: Segment) -> bool:
@@ -105,179 +61,71 @@ def _clipped(part_lines: tuple[int, int], segment: Segment) -> tuple[int, int]:
     return (max(part_lines[0], segment.lines[0]), min(part_lines[1], segment.lines[1]))
 
 
-def _sibling_text(segment: Segment, project_summary: ProjectSummary) -> str:
-    """One line about another segment.
-
-    A whole-source segment keeps the video summary it always had; a partial one
-    is described by the parts it actually covers, since a video summary would
-    describe footage playing somewhere else in the finished video.
-    """
-    if segment.lines is None:
-        own = project_summary.video_summaries.get(segment.stem)
-        if own:
-            return own
-    covered = [p.summary for p in project_summary.parts if _overlaps(p, segment) and p.summary]
-    if covered:
-        return " / ".join(covered)
-    return ""
-
-
-def _sibling_entry(index: int, segment: Segment, project_summary: ProjectSummary) -> str:
-    label = segment_label(segment)
-    text = _sibling_text(segment, project_summary)
-    return f"- {index}. {label}: {text}" if text else f"- {index}. {label}"
-
-
-def _directions_by_part(
-    own: list, directions: list[PartDirection]
-) -> dict[int, list[PartDirection]]:
-    """Group this video's directions under the part each one covers.
-
-    ``plan`` may split a summary part into several narrower directions, so a
-    direction is matched by line overlap rather than by an exact range; each is
-    attached to the part it overlaps most (ties -> the earlier part).
-    """
-    grouped: dict[int, list[PartDirection]] = {}
-    for d in directions:
-        best_idx, best_overlap = -1, 0
-        for i, p in enumerate(own):
-            if p.stem != d.stem:
-                continue
-            overlap = min(p.lines[1], d.lines[1]) - max(p.lines[0], d.lines[0]) + 1
-            if overlap > best_overlap:
-                best_idx, best_overlap = i, overlap
-        if best_idx >= 0:
-            grouped.setdefault(best_idx, []).append(d)
-    for entries in grouped.values():
-        entries.sort(key=lambda d: d.lines)
-    return grouped
-
-
-def build_director_context(
-    project_summary: ProjectSummary,
+def _direction_rows(
     directions: list[PartDirection],
     segment: Segment,
-    *,
-    all_segments: list[Segment] | None = None,
-    prior_captions: list[str] | None = None,
-    max_prior_captions: int = 0,
-    seam_before: Seam | None = None,
-    seam_after: Seam | None = None,
-) -> str:
-    """Render the context for one SEGMENT: global summary + the parts this
-    segment covers (line ranges, summaries, rough directions) + the sibling
-    segments.
+    index: int,
+    view: DisplayView,
+) -> list[str]:
+    """One segment's directions, ranged in DISPLAY numbers.
 
-    ``all_segments`` is the finished video's playback order.  When it is given
-    and contains *segment* — and the project has more than one segment — the
-    siblings are split into what plays BEFORE and AFTER this one and the header
-    states its index, so a whole-project instruction in the editorial brief
-    ("explain the rig early on") is readable as being about one particular
-    stretch rather than about every video independently.  The unit is the
-    segment, not the source: "video 3 of 7" stops meaning anything the moment
-    one source plays at two places in the timeline, and another stretch of this
-    very source is a neighbour like any other footage.
-
-    ``prior_captions`` are the captions the director already committed on the
-    segments playing earlier, so an explanation is not repeated.
-    ``max_prior_captions`` keeps only that many of the most recent ones
-    (``0`` = no limit).
-
-    ``seam_before``/``seam_after`` are the neighbouring segments' lines at the
-    two joins (see :class:`Seam`); either side may be absent (the first segment
-    has no predecessor, the last no successor, and a neighbour's ``_edits.txt``
-    may be missing on a re-run), and with neither the block is byte-identical to
-    before.
-
-    Returns ``""`` when there is nothing to inject (so the director prompt is
-    unchanged when the overview is empty).
+    Each direction is clipped to the lines this segment actually plays and then
+    mapped through :meth:`DisplayView.from_source` -- the model reads one global
+    numbering, and a source number rendered into it would name unrelated
+    footage.  A range the view cannot map (a plan that claims more lines than
+    the transcript has) is skipped with a warning rather than rendered raw.
     """
-    stem = segment.stem
-    parts = project_summary.parts
-    video_summaries = project_summary.video_summaries
-    own = [p for p in parts if _overlaps(p, segment)]
+    rows: list[tuple[int, str]] = []
+    for direction in sorted(directions, key=lambda d: d.lines):
+        if not _overlaps(direction, segment):
+            continue
+        first, last = _clipped(direction.lines, segment)
+        if first > last:
+            continue
+        start = view.from_source(index, first)
+        end = view.from_source(index, last)
+        if start is None or end is None:
+            logger.warning(
+                "director: no display line for %s lines %d-%d; direction skipped (%s)",
+                direction.stem,
+                direction.lines[0],
+                direction.lines[1],
+                direction.direction,
+            )
+            continue
+        rows.append((start, f"- lines {start}-{end}: {direction.direction}"))
+    return [row for _, row in sorted(rows, key=lambda item: item[0])]
 
-    # A single-segment project has no timeline order worth explaining.
-    order = list(all_segments or [])
-    positioned = len(order) > 1 and segment in order
-    index = order.index(segment) + 1 if positioned else 0
-    total = len(order)
-    captions = list(prior_captions or [])
-    if max_prior_captions > 0:
-        captions = captions[-max_prior_captions:]
-    seams = _seam_block(seam_before, seam_after)
 
-    if not project_summary.summary and not own and not positioned and not captions and not seams:
-        return ""
+def project_context_block(
+    project_summary: ProjectSummary,
+    directions: list[PartDirection],
+    segments: Sequence[Segment],
+    view: DisplayView,
+) -> str:
+    """The project's context for the WHOLE video, for the cacheable prefix.
 
-    dirs_by_part = _directions_by_part(own, [d for d in directions if _overlaps(d, segment)])
+    The overall summary once, then every segment in playback order with the
+    plan's directions covering it, every range in the display numbering the
+    conversation reads -- and :data:`SECTION_BOUNDARY_NOTE` immediately above
+    that list, which is the only place it is emitted.
 
-    out: list[str] = ["Project context (all videos):"]
+    *segments* is the playback order, positionally the same as ``view.segments``
+    (``[k]`` is a position in both).
+
+    ``""`` when there is nothing to say, so an empty overview leaves the system
+    message exactly as it was.
+    """
+    blocks: list[str] = []
+    for index, segment in enumerate(segments, start=1):
+        label = view.segments[index - 1].label if index <= len(view.segments) else "?"
+        rows = _direction_rows(directions, segment, index, view)
+        blocks.append("\n".join([f"[{index}] {label}:", *(rows or ["- (no directions)"])]))
+    listed = any("- lines " in block for block in blocks)
+
+    out: list[str] = []
     if project_summary.summary:
-        out.append(f"Overall: {project_summary.summary}")
-
-    if positioned:
-        out.append(
-            "All segments below are concatenated into ONE finished video in this "
-            f"order; you are editing only segment {index} of them."
-        )
-
-    if own or positioned:
-        header = f'This segment ("{segment_label(segment)}")'
-        if positioned:
-            header += f" — segment {index} of {total}"
-            if index == 1:
-                header += ", the FIRST in the finished timeline"
-            elif index == total:
-                header += ", the LAST in the finished timeline"
-        out.append(header + ":")
-        own_summary = video_summaries.get(stem, "") if segment.lines is None else ""
-        if own_summary:
-            out.append(f"Summary: {own_summary}")
-        for i, p in enumerate(own):
-            lines = _clipped(p.lines, segment)
-            line = f"- lines {lines[0]}-{lines[1]}: {p.summary}"
-            part_dirs = dirs_by_part.get(i, [])
-            if len(part_dirs) == 1 and _clipped(part_dirs[0].lines, segment) == lines:
-                out.append(line + f" → direction: {part_dirs[0].direction}")
-                continue
-            if part_dirs:
-                # plan split this part: each direction states the lines it covers.
-                out.append(line + " → directions:")
-                for d in part_dirs:
-                    clipped = _clipped(d.lines, segment)
-                    out.append(f"    - lines {clipped[0]}-{clipped[1]}: {d.direction}")
-            else:
-                out.append(line)
-
-    if positioned:
-        earlier = [
-            _sibling_entry(i + 1, s, project_summary) for i, s in enumerate(order[: index - 1])
-        ]
-        later = [
-            _sibling_entry(index + 1 + i, s, project_summary) for i, s in enumerate(order[index:])
-        ]
-        out.append("")
-        out.append("Earlier in the finished video (already edited):")
-        out.extend(earlier or ["- (none)"])
-        out.append("Later in the finished video:")
-        out.extend(later or ["- (none)"])
-    else:
-        # One line per other source video (its video summary, else first part's).
-        seen: dict[str, str] = {}
-        for p in parts:
-            if p.stem != stem and p.stem not in seen:
-                seen[p.stem] = video_summaries.get(p.stem) or p.summary
-        if seen:
-            out.append("Other videos:")
-            for s, summary in seen.items():
-                out.append(f"- {s}: {summary}")
-
-    if captions:
-        out.append("")
-        out.append("Captions already shown earlier in the finished video:")
-        out.extend(f"- {c}" for c in captions)
-
-    out.extend(seams)
-
-    return "\n".join(out)
+        out.append(f"Project context (all videos):\nOverall: {project_summary.summary}")
+    if listed:
+        out.append("\n".join([SECTION_BOUNDARY_NOTE, *blocks]))
+    return "\n\n".join(out)

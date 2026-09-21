@@ -120,16 +120,16 @@ PLAN_PROMPT = (
     "(e.g. a part that repeats an earlier one can be removed). Reference "
     "parts by their 1-based index. Output ONLY a JSON object.\n"
     "\n"
-    "Timing: a part may carry a bracket after its line range — "
-    "[4.2s, gap 0.8s] means the part has a duration of 4.2 seconds and is "
-    "followed by a 0.8-second silent gap before the next part of the same "
-    "video. A negligible gap, and the last part of a video, show no gap "
-    "([4.2s]); a part with unknown timing has no "
-    "bracket. "
-    "A part containing long internal silences splits its duration — "
-    "[13.0s speech, 62.9s silence] means only 13.0 seconds are spoken; the "
-    "silent seconds are dropped by default. Judge "
-    "pacing from the speech figure. "
+    # Same four shapes as DIRECTOR_PROMPT's legend, for the same reason: the
+    # four-part form was 20% of a real run's part brackets and undocumented.
+    "Timing: a part may carry a bracket after its line range. [4.2s] is the "
+    "part's duration; [4.2s, gap 0.8s] adds the silent gap before the next "
+    "part of the same video. A part holding long internal silence splits it "
+    "instead — [13.0s speech, 62.9s silence] means only 13.0 seconds are "
+    "spoken and the 62.9 silent seconds are dropped by default — and may "
+    "carry a gap too: [13.0s speech, 62.9s silence, gap 0.8s]. Those are the "
+    "only four forms; a negligible gap is omitted; no timing, no bracket. "
+    "Judge pacing from the speech figure. "
     "Use these numbers to judge pacing: long parts are candidates "
     "for shortening or speeding up, and long gaps mean dead air.\n"
     "\n"
@@ -264,46 +264,75 @@ PLAN_REVISE_PROMPT = (
 
 
 DIRECTOR_PROMPT = (
-    "You are a video editor. You receive a Japanese transcript as "
-    "numbered lines (one line per subtitle segment). Decide high-level "
+    "You are a video editor. You are given the WHOLE finished video as "
+    "numbered lines — every segment of it in playback order, speech and "
+    "silence together, under ONE numbering — and you edit it over several "
+    "turns. Decide high-level "
+    # No trigger list here: the overlay bullet already owns "turning points,
+    # conclusions, failures, and mishaps", and a list stated twice is two
+    # places to drift.
     "edits to tighten AND STAGE the video: cut what drags, but also mark "
-    "the moments that make it worth watching — turning points, payoffs, "
-    "failures, mishaps. Do NOT rewrite or output the "
-    "transcript text. Output ONLY a JSON object.\n"
+    "the moments that make it worth watching.\n"
     "\n"
-    "Timing: a line may carry a bracket after its text — [4.2s, gap 0.8s] "
-    "means the line lasts 4.2 seconds and is followed by a 0.8-second silent "
-    "gap before the next line. A negligible gap, and the last line, show no "
-    "gap ([4.2s]); a line with "
-    "unknown timing has no bracket. "
-    "A line containing long internal silences splits its duration — "
-    "[13.0s speech, 62.9s silence] means only 13.0 seconds are spoken; the "
-    '62.9 silent seconds are dropped by default (a "keep" over the line '
-    "preserves them). Judge pacing from the speech figure, never from "
-    "speech+silence. "
-    "Use these numbers to judge pacing: a long speech duration is a "
+    # The protocol, stated once.  Each user message repeats the exact reply
+    # shape (director.loop.REPLY_SHAPE), so what belongs here is what a turn
+    # MEANS: that the range is approximate, that a reply owns its range, and
+    # that the playback comes back — the three things that make rewriting an
+    # earlier range a normal move rather than an admission.
+    "Each turn asks you for an approximate range; you reply with the ops for "
+    "the stretch you really reviewed, and are shown the COMPLETE edit — every "
+    "op, caption and the runtime — so check the whole-video requirements on "
+    "every turn. A "
+    "reply OWNS the range it names: re-send a range and its ops REPLACE the "
+    # "a playback you did not mean is fixed by sending that range again" used
+    # to follow; the last Rules line ("Re-send the range with the boundary
+    # moved") is the same instruction, and the complete edit shown every turn
+    # is what pays for saying it once.
+    "ones you gave for it. "
+    'Reply {"done": true} once every line has been reviewed '
+    "and the playback is what you meant.\n"
+    "\n"
+    # Every bracket shape the renderer can emit is shown, in one place.  The
+    # four-part form was 17.0% of a real run's brackets while going
+    # undocumented, and the three-part gap form the old legend led with was the
+    # rarest at 4.4% — so the shape the LLM met most often was the one it had
+    # to infer.  Enumerating them costs nothing: this paragraph is four
+    # characters shorter than the one it replaces.
+    "Timing: a line may carry a bracket after its text. [4.2s] is the line's "
+    "duration; [4.2s, gap 0.8s] adds the silent gap before the next line. A "
+    "line holding long internal silence splits it instead — "
+    "[13.0s speech, 62.9s silence] means only 13.0 seconds are spoken and the "
+    "62.9 silent seconds are dropped by default — "
+    "and may carry a gap too: [13.0s speech, 62.9s silence, gap 0.8s]. Those "
+    "are the only four forms; a negligible gap is omitted; no timing, no "
+    "bracket. A bracket's gap is a SHORT one — a longer wait is a "
+    # The gap-rescue reading used to live here, because a 29.9 s wait reached
+    # the director only as `gap 29.9s` inside the preceding line's bracket and
+    # nothing else could be said about it.  It is a line of its own now, which
+    # is where the "this may be the best moment in the shot" reading belongs.
+    "[silent …] line of its own, below.\n"
+    "\n"
+    "Use these numbers to judge pacing, always from the speech figure and "
+    "never from speech+silence: a long speech duration is a "
     "candidate for cutting, not speeding up — a long stretch of manual "
-    "work is a timelapse candidate instead. A long gap is "
-    "dead air by default, already dropped — but that is the fallback "
-    "reading, not the only one. Check the speech just before and after it: "
-    "if it announces something happening (an accident, a cleanup, a wait "
-    "for a result), the gap itself may be the most watchable moment in the "
-    'shot, and a "keep" spanning that line and the next (lines [N, N+1]) '
-    "preserves it.\n"
+    "work is a timelapse candidate.\n"
     "\n"
-    "Visual context: an indented line like\n"
-    "    [silent gap 12.4s: a build runs and logs scroll past]\n"
-    "may follow a numbered line. It describes what is VISIBLE on screen "
-    "during the silence after that line (nobody is speaking). Such gaps are "
-    "dropped by default. If the gap shows something worth watching, emit a "
-    '"keep" op spanning that line and the next one — a keep over lines '
-    "[N, N+1] preserves the silence between them. If the described action "
-    "continues across several gaps (it is still unfolding in the next "
-    "annotation, or the speech around it narrates the same event), span the "
-    "whole run in ONE keep instead of one narrow keep per gap. Annotation "
-    "lines are not numbered; never reference them as op lines.\n"
+    "Silence: a line like\n"
+    "54: [silent 29.9s: a build runs and logs scroll past]\n"
+    # It used to carry no number (the per-segment transcript numbered source
+    # lines only), so the prompt had to teach the "53~" form.  Under the
+    # whole-video numbering it is a line like any other, and the parser
+    # rejects "53~" — so the form is gone rather than kept as an alias.
+    "is the wait between the lines either side of it — 29.9 s in which nobody "
+    "speaks — followed by what is VISIBLE on screen during it. It is a line "
+    "like any other: put its number in an op — a timelapse plays that wait "
+    "fast, a keep restores it. Dead air is the "
+    "fallback reading, not the only one: if the speech either side announces "
+    "something happening (an accident, a cleanup, a wait for a result), that "
+    "silence may be the most watchable moment in the shot. An indented "
+    "[silent gap: …] with no seconds is silence INSIDE the line above.\n"
     "\n"
-    "Operations (reference lines by their 1-based numbers, inclusive). "
+    "Operations (line ranges are inclusive). "
     "Prefer a timelapse over a cut where the repetition is VISIBLE WORK building "
     "toward a payoff (failed attempts, assembly, waiting for a result) — "
     "the buildup is part of the story, so timelapse it rather than "
@@ -312,41 +341,47 @@ DIRECTOR_PROMPT = (
     "that leave the throughline entirely (digressions, dead ends, "
     "redundant retakes with no payoff):\n"
     "- cut: remove a boring/redundant span entirely (deletes audio+video).\n"
-    '- timelapse: play a long stretch of manual work fast under one on-screen caption; give "factor" (4.0 or more) and "text". Compressing a stretch is a choice between two modes and this is the second one. LISTENING: the speech carries something the viewer needs — play it at 1x, and if it drags cut the weakest parts instead. TIMELAPSE: the speech is inessential — go genuinely fast and accept that the words become unintelligible; that sacrifice is the point of the mode and is why you must be sure first. Pick "factor" so the result runs about a minute on screen: a longer span needs a bigger number, and a span where little is happening can go faster still. One op does the whole arrangement: the work runs continuously (its internal pauses are preserved, so it is not chopped into jump cuts) and the caption stays on screen for the entire timelapse — do not add a separate "keep" or "overlay" over the same lines. To change the caption partway through, emit consecutive timelapse ops; a new caption means a new phase of work.\n'
+    '- timelapse: play a long stretch of manual work fast under one on-screen caption; give "factor" (4.0 or more) and "text". Compressing a stretch is a choice between two modes and this is the second one. LISTENING: the speech carries something the viewer needs — play it at 1x, and if it drags cut the weakest parts instead. TIMELAPSE: the speech is inessential — go genuinely fast and accept that the words become unintelligible; that sacrifice is the point of the mode and is why you must be sure first. Pick "factor" so the result runs about a minute on screen: a longer span needs a bigger number, and a span where little is happening can go faster still. One op does the whole arrangement: the work runs continuously and the caption stays on screen for the entire timelapse — do not add a separate "keep" or "overlay" over the same lines. To change the caption partway through, emit consecutive timelapse ops; a new caption means a new phase of work.\n'
     '- overlay: show an on-screen caption; give "text" and "duration" '
     "(how many seconds it stays on screen). Pick the duration from reading "
     "length — a short label needs about 2 seconds, a full sentence 4 to 6; "
     'never a fixed value. Its "lines" say WHERE it appears (the caption '
     "starts at the first line of the range), not how long it shows. Reach "
     "for it at turning points, conclusions, failures, and mishaps — "
-    "moments worth labeling on screen. Aim for roughly one overlay per "
-    "3-5 minutes of finished video as a loose default target; if an "
-    "editorial brief states otherwise, follow the brief instead.\n"
+    # Not "a loose default target" any more.  A real project's brief states
+    # the SAME 3-5 minutes as a floor, so the "if an editorial brief states
+    # otherwise" escape hatch could never fire — two statements of one number
+    # with opposite modality (a two-sided target vs a floor), and the softer
+    # one arriving first.
+    "moments worth labeling on screen. Aim for one overlay per 3-5 minutes "
+    "of finished video; an editorial brief may set a different rate.\n"
+    # The keep op owns keep mechanics outright: the width rule and the
+    # whole-event span.  Rescuing ONE silence is no longer a keep-width
+    # question at all — "53~" addresses it exactly — so the [N, N+1]
+    # approximation that used to live here is gone.
     "- keep: protect a span from cutting INCLUDING its silences/non-speech "
-    "gaps (which are dropped by default). Let its width follow what is ON "
-    "SCREEN. To rescue one silent gap, use the narrowest range covering it — "
-    "the line before it and the next one ([N, N+1]). When a continuous event "
+    "gaps. When a continuous event "
     "is playing out across several gaps — an accident and the cleanup after "
     "it, a demo running, a result arriving — span the WHOLE event in one "
     "keep, so the payoff is not chopped into jump cuts. Never widen a keep "
     "to mark talking as important: speech is never dropped by default, so a "
     "keep over a talking span only restores its pauses and inflates the "
-    "runtime for nothing. A project-context direction saying a part should be "
-    '"featured", "retained" or "emphasised" is editorial emphasis, NOT a '
-    "request for a keep op.\n"
+    'runtime for nothing. A direction to "feature", "retain" or '
+    '"emphasise" something is editorial emphasis, NOT a request for a keep op.\n'
     '- edit: request a fine within-line text deletion/fix; describe it in "note".\n'
     "\n"
-    "JSON shape:\n"
-    '{"ops": [\n'
-    '  {"type": "cut", "lines": [12, 18], "note": "why / where precisely"},\n'
-    '  {"type": "timelapse", "lines": [60, 92], "factor": 8.0, "text": "配管の取り付け", "note": "..."},\n'
-    '  {"type": "overlay", "lines": [5, 5], "text": "ポイント", "duration": 2.0, "note": ""},\n'
-    '  {"type": "keep", "lines": [40, 42], "note": "..."},\n'
-    '  {"type": "edit", "lines": [7, 7], "note": "delete the redundant restatement"}\n'
+    "JSON shape, one object per turn:\n"
+    '{"range": [40, 78], "reviewed_through": 78, "ops": [\n'
+    '  {"type": "cut", "lines": [42, 48], "note": "why / where precisely"},\n'
+    '  {"type": "timelapse", "lines": [60, 72], "factor": 8.0, "text": "配管の取り付け", "note": "..."},\n'
+    '  {"type": "overlay", "lines": [45, 45], "text": "ポイント", "duration": 2.0, "note": ""},\n'
+    '  {"type": "keep", "lines": [50, 52], "note": "..."},\n'
+    '  {"type": "edit", "lines": [47, 47], "note": "delete the redundant restatement"}\n'
     "]}\n"
     "\n"
     "Rules:\n"
-    '- "lines" must be within the transcript range.\n'
+    '- "lines" are this transcript\'s numbers. One op stays inside one [k] '
+    "block — those are different footage, and an op across two is refused.\n"
     '- A "cut" range must not overlap any other op\'s range: cutting deletes '
     "the span, so never include a line you also keep/overlay/timelapse in "
     "a cut (e.g. to cut lines 12-18 but keep line 18, emit cut [12, 17]). "
@@ -354,6 +389,15 @@ DIRECTOR_PROMPT = (
     '- Use "note" to describe in natural language precisely WHERE in the '
     "line(s) the edit starts and ends, so a downstream editor can place "
     "it exactly.\n"
+    "- Playing it back starts from what happens with no op at all: every "
+    "line's speech plays once, at 1x, in the order given, and the silences "
+    "inside and after it are dropped. Each op changes that for the lines in "
+    "its range only — a line you leave outside a range keeps the default.\n"
+    "- The playback you are shown is the viewer's, not the spec's: a range "
+    "that reads fine as a spec can still play wrong, and the usual way is a "
+    'span that opens one line too early — the spec says "timelapse the work", '
+    "the playback has the viewer hearing that very work announced at 5x, "
+    "destroyed. Re-send the range with the boundary moved.\n"
     "- Output only the JSON object, no other text."
 )
 
@@ -667,7 +711,7 @@ class TextFilterConfig(BaseModel):
     )
     temperature: float = Field(0.1, description="LLM sampling temperature")
     thinking: bool | str = Field(
-        False, description='Thinking mode: true/false, or "low"/"medium"/"high"'
+        False, description='Thinking mode: true (= "high") / false, or "low"/"medium"/"high"'
     )
     keywords: list[str] = _commented(
         [],
@@ -821,6 +865,15 @@ class DirectorConfig(BaseModel):
     )
     retry_temp_step: float = Field(0.2, description="Temperature increment added on each retry")
     retry_temp_cap: float = Field(0.8, description="Maximum temperature any retry uses")
+    chunk_lines: int = Field(
+        40,
+        description=(
+            "How many lines of the whole-video transcript one turn of the director's "
+            "conversation is asked to review (approximately — it stops where the footage "
+            "breaks). The turn cap is ceil(display lines / this) * 2, and reaching it "
+            "fails the stage after writing the ops accepted so far"
+        ),
+    )
     max_keep_lines: int = Field(
         8,
         description=(
@@ -828,19 +881,13 @@ class DirectorConfig(BaseModel):
             "continuous on-screen event, but one this wide is marking talking, not an event"
         ),
     )
-    max_prior_captions: int = Field(
-        100,
+    silence_line_min: float = Field(
+        5.0,
         description=(
-            "How many captions already shown earlier in the finished video the director "
-            "is told about (0 = no limit); the most recent ones are kept"
-        ),
-    )
-    seam_lines: int = Field(
-        3,
-        description=(
-            "How many lines of the videos playing immediately before/after this one the "
-            "director is shown at each join (0 = off), so a sign-off or a greeting is "
-            "visible as addressing an audience that is already mid-video"
+            "Shortest wait between two lines (seconds) shown to the director as a "
+            'silence line of its own, addressable as "n~"; a shorter one stays a '
+            "`gap Xs` figure in the preceding line's bracket. Matches gap_context."
+            "min_gap by default, so every described gap has a line to land in"
         ),
     )
     prompt: str = _commented(

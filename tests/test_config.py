@@ -11,7 +11,6 @@ import pytest
 import yaml
 from pydantic import ValidationError
 
-import nagare_clip.director.run as director_run
 from nagare_clip.config import (
     DEFAULTS,
     deep_merge,
@@ -464,6 +463,41 @@ def test_director_prompt_timelapse_states_its_price():
     assert "unintelligible" in bullet
 
 
+def test_director_prompt_asks_for_a_playback_before_settling_a_range():
+    """Every symptom a real run produced was correct as a spec and wrong on
+    playback: `timelapse [1,15] x5` reads fine, and plays as the speaker
+    announcing that very work at 5x, unintelligible. The director used to be
+    asked to reconstruct that playback in its head; the conversation computes
+    it and hands it back every turn, so the rule is now to READ it — and the
+    one move that makes reading it worth anything is re-sending the range."""
+    prompt = get_effective_config(None, {})["director"]["prompt"].lower()
+    assert "the playback you are shown" in prompt
+    assert "reads fine as a spec" in prompt
+    assert "re-send the range" in prompt
+
+
+def test_director_prompt_states_the_no_op_baseline():
+    """A playback needs a state to play FROM. Every delta was already in the
+    prompt (silences dropped, cut deletes, timelapse destroys speech) but the
+    ground state they are deltas to was not: "outside" appeared zero times, and
+    the two mentions of 1x offered it as a CHOICE ("leave it at 1x") rather
+    than as what an unmarked line already does. `speech is never dropped by
+    default` existed only inside the keep bullet, as an argument against
+    widening keeps."""
+    prompt = get_effective_config(None, {})["director"]["prompt"].lower()
+    assert "with no op at all" in prompt
+    assert "outside a range" in prompt
+
+
+def test_director_prompt_playback_rule_stays_out_of_the_timelapse_bullet():
+    """Improvement 16 again (see test_director_prompt_timelapse_bullet_stays_
+    cheap_to_choose): weight on THIS bullet pushes the director toward the
+    easier option. The playback rule applies to every op's range, so it belongs
+    in Rules where it costs the timelapse choice nothing. A first attempt put
+    it in this bullet and grew it 1026 -> 1684 characters."""
+    assert "play it back" not in _timelapse_bullet().lower()
+
+
 def test_director_prompt_timelapse_is_self_contained():
     """The whole point of the op: one op does the arrangement three ops used to.
     The prompt must not ask for a companion keep/speed/overlay, or the director
@@ -539,6 +573,11 @@ def test_prompt_documents_duration_and_gap_bracket(stage):
     assert format_dur_gap(4.2, 0.8) in prompt  # "[4.2s, gap 0.8s]"
     assert format_dur_gap(4.2, None) in prompt  # "[4.2s]" — last line/part, no gap
     assert format_dur_gap(13.0, None, 62.9) in prompt  # "[13.0s speech, 62.9s silence]"
+    # The four-part form is 17.0% of the director's real brackets and 20% of the
+    # plan's, yet went undocumented while `[4.2s, gap 0.8s]` -- which the legend
+    # leads with -- is the rarest at 4.4%.  A shape the prompt never shows is a
+    # shape the LLM has to guess at while it is being asked to judge pacing.
+    assert format_dur_gap(13.0, 0.8, 62.9) in prompt  # "[13.0s speech, 62.9s silence, gap 0.8s]"
     lowered = prompt.lower()
     assert "duration" in lowered
     assert "gap" in lowered
@@ -647,33 +686,51 @@ def test_gap_context_prompt_documents_the_markers_describe_parses():
     assert "ACTION:" in prompt
 
 
-def test_director_prompt_documents_gap_annotations():
-    # The director must be told what the `[silent gap ...]` annotation line means
-    # and that a `keep` op spanning the adjacent lines rescues the moment.
+def test_director_prompt_documents_silence_lines_and_how_to_address_them():
+    # A silence used to be the one thing in the transcript with no number, so
+    # the prompt had to teach the "n~" form.  Under the whole-video numbering
+    # it has a number like any other line -- and the loop REJECTS "n~" -- so
+    # the prompt must teach the number and nothing else.
     cfg = get_effective_config(None, {})
     prompt = cfg["director"]["prompt"]
-    assert "[silent gap" in prompt
-    assert "keep" in prompt
+    assert "[silent " in prompt
+    assert "53~" not in prompt
+    assert "either endpoint" not in prompt
+    # What acts on it: the two ops that can, named where the line is shown.
+    silence = next(ln for ln in prompt.splitlines() if ln.startswith("is the wait"))
+    assert "put its number in an op" in silence
+    assert "keep" in silence and "timelapse" in silence
 
 
-def test_director_prompt_gap_example_matches_the_real_formatter():
+def test_director_prompt_silence_example_matches_the_real_formatter():
     """The DIRECTOR_PROMPT's documented example line must be exactly what
-    gap_context.context.annotate_numbered_transcript renders for the
-    corresponding Gap -- pins the doc example to the real formatter so a
-    rendering change (indent, decimal places, wording) fails loudly here
-    instead of silently going stale in the prompt."""
+    director.silence_lines.SilenceLine renders -- pins the doc example to the
+    real formatter so a rendering change (indent, decimal places, wording)
+    fails loudly here instead of silently going stale in the prompt.
+
+    Was pinned to gap_context.annotate_numbered_transcript, which rendered the
+    `[silent gap: ...]` annotation the silence line replaces for a between-line
+    wait; that annotation survives for silence INSIDE a line, so its prefix is
+    pinned too."""
+    from nagare_clip.director.silence_lines import SilenceLine, silence_body
     from nagare_clip.gap_context.context import annotate_numbered_transcript
     from nagare_clip.gap_context.gaps import Gap
 
     cfg = get_effective_config(None, {})
     prompt = cfg["director"]["prompt"]
 
-    gap = Gap(start=0.0, end=12.4, frames=[], description="a build runs and logs scroll past")
-    rendered = annotate_numbered_transcript("1: x", [(1, gap)])
-    annotation_line = rendered.split("\n")[1]
+    line = SilenceLine(53, 0.0, 29.9, ("a build runs and logs scroll past",))
+    # The whole-video view numbers the silence, so it drops the "after line n"
+    # the un-numbered transcript line carries -- and that is the body the
+    # prompt's example must show.
+    body = silence_body(line.duration, line.descriptions)
+    assert body == "[silent 29.9s: a build runs and logs scroll past]"
+    assert f"54: {body}" in prompt
 
-    assert annotation_line == "    [silent gap 12.4s: a build runs and logs scroll past]"
-    assert annotation_line in prompt
+    gap = Gap(start=0.0, end=12.4, frames=[], description="x")
+    prefix = annotate_numbered_transcript("1: x", [(1, gap)]).split("\n")[1].split("x]")[0]
+    assert prefix == "    [silent gap: "
+    assert prefix.strip() in prompt
 
 
 def test_director_prompt_overlay_example_carries_a_duration():
@@ -687,7 +744,7 @@ def test_director_prompt_overlay_example_carries_a_duration():
     example = next(
         line.strip().rstrip(",") for line in prompt.splitlines() if '"type": "overlay"' in line
     )
-    ops = parse_director_response('{"ops": [' + example + "]}", num_lines=10)
+    ops = parse_director_response('{"ops": [' + example + "]}", num_lines=100)
     assert len(ops) == 1
     assert ops[0].type == "overlay"
     assert ops[0].duration is not None and ops[0].duration > 0
@@ -790,10 +847,12 @@ def test_director_prompt_scales_keep_width_to_what_is_on_screen():
     as important stays forbidden — that abuse took a 22.3-minute cut to 53.9."""
     cfg = get_effective_config(None, {})
     prompt = cfg["director"]["prompt"]
-    # Rescuing one gap keeps its narrow example...
-    assert "narrowest range" in prompt
-    assert "[N, N+1]" in prompt
-    # ...but a continuous event may be spanned whole.
+    # Rescuing one silence no longer needs a keep over the lines around it:
+    # the silence is addressable on its own ("53~"), so the [N, N+1] mechanic
+    # -- which could only ever approximate it -- is gone.
+    assert "[N, N+1]" not in prompt
+    assert "narrowest range" not in prompt
+    # A continuous event may still be spanned whole.
     assert "WHOLE event" in prompt
     assert "jump cuts" in prompt
     # Talking is never a reason to widen one.
@@ -802,33 +861,64 @@ def test_director_prompt_scales_keep_width_to_what_is_on_screen():
     assert "editorial emphasis, NOT a " in prompt
 
 
+def test_director_prompt_states_each_keep_rule_in_exactly_one_place():
+    """An audit of the assembled prompt found the same rules restated across the
+    role line, the Timing legend, the Visual-context paragraph, the op menu and
+    the generated keep-limit note -- `dropped by default` four times, the
+    `[N, N+1]` mechanic three times, the overlay trigger list verbatim twice.
+
+    Repetition is not free here. The one rule that governs where an op's
+    boundary goes is stated ONCE, at 55% into the prompt, while the plan's
+    concrete line ranges arrive at 82% -- so the prompt's own emphasis is
+    inverted relative to what actually needs saying. Restating a mechanic in
+    four places also makes it four places to drift: the keep-limit note used to
+    assert that "a continuous on-screen event fits well inside" the 8-line cap,
+    which is false in exactly the case the whole-event keep rule exists for.
+
+    Each of these belongs to one owner: the keep op bullet owns keep mechanics,
+    the Timing legend owns bracket notation, the overlay bullet owns when to
+    caption."""
+    prompt = get_effective_config(None, {})["director"]["prompt"]
+    # The [N, N+1] rescue mechanic is gone entirely: a silence line is
+    # addressed as "53~", exactly, so an approximation of it in a second
+    # vocabulary is one more place to drift.  It must not creep back.
+    assert prompt.count("[N, N+1]") == 0
+    # "dropped by default" is the Timing legend's job; the keep bullet and the
+    # visual-context paragraph point at it rather than restating it.
+    assert prompt.count("dropped by default") <= 2
+    # The overlay trigger list is the overlay bullet's, not the role line's.
+    assert prompt.count("mishaps") == 1
+
+
 def test_director_prompt_lets_a_described_action_span_its_whole_run():
-    """The visual-context paragraph is where a described gap's keep width is
-    decided; ending every one at [N, N+1] is what lost the water-spill cleanup."""
+    """Ending every described gap's keep at [N, N+1] is what lost the
+    water-spill cleanup, so the whole-run rule has to survive -- but it now
+    lives once, in the keep bullet, rather than being restated in the
+    visual-context paragraph. The bullet states it more completely (it names
+    the accident/demo/result cases and the jump-cut consequence), and keeping
+    one owner is what stopped the two copies drifting apart."""
+    prompt = get_effective_config(None, {})["director"]["prompt"]
+    keep_bullet = next(ln for ln in prompt.splitlines() if ln.startswith("- keep:"))
+    assert "across several gaps" in keep_bullet
+    assert "WHOLE event in one keep" in keep_bullet
+    # And the silence paragraph must not restate it: it names the ops that
+    # act on a silence and leaves how wide to the bullet that owns it.
+    silence = next(ln for ln in prompt.splitlines() if ln.startswith("is the wait"))
+    assert "keep" in silence and "timelapse" in silence
+    assert "WHOLE event" not in silence and "jump cuts" not in silence
+
+
+def test_director_chunk_lines_default():
+    """How many display lines one turn of the conversation is asked to review.
+    The turn cap is ceil(lines / chunk_lines) * 2, so this number sets both how
+    much the director holds at once and how many turns it may spend."""
     cfg = get_effective_config(None, {})
-    assert "continues across several gaps" in cfg["director"]["prompt"]
+    assert cfg["director"]["chunk_lines"] == 40
 
 
 def test_director_max_keep_lines_default():
     cfg = get_effective_config(None, {})
     assert cfg["director"]["max_keep_lines"] == 8
-
-
-def test_director_max_prior_captions_default():
-    """How many of the captions already shown earlier in the finished video the
-    director is handed. Generous by default — a modern context window swallows
-    100 short lines — but tunable for long projects."""
-    cfg = get_effective_config(None, {})
-    assert cfg["director"]["max_prior_captions"] == 100
-
-
-def test_director_seam_lines_default():
-    """How many of a neighbouring video's lines the director sees at each join.
-    Small on purpose: the prompt is already long and a sign-off is one or two
-    lines. Must match the fallback run_director uses when the key is absent."""
-    cfg = get_effective_config(None, {})
-    assert cfg["director"]["seam_lines"] == 3
-    assert cfg["director"]["seam_lines"] == director_run.DEFAULT_SEAM_LINES
 
 
 def test_text_filter_prompt_repeated_phrase_example_is_valid_patch_syntax():
@@ -1090,3 +1180,65 @@ def test_revise_prompt_documents_the_ids_and_the_split():
     assert "id" in prompt.lower()
     assert "split" in prompt.lower()
     assert '"message"' in prompt
+
+
+def test_director_prompt_did_not_grow_for_the_silence_lines():
+    """Improvement 16: every round that grew this prompt cost something, so a
+    feature that adds a paragraph has to pay for it by deleting what it makes
+    redundant -- here the gap-rescue mechanics in the Timing legend and the
+    visual-context paragraph, and the [N, N+1] rule in the keep bullet.  6289
+    characters is what it measured before the silence lines went in.
+
+    The conversation raised the ceiling to 6600 ONCE, deliberately: the turn
+    protocol (an approximate range per turn, a reply that owns its range, and
+    `done`) is what the model is doing now, and no wording of it is free.  It
+    paid what it could -- the "53~" teaching (a silence is a numbered line
+    now), the transcript-echo rule the last Rules line already covers, the
+    1-based-numbering restatement above the menu, and half the playback rule
+    (the preview computes that playback now) -- which is 300 of the 604
+    characters the protocol cost.  Anything further must delete, not raise."""
+    prompt = get_effective_config(None, {})["director"]["prompt"]
+    assert len(prompt) < 6600
+
+
+def _display_view(n: int = 100):
+    """A flat one-segment view, enough for the loop to read a reply against."""
+    from nagare_clip.director.display import DisplayLine, DisplaySegment, DisplayView
+
+    return DisplayView(
+        lines=[
+            DisplayLine(number=i, segment=1, stem="x", source_line=i, is_silence=False, text="t")
+            for i in range(1, n + 1)
+        ],
+        segments=[DisplaySegment(index=1, stem="x", label="x", first=1, last=n)],
+    )
+
+
+def test_director_prompt_states_the_turn_protocol():
+    """The director is no longer one call over one segment: it is a
+    conversation over the whole video. A prompt describing the old shape is
+    not merely stale, it contradicts what every user message asks for."""
+    prompt = get_effective_config(None, {})["director"]["prompt"]
+    lowered = prompt.lower()
+    assert "one numbering" in lowered  # the whole video, numbered once
+    assert '"range"' in prompt and '"reviewed_through"' in prompt
+    assert '{"done": true}' in prompt
+    # Re-sending a range REPLACES its ops — the one move that makes the
+    # playback worth reading.
+    assert "replace" in lowered
+
+
+def test_director_prompt_turn_shape_is_the_one_the_loop_parses():
+    """Pin the documented reply to the real reader: a stale shape here is a
+    turn the loop rejects, and the retry ladder burns on it."""
+    from nagare_clip.director.loop import LoopState, apply_reply
+
+    prompt = get_effective_config(None, {})["director"]["prompt"]
+    start = prompt.index('{"range"')
+    shape = prompt[start : prompt.index("]}", start) + 2]
+    view = _display_view()
+    state = LoopState()
+    result = apply_reply(view, state, shape)
+    assert result.error is None and result.refusal is None
+    assert {op.type for op in result.ops} == {"cut", "timelapse", "overlay", "keep", "edit"}
+    assert state.reviewed_through == 78
