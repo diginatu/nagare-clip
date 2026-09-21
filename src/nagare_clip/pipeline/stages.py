@@ -64,7 +64,7 @@ from nagare_clip.pipeline.external import (
 )
 from nagare_clip.pipeline.runner import PipelineContext, Stage
 from nagare_clip.pipeline.sources import SourceMedia, project_stems
-from nagare_clip.plan.dialogue import history_path
+from nagare_clip.plan.dialogue import HUMAN, history_path, unanswered_turns
 from nagare_clip.plan.divergence import find_divergences, format_divergences
 from nagare_clip.plan.plan_llm import order_from_dict, plan_from_dict
 from nagare_clip.plan.run import run_plan
@@ -403,6 +403,49 @@ def _plan_run(ctx: PipelineContext) -> None:
 
 def _plan_required(ctx: PipelineContext) -> list[Path]:
     return [ctx.stage_dir("plan") / "plan.json"]
+
+
+def check_unanswered_turns(ctx: PipelineContext, *, retire_turns: bool = False) -> None:
+    """Refuse a run whose ``plan`` stage would retire unapplied instructions.
+
+    A ``plan`` re-run appends a divider to ``plan_dialogue/history.md``, and the
+    turns above a divider stop being applied.  That is right for turns
+    ``plan_revise`` has already answered and wrong for one it has not: the
+    instruction stays readable in the file, ``plan_revise`` then reports nothing
+    unanswered and makes no call, and the edit silently comes out without it.
+    Nothing looks broken, which is what makes it expensive.
+
+    Checked here, before ``run_stages``, rather than inside ``_plan_run``: a
+    ``--from-stage summary --to-stage blender`` reaches ``plan`` too, and should
+    not spend the summary stage on the way to a refusal.
+
+    ``--retire-turns`` is the deliberate way through, for when the turns really
+    are spent.
+    """
+    if retire_turns:
+        return
+    plan_index = STAGE_NAMES.index("plan")
+    if not (ctx.from_index <= plan_index <= ctx.to_index):
+        return
+    history = history_path(ctx.output_dir)
+    turns = unanswered_turns(history)
+    if not turns:
+        return
+    humans = sum(1 for t in turns if t.role == HUMAN)
+    raise PipelineError(
+        f"plan: refusing to run over an unanswered conversation.\n"
+        f"\n"
+        f"{history} has {humans} unanswered human turn(s) below the last\n"
+        f"'--- plan re-ran ... ---' divider.  Re-running plan appends a new divider,\n"
+        f"which retires all {len(turns)} turn(s) below the current one: they stay in the\n"
+        f"file but stop being applied, plan_revise then reports nothing unanswered and\n"
+        f"makes no call, and the edit comes out without them with nothing looking broken.\n"
+        f"\n"
+        f"To apply them instead, run only the stage that answers them:\n"
+        f"    --from-stage plan_revise --to-stage plan_revise\n"
+        f"\n"
+        f"To discard them on purpose, re-run this command with --retire-turns."
+    )
 
 
 # --- plan_revise -------------------------------------------------------------

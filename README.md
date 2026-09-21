@@ -103,6 +103,16 @@ directions it has just rebuilt. Nothing is deleted from the file: an instruction
 that still holds can be copied down below the divider. To apply a turn, re-run
 `plan_revise`, not `plan`.
 
+That used to be advice, and advice lost an argument with muscle memory: a
+`plan` re-run retired a re-typed instruction a second time, `plan_revise` then
+reported "nothing unanswered", and the edit came out without it with nothing
+looking broken. So `plan` now **refuses to start** while a human turn below the
+last divider is unanswered — it prints how many turns the divider would retire,
+points at `--from-stage plan_revise --to-stage plan_revise`, and offers
+`--retire-turns` for when you do mean to throw them away. The check runs before
+the first stage, so a window that merely *reaches* `plan` fails at once instead
+of after an hour of transcription.
+
 `plan_say.sh` is a convenience: the file is plain markdown with `## human` /
 `## plan` headings and opening it in an editor and typing works just as well
 (text before the first heading counts as yours). It is stored under `output/`
