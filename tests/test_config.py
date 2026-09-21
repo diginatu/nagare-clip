@@ -861,6 +861,28 @@ def test_director_prompt_scales_keep_width_to_what_is_on_screen():
     assert "editorial emphasis, NOT a " in prompt
 
 
+def test_the_reply_contract_is_stated_by_the_turn_that_needs_it():
+    """`loop.REPLY_SHAPE` goes out with every single turn, immediately above the
+    reply it governs, and already says that op line numbers are this
+    transcript's. DIRECTOR_PROMPT said it again 9,000 characters earlier, to be
+    reread every turn for nothing.
+
+    Only the mechanical half moves out. That a reply OWNS its range and
+    re-sending REPLACES its ops stays in the prefix as well, deliberately:
+    that copy is strategic rather than formatting -- being able to go back and
+    rewrite is the move the whole design exists for, and the model should hold
+    it before it writes its first op. `test_director_prompt_states_the_turn_
+    protocol` pins that one."""
+    from nagare_clip.director.loop import REPLY_SHAPE
+
+    prompt = get_effective_config(None, {})["director"]["prompt"]
+    for claim in ("REPLACE", "re-send", "this transcript's numbers"):
+        assert claim.lower() in REPLY_SHAPE.lower(), claim
+    assert '"lines" are this transcript\'s numbers' not in prompt
+    # What only the prefix can say -- one op cannot span two segments -- stays.
+    assert "inside one [k] block" in prompt
+
+
 def test_director_prompt_states_each_keep_rule_in_exactly_one_place():
     """An audit of the assembled prompt found the same rules restated across the
     role line, the Timing legend, the Visual-context paragraph, the op menu and

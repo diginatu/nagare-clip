@@ -283,11 +283,12 @@ DIRECTOR_PROMPT = (
     "the stretch you really reviewed, and are shown the COMPLETE edit — every "
     "op, caption and the runtime — so check the whole-video requirements on "
     "every turn. A "
+    # Also in loop.REPLY_SHAPE, on every turn — kept here deliberately.  That
+    # copy is mechanical (how to format a reply); this one is strategic: being
+    # able to go back and rewrite is the move the whole design exists for, and
+    # the model should hold it before it writes its first op, not only when it
+    # reads the shape.  test_director_prompt_states_the_turn_protocol pins it.
     "reply OWNS the range it names: re-send a range and its ops REPLACE the "
-    # "a playback you did not mean is fixed by sending that range again" used
-    # to follow; the last Rules line ("Re-send the range with the boundary
-    # moved") is the same instruction, and the complete edit shown every turn
-    # is what pays for saying it once.
     "ones you gave for it. "
     'Reply {"done": true} once every line has been reviewed '
     "and the playback is what you meant.\n"
@@ -380,8 +381,10 @@ DIRECTOR_PROMPT = (
     "]}\n"
     "\n"
     "Rules:\n"
-    '- "lines" are this transcript\'s numbers. One op stays inside one [k] '
-    "block — those are different footage, and an op across two is refused.\n"
+    # "lines are this transcript's numbers" is in REPLY_SHAPE, on every turn.
+    # What only this list can say is the one-segment rule.
+    "- One op stays inside one [k] block — those are different footage, and "
+    "an op across two is refused.\n"
     '- A "cut" range must not overlap any other op\'s range: cutting deletes '
     "the span, so never include a line you also keep/overlay/timelapse in "
     "a cut (e.g. to cut lines 12-18 but keep line 18, emit cut [12, 17]). "
