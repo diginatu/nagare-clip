@@ -684,3 +684,141 @@ class TestTheCompleteEditState:
         ops = {1: [_op("overlay", 47, 47, text="水を注ぐ", duration=2.0)]}
         text = edit_state(view, [WATER_T, FISH_T], ops)
         assert text.index("Captions in playback order") < text.index("whole video so far")
+
+
+# --- the resulting timeline: what the stretch looks like, in order -------------
+
+
+def _timeline(text: str) -> list[str]:
+    """The rows of the "as it plays" block, without its header."""
+    body = text.split(" as it plays:\n", 1)[1]
+    out = []
+    for line in body.split("\n"):
+        if not line.startswith("  "):
+            break
+        out.append(line.strip())
+    return out
+
+
+def _seconds(row: str) -> float | None:
+    """The on-screen seconds a row prints (``None`` for a run that is gone)."""
+    figure = row.split()[1]
+    return None if figure == "—" else float(figure)
+
+
+class TestTheResultingTimeline:
+    """One block per op says what each op does; nothing said what the finished
+    stretch LOOKS like in order.  A 0.2 s island of 1x footage between two
+    timelapses is not a property of any op — it is the gap between two — so it
+    appeared in no block and the model could not see it."""
+
+    def test_the_runs_are_the_segment_in_order(self):
+        ops = [_op("timelapse", 48, 48, factor=6.0, text="T"), _op("cut", 51, 52)]
+        rows = _timeline(_preview(WATER, WATER_FIRST, ops).text)
+        assert rows == [
+            "1x           5.9 s  lines 45-47",
+            "timelapse    3.2 s  line 48  x6.0 「T」",
+            "1x          12.3 s  lines 49-50",
+            "cut              —  lines 51-52",
+            "1x          17.6 s  lines 53-55",
+        ]
+
+    def test_an_island_of_1x_between_two_timelapses_is_its_own_run(self):
+        # The real failure: PXL_20260430_084048507 plays 0.22 s and 0.38 s of
+        # 1x footage between two timelapses.  Line 49 is this fixture's island.
+        ops = [
+            _op("timelapse", 48, 48, factor=6.0, text="A"),
+            _op("timelapse", 50, 50, factor=6.0, text="B"),
+        ]
+        rows = _timeline(_preview(WATER, WATER_FIRST, ops).text)
+        assert rows[1] == "timelapse    3.2 s  line 48  x6.0 「A」"
+        assert rows[2] == "1x           1.7 s  line 49"
+        assert rows[3] == "timelapse    2.3 s  line 50  x6.0 「B」"
+
+    def test_two_timelapses_in_a_row_stay_two_runs(self):
+        # What the viewer gets is a stutter between two sped-up stretches; one
+        # merged run would hide it.
+        ops = [
+            _op("timelapse", 48, 48, factor=6.0, text="A"),
+            _op("timelapse", 49, 49, factor=6.0, text="B"),
+        ]
+        rows = _timeline(_preview(WATER, WATER_FIRST, ops).text)
+        assert rows[1] == "timelapse    3.2 s  line 48  x6.0 「A」"
+        assert rows[2] == "timelapse    0.4 s  line 49  x6.0 「B」"
+
+    def test_a_cut_run_appears_with_no_duration(self):
+        rows = _timeline(_preview(WATER, WATER_FIRST, [_op("cut", 46, 47)]).text)
+        assert rows[1] == "cut              —  lines 46-47"
+
+    def test_a_keep_is_1x_with_its_silences_restored(self):
+        rows = _timeline(_preview(WATER, WATER_FIRST, [_op("keep", 46, 47)]).text)
+        # 8.9 s + 3.6 s of span, where plain 1x would play 4.4 s + 1.2 s.
+        assert rows[1] == "1x+silence  12.5 s  lines 46-47"
+
+    def test_a_speed_run_carries_its_factor(self):
+        rows = _timeline(_preview(WATER, WATER_FIRST, [_op("speed", 46, 46, factor=2.0)]).text)
+        assert rows[1] == "speed        2.2 s  line 46  x2.0"
+
+    def test_an_overlay_rides_the_run_it_starts_in(self):
+        ops = [_op("overlay", 47, 47, text="ポイント", duration=2.0)]
+        rows = _timeline(_preview(WATER, WATER_FIRST, ops).text)
+        # No row of its own: an overlay changes no runtime.
+        assert rows == ["1x          54.1 s  lines 45-55  +「ポイント」 2.0 s"]
+
+    def test_the_runs_sum_to_the_runtime_the_footer_prints(self):
+        ops = [
+            _op("timelapse", 48, 49, factor=6.0, text="A"),
+            _op("cut", 51, 52),
+            _op("keep", 54, 55),
+            _op("overlay", 45, 45, text="O", duration=2.0),
+        ]
+        preview = _preview(WATER, WATER_FIRST, ops)
+        assert sum(run.seconds for run in preview.runs) == pytest.approx(preview.runtime_seconds)
+        rows = _timeline(preview.text)
+        printed = sum(_seconds(row) or 0.0 for row in rows)
+        assert printed == pytest.approx(preview.runtime_seconds, abs=0.05 * len(rows))
+        assert f"with these ops {preview.runtime_seconds:.1f} s" in preview.text
+
+    def test_the_block_sits_between_the_ops_and_the_runtime(self):
+        text = _preview(WATER, WATER_FIRST, [_op("cut", 46, 47)]).text
+        assert text.index("cut [46,47]") < text.index(" as it plays:") < text.index("default 54.1")
+
+    def test_a_segment_with_no_ops_still_says_what_it_plays(self):
+        rows = _timeline(_preview(WATER, WATER_FIRST, []).text)
+        assert rows == ["1x          54.1 s  lines 45-55"]
+
+
+class TestTheTimelineUnderDisplayNumbering:
+    """A silence is a numbered line of the finished video, so it takes part in
+    the runs like any other line."""
+
+    def test_a_silence_inside_a_timelapse_is_inside_its_run(self):
+        # Display 3 is source 47, display 4 the 22.0 s wait after it, display 5
+        # source 48: one timelapse over all three.
+        text = _numbered([_op("timelapse", 47, 48, factor=6.0, text="T")])
+        rows = _timeline(text)
+        assert rows[1] == "timelapse    7.5 s  lines 3-5  x6.0 「T」"
+
+    def test_a_dropped_silence_line_plays_nothing_and_holds_no_run(self):
+        # Line 11 is the 29.9 s wait after display line 10; no op restores it,
+        # so it is gone and the 1x run around it is unchanged by it.
+        rows = _timeline(_numbered([_op("keep", 53, 53)]))
+        assert rows == [
+            "1x          36.5 s  lines 1-9",
+            "1x+silence   0.9 s  line 10",
+            "1x          16.9 s  lines 11-13",
+        ]
+
+    def test_a_silence_kept_on_its_own_is_a_run_of_its_own(self):
+        op = DirectorOp(
+            type="timelapse", lines=(53, 53), factor=5.0, text="T", gap_start=True, gap_end=True
+        )
+        rows = _timeline(_numbered([op]))
+        assert "timelapse    6.0 s  line 11  x5.0 「T」" in rows
+
+    def test_the_whole_edit_state_carries_one_timeline_per_segment(self):
+        view = _view()
+        text = edit_state(view, [WATER_T, FISH_T], {1: [_op("cut", 45, 47)]})
+        assert "segment [1] water [45-55] as it plays:" in text
+        assert "segment [2] fish [5-16] as it plays:" in text
+        assert text.count(" as it plays:") == 2

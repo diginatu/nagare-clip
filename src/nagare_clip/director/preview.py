@@ -22,6 +22,15 @@ where the transcript shows one — and its line range says only where it hangs.
 ``["53~","53~"]`` therefore plays 29.9 s of footage in 6.0 s at x5 and makes no
 speech unintelligible, which is the whole reason the form exists.
 
+One block per op says what each op DOES; nothing there says what the finished
+stretch LOOKS like.  A 0.4 s island of 1x footage between two timelapses is
+not a property of either — it is the gap between them — so it appeared in no
+block, and a timelapse that ends up 0.9 s on screen looked fine until you saw
+that its neighbours are timelapses too.  :func:`timeline_runs` adds the
+segment read IN ORDER: consecutive display lines grouped by their fate, each
+run with its on-screen seconds.  Same playback model, so the two views cannot
+disagree, and the runs sum to the footer's runtime.
+
 Overlap resolution is not modelled here: :func:`resolve_placements` runs
 guided_edit's own :func:`~nagare_clip.guided_edit.apply.resolve_span_ops` (after
 the real timelapse expansion), so an op is reported where it will actually land.
@@ -81,6 +90,22 @@ STATE_HEADER = (
 )
 
 CAPTIONS_HEADER = "Captions in playback order"
+
+#: Heads the run list of one segment.
+AS_IT_PLAYS = " as it plays:"
+
+#: How a run is labelled.  Every other kind is its op's own type; a ``keep``
+#: is not a fourth speed but 1x footage with the silences it restores put
+#: back, and calling it "keep" in a column of speeds would hide exactly the
+#: difference the viewer hears.
+RUN_LABELS = {"keep": "1x+silence"}
+
+#: The label of a stretch no op governs: it plays once, at 1x, its silences
+#: dropped.
+PLAIN = "1x"
+
+#: The op types that carry a factor.
+SPED = ("timelapse", "speed")
 
 SegTimes = Sequence[tuple[float | None, float | None]]
 
@@ -159,6 +184,36 @@ def resolve_placements(
     return out
 
 
+@dataclass
+class Run:
+    """One stretch of the finished segment, as the VIEWER meets it.
+
+    A run is what happens to a stretch of consecutive display lines — nothing
+    happening (1x) is as much a run as a timelapse — so the segment's runs are
+    the finished stretch read in order.  *owner* is the index in ``ops`` of the
+    op that governs it (``None``: no op, the default), and it is what ends one
+    run and starts the next: two timelapses in a row are two runs, because the
+    viewer gets two.
+
+    *lines* are display numbers.  *after* names the line an un-numbered silence
+    follows, for the one run that has no line of its own: an op resolved onto a
+    wait the transcript does not number.
+    """
+
+    kind: str
+    owner: int | None = None
+    seconds: float = 0.0
+    lines: list[int] = field(default_factory=list)
+    after: int | None = None
+    factor: float | None = None
+    text: str = ""
+    captions: list[tuple[str, float]] = field(default_factory=list)
+
+    @property
+    def label(self) -> str:
+        return RUN_LABELS.get(self.kind, self.kind)
+
+
 @dataclass(frozen=True)
 class SegmentPreview:
     text: str
@@ -168,6 +223,10 @@ class SegmentPreview:
     #: shows, in playback order — the overlays an ``overlay`` op places and the
     #: ones a ``timelapse`` expands into, which is every caption there is.
     captions: tuple[tuple[int, str, float], ...] = ()
+    #: The finished segment in order (:func:`timeline_runs`), the view the
+    #: per-op blocks cannot give: their on-screen seconds sum to
+    #: *runtime_seconds*.
+    runs: tuple[Run, ...] = ()
 
 
 def _s(sec: float) -> str:
@@ -246,6 +305,8 @@ class _Playback:
         self.fig = line_seconds(seg_times, silences)
         self.speech = speech_seconds(seg_times, silences)
         self.cut: set[int] = set()
+        #: Which op cut a line — the run list needs the op, not only the fate.
+        self.cut_by: dict[int, int] = {}
         self.keep: dict[int, tuple[int, int]] = {}
         self.speed: dict[int, tuple[float, tuple[int, int]]] = {}
         # A "n~" op is applied as a TIME range, so what it holds is not its
@@ -271,6 +332,7 @@ class _Playback:
                 span = range(p.lines[0], p.lines[1] + 1)
                 if p.kind == "cut":
                     self.cut.update(span)
+                    self.cut_by.update({n: i for n in span})
                 elif p.kind == "keep":
                     self.keep.update({n: (i, j) for n in span})
                 elif p.kind == "speed":
@@ -474,6 +536,106 @@ def _range(p: Placement | None) -> list[int]:
     if p is None or p.lines is None:
         return []
     return list(range(p.lines[0], p.lines[1] + 1))
+
+
+def timeline_runs(
+    pb: _Playback,
+    ops: list[DirectorOp],
+    num: Numbering = IDENTITY,
+    captions: Sequence[tuple[int, int, float]] = (),
+) -> list[Run]:
+    """The segment as it plays: consecutive display lines grouped by their fate.
+
+    Derived from the SAME resolved playback as every per-op block above it
+    (:class:`_Playback` over :func:`resolve_placements`), so the two views
+    cannot disagree, and priced with the same rule as the footer's runtime —
+    a line's speech seconds, a kept line's whole span, a gap only where one
+    op holds both its sides — so the runs sum to that runtime exactly.
+
+    *captions* are the ``(op index, line, duration)`` overlays the caller
+    already resolved; an ``overlay`` changes no runtime, so it rides the run
+    it starts in instead of breaking the sequence with a row of its own.
+    """
+
+    def line_owner(n: int) -> int | None:
+        if n in pb.cut:
+            return pb.cut_by.get(n)
+        if n in pb.speed:
+            return pb.speed[n][1][0]
+        if n in pb.keep:
+            return pb.keep[n][0]
+        return None
+
+    def gap_owner(n: int) -> int | None:
+        """The op that holds the wait after line *n*, if any.
+
+        A wait inside one op's range belongs to it whether or not it plays: a
+        cut deletes the silences between the lines it deletes, and a bare
+        speed drops them exactly as the default does.
+        """
+        if n in pb.gap_speed:
+            return pb.gap_speed[n][1][0]
+        if n in pb.gap_keep:
+            return pb.gap_keep[n][0]
+        here = line_owner(n)
+        return here if here is not None and here == line_owner(n + 1) else None
+
+    runs: list[Run] = []
+
+    def add(
+        owner: int | None, seconds: float, number: int | None, after: int | None = None
+    ) -> None:
+        if not runs or runs[-1].owner != owner:
+            op = ops[owner] if owner is not None else None
+            runs.append(
+                Run(
+                    kind=op.type if op is not None else PLAIN,
+                    owner=owner,
+                    after=after,
+                    factor=op.factor if op is not None and op.type in SPED else None,
+                    text=op.text if op is not None and op.type == "timelapse" else "",
+                )
+            )
+        runs[-1].seconds += seconds
+        if number is not None:
+            runs[-1].lines.append(number)
+
+    for n in pb.all_lines():
+        add(line_owner(n), pb.line_footage(n, "speech") / pb.factor(n), num.of(n))
+        if n >= pb.last:
+            continue
+        plays = pb.gap_plays(n)
+        seconds = max(pb.gap_after(n) or 0.0, 0.0) / pb.gap_factor(n) if plays else 0.0
+        number = num.silence.get(n)
+        if number is not None:
+            # A silence with a line of its own takes part like any other line.
+            add(gap_owner(n), seconds, number)
+        elif plays:
+            # No line of its own, and something is playing it: a ``"n~"`` op
+            # on a wait too short to be numbered.  It is still on screen.
+            add(gap_owner(n), seconds, None, after=num.of(n))
+    for index, line, duration in captions:
+        if ops[index].type != "overlay":
+            continue  # a timelapse's caption is already on its own run
+        number = num.of(line)
+        for run in runs:
+            if number in run.lines:
+                run.captions.append((ops[index].text or "", duration))
+                break
+    return runs
+
+
+def _run_line(run: Run) -> str:
+    figure = "—" if run.kind == "cut" else _s(run.seconds)
+    where = _lines_phrase(run.lines) if run.lines else f"the silence after line {run.after}"
+    out = f"  {run.label:<11}{figure:>7}  {where}"
+    if run.factor is not None:
+        out += f"  x{run.factor}"
+    if run.text:
+        out += " 「" + run.text.replace("\n", "\\n") + "」"
+    for text, duration in run.captions:
+        out += f"  +「{text}」 {duration:.1f} s"
+    return out
 
 
 def preview_segment(
@@ -769,9 +931,15 @@ def preview_segment(
             f"whole video (estimate): {_s(elsewhere_seconds)} elsewhere + {_s(runtime)} here "
             f"= {_s(elsewhere_seconds + runtime)}"
         )
-    parts = [HEADER] + (blocks or ["(no ops: every line plays its default)"]) + ["\n".join(footer)]
+    runs = timeline_runs(pb, ops, num, captions)
+    timeline = "\n".join([label + AS_IT_PLAYS] + [_run_line(run) for run in runs])
+    parts = (
+        [HEADER]
+        + (blocks or ["(no ops: every line plays its default)"])
+        + [timeline, "\n".join(footer)]
+    )
     rows = tuple(sorted((num.of(line), ops[i].text or "", dur) for i, line, dur in captions))
-    return SegmentPreview("\n\n".join(parts), default, runtime, rows)
+    return SegmentPreview("\n\n".join(parts), default, runtime, rows, tuple(runs))
 
 
 def segment_preview(
