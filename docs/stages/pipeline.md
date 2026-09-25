@@ -162,10 +162,12 @@ the whole design:
   concept then.
 
 The file rows are in pipeline-flow order (`index_page._rows()`, pinned by a
-test): `plan_dialogue/history.md` (plan/plan_revise), `cut_report.md` (first
-written by `intervals`, re-written by `blender`), the `.blend`, `publish.md`,
-`render.md`, and `llm_report/index.md` last because it covers every call of the
-run rather than one stage.
+test): `plan_dialogue/history.md` (plan/plan_revise), the `.blend`,
+`publish.md`, `render.md`, and `llm_report/index.md` last because it covers
+every call of the run rather than one stage. `cut_report.md` deliberately has
+no row: `llm_report/index.md` inlines it (its `## finished cut` section) and the
+headline already states its source → finished minutes, so a row would be a
+duplicate link.
 
 `index_page.py` reads only what is on disk (mtimes, `publish.json`,
 `render.json`, `llm_report/index.md`, the intervals JSONs + `timeline.json`) and

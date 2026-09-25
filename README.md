@@ -171,10 +171,11 @@ one that failed partway — rewrites one page at the top of the output directory
 It names the `.blend` (the deliverable is otherwise mentioned in no file at
 all), links the four files written to be read by a human, states
 the finished cut in one line, and embeds the rendered thumbnails. The rows
-follow the pipeline's flow: `plan_dialogue/history.md`,
-`llm_report/notes/cut_report.md`, the `.blend`, `publish/publish.md`,
-`render/render.md`, and last `llm_report/index.md`, which covers the whole
-run's LLM calls rather than one stage. It costs no
+follow the pipeline's flow: `plan_dialogue/history.md`, the `.blend`,
+`publish/publish.md`, `render/render.md`, and last `llm_report/index.md`,
+which covers the whole run's LLM calls rather than one stage. The cut report
+has no row of its own: `llm_report/index.md` already embeds it, and the
+headline line already states its source → finished minutes. It costs no
 LLM call at any setting and honours `general.image_markup` like the other two
 reviewable files.
 

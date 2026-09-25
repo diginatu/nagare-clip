@@ -91,7 +91,6 @@ class TestWhatIsOnThePage:
         rows = [line for line in md.splitlines() if line.startswith("| ") and "—" in line]
         needles = [
             "plan_dialogue/history.md",
-            "cut_report.md",
             ".blend",
             "publish/publish.md",
             "render/render.md",
@@ -121,10 +120,12 @@ class TestWhatIsOnThePage:
         assert "`blender/b_edited.blend`" in md
         assert "a_edited.blend" not in md
 
-    def test_the_cut_report_note_is_listed(self, tmp_path):
+    def test_the_cut_report_note_is_not_listed(self, tmp_path):
+        """llm_report/index.md already embeds it and the headline states its
+        numbers, so a row of its own would be a duplicate link."""
         output = _project(tmp_path)
         _touch(output / "llm_report" / "notes" / "cut_report.md")
-        assert "[cut_report.md](llm_report/notes/cut_report.md)" in build_index(output, CFG)
+        assert "cut_report" not in build_index(output, CFG)
 
 
 class TestTimestamps:
@@ -135,13 +136,13 @@ class TestTimestamps:
 
     def test_a_missing_file_is_a_dash(self, tmp_path):
         output = _project(tmp_path)
-        assert _row(build_index(output, CFG), "cut_report.md").endswith("| — |")
+        assert _row(build_index(output, CFG), "render.md").endswith("| — |")
 
     def test_a_missing_file_is_named_but_not_linked(self, tmp_path):
         """A link to a file that is not there is worse than a path."""
         md = build_index(_project(tmp_path), CFG)
-        assert "`llm_report/notes/cut_report.md`" in md
-        assert "](llm_report/notes/cut_report.md)" not in md
+        assert "`render/render.md`" in md
+        assert "](render/render.md)" not in md
 
     def test_no_row_explains_an_absence(self, tmp_path):
         """A timestamp is a fact; an explanation is a guess by a writer who
