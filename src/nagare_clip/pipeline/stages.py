@@ -624,6 +624,7 @@ def _director_run(ctx: PipelineContext) -> None:
             gaps=ctx.stage_dir("gap_context") / f"{segment.stem}_gaps.json",
             cuts_txt=ctx.stage_dir("audio_silence") / f"{segment.stem}_cuts.txt",
             silence_line_min=silence_line_min(ctx.cfg["director"]),
+            intervals_cfg=ctx.cfg["intervals"],
         )
         for segment in segments
     ]

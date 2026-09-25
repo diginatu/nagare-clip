@@ -471,8 +471,11 @@ def speech_seconds(
     seg_times: Sequence[tuple[float | None, float | None]],
     silences: Sequence[float] | None = None,
 ) -> list[float | None]:
-    """Seconds each line plays with no op at all: its span minus the
-    audio_silence cut inside it (``None`` when the line is untimed).
+    """Seconds each line plays with no op at all: its span minus what the
+    intervals stage drops inside it (``None`` when the line is untimed).
+
+    *silences* come from :func:`nagare_clip.director.run.source_drops`, the
+    intervals stage's own keep chain, so this IS the render's 1x figure.
 
     The one definition of a line's playing time — the transcript brackets and
     the whole-video "default runtime" both read it, so they cannot drift.
@@ -494,8 +497,8 @@ def line_seconds(
     Differs from :func:`speech_seconds` only where a sub-second silence is
     folded back in for display.  Per-line figures quoted back to the director
     (the playback preview) read this, so a line never carries two numbers;
-    runtimes keep summing :func:`speech_seconds`, because the audio_silence cut
-    is applied regardless of what the bracket shows.
+    runtimes keep summing :func:`speech_seconds`, because the intervals stage
+    drops that silence regardless of what the bracket shows.
     """
     out: list[float | None] = []
     for i, dur in enumerate(speech_seconds(seg_times, silences)):
@@ -549,8 +552,9 @@ def format_numbered_transcript_timed(
     """``N: text  [dur, gap]`` (1-based), gap = time to the next line.
 
     Per line: ``dur = end - start``; ``gap = next.start - this.end`` (the last
-    line has no gap).  When *silences* is given (audio_silence-cut seconds
-    inside each line's span, from :func:`nagare_clip.timing.segment_silences`),
+    line has no gap).  When *silences* is given (the seconds of each line's
+    span the intervals stage drops, from
+    :func:`nagare_clip.director.run.source_drops`),
     a line with significant internal silence renders
     ``[12.9s speech, 62.9s silence]`` — speech-only duration — so the LLM
     never judges pacing from span time that is mostly already-dropped silence.

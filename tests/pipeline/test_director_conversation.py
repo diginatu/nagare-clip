@@ -534,3 +534,23 @@ class TestTheProjectContext:
         system = _run(monkeypatch, _ctx(planned, chunk_lines=4))[0][0]["content"]
         assert "人間が直した指示" in system
         assert "keep the fitting" not in system
+
+
+def test_the_stage_prices_brackets_with_the_projects_intervals_settings(project, monkeypatch):
+    # A line's "Ys silence" is what intervals drops, so the director must be
+    # handed the SAME intervals: section the intervals stage will run with --
+    # not the defaults, which on a real project differ in every margin.
+    from nagare_clip.director.run import ConversationResult
+
+    ctx = _ctx(project)
+    ctx.cfg["intervals"]["keep_pre_margin"] = 0.123
+    seen = []
+
+    def fake(inputs, cfg, **kwargs):
+        seen.extend(inputs)
+        return ConversationResult(ops={})
+
+    monkeypatch.setattr(st, "run_director_conversation", fake)
+    st._director_run(ctx)
+    assert seen
+    assert all(i.intervals_cfg["keep_pre_margin"] == 0.123 for i in seen)

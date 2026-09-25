@@ -39,7 +39,7 @@ Two figures, each the one the director already sees for its scope: a *line*'s
 seconds are its transcript bracket (:func:`~.director_llm.line_seconds`, which
 folds a sub-second silence back in), and a *segment*'s runtime sums
 :func:`~.director_llm.speech_seconds`, as the whole-video header's "default
-runtime" does, because the audio_silence cut removes that silence regardless.
+runtime" does, because the intervals stage drops that silence regardless.
 Markers already in the edit lines steer the clipping but are not played back.
 """
 

@@ -26,6 +26,7 @@ from pathlib import Path
 
 from nagare_clip.audio_silence.cuts_file import read_cuts
 from nagare_clip.brief import apply_brief
+from nagare_clip.config import DEFAULTS
 from nagare_clip.director import director_llm as director_llm_mod
 from nagare_clip.director.context import project_context_block
 from nagare_clip.director.director_llm import (
@@ -50,6 +51,7 @@ from nagare_clip.director.silence_lines import (
 )
 from nagare_clip.gap_context.context import anchor_gaps
 from nagare_clip.gap_context.gaps import Gap, load_gaps
+from nagare_clip.intervals.keep import dropped_ranges
 from nagare_clip.llm_client import CACHEABLE_PREFIX_KEY, with_trace_meta
 from nagare_clip.llm_report import (
     DROPPED_ITEMS,
@@ -102,6 +104,10 @@ class SegmentInputs:
     #: ``director.silence_line_min``: the shortest wait between two lines the
     #: transcript shows as a silence line of its own.
     silence_line_min: float = DEFAULT_SILENCE_LINE_MIN
+    #: The ``intervals:`` config section: a line's ``Ys silence`` is what that
+    #: stage drops, so it is priced with that stage's settings.  ``None`` is
+    #: the section's defaults.
+    intervals_cfg: dict | None = None
 
 
 @dataclass(frozen=True)
@@ -135,6 +141,37 @@ class SegmentTranscript:
         return sum(speech)
 
 
+_DROPS_CACHE: dict[str, list[tuple[float, float]]] = {}
+
+
+def source_drops(
+    data: dict,
+    edit_lines: list[str],
+    cuts_txt: Path | None,
+    intervals_cfg: dict | None,
+) -> list[tuple[float, float]]:
+    """What ``intervals`` drops from this source with no director op.
+
+    :func:`~nagare_clip.intervals.keep.dropped_ranges` over the same inputs the
+    stage reads — the edit lines, the cut list, the ``intervals:`` settings —
+    so a line's bracket prices exactly the footage the render drops.  Cached
+    on those inputs: a source split into several segments is computed once.
+    """
+    cuts = read_cuts(Path(cuts_txt)) if cuts_txt and Path(cuts_txt).is_file() else []
+    ivl = intervals_cfg if intervals_cfg is not None else DEFAULTS["intervals"]
+    key = json.dumps([data, edit_lines, cuts, ivl], sort_keys=True, ensure_ascii=False)
+    if key not in _DROPS_CACHE:
+        try:
+            drops = dropped_ranges(data, ivl, edit_lines=edit_lines, cut_ranges=cuts)
+        except ValueError as exc:
+            # intervals would refuse these edits outright; price the source
+            # without them rather than not at all.
+            logging.warning("director: edit lines do not sync (%s); pricing without them", exc)
+            drops = dropped_ranges(data, ivl, cut_ranges=cuts)
+        _DROPS_CACHE[key] = drops
+    return _DROPS_CACHE[key]
+
+
 def load_segment_transcript(inputs: SegmentInputs) -> SegmentTranscript:
     """Read one segment's transcript and annotations off disk.
 
@@ -153,8 +190,10 @@ def load_segment_transcript(inputs: SegmentInputs) -> SegmentTranscript:
         except (ValueError, OSError):
             logging.warning("director: could not read --json %s", inputs.json_path)
     silences = None
-    if seg_times and inputs.cuts_txt and Path(inputs.cuts_txt).is_file():
-        silences = segment_silences(seg_times, read_cuts(Path(inputs.cuts_txt)))
+    if seg_times:
+        silences = segment_silences(
+            seg_times, source_drops(data, all_lines, inputs.cuts_txt, inputs.intervals_cfg)
+        )
     gap_list = (
         anchor_gaps(load_gaps(inputs.gaps), seg_times or [], segment.lines) if seg_times else []
     )

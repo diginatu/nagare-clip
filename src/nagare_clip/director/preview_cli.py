@@ -83,6 +83,7 @@ def _segment_preview(
             gaps=ctx.stage_dir("gap_context") / f"{stem}_gaps.json",
             cuts_txt=ctx.stage_dir("audio_silence") / f"{stem}_cuts.txt",
             silence_line_min=silence_line_min(ctx.cfg["director"]),
+            intervals_cfg=ctx.cfg["intervals"],
         )
     )
     first = transcript.first_line

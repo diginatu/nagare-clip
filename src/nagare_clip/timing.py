@@ -1,8 +1,9 @@
 """Pure timing helpers shared by the plan and director stages.
 
 Extract per-segment times from a WhisperX JSON, measure how much of a span
-the audio_silence cut list already covers (``span_silence``/
-``segment_silences``), and render a compact ``[dur, gap]`` bracket —
+a set of dropped ranges covers (``span_silence``/``segment_silences`` — the
+callers pass :func:`nagare_clip.intervals.keep.dropped_ranges`, what the
+render drops), and render a compact ``[dur, gap]`` bracket —
 or, when silence overlaps, the ``[Xs speech, Ys silence]`` form
 (``format_dur_gap``).  No I/O, no internal imports — safe to import anywhere.
 """
@@ -73,7 +74,7 @@ def format_dur_gap(dur: float | None, gap: float | None, silence: float | None =
     - ``gap is None`` -> no gap part.
     - a negligible gap (would render as ``0.0s``, incl. negative) is omitted
       the same way — "gap 0.0s" on every contiguous line/part is pure noise.
-    - a significant *silence* (audio_silence-cut seconds inside the span,
+    - a significant *silence* (seconds of the span the render drops,
       ``>= MIN_SILENCE_SPLIT``) splits the duration into
       ``Xs speech, Ys silence`` — *dur* is then the speech-only figure.
     - a shorter silence is folded back in: callers pass *dur* already net of
@@ -102,7 +103,7 @@ def silence_shown(silence: float | None) -> bool:
 def bracket_seconds(dur: float, silence: float | None = None) -> float:
     """The one duration figure a line's bracket prints for it.
 
-    *dur* is net speech (span minus the audio_silence cut inside it); a silence
+    *dur* is net speech (span minus what the render drops inside it); a silence
     too short to be split out is folded back in (see :func:`format_dur_gap`).
     Anything that quotes a line's duration back to the director reads it here,
     so it can never see two numbers for one line.

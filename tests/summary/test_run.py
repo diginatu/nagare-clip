@@ -191,3 +191,32 @@ def test_no_brief_leaves_summary_prompts_untouched(monkeypatch, tmp_path):
         {"summary": {"enabled": True, "prompt": "P", "overall_prompt": "O", "max_retries": 0}},
     )
     assert systems == ["P", "O"]
+
+
+def test_part_silence_is_what_intervals_drops_not_only_the_cut_list(monkeypatch, tmp_path):
+    # A part's "silence" feeds plan's speech/silence bracket, so it is priced
+    # the way the director's line brackets are: the footage intervals drops,
+    # word gaps over intervals.silence_threshold included, cut list or not.
+    captured = {}
+
+    def fake_build(parts_input, cfg, **kwargs):
+        captured["dropped"] = kwargs.get("dropped_by_stem")
+        return ProjectSummary(summary="all", parts=[PartSummary("v", (1, 1), "x")])
+
+    monkeypatch.setattr(summary_run, "build_summary", fake_build)
+    words = [
+        {"word": ch, "start": s, "end": e}
+        for ch, (s, e) in zip("あいうえ", [(0.0, 0.5), (0.5, 1.0), (6.0, 6.5), (6.5, 7.0)])
+    ]
+    _run(
+        monkeypatch,
+        tmp_path,
+        {
+            "summary": {"enabled": True},
+            "intervals": {"keep_pre_margin": 0.0, "keep_post_margin": 0.0},
+        },
+        {"v": "あいうえ\n"},
+        {"v": {"segments": [{"start": 0.0, "end": 7.0, "text": "あいうえ", "words": words}]}},
+    )
+    dropped = captured["dropped"]["v"]
+    assert any(s <= 2.0 and e >= 5.0 for s, e in dropped)

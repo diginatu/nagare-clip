@@ -336,7 +336,7 @@ def build_summary(
     recorder: Recorder = NULL_RECORDER,
     seg_times_by_stem: dict[str, list[tuple[float | None, float | None]]] | None = None,
     gap_blocks_by_stem: dict[str, str] | None = None,
-    cuts_by_stem: dict[str, list[tuple[float, float]]] | None = None,
+    dropped_by_stem: dict[str, list[tuple[float, float]]] | None = None,
 ) -> ProjectSummary:
     """Map (``segment_video`` per video) then reduce (``generate_project_summary``)."""
     parts: list[PartSummary] = []
@@ -359,11 +359,11 @@ def build_summary(
     if seg_times_by_stem:
         for p in parts:
             _attach_part_times(p, seg_times_by_stem.get(p.stem))
-    if cuts_by_stem:
+    if dropped_by_stem:
         for p in parts:
-            cuts = cuts_by_stem.get(p.stem)
-            if cuts and p.start is not None and p.end is not None:
-                sil = span_silence(p.start, p.end, cuts)
+            dropped = dropped_by_stem.get(p.stem)
+            if dropped and p.start is not None and p.end is not None:
+                sil = span_silence(p.start, p.end, dropped)
                 if sil > 0.0:
                     p.silence = sil
     summary = generate_project_summary(

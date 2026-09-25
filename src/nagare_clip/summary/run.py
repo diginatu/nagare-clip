@@ -15,8 +15,10 @@ from pathlib import Path
 
 from nagare_clip.audio_silence.cuts_file import read_cuts
 from nagare_clip.brief import apply_brief
+from nagare_clip.config import DEFAULTS
 from nagare_clip.gap_context.context import anchor_gaps, format_gap_block
 from nagare_clip.gap_context.gaps import load_gaps
+from nagare_clip.intervals.keep import dropped_ranges
 from nagare_clip.llm_report import NULL_RECORDER, Recorder
 from nagare_clip.summary import summarize as summarize_mod
 from nagare_clip.summary.summarize import (
@@ -48,12 +50,12 @@ def run_summary(
             lines = path.read_text(encoding="utf-8").splitlines()
             parts_input.append((path.stem, lines))
         seg_times_by_stem = {}
+        data_by_stem: dict[str, dict] = {}
         for jpath in json_paths or []:
             if jpath.is_file():
                 try:
-                    seg_times_by_stem[jpath.stem] = segment_times(
-                        json.loads(jpath.read_text(encoding="utf-8"))
-                    )
+                    data_by_stem[jpath.stem] = json.loads(jpath.read_text(encoding="utf-8"))
+                    seg_times_by_stem[jpath.stem] = segment_times(data_by_stem[jpath.stem])
                 except (ValueError, OSError):
                     logging.warning("summary: could not read --json %s", jpath)
         gap_blocks_by_stem: dict[str, str] = {}
@@ -70,6 +72,13 @@ def run_summary(
             if cpath.is_file():
                 stem = cpath.stem.removesuffix("_cuts")
                 cuts_by_stem[stem] = read_cuts(cpath)
+        # A part's silence is what intervals drops from it (no edits exist
+        # yet), priced the way the director's line brackets are.
+        ivl = {**DEFAULTS["intervals"], **cfg.get("intervals", {})}
+        dropped_by_stem = {
+            stem: dropped_ranges(data, ivl, cut_ranges=cuts_by_stem.get(stem, []))
+            for stem, data in data_by_stem.items()
+        }
         logging.info("summary: analysing %d video(s) with LLM", len(parts_input))
         project = build_summary(
             parts_input,
@@ -78,7 +87,7 @@ def run_summary(
             recorder=recorder,
             seg_times_by_stem=seg_times_by_stem or None,
             gap_blocks_by_stem=gap_blocks_by_stem or None,
-            cuts_by_stem=cuts_by_stem or None,
+            dropped_by_stem=dropped_by_stem or None,
         )
         logging.info(
             "summary: %d part(s) across %d video(s)",

@@ -302,21 +302,24 @@ DIRECTOR_PROMPT = (
     "Timing: a line may carry a bracket after its text. [4.2s] is the line's "
     "duration; [4.2s, gap 0.8s] adds the silent gap before the next line. A "
     "line holding long internal silence splits it instead — "
-    "[13.0s speech, 62.9s silence] means only 13.0 seconds are spoken and the "
-    "62.9 silent seconds are dropped by default — "
-    "and may carry a gap too: [13.0s speech, 62.9s silence, gap 0.8s]. Those "
-    "are the only four forms; a negligible gap is omitted; no timing, no "
-    "bracket. A bracket's gap is a SHORT one — a longer wait is a "
+    # Both figures are what intervals renders (intervals.keep.dropped_ranges):
+    # word gaps over silence_threshold included, keep margins given back.  So
+    # the two add up to the footage, which is what a keep or a timelapse plays.
+    "[13.0s speech, 62.9s silence]: 13.0 s plays and 62.9 s is dropped by "
+    "default; the two add up to the line's footage — "
+    "and may carry a gap too: [13.0s speech, 62.9s silence, gap 0.8s]. A "
+    "negligible gap is omitted. A bracket's gap is a SHORT one — a longer "
+    "wait is a "
     # The gap-rescue reading used to live here, because a 29.9 s wait reached
     # the director only as `gap 29.9s` inside the preceding line's bracket and
     # nothing else could be said about it.  It is a line of its own now, which
     # is where the "this may be the best moment in the shot" reading belongs.
     "[silent …] line of its own, below.\n"
     "\n"
-    "Use these numbers to judge pacing, always from the speech figure and "
-    "never from speech+silence: a long speech duration is a "
-    "candidate for cutting, not speeding up — a long stretch of manual "
-    "work is a timelapse candidate.\n"
+    "Judge pacing from the speech figure, never speech+silence: a long "
+    "speech duration is a candidate for cutting, not speeding up — a long "
+    "stretch of manual work is a timelapse candidate. A keep plays the "
+    "silence too; a timelapse plays speech+silence divided by its factor.\n"
     "\n"
     "Silence: a line like\n"
     "54: [silent 29.9s: a build runs and logs scroll past]\n"

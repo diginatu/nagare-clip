@@ -554,7 +554,7 @@ def test_director_prompt_timing_line_does_not_offer_speed_for_long_duration():
     work remains a timelapse candidate."""
     cfg = get_effective_config(None, {})
     prompt = cfg["director"]["prompt"]
-    line = next(ln for ln in prompt.splitlines() if "Use these numbers to judge pacing" in ln)
+    line = next(ln for ln in prompt.splitlines() if "Judge pacing from the speech figure" in ln)
     lowered = line.lower()
     assert "candidates for cutting or speeding up" not in lowered
     assert "cutting" in lowered
@@ -1223,7 +1223,12 @@ def test_director_prompt_did_not_grow_for_the_silence_lines():
     6495 -> 6595: the seam fact (a [k] block was recorded as its own video, so
     it can open with a greeting or end with a sign-off) took 100 of the 104
     characters that were left, inside the ceiling rather than over it.  Four
-    characters remain: the next addition here deletes something first."""
+    characters remain: the next addition here deletes something first.
+
+    6595 -> 6589: the bracket legend's new facts (speech + silence add up to
+    the footage; a keep plays the silence; a timelapse plays speech+silence
+    over its factor) were paid for by rewording the Timing/pacing lines and
+    deleting "Those are the only four forms" and "no timing, no bracket"."""
     prompt = get_effective_config(None, {})["director"]["prompt"]
     assert len(prompt) < 6600
 
@@ -1290,3 +1295,19 @@ def test_director_prompt_turn_shape_is_the_one_the_loop_parses():
     assert result.error is None and result.refusal is None
     assert {op.type for op in result.ops} == {"cut", "timelapse", "overlay", "keep", "edit"}
     assert state.reviewed_through == 78
+
+
+def test_director_prompt_bracket_legend_says_what_each_figure_plays():
+    """The speech/silence split is now what intervals renders: the speech figure
+    is what plays at 1x with no op, the silence is every second of the line the
+    render drops, and the two add up to the line's footage.  Without that last
+    fact the director cannot price its own ops: a timelapse plays the WHOLE
+    footage over its factor, not the speech figure over it, and a keep plays
+    the silence back.  Stated in the Timing legend, which owns the notation,
+    and paid for there -- the ceiling above is not raised."""
+    prompt = get_effective_config(None, {})["director"]["prompt"]
+    timing = next(ln for ln in prompt.splitlines() if ln.startswith("Timing:"))
+    assert "add up to the line's footage" in timing
+    pacing = next(ln for ln in prompt.splitlines() if "Judge pacing from the speech figure" in ln)
+    assert "a timelapse plays speech+silence divided by its factor" in pacing
+    assert "a keep plays the silence too" in pacing.lower()

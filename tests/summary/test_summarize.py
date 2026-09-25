@@ -473,7 +473,7 @@ class TestPartSilence:
             {"prompt": "p", "overall_prompt": "o"},
             call_llm=_seq_llm([resp, overall]),
             seg_times_by_stem=seg_times,
-            cuts_by_stem={"v": [(5.0, 15.0)]},
+            dropped_by_stem={"v": [(5.0, 15.0)]},
         )
         assert project.parts[0].silence == 10.0
 

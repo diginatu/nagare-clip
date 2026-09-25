@@ -112,3 +112,24 @@ def test_parser_drops_come_from_the_llm_report(project, capsys):
         "dropped by the parser (no effect): keep op spans 2 lines [2, 3] > max_keep_lines=1" in out
     )
     assert "no LLM report for b" in out
+
+
+def test_brackets_are_priced_with_the_projects_intervals_settings(project, capsys, monkeypatch):
+    # The preview must price a line as the stage would: same intervals: section.
+    import nagare_clip.director.preview_cli as cli
+
+    config = project / "nagare_config.yml"
+    data = yaml.safe_load(config.read_text(encoding="utf-8"))
+    data["intervals"] = {"keep_pre_margin": 0.123}
+    config.write_text(yaml.safe_dump(data), encoding="utf-8")
+    seen = []
+    real = cli.load_segment_transcript
+
+    def spy(inputs):
+        seen.append(inputs)
+        return real(inputs)
+
+    monkeypatch.setattr(cli, "load_segment_transcript", spy)
+    _run(capsys, "--config", str(config))
+    assert seen
+    assert all(i.intervals_cfg["keep_pre_margin"] == 0.123 for i in seen)
