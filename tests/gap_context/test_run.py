@@ -332,3 +332,110 @@ def test_static_ssim_prefilter_skips_vision_call(tmp_path, monkeypatch):
     assert prefiltered["static"] is True
     assert "prefilter" in prefiltered["description"]
     assert described["static"] is False
+
+
+def _neighbours_for(tmp_path, monkeypatch, stem, segments, start, end, context_lines=1):
+    """Run one gap over *segments* and return the (before, after) handed to describe_gap."""
+    import nagare_clip.gap_context.run as run_mod
+
+    seen = {}
+
+    def fake_describe(gf, cfg, *, unit, before, after, call_llm, recorder):
+        seen["before"], seen["after"] = before, after
+        return None
+
+    monkeypatch.setattr(run_mod, "describe_gap", fake_describe)
+    jp = tmp_path / f"{stem}.json"
+    jp.write_text(json.dumps({"segments": segments}), encoding="utf-8")
+    cfg = {"gap_context": {**BASE_CFG["gap_context"], "context_lines": context_lines}}
+    gf = GapFrames(start=start, end=end, frames=_frames(tmp_path, "f.jpg"), relpaths=["f.jpg"])
+    run_gap_context([gf], tmp_path / f"{stem}_gaps.json", cfg, stem=stem, json_path=jp)
+    return seen["before"], seen["after"]
+
+
+def test_neighbour_lines_keep_a_line_whose_last_word_is_stretched_into_the_gap(
+    tmp_path, monkeypatch
+):
+    """WhisperX stretches an utterance's last word across the start of a pause,
+    so the line leading into the gap ends AFTER gap.start.  It is still the
+    line that leads into the gap -- the most relevant speech for the vision
+    model -- and must be the last "before" line (anchor_gaps' midpoint rule)."""
+    before, after = _neighbours_for(
+        tmp_path,
+        monkeypatch,
+        "stretch",
+        [
+            {"start": 0.0, "end": 5.0, "text": "古い文"},
+            {"start": 5.0, "end": 12.5, "text": "ここでビルドします"},  # stretched past 10.0
+            {"start": 20.0, "end": 25.0, "text": "できました"},
+        ],
+        10.0,
+        20.0,
+    )
+    assert before == ["ここでビルドします"]
+    assert after == ["できました"]
+
+
+def test_neighbour_lines_keep_a_line_starting_just_before_the_gap_ends(tmp_path, monkeypatch):
+    """The mirror case: the next line's first word is timed a little early, so
+    it starts before gap.end.  It is still the line the gap leads into."""
+    before, after = _neighbours_for(
+        tmp_path,
+        monkeypatch,
+        "early",
+        [
+            {"start": 5.0, "end": 10.0, "text": "直前の文"},
+            {"start": 19.4, "end": 25.0, "text": "直後の文"},  # starts before 20.0
+            {"start": 25.0, "end": 30.0, "text": "新しい文"},
+        ],
+        10.0,
+        20.0,
+    )
+    assert before == ["直前の文"]
+    assert after == ["直後の文"]
+
+
+def test_neighbour_lines_split_at_the_line_that_contains_the_gap(tmp_path, monkeypatch):
+    """A silence sentence_split declined to split sits INSIDE one line, whose
+    bracket reports it as internal silence.  That line is the last "before"
+    line -- the one anchor_gaps prints the annotation under -- and the next
+    line is the first "after"."""
+    before, after = _neighbours_for(
+        tmp_path,
+        monkeypatch,
+        "inside",
+        [
+            {"start": 0.0, "end": 8.0, "text": "前の文"},
+            {"start": 8.0, "end": 30.0, "text": "間に沈黙を含む文"},
+            {"start": 30.0, "end": 35.0, "text": "後の文"},
+        ],
+        10.0,
+        20.0,
+        context_lines=2,
+    )
+    assert before == ["前の文", "間に沈黙を含む文"]
+    assert after == ["後の文"]
+
+
+def test_neighbour_lines_agree_with_anchor_gaps(tmp_path, monkeypatch):
+    """The last "before" line is exactly the line anchor_gaps attaches the
+    gap to, for every gap -- one anchoring rule, not two."""
+    from nagare_clip.gap_context.context import anchor_gaps
+    from nagare_clip.gap_context.gaps import Gap
+    from nagare_clip.timing import segment_times
+
+    segments = [
+        {"start": 0.0, "end": 4.0, "text": "L1"},
+        {"start": 4.0, "end": 11.0, "text": "L2"},
+        {"start": 14.5, "end": 16.0, "text": "L3"},
+        {"start": 23.0, "end": 40.0, "text": "L4"},
+        {"start": 40.0, "end": 42.0, "text": "L5"},
+    ]
+    seg_times = segment_times({"segments": segments})
+    for i, (start, end) in enumerate([(4.5, 9.0), (10.0, 15.0), (16.0, 23.0), (25.0, 35.0)]):
+        [(anchor, _)] = anchor_gaps([Gap(start=start, end=end, frames=[])], seg_times)
+        before, after = _neighbours_for(
+            tmp_path, monkeypatch, f"agree{i}", segments, start, end, context_lines=9
+        )
+        assert before == [s["text"] for s in segments[:anchor]], (start, end)
+        assert after == [s["text"] for s in segments[anchor:]], (start, end)

@@ -14,6 +14,7 @@ import logging
 from pathlib import Path
 from typing import Any
 
+from nagare_clip.gap_context.context import anchor_line
 from nagare_clip.gap_context.describe import GapFrames, describe_gap
 from nagare_clip.gap_context.gaps import Gap, gaps_to_dict
 from nagare_clip.llm_client import call_llm as _call_llm
@@ -24,7 +25,13 @@ from nagare_clip.timing import segment_times
 def _neighbour_lines(
     gf: GapFrames, segments: list[dict[str, Any]], seg_times, count: int
 ) -> tuple[list[str], list[str]]:
-    """Up to *count* lines ending at/before the gap and starting at/after it.
+    """Up to *count* spoken lines leading into the gap and *count* following it.
+
+    The split is ``anchor_line`` -- the line ``anchor_gaps`` prints the gap's
+    annotation under is the last "before" line, every later line is "after".
+    Not ``end <= gap.start``: WhisperX stretches an utterance's last word
+    across the start of a pause, so the line that leads into the gap usually
+    ends after it starts, and that rule dropped exactly the most relevant line.
 
     Both lists are in transcript order, so the line nearest the gap is last in
     *before* and first in *after*.
@@ -33,13 +40,14 @@ def _neighbour_lines(
     after: list[str] = []
     if count <= 0:
         return before, after
-    for (start, end), seg in zip(seg_times, segments, strict=False):
+    anchor = anchor_line(gf.start, gf.end, seg_times)
+    for i, seg in enumerate(segments):
         text = seg.get("text", "") if isinstance(seg, dict) else ""
         if not isinstance(text, str) or not text.strip():
             continue
-        if end is not None and end <= gf.start + 0.01:
+        if i < anchor:
             before.append(text.strip())
-        elif len(after) < count and start is not None and start >= gf.end - 0.01:
+        elif len(after) < count:
             after.append(text.strip())
     return before[-count:], after
 

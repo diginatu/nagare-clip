@@ -10,6 +10,25 @@ from __future__ import annotations
 from nagare_clip.gap_context.gaps import Gap
 
 
+def anchor_line(
+    start: float, end: float, seg_times: list[tuple[float | None, float | None]]
+) -> int:
+    """The 1-based line a silence ``[start, end]`` belongs to (``0`` = before line 1).
+
+    The last line that starts at or before the silence's midpoint -- see
+    ``anchor_gaps`` for why the midpoint and not the start.  Shared with the
+    gap_context stage's own choice of neighbour lines, so the line the vision
+    model reads as leading into a gap is the line the annotation is printed
+    under.
+    """
+    midpoint = (start + end) / 2
+    anchor = 0
+    for i, (line_start, _end) in enumerate(seg_times):
+        if line_start is not None and line_start <= midpoint:
+            anchor = i + 1
+    return anchor
+
+
 def anchor_gaps(
     gaps: list[Gap],
     seg_times: list[tuple[float | None, float | None]],
@@ -48,11 +67,7 @@ def anchor_gaps(
     for gap in gaps:
         if gap.static:
             continue
-        midpoint = (gap.start + gap.end) / 2
-        anchor = 0
-        for i, (start, _end) in enumerate(seg_times):
-            if start is not None and start <= midpoint:
-                anchor = i + 1
+        anchor = anchor_line(gap.start, gap.end, seg_times)
         if lines is not None:
             first, last = lines
             limit = last if last < len(seg_times) else last + 1
