@@ -303,13 +303,24 @@ One LLM call per gap (`describe_gap()`), not per frame:
   pins this).
 
 `run_gap_context()` (`run.py`) is the per-video entry point: for each
-`GapFrames` it looks up the last `gap_context.context_lines` WhisperX segments
-ending at/before the gap and the first `context_lines` starting at/after it
+`GapFrames` it looks up the last `gap_context.context_lines` spoken lines
+leading into the gap and the first `context_lines` after it
 (`_neighbour_lines()` — tolerant of missing/`None` `start`/`end`, non-dict
 segments, non-string/blank `text`, and a `context_lines` larger than the number
 of segments actually there) and passes their text to `describe_gap()` as
 `before`/`after`, when the sentence_split `{stem}.json` (`json_path`) is
-available. `context_lines` defaults to **1** (the pre-existing behaviour: one
+available. The two sides are split at `context.anchor_line()` — the same midpoint rule `anchor_gaps` uses (below), so
+the line the vision model is told leads into a gap is the line the summary and
+director print that gap's annotation under. It used to take lines ending at/before
+`gap.start` and starting at/after `gap.end`, which is the rule `anchor_gaps` was
+moved off: WhisperX stretches an utterance's last word across the start of a
+pause, so the line leading into the gap ends *after* it starts and was left out
+— on the water_pump_4 project 54 of 91 gaps lost their nearest "before" line
+that way (26 a stretched tail, 28 a silence inside the line), and 21 lost their
+nearest "after" line because its first word was timed a little early. A line
+that CONTAINS the gap (a silence sentence_split declined to split) is therefore
+the last "before" line, even though some of its words follow the gap.
+`context_lines` defaults to **1** (the pre-existing behaviour: one
 line per side); `0` skips neighbour lookup entirely. Raising it costs prompt
 tokens on every gap of every video, so it is a knob, not a default. Note the
 same-named `guided_edit.context_lines` is an unrelated knob for a different
@@ -371,14 +382,16 @@ filter keeps "camera pointed at nothing changing" scenes out of both the
 summary block and the director annotation (in a real tripod-footage run,
 roughly three quarters of described gaps were static noise). Details:
 
-- For each gap, scan every line's `(start, end)`; whenever a line's `end` is
-  not `None` and `end <= gap.start + _EPS` (`_EPS = 0.01`), advance the anchor
-  to that line's 1-based index. Because the scan runs over **every** line
-  rather than stopping at the first match, the anchor ends up as the **last**
-  qualifying line, not the first — a regression the tests pin explicitly
-  (`test_anchor_gaps_picks_the_last_qualifying_line_not_first`).
-- The `_EPS` epsilon absorbs float rounding at the boundary — a line ending
-  at `10.005` still anchors a gap starting at `10.0`.
+- The gap's **midpoint** picks the line: `anchor_line()` returns the 1-based
+  index of the **last** line whose `start` is not `None` and is `<=` the
+  midpoint (`anchor_gaps` calls it per gap; `run.py` calls it for the vision
+  model's neighbour lines). Not the gap's start: WhisperX stretches an
+  utterance's last word across the beginning of a pause, so keying on
+  `end <= gap.start` landed 54% of annotations one line early, and a silence
+  sentence_split declined to split sits *inside* a line whose bracket already
+  reports it as `Ys silence`. The rule reads as "the line whose own bracket
+  accounts for this silence" (`test_anchor_gaps_midpoint_not_start_decides_the_anchor`,
+  `test_anchor_gaps_picks_the_last_line_before_the_midpoint_not_the_first`).
 - `anchor == 0` means the gap precedes every line ("before line 1"); this is
   also what an empty `seg_times` list produces (no line ever qualifies).
 - `anchor == len(lines)` means the gap follows the transcript's final line
