@@ -356,11 +356,21 @@ def call_llm(messages: list[dict[str, Any]], cfg: dict[str, Any]) -> str:
         kwargs["response_format"] = {"type": "json_object"}
 
     thinking = cfg.get("thinking", False)
-    if thinking:
+    if not thinking and provider == "anthropic":
+        # Off is said, not implied: Sonnet 5 / Opus 5 think when `thinking` is
+        # omitted, and LiteLLM maps reasoning_effort="none" to omitting it.
+        kwargs["thinking"] = {"type": "disabled"}
+    else:
         # `true` is "thinking on at the normal effort", i.e. the API's own
         # default `high` — not `low`, which is what it used to mean and what
-        # no config writing `true` intended.
-        kwargs["reasoning_effort"] = thinking if isinstance(thinking, str) else "high"
+        # no config writing `true` intended.  `false` is "none", never
+        # omitted: OpenAI's reasoning models (gpt-6-luna: medium) think by
+        # default too; ollama_chat turns "none" into think=false.
+        if not thinking:
+            effort = "none"
+        else:
+            effort = thinking if isinstance(thinking, str) else "high"
+        kwargs["reasoning_effort"] = effort
 
     if _ensure_tracing():
         metadata = dict(trace) if trace else {}

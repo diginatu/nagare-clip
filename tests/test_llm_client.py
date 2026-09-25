@@ -85,9 +85,32 @@ def test_thinking_true_maps_to_high():
     assert m.call_args.kwargs["reasoning_effort"] == "high"
 
 
-def test_thinking_false_omits_reasoning_effort():
+def test_thinking_false_turns_reasoning_off():
+    """`false` means OFF.  Sending nothing let current reasoning models think
+    at their own default (gpt-6-luna: medium), so `false` in a config was a
+    claim the run did not keep."""
     _, m = _call({"provider": "openai", "model": "x", "thinking": False})
+    assert m.call_args.kwargs["reasoning_effort"] == "none"
+
+
+def test_thinking_absent_is_off_too():
+    _, m = _call({"provider": "ollama_chat", "model": "x"})
+    assert m.call_args.kwargs["reasoning_effort"] == "none"
+
+
+def test_anthropic_off_is_an_explicit_disabled_thinking():
+    """Sonnet 5 thinks when `thinking` is omitted, and LiteLLM maps
+    reasoning_effort="none" to omitting it -- so off has to be said in
+    Anthropic's own terms."""
+    _, m = _call({"provider": "anthropic", "model": "claude-sonnet-5", "thinking": False})
+    assert m.call_args.kwargs["thinking"] == {"type": "disabled"}
     assert "reasoning_effort" not in m.call_args.kwargs
+
+
+def test_anthropic_on_still_uses_reasoning_effort():
+    _, m = _call({"provider": "anthropic", "model": "claude-sonnet-5", "thinking": "high"})
+    assert m.call_args.kwargs["reasoning_effort"] == "high"
+    assert "thinking" not in m.call_args.kwargs
 
 
 def test_api_key_forwarded_when_set():
