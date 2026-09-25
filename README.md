@@ -592,7 +592,7 @@ text_filter:
   provider: "ollama_chat"   # see "Choosing an LLM provider" above
   api_base: ""              # empty -> local Ollama; leave empty for cloud providers
   model: "qwen3.5:4b"
-  thinking: "low"   # thinking mode: true/false, or "low"/"medium"/"high" for supported models
+  reasoning_effort: "low"   # passed to LiteLLM as-is; omit to send nothing
 ```
 
 The LLM uses `{{old->new}}` inline patch syntax to mark corrections. Human editors can then review and modify the markers in `_edits.txt` before the intervals stage applies them.
@@ -601,7 +601,7 @@ Human editors can also wrap a span in `<keep>...</keep>` to force-preserve the a
 
 `<speed factor="N.N">...</speed>` is a companion marker carrying a playback-speed annotation. Unlike `<keep>`, it does **not** force-keep audio — its span does not carve silence out of the excludes, so silence inside it is still cut and the speed applies only to the surviving spoken parts (nest inside `<keep>` to preserve the audio too). The intervals stage records each marked span as an entry in a top-level `speed_ranges` array (`{start, end, factor}`) in `_intervals.json`, independent of `keep_intervals`. The blender stage splits keep intervals at those boundaries, so a `<speed>` span may cover an arbitrary sub-range of a keep interval (or span several), and adds a Blender VSE Speed Control effect strip over each sped-up sub-range so it plays at the requested speed in the final `.blend`. A `speed_ranges` entry that falls entirely on cut content simply matches no surviving interval and is ignored.
 
-`thinking` enables chain-of-thought reasoning for supported models (e.g. qwen3, deepseek-r1); it maps to LiteLLM's `reasoning_effort` (best-effort per provider). `false` turns reasoning off explicitly (an omitted setting would leave current reasoning models thinking at their own default). Set `true`/`false`, or a string level like `"low"`, `"medium"`, `"high"` for models that support granular control (e.g. Qwen 3.5). The pipeline uses only the final answer, not the reasoning trace.
+`reasoning_effort` is passed to LiteLLM's `reasoning_effort` **unchanged** — no translation, no per-provider special case — so what a value (`"none"`, `"low"`, `"medium"`, `"high"`, …) does for a given model is exactly what LiteLLM documents for that provider. Leave it unset (the default, `null`) to send nothing, in which case the model runs at its own default (current reasoning models think by default). The pipeline uses only the final answer, not the reasoning trace. The old `thinking` key is gone: a config that still contains it fails to load with a message naming the key.
 
 #### Filter context from the summary stage (optional)
 

@@ -24,6 +24,7 @@ import copy
 import logging
 import re
 import sys
+from collections.abc import Iterator
 from pathlib import Path
 from typing import Any, ClassVar, Literal
 
@@ -657,7 +658,7 @@ class SentenceSplitConfig(BaseModel):
     )
     api_key: str = Field("", description="API key for the provider (or set the provider's env var)")
     temperature: float = Field(0.2)
-    thinking: bool | str = Field(False)
+    reasoning_effort: str | None = Field(None)
     timeout: int = Field(300)
     response_format: str = Field("json")
     max_retries: int = Field(
@@ -716,8 +717,9 @@ class TextFilterConfig(BaseModel):
         description="System prompt for LLM (has sensible default for Japanese)",
     )
     temperature: float = Field(0.1, description="LLM sampling temperature")
-    thinking: bool | str = Field(
-        False, description='Thinking mode: true (= "high") / false, or "low"/"medium"/"high"'
+    reasoning_effort: str | None = Field(
+        None,
+        description='Passed to LiteLLM as reasoning_effort, unchanged (e.g. "none"/"low"/"high"); null sends nothing',
     )
     keywords: list[str] = _commented(
         [],
@@ -750,7 +752,7 @@ class SummaryConfig(BaseModel):
     )
     api_key: str = Field("", description="API key for the provider (or set the provider's env var)")
     temperature: float = Field(0.3)
-    thinking: bool | str = Field(False)
+    reasoning_effort: str | None = Field(None)
     timeout: int = Field(300)
     response_format: str = Field("json")
     max_retries: int = Field(
@@ -792,7 +794,7 @@ class PlanConfig(BaseModel):
     )
     api_key: str = Field("", description="API key for the provider (or set the provider's env var)")
     temperature: float = Field(0.3)
-    thinking: bool | str = Field(False)
+    reasoning_effort: str | None = Field(None)
     timeout: int = Field(300)
     response_format: str = Field("json")
     max_retries: int = Field(
@@ -829,7 +831,7 @@ class PlanReviseConfig(BaseModel):
     )
     api_key: str = Field("", description="API key for the provider (or set the provider's env var)")
     temperature: float = Field(0.3)
-    thinking: bool | str = Field(False)
+    reasoning_effort: str | None = Field(None)
     timeout: int = Field(300)
     response_format: str = Field("json")
     max_retries: int = Field(
@@ -863,7 +865,7 @@ class DirectorConfig(BaseModel):
     )
     api_key: str = Field("", description="API key for the provider (or set the provider's env var)")
     temperature: float = Field(0.2)
-    thinking: bool | str = Field(False)
+    reasoning_effort: str | None = Field(None)
     timeout: int = Field(300)
     response_format: str = Field("json", description="JSON mode for reliable parsing")
     max_retries: int = Field(
@@ -923,7 +925,7 @@ class GuidedEditConfig(BaseModel):
     )
     api_key: str = Field("", description="API key for the provider (or set the provider's env var)")
     temperature: float = Field(0.1)
-    thinking: bool | str = Field(False)
+    reasoning_effort: str | None = Field(None)
     timeout: int = Field(60)
     context_lines: int = Field(
         1, description='Lines of context shown to the LLM around an "edit" op boundary'
@@ -963,7 +965,7 @@ class GapContextConfig(BaseModel):
     )
     api_key: str = Field("", description="API key for the provider (or set the provider's env var)")
     temperature: float = Field(0.2)
-    thinking: bool | str = Field(False)
+    reasoning_effort: str | None = Field(None)
     timeout: int = Field(300)
     max_retries: int = Field(
         2, description="Extra attempts on LLM error / empty response (0 = single attempt)"
@@ -1313,7 +1315,7 @@ class DescribeFramesConfig(BaseModel):
     )
     api_key: str = Field("", description="API key for the provider (or set the provider's env var)")
     temperature: float = Field(0.2)
-    thinking: bool | str = Field(False)
+    reasoning_effort: str | None = Field(None)
     timeout: int = Field(300)
     max_retries: int = Field(
         2, description="Extra attempts on LLM error / empty response (0 = single attempt)"
@@ -1362,7 +1364,7 @@ class PublishConfig(BaseModel):
         0.7,
         description="Higher than the editing stages: title and hook candidates should differ from each other",
     )
-    thinking: bool | str = Field(False)
+    reasoning_effort: str | None = Field(None)
     timeout: int = Field(300)
     response_format: str = Field("json")
     max_retries: int = Field(
@@ -1543,7 +1545,37 @@ def get_effective_config(
     merged = deep_merge(load_config(config_path), cli_overrides or {})
     if config_path is not None:
         logging.info("Config loaded from %s", config_path)
+    _reject_removed_keys(merged)
     return NagareClipConfig.model_validate(merged).model_dump()
+
+
+def _key_paths(d: dict, key: str, prefix: str = "") -> Iterator[str]:
+    """Yield the dotted path of every occurrence of *key* anywhere in *d*."""
+    for k, v in d.items():
+        path = f"{prefix}{k}"
+        if k == key:
+            yield path
+        if isinstance(v, dict):
+            yield from _key_paths(v, key, path + ".")
+
+
+def _reject_removed_keys(merged: dict) -> None:
+    """Fail on the removed ``thinking`` key with a message that names it.
+
+    Not a silent alias: ``thinking`` used to be translated (``false`` ->
+    reasoning off), ``reasoning_effort`` is not, so the same value no longer
+    means the same run. Checked on the raw dict, before validation, so the
+    open-ended Blender pass-through blocks cannot quietly accept it and the
+    error is this sentence rather than a generic "extra inputs" line.
+    """
+    paths = list(_key_paths(merged, "thinking"))
+    if paths:
+        raise ValueError(
+            f"config key(s) {', '.join(paths)} removed: use `reasoning_effort` "
+            "instead -- its value is passed straight to LiteLLM as "
+            'reasoning_effort (e.g. "none", "low", "high"); leave it unset '
+            "to send nothing"
+        )
 
 
 # ---------------------------------------------------------------------------

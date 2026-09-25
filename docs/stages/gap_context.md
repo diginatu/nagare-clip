@@ -452,7 +452,7 @@ fits well inside the limit, precisely because nobody is talking through it.
 
 `enabled` (default `false`), `provider`/`api_base`/`model`
 (default `qwen2.5vl:7b` — must be a **vision-capable** model)/`api_key`/
-`temperature`/`thinking`/`timeout`/`max_retries`/`retry_temp_step`/
+`temperature`/`reasoning_effort`/`timeout`/`max_retries`/`retry_temp_step`/
 `retry_temp_cap` follow the same shape as every other LLM stage block.
 Stage-specific: `min_gap` (seconds, default 3.0 — same default as
 `sentence_split.force_split_min_silence`, though the two are independent

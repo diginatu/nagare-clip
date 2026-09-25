@@ -70,46 +70,22 @@ def test_no_response_format_key_when_unset():
     assert "response_format" not in m.call_args.kwargs
 
 
-def test_thinking_level_maps_to_reasoning_effort():
-    _, m = _call({"provider": "openai", "model": "x", "thinking": "high"})
-    assert m.call_args.kwargs["reasoning_effort"] == "high"
+@pytest.mark.parametrize("provider", ["openai", "anthropic", "gemini", "ollama_chat"])
+@pytest.mark.parametrize("effort", ["none", "low", "high", "xhigh"])
+def test_reasoning_effort_is_passed_to_litellm_unchanged(provider, effort):
+    """The config value IS LiteLLM's `reasoning_effort` -- no translation, no
+    provider special case. What a value means for a model is LiteLLM's (and
+    the provider's) business, which the user can look up there."""
+    _, m = _call({"provider": provider, "model": "x", "reasoning_effort": effort})
+    assert m.call_args.kwargs["reasoning_effort"] == effort
+    assert "thinking" not in m.call_args.kwargs
 
 
-def test_thinking_true_maps_to_high():
-    """`true` means "thinking on, at the normal effort" -- the API's own default
-    is `high`. It used to mean `low`, and no config that wrote `true` meant
-    that: the director ran at the lowest effort for weeks while being asked to
-    simulate a playback in its head, and the plan stage, whose line ranges the
-    director copies, still did."""
-    _, m = _call({"provider": "openai", "model": "x", "thinking": True})
-    assert m.call_args.kwargs["reasoning_effort"] == "high"
-
-
-def test_thinking_false_turns_reasoning_off():
-    """`false` means OFF.  Sending nothing let current reasoning models think
-    at their own default (gpt-6-luna: medium), so `false` in a config was a
-    claim the run did not keep."""
-    _, m = _call({"provider": "openai", "model": "x", "thinking": False})
-    assert m.call_args.kwargs["reasoning_effort"] == "none"
-
-
-def test_thinking_absent_is_off_too():
-    _, m = _call({"provider": "ollama_chat", "model": "x"})
-    assert m.call_args.kwargs["reasoning_effort"] == "none"
-
-
-def test_anthropic_off_is_an_explicit_disabled_thinking():
-    """Sonnet 5 thinks when `thinking` is omitted, and LiteLLM maps
-    reasoning_effort="none" to omitting it -- so off has to be said in
-    Anthropic's own terms."""
-    _, m = _call({"provider": "anthropic", "model": "claude-sonnet-5", "thinking": False})
-    assert m.call_args.kwargs["thinking"] == {"type": "disabled"}
+@pytest.mark.parametrize("provider", ["openai", "anthropic", "ollama_chat"])
+@pytest.mark.parametrize("cfg_extra", [{}, {"reasoning_effort": None}])
+def test_unset_reasoning_effort_sends_nothing(provider, cfg_extra):
+    _, m = _call({"provider": provider, "model": "x", **cfg_extra})
     assert "reasoning_effort" not in m.call_args.kwargs
-
-
-def test_anthropic_on_still_uses_reasoning_effort():
-    _, m = _call({"provider": "anthropic", "model": "claude-sonnet-5", "thinking": "high"})
-    assert m.call_args.kwargs["reasoning_effort"] == "high"
     assert "thinking" not in m.call_args.kwargs
 
 

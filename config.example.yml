@@ -60,7 +60,7 @@ sentence_split:
   model: "gpt-oss:120b"   # Model (passed to LiteLLM as "<provider>/<model>")
   api_key: ""   # API key for the provider (or set the provider's env var)
   temperature: 0.2
-  thinking: false
+  reasoning_effort: null
   timeout: 300
   response_format: json
   max_retries: 2   # Extra attempts on LLM error / invalid ranges (0 = single attempt)
@@ -84,7 +84,7 @@ gap_context:
   model: "qwen2.5vl:7b"   # A VISION-capable model (passed to LiteLLM as "<provider>/<model>")
   api_key: ""   # API key for the provider (or set the provider's env var)
   temperature: 0.2
-  thinking: false
+  reasoning_effort: null
   timeout: 300
   max_retries: 2   # Extra attempts on LLM error / empty response (0 = single attempt)
   retry_temp_step: 0.2
@@ -108,7 +108,7 @@ summary:
   model: "gpt-oss:120b"   # A larger model (passed to LiteLLM as "<provider>/<model>")
   api_key: ""   # API key for the provider (or set the provider's env var)
   temperature: 0.3
-  thinking: false
+  reasoning_effort: null
   timeout: 300
   response_format: json
   max_retries: 2   # Extra attempts on LLM error / unparseable JSON (0 = single attempt)
@@ -130,7 +130,7 @@ text_filter:
   retry_min_batch_size: 1   # Floor for the halving retry; set equal to batch_size to disable
   # prompt: "..."   # System prompt for LLM (has sensible default for Japanese)
   temperature: 0.1   # LLM sampling temperature
-  thinking: false   # Thinking mode: true (= "high") / false, or "low"/"medium"/"high"
+  reasoning_effort: null   # Passed to LiteLLM as reasoning_effort, unchanged (e.g. "none"/"low"/"high"); null sends nothing
   # keywords: []   # Constant keywords always injected into the filter LLM prompt
 
 # plan stage: runs once project-wide after summary, before director. A larger
@@ -144,7 +144,7 @@ plan:
   model: "gpt-oss:120b"   # A larger model (passed to LiteLLM as "<provider>/<model>")
   api_key: ""   # API key for the provider (or set the provider's env var)
   temperature: 0.3
-  thinking: false
+  reasoning_effort: null
   timeout: 300
   response_format: json
   max_retries: 2   # Extra attempts on LLM error / unparseable JSON (0 = single attempt)
@@ -165,7 +165,7 @@ plan_revise:
   model: "gpt-oss:120b"   # A larger model (passed to LiteLLM as "<provider>/<model>")
   api_key: ""   # API key for the provider (or set the provider's env var)
   temperature: 0.3
-  thinking: false
+  reasoning_effort: null
   timeout: 300
   response_format: json
   max_retries: 2   # Extra attempts on LLM error / unparseable JSON (0 = single attempt)
@@ -183,7 +183,7 @@ director:
   model: "gpt-oss:120b"   # A larger model (passed to LiteLLM as "<provider>/<model>")
   api_key: ""   # API key for the provider (or set the provider's env var)
   temperature: 0.2
-  thinking: false
+  reasoning_effort: null
   timeout: 300
   response_format: json   # JSON mode for reliable parsing
   max_retries: 2   # Extra attempts on LLM error / unparseable JSON (0 = single attempt)
@@ -204,7 +204,7 @@ guided_edit:
   model: "qwen3.5:4b"   # The same small model as text_filter is fine (passed to LiteLLM as "<provider>/<model>")
   api_key: ""   # API key for the provider (or set the provider's env var)
   temperature: 0.1
-  thinking: false
+  reasoning_effort: null
   timeout: 60
   context_lines: 1   # Lines of context shown to the LLM around an "edit" op boundary
   max_retries: 2   # Extra attempts on LLM error / failed verification (0 = single attempt)
@@ -340,7 +340,7 @@ publish:
   model: "gpt-oss:120b"   # A larger model (passed to LiteLLM as "<provider>/<model>")
   api_key: ""   # API key for the provider (or set the provider's env var)
   temperature: 0.7   # Higher than the editing stages: title and hook candidates should differ from each other
-  thinking: false
+  reasoning_effort: null
   timeout: 300
   response_format: json
   max_retries: 2   # Extra attempts on LLM error / unparseable JSON (0 = single attempt)
@@ -376,7 +376,7 @@ publish:
     model: "qwen2.5vl:7b"   # A VISION-capable model (passed to LiteLLM as "<provider>/<model>")
     api_key: ""   # API key for the provider (or set the provider's env var)
     temperature: 0.2
-    thinking: false
+    reasoning_effort: null
     timeout: 300
     max_retries: 2   # Extra attempts on LLM error / empty response (0 = single attempt)
     retry_temp_step: 0.2

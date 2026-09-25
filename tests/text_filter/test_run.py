@@ -21,7 +21,7 @@ def _s2_config(constant_keywords: list | None = None) -> dict:
         "retry_min_batch_size": 1,
         "prompt": "Base prompt.",
         "temperature": 0.1,
-        "thinking": False,
+        "reasoning_effort": None,
         "keywords": constant_keywords if constant_keywords is not None else [],
     }
 

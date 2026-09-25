@@ -1335,3 +1335,72 @@ def test_director_prompt_bracket_legend_says_what_each_figure_plays():
     pacing = next(ln for ln in prompt.splitlines() if "Judge pacing from the speech figure" in ln)
     assert "a timelapse plays speech+silence divided by its factor" in pacing
     assert "a keep plays the silence too" in pacing.lower()
+
+
+# ---------------------------------------------------------------------------
+# reasoning_effort: passed straight to LiteLLM; the old `thinking` key is gone
+# ---------------------------------------------------------------------------
+
+_LLM_SECTIONS = [
+    ("sentence_split",),
+    ("text_filter",),
+    ("summary",),
+    ("plan",),
+    ("plan_revise",),
+    ("director",),
+    ("guided_edit",),
+    ("gap_context",),
+    ("publish",),
+    ("publish", "describe_frames"),
+]
+
+
+def _section(cfg: dict, path: tuple[str, ...]) -> dict:
+    for key in path:
+        cfg = cfg[key]
+    return cfg
+
+
+def _nest(path: tuple[str, ...], leaf: dict) -> dict:
+    for key in reversed(path):
+        leaf = {key: leaf}
+    return leaf
+
+
+@pytest.mark.parametrize("path", _LLM_SECTIONS, ids=".".join)
+def test_reasoning_effort_defaults_to_unset(path):
+    section = _section(DEFAULTS, path)
+    assert section["reasoning_effort"] is None
+    assert "thinking" not in section
+
+
+@pytest.mark.parametrize("path", _LLM_SECTIONS, ids=".".join)
+def test_reasoning_effort_value_is_kept_verbatim(tmp_path: Path, path):
+    cfg_file = tmp_path / "cfg.yml"
+    cfg_file.write_text(yaml.dump(_nest(path, {"reasoning_effort": "xhigh"})))
+    assert _section(get_effective_config(cfg_file), path)["reasoning_effort"] == "xhigh"
+
+
+@pytest.mark.parametrize("path", _LLM_SECTIONS, ids=".".join)
+def test_old_thinking_key_fails_naming_the_key_and_its_replacement(tmp_path: Path, path):
+    """Not a silent alias: `thinking: false` used to be translated, and
+    `reasoning_effort` is not -- so a leftover key must stop the run and say
+    which key and what replaced it, not be read as a generic typo."""
+    cfg_file = tmp_path / "cfg.yml"
+    cfg_file.write_text(yaml.dump(_nest(path, {"thinking": False})))
+    with pytest.raises(ValueError) as e:
+        get_effective_config(cfg_file)
+    msg = str(e.value)
+    assert ".".join((*path, "thinking")) in msg
+    assert "reasoning_effort" in msg
+    assert "LiteLLM" in msg
+    assert "extra" not in msg.lower()
+
+
+def test_old_thinking_key_reports_every_occurrence(tmp_path: Path):
+    cfg_file = tmp_path / "cfg.yml"
+    cfg_file.write_text(yaml.dump({"director": {"thinking": True}, "plan": {"thinking": "high"}}))
+    with pytest.raises(ValueError) as e:
+        get_effective_config(cfg_file)
+    assert "director.thinking" in str(e.value)
+    assert "plan.thinking" in str(e.value)

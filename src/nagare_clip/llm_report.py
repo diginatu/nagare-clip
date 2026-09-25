@@ -50,7 +50,7 @@ class _Attempt:
     total: int
     temperature: float | None
     model: str
-    thinking: Any
+    reasoning_effort: Any
     messages: list[dict[str, str]]
     response: str | None
     error: str | None
@@ -173,7 +173,7 @@ class Recorder:
             return
         temperature = cfg.get("temperature") if cfg else None
         model = str(cfg.get("model", "")) if cfg else ""
-        thinking = cfg.get("thinking", False) if cfg else False
+        reasoning_effort = cfg.get("reasoning_effort") if cfg else None
         self._started.setdefault(unit, datetime.now())
         self._buffers.setdefault(unit, []).append(
             _Attempt(
@@ -181,7 +181,7 @@ class Recorder:
                 total=total,
                 temperature=temperature,
                 model=model,
-                thinking=thinking,
+                reasoning_effort=reasoning_effort,
                 messages=[dict(m) for m in messages],
                 response=response,
                 error=error,
@@ -200,12 +200,13 @@ class Recorder:
         attempts = self._buffers.pop(unit, [])
         started = self._started.pop(unit, datetime.now())
         duration_ms = int((datetime.now() - started).total_seconds() * 1000)
-        # Both walk backwards on the same `a.model` predicate (not `a.thinking`
-        # for the second) so `model`/`thinking` describe the SAME attempt —
-        # the last one with a real LLM call, skipping deterministic attempts
+        # Both walk backwards on the same `a.model` predicate (not
+        # `a.reasoning_effort` for the second) so `model`/`reasoning_effort`
+        # describe the SAME attempt — the last one with a real LLM call,
+        # skipping deterministic attempts
         # (cfg=None -> model="") like guided_edit's span-op verification.
         model = next((a.model for a in reversed(attempts) if a.model), "")
-        thinking = next((a.thinking for a in reversed(attempts) if a.model), False)
+        reasoning_effort = next((a.reasoning_effort for a in reversed(attempts) if a.model), None)
         try:
             self._stage_dir.mkdir(parents=True, exist_ok=True)
             (self._stage_dir / f"{_slug(unit)}.md").write_text(
@@ -216,7 +217,7 @@ class Recorder:
                     outcome,
                     reason,
                     model,
-                    thinking,
+                    reasoning_effort,
                     started.isoformat(timespec="seconds"),
                     duration_ms,
                 ),
@@ -238,7 +239,7 @@ def _render_unit(
     outcome: str,
     reason: str,
     model: str,
-    thinking: Any,
+    reasoning_effort: Any,
     started_at: str,
     duration_ms: int,
 ) -> str:
@@ -246,7 +247,7 @@ def _render_unit(
         "stage": stage,
         "unit": unit,
         "model": model,
-        "thinking": thinking,
+        "reasoning_effort": reasoning_effort,
         "attempts": len(attempts),
         "outcome": outcome,
         "reason": reason,
