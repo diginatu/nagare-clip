@@ -16,27 +16,16 @@ from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
 from typing import Any
 
-from nagare_clip.director.silence_lines import SilenceLine, insert_silence_lines
-from nagare_clip.gap_context.context import annotate_numbered_transcript
-from nagare_clip.gap_context.gaps import Gap
 from nagare_clip.intervals.sync_json import (
     CUT_TAG_RE,
     KEEP_TAG_RE,
     OVERLAY_TAG_RE,
     SPEED_TAG_RE,
 )
-from nagare_clip.llm_client import CACHEABLE_PREFIX_KEY, with_trace_meta
-from nagare_clip.llm_report import (
-    DROPPED_ITEMS,
-    LLM_ERROR,
-    NULL_RECORDER,
-    OK,
-    OK_EMPTY,
-    UNPARSEABLE,
-    Recorder,
+from nagare_clip.text_filter.llm_filter import (  # noqa: F401 - _call_llm is run.py's patch seam
+    _call_llm,
+    apply_patches_to_lines,
 )
-from nagare_clip.llm_retry import cfg_for_attempt, retry_attempts
-from nagare_clip.text_filter.llm_filter import _call_llm, apply_patches_to_lines
 from nagare_clip.timing import bracket_seconds, format_dur_gap
 
 logger = logging.getLogger(__name__)
@@ -507,41 +496,6 @@ def line_seconds(
     return out
 
 
-def render_transcript(
-    clean_lines: list[str],
-    seg_times: list[tuple[float | None, float | None]] | None = None,
-    silences: list[float] | None = None,
-    anchored_gaps: list[tuple[int, Gap]] | None = None,
-    first_line: int = 1,
-    silence_lines: Sequence[SilenceLine] | None = None,
-) -> str:
-    """One segment's numbered transcript exactly as the director is shown it.
-
-    Timed brackets when *seg_times* matches the lines, gap annotations on top of
-    those; plain ``N: text`` otherwise.  The editable user message and the
-    whole-video reference block are both rendered here, so the two views of one
-    segment can never disagree.
-
-    *silence_lines* (:mod:`nagare_clip.director.silence_lines`) are the waits
-    between lines long enough to be shown as lines of their own.  Each one
-    states its duration, so the line it follows drops the ``gap`` part of its
-    bracket: one silence is never two numbers.  They need brackets to sit
-    beside, so an untimed transcript ignores them.
-    """
-    if seg_times is not None and len(seg_times) == len(clean_lines):
-        out = format_numbered_transcript_timed(
-            clean_lines,
-            seg_times,
-            silences=silences,
-            first_line=first_line,
-            silence_after={line.after_line for line in silence_lines or []},
-        )
-        if anchored_gaps:
-            out = annotate_numbered_transcript(out, anchored_gaps)
-        return insert_silence_lines(out, silence_lines or [])
-    return format_numbered_transcript(clean_lines, first_line=first_line)
-
-
 def format_numbered_transcript_timed(
     clean_lines: list[str],
     seg_times: list[tuple[float | None, float | None]],
@@ -604,164 +558,3 @@ def ops_to_dict(ops: list[DirectorOp]) -> dict[str, Any]:
             entry["note"] = op.note
         out.append(entry)
     return {"ops": out}
-
-
-@dataclass(frozen=True)
-class DirectorResult:
-    """One segment's ops, and whether the call actually succeeded.
-
-    The two used to be indistinguishable: a failed call and a deliberate "no
-    edits here" both returned ``[]``, so continuing was the only safe move.
-    Separating them is what lets a settled failure fail the run instead of
-    letting one source pass through unedited into a finished video.
-    """
-
-    ops: list[DirectorOp]
-    ok: bool = True
-
-
-def generate_director_ops(
-    edit_lines: list[str],
-    cfg: dict[str, Any],
-    *,
-    call_llm: CallLLM = _call_llm,
-    overview_context: str = "",
-    recorder: Recorder = NULL_RECORDER,
-    unit: str = "director",
-    seg_times: list[tuple[float | None, float | None]] | None = None,
-    anchored_gaps: list[tuple[int, Gap]] | None = None,
-    silences: list[float] | None = None,
-    first_line: int = 1,
-    reference: str = "",
-    user_header: str = "",
-    silence_lines: Sequence[SilenceLine] | None = None,
-) -> DirectorResult:
-    """Run the director LLM over one segment's transcript and return its ops.
-
-    Retries (config ``max_retries``) on an LLM exception or a hard parse
-    failure, nudging temperature up each attempt.  A valid empty op list is
-    accepted without retry and is ``ok`` — "no edits" is a real answer.  After
-    all attempts fail the result is ``ok=False`` with no ops, which the caller
-    treats as fatal.
-
-    ``first_line`` is this segment's first line in the source's own numbering:
-    the transcript is rendered from it and every op must fall inside the
-    segment.
-
-    ``overview_context`` (from the summary/plan stages) is appended to the system
-    prompt when non-empty; an empty string leaves the prompt unchanged.
-
-    ``anchored_gaps`` (from the gap_context stage, already anchored by the
-    caller against the WHOLE source's times and restricted to this segment) are
-    inserted as indented, un-numbered ``[silent gap …]`` lines so the director
-    can issue a ``keep`` op over the adjacent lines to rescue a gap worth
-    keeping. Only applies when ``seg_times`` is also present (the annotation is
-    positional within the rendered transcript); an empty/absent value leaves the
-    user content byte-identical to before this feature existed.
-
-    ``silences`` (per-line audio_silence overlap, same length as ``seg_times``)
-    splits each bracket into speech/silence; ``None`` keeps the output
-    byte-identical.
-
-    ``silence_lines`` are the waits between lines shown as lines of their own,
-    each addressable as ``"n~"``; empty/absent leaves the transcript as it was
-    before the feature existed.
-
-    ``reference`` is the whole finished
-    video's transcript, appended INSIDE the cacheable prefix — the caller must
-    pass the same string on every segment's call of a run.  ``user_header`` is
-    one line put above the editable transcript.  Both empty (the default) leave
-    the request byte-identical.
-    """
-    clean_lines = clean_for_display(edit_lines)
-    max_keep_lines = _max_keep_lines(cfg)
-    system_prompt = cfg.get("prompt", "")
-    if max_keep_lines > 0:
-        system_prompt = f"{system_prompt}\n\n{keep_limit_note(max_keep_lines)}"
-    if reference:
-        # The whole video's transcript: identical on every segment's call of a
-        # run, so it belongs INSIDE the cached prefix.
-        system_prompt = f"{system_prompt}\n\n{reference}"
-    # Everything up to here is identical on every segment's call; the overview
-    # context is where they diverge.  Declared so the client caches exactly
-    # this much — a breakpoint after the overview would make every call's
-    # prefix unique and turn caching into a pure write premium.
-    stable_prefix = system_prompt
-    if overview_context:
-        system_prompt = f"{system_prompt}\n\n{overview_context}"
-    user_content = render_transcript(
-        clean_lines, seg_times, silences, anchored_gaps, first_line, silence_lines
-    )
-    if user_header:
-        user_content = f"{user_header}\n{user_content}"
-    messages = [
-        {"role": "system", "content": system_prompt, CACHEABLE_PREFIX_KEY: stable_prefix},
-        {"role": "user", "content": user_content},
-    ]
-    recorder.begin(unit)
-    cfg = with_trace_meta(cfg, stage=recorder.stage, unit=unit)
-    attempts = retry_attempts(cfg)
-    for attempt in range(attempts):
-        attempt_cfg = cfg_for_attempt(cfg, attempt)
-        try:
-            response = call_llm(messages, attempt_cfg)
-        except Exception as e:  # noqa: BLE001 - recoverable
-            logger.warning(
-                "Director LLM call failed (attempt %d/%d)",
-                attempt + 1,
-                attempts,
-                exc_info=True,
-            )
-            recorder.attempt(
-                unit=unit,
-                attempt=attempt,
-                total=attempts,
-                messages=messages,
-                error=str(e),
-                outcome=LLM_ERROR,
-                reason="LLM call failed",
-                cfg=attempt_cfg,
-            )
-            continue
-        drops: list[str] = []
-        ops = try_parse_director_response(
-            response,
-            num_lines=first_line + len(clean_lines) - 1,
-            drops=drops,
-            max_keep_lines=max_keep_lines,
-            first_line=first_line,
-        )
-        if ops is None:
-            recorder.attempt(
-                unit=unit,
-                attempt=attempt,
-                total=attempts,
-                messages=messages,
-                response=response,
-                outcome=UNPARSEABLE,
-                reason="invalid JSON / no 'ops' array",
-                cfg=attempt_cfg,
-            )
-            logger.warning("Director response unparseable (attempt %d/%d)", attempt + 1, attempts)
-            continue
-        if drops:
-            outcome, reason = DROPPED_ITEMS, f"{len(drops)} op(s) dropped: " + "; ".join(drops)
-        elif not ops:
-            outcome, reason = OK_EMPTY, ""
-        else:
-            outcome, reason = OK, ""
-        recorder.attempt(
-            unit=unit,
-            attempt=attempt,
-            total=attempts,
-            messages=messages,
-            response=response,
-            outcome=outcome,
-            reason=reason,
-            cfg=attempt_cfg,
-        )
-        recorder.flush_unit(unit, outcome=outcome, reason=reason)
-        return DirectorResult(ops, ok=True)
-    recorder.flush_unit(unit, outcome=LLM_ERROR, reason=f"all {attempts} attempt(s) failed")
-    logger.error("Director: all %d attempt(s) failed for %r", attempts, unit)
-    return DirectorResult([], ok=False)

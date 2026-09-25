@@ -4,15 +4,12 @@ from __future__ import annotations
 
 import json
 
-import pytest
-
 from nagare_clip.director.director_llm import (
     TIMELAPSE_MIN_FACTOR,
     DirectorOp,
     clean_for_display,
     format_numbered_transcript,
     format_numbered_transcript_timed,
-    generate_director_ops,
     keep_limit_note,
     ops_from_dict,
     ops_to_dict,
@@ -151,69 +148,6 @@ class TestHelpers:
         assert d["ops"][2] == {"type": "cut", "lines": [4, 5]}
 
 
-class TestGenerate:
-    def test_generate_uses_clean_numbered_input_and_parses(self):
-        captured = {}
-
-        def fake_llm(messages, cfg):
-            captured["user"] = messages[1]["content"]
-            return '{"ops": [{"type": "cut", "lines": [1, 2]}]}'
-
-        ops = generate_director_ops(
-            ["あ{{えー->}}い", "うえ"], {"prompt": "P"}, call_llm=fake_llm
-        ).ops
-        assert captured["user"] == "1: あい\n2: うえ"
-        assert ops[0].type == "cut" and ops[0].lines == (1, 2)
-
-    def test_generate_returns_empty_on_llm_failure(self):
-        def boom(messages, cfg):
-            raise ConnectionError("down")
-
-        assert generate_director_ops(["あ"], {"prompt": "P"}, call_llm=boom).ops == []
-
-    def test_empty_overview_context_leaves_system_prompt_unchanged(self):
-        captured = {}
-
-        def fake_llm(messages, cfg):
-            captured["system"] = messages[0]["content"]
-            return '{"ops": []}'
-
-        generate_director_ops(["あ"], {"prompt": "P"}, call_llm=fake_llm)
-        assert captured["system"] == "P"
-
-    def test_overview_context_appended_to_system_prompt(self):
-        captured = {}
-
-        def fake_llm(messages, cfg):
-            captured["system"] = messages[0]["content"]
-            return '{"ops": []}'
-
-        generate_director_ops(["あ"], {"prompt": "P"}, call_llm=fake_llm, overview_context="CTX")
-        assert captured["system"] == "P\n\nCTX"
-
-    def test_the_cacheable_prefix_stops_where_the_segments_diverge(self):
-        """One run makes a call per segment; the prompt, brief and keep note are
-        byte-identical across them, the overview context never is. The client
-        can only cache what it is told is stable -- marking the whole message
-        made every call's prefix unique, so every call paid the cache-write
-        premium and none read."""
-        seen = []
-
-        def fake_llm(messages, cfg):
-            seen.append(messages[0])
-            return '{"ops": []}'
-
-        cfg = {"prompt": "P", "max_keep_lines": 3}
-        generate_director_ops(["あ"], cfg, call_llm=fake_llm, overview_context="segment 1 of 9")
-        generate_director_ops(["い"], cfg, call_llm=fake_llm, overview_context="segment 2 of 9")
-        first, second = seen
-        assert first["cacheable_prefix"] == second["cacheable_prefix"]
-        assert first["content"].startswith(first["cacheable_prefix"])
-        # The keep note is stable and belongs inside; the overview does not.
-        assert keep_limit_note(3) in first["cacheable_prefix"]
-        assert "segment 1 of 9" not in first["cacheable_prefix"]
-
-
 class TestKeepWidthLimit:
     """`keep` restores every silence in its range, so a wide one can double the
     finished runtime while adding no speech (speech is kept by default anyway).
@@ -279,42 +213,6 @@ class TestKeepWidthLimit:
         a wide keep into it means it, so `ops_from_dict` never applies the cap."""
         data = {"ops": [{"type": "keep", "lines": [1, 99]}]}
         assert [o.lines for o in ops_from_dict(data, num_lines=140)] == [(1, 99)]
-
-    def test_generate_reads_the_limit_from_cfg(self):
-        fake = _seq_llm([self._resp(1, 99)])
-        ops = generate_director_ops(
-            ["あ"] * 140, {"prompt": "P", "max_keep_lines": 4}, call_llm=fake
-        ).ops
-        assert ops == []
-
-    def test_generate_without_cfg_key_is_unlimited(self):
-        fake = _seq_llm([self._resp(1, 99)])
-        ops = generate_director_ops(["あ"] * 140, {"prompt": "P"}, call_llm=fake).ops
-        assert [o.lines for o in ops] == [(1, 99)]
-
-    def test_limit_is_stated_in_the_system_prompt(self):
-        """The number the LLM is told must be the number the parser enforces."""
-        captured = {}
-
-        def fake_llm(messages, cfg):
-            captured["system"] = messages[0]["content"]
-            return '{"ops": []}'
-
-        generate_director_ops(
-            ["あ"], {"prompt": "P", "max_keep_lines": 3}, call_llm=fake_llm, overview_context="CTX"
-        )
-        assert captured["system"] == f"P\n\n{keep_limit_note(3)}\n\nCTX"
-        assert "at most 3 line(s)" in captured["system"]
-
-    def test_no_note_when_unlimited(self):
-        captured = {}
-
-        def fake_llm(messages, cfg):
-            captured["system"] = messages[0]["content"]
-            return '{"ops": []}'
-
-        generate_director_ops(["あ"], {"prompt": "P", "max_keep_lines": 0}, call_llm=fake_llm)
-        assert captured["system"] == "P"
 
     def test_note_promises_no_exemption(self):
         """The three-op pairing is gone; a wide keep is capped unconditionally.
@@ -404,100 +302,13 @@ class TestTryParse:
         assert ops is not None and ops[0].type == "cut"
 
 
-class TestRetry:
-    def test_retries_on_llm_error_then_succeeds(self):
-        fake = _seq_llm([ConnectionError("x"), '{"ops": [{"type": "cut", "lines": [1, 1]}]}'])
-        ops = generate_director_ops(["あ"], {"prompt": "P", "max_retries": 2}, call_llm=fake).ops
-        assert fake.calls["i"] == 2
-        assert ops[0].type == "cut"
-
-    def test_retries_on_unparseable_then_succeeds(self):
-        fake = _seq_llm(["garbage", "still bad", '{"ops": [{"type": "keep", "lines": [1, 1]}]}'])
-        ops = generate_director_ops(["あ"], {"prompt": "P", "max_retries": 2}, call_llm=fake).ops
-        assert fake.calls["i"] == 3
-        assert ops[0].type == "keep"
-
-    def test_all_attempts_fail_returns_empty(self):
-        fake = _seq_llm([ConnectionError("x")] * 3)
-        ops = generate_director_ops(["あ"], {"prompt": "P", "max_retries": 2}, call_llm=fake).ops
-        assert ops == []
-        assert fake.calls["i"] == 3
-
-    def test_valid_empty_ops_does_not_retry(self):
-        fake = _seq_llm(['{"ops": []}'])
-        ops = generate_director_ops(["あ"], {"prompt": "P", "max_retries": 2}, call_llm=fake).ops
-        assert ops == []
-        assert fake.calls["i"] == 1
-
-    def test_max_retries_zero_is_single_attempt(self):
-        fake = _seq_llm([ConnectionError("x")])
-        ops = generate_director_ops(["あ"], {"prompt": "P", "max_retries": 0}, call_llm=fake).ops
-        assert ops == []
-        assert fake.calls["i"] == 1
-
-    def test_temperature_nudged_per_attempt(self):
-        temps: list = []
-        fake = _seq_llm([ConnectionError("x")] * 4, temps=temps)
-        generate_director_ops(
-            ["あ"],
-            {
-                "prompt": "P",
-                "temperature": 0.2,
-                "max_retries": 3,
-                "retry_temp_step": 0.2,
-                "retry_temp_cap": 0.8,
-            },
-            call_llm=fake,
-        )
-        assert temps == [
-            pytest.approx(0.2),
-            pytest.approx(0.4),
-            pytest.approx(0.6),
-            pytest.approx(0.8),
-        ]
-
-
 import yaml as _yaml
-
-from nagare_clip.llm_report import Recorder
 
 
 def _outcome(tmp_path, stage, unit):
     text = (tmp_path / stage / f"{unit}.md").read_text(encoding="utf-8")
     _, fm, _ = text.split("---", 2)
     return _yaml.safe_load(fm)["outcome"]
-
-
-class TestDirectorRecorder:
-    def test_records_unparseable_then_ok(self, tmp_path):
-        rec = Recorder("director", tmp_path, enabled=True)
-        fake = _seq_llm(["nonsense", '{"ops": []}'])
-        ops = generate_director_ops(
-            ["a", "b"],
-            {"max_retries": 2},
-            call_llm=fake,
-            recorder=rec,
-            unit="vid",
-        ).ops
-        assert ops == []
-        assert _outcome(tmp_path, "director", "vid") == "ok-empty"
-        body = (tmp_path / "director" / "vid.md").read_text(encoding="utf-8")
-        assert "nonsense" in body  # failed attempt's response preserved
-
-    def test_records_dropped_items(self, tmp_path):
-        rec = Recorder("director", tmp_path, enabled=True)
-        # one valid op, one with out-of-range lines (dropped)
-        resp = '{"ops": [{"type":"cut","lines":[1,1]},{"type":"cut","lines":[9,9]}]}'
-        fake = _seq_llm([resp])
-        ops = generate_director_ops(
-            ["a", "b"],
-            {"max_retries": 0},
-            call_llm=fake,
-            recorder=rec,
-            unit="vid",
-        ).ops
-        assert len(ops) == 1
-        assert _outcome(tmp_path, "director", "vid") == "dropped-items"
 
 
 class TestTimedTranscript:
@@ -511,89 +322,6 @@ class TestTimedTranscript:
         out = format_numbered_transcript_timed(["あ", "い"], seg)
         # line1 has no dur -> no bracket (trailing spaces stripped); line2 last -> dur only
         assert out == "1: あ\n2: い  [2.0s]"
-
-    def test_generate_uses_timed_format_when_seg_times_given(self):
-        captured = {}
-
-        def fake_llm(messages, cfg):
-            captured["user"] = messages[1]["content"]
-            return '{"ops": []}'
-
-        generate_director_ops(
-            ["あ", "い"],
-            {"prompt": "P"},
-            call_llm=fake_llm,
-            seg_times=[(1.0, 3.0), (4.0, 6.5)],
-        )
-        assert captured["user"] == "1: あ  [2.0s, gap 1.0s]\n2: い  [2.5s]"
-
-    def test_generate_falls_back_byte_identical_without_seg_times(self):
-        captured = {}
-
-        def fake_llm(messages, cfg):
-            captured["user"] = messages[1]["content"]
-            return '{"ops": []}'
-
-        generate_director_ops(["あ", "い"], {"prompt": "P"}, call_llm=fake_llm)
-        assert captured["user"] == "1: あ\n2: い"
-
-    def test_generate_falls_back_on_length_mismatch(self):
-        captured = {}
-
-        def fake_llm(messages, cfg):
-            captured["user"] = messages[1]["content"]
-            return '{"ops": []}'
-
-        generate_director_ops(
-            ["あ", "い"],
-            {"prompt": "P"},
-            call_llm=fake_llm,
-            seg_times=[(1.0, 3.0)],  # only 1 entry for 2 lines
-        )
-        assert captured["user"] == "1: あ\n2: い"
-
-
-def test_generate_director_ops_annotates_the_transcript_with_gaps():
-    from nagare_clip.gap_context.context import anchor_gaps
-    from nagare_clip.gap_context.gaps import Gap
-
-    seen = {}
-
-    def fake_llm(messages, cfg):
-        seen["user"] = messages[1]["content"]
-        return json.dumps({"ops": []})
-
-    seg_times = [(0.0, 10.0), (20.0, 25.0)]
-    # Anchoring is the caller's job now: it holds the WHOLE source's times, of
-    # which this call may be given only a slice.
-    generate_director_ops(
-        ["いち", "に"],
-        {"prompt": "P", "max_retries": 0},
-        call_llm=fake_llm,
-        seg_times=seg_times,
-        anchored_gaps=anchor_gaps(
-            [Gap(start=10.0, end=20.0, frames=[], description="ビルドが走る")], seg_times
-        ),
-    )
-    assert seen["user"] == (
-        "1: いち  [10.0s, gap 10.0s]\n    [silent gap: ビルドが走る]\n2: に  [5.0s]"
-    )
-
-
-def test_generate_director_ops_transcript_is_byte_identical_without_gaps():
-    seen = {}
-
-    def fake_llm(messages, cfg):
-        seen["user"] = messages[1]["content"]
-        return json.dumps({"ops": []})
-
-    generate_director_ops(
-        ["いち", "に"],
-        {"prompt": "P", "max_retries": 0},
-        call_llm=fake_llm,
-        seg_times=[(0.0, 10.0), (20.0, 25.0)],
-    )
-    assert seen["user"] == "1: いち  [10.0s, gap 10.0s]\n2: に  [5.0s]"
 
 
 class TestTimedTranscriptSilences:

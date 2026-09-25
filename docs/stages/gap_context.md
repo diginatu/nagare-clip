@@ -292,8 +292,8 @@ One LLM call per gap (`describe_gap()`), not per frame:
   `gap_context.max_retries`/`retry_temp_step`/`retry_temp_cap`). All attempts
   failing drops the gap (logged), not fatal to the run. The collapse matters
   beyond cosmetics: an un-collapsed multi-line reply could inject a line
-  starting with `N: ` into the director's numbered transcript once spliced in
-  by `annotate_numbered_transcript`, which would look like a real transcript
+  starting with `N: ` into the director's numbered transcript once rendered
+  by `director.display.DisplayView.render()`, which would look like a real transcript
   line to the director.
 - **The LLM report records frame PATHS, never base64.** `_report_messages()`
   flattens the recorded user message to the same header text plus a
@@ -344,8 +344,8 @@ hand-edited file can never break the pipeline:
   a line break or a markdown bullet inside the description is silently
   normalized to one line rather than being allowed to inject a line into a
   downstream numbered transcript that looks like a real `N: ...` transcript
-  line (`context.annotate_numbered_transcript`'s un-numbered-annotation
-  invariant depends on this).
+  line (the director view's un-numbered-annotation invariant depends on
+  this).
 - `frames` is optional (defaults to `[]`) and any non-string entries in it are
   filtered out silently, rather than dropping the whole gap.
 - `static` reads leniently: only JSON `true` counts; absent (pre-static
@@ -382,8 +382,8 @@ roughly three quarters of described gaps were static noise). Details:
 - `anchor == 0` means the gap precedes every line ("before line 1"); this is
   also what an empty `seg_times` list produces (no line ever qualifies).
 - `anchor == len(lines)` means the gap follows the transcript's final line
-  (trailing silence) — `annotate_numbered_transcript` appends it after the
-  last line rather than dropping it.
+  (trailing silence) — the director view renders it under the last line
+  rather than dropping it.
 
 **`summary`'s `## Silent gaps (visual context)` block (`format_gap_block`)**:
 one bullet per anchored gap, `- after line N (Xs-Ys, Ds): description` (or
@@ -396,25 +396,18 @@ it to that video's user content — `if gap_block:` — so an absent/empty block
 (disabled stage, or a video with no long gaps) leaves the prompt
 byte-identical to before this feature existed.
 
-**`director`'s indented, un-numbered annotation (`annotate_numbered_transcript`)**:
-inserts `    [silent gap {duration:.1f}s: {description}]` lines (four-space
-indent, `_INDENT`) into the numbered transcript, immediately after the
-anchored line (or before line 1, for anchor 0; or after the last line, for
-`anchor == len(lines)`). Annotation lines are **deliberately not numbered** —
-the director's op `"lines"` references must stay unambiguous, so an
-annotation can never itself become a line an op targets. Multiple gaps
-anchored to the same line all appear, in order. An out-of-range anchor
-(outside `0..len(lines)`) is silently ignored. An empty `anchored` list
-returns the transcript **unchanged** (not even a no-op copy — same string
-object semantics as byte-identical). `director/director_llm.py`'s
-`generate_director_ops()` only calls this when **both** `seg_times` and
-`gaps` are non-empty/present (gaps need anchor times, and the timed-transcript
-path itself requires `seg_times` to match `clean_lines` in length) — so a
-video without timing data, or with `gap_context` disabled (`gaps=[]` from
-`load_gaps` on a missing/empty file), renders byte-identical to before this
-feature. `director/run.py` wires this: `gaps=Path | None` →
-`load_gaps(gaps)` (already `None`-safe) → `generate_director_ops(...,
-gaps=gap_list)`.
+**`director`'s indented, un-numbered annotation (`director/display.py`)**:
+`director/run.py` anchors each source's gaps (`anchor_gaps`) and hands them to
+`silence_lines.build_silence_lines()`, which gives a gap whose midpoint falls in
+a between-line wait to that wait's numbered silence line; the ones left over
+(a silence INSIDE a line) stay in `SegmentTranscript.gaps`.
+`build_display_view()` collects those per line and `DisplayView.render()`
+prints each as `    [silent gap: {description}]` (four-space indent) right
+under its line — or under the segment header, for anchor 0. Annotation lines
+are **deliberately not numbered**, so the director's op `"lines"` references
+stay unambiguous and an annotation can never itself become a line an op
+targets. Several gaps on one line all appear, in order. With `gap_context`
+disabled (`load_gaps` on a missing/empty file gives `[]`) nothing is added.
 
 The default `DIRECTOR_PROMPT` (`config.py`) documents the annotation's exact
 rendering (`    [silent gap: a build runs and logs scroll past]`) and
@@ -424,7 +417,7 @@ watching, the director should emit a `keep` op spanning the annotated line and
 the next one — **a `keep` over lines `[N, N+1]` preserves the silence between
 them** — with an explicit reminder that annotation lines are never valid `op`
 line references. `tests/test_config.py::test_director_prompt_gap_example_matches_the_real_formatter`
-pins that documented line to `annotate_numbered_transcript`'s actual output
+pins that documented line to the director view's actual output
 for the equivalent `Gap`, not just to a substring match, so a rendering change
 (indent width, decimal places, wording) fails loudly instead of the prompt
 silently drifting from reality.

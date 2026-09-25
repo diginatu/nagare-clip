@@ -51,22 +51,3 @@ def parse_silencedetect_output(stderr: str) -> list[tuple[float, float]]:
         ranges.append((pending_start, duration))
 
     return ranges
-
-
-def build_ffmpeg_args(rel_source: str, noise: float, min_silence: float) -> list[str]:
-    """ffmpeg argument list run inside the whisperx container.
-
-    ``rel_source`` is the path relative to the mounted input-videos dir
-    (container ``working_dir`` is ``/app``) — the same value transcription passes.
-    """
-    return [
-        "-hide_banner",
-        "-nostats",
-        "-i",
-        rel_source,
-        "-af",
-        f"silencedetect=noise={noise}dB:d={min_silence}",
-        "-f",
-        "null",
-        "-",
-    ]

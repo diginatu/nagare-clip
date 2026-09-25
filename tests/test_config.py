@@ -708,13 +708,14 @@ def test_director_prompt_silence_example_matches_the_real_formatter():
     real formatter so a rendering change (indent, decimal places, wording)
     fails loudly here instead of silently going stale in the prompt.
 
-    Was pinned to gap_context.annotate_numbered_transcript, which rendered the
-    `[silent gap: ...]` annotation the silence line replaces for a between-line
-    wait; that annotation survives for silence INSIDE a line, so its prefix is
-    pinned too."""
+    The `[silent gap: ...]` annotation the silence line replaces for a
+    between-line wait survives for silence INSIDE a line, so the whole-video
+    view's prefix for it is pinned too."""
+    from nagare_clip.director.display import build_display_view
+    from nagare_clip.director.run import SegmentTranscript
     from nagare_clip.director.silence_lines import SilenceLine, silence_body
-    from nagare_clip.gap_context.context import annotate_numbered_transcript
     from nagare_clip.gap_context.gaps import Gap
+    from nagare_clip.order import Segment
 
     cfg = get_effective_config(None, {})
     prompt = cfg["director"]["prompt"]
@@ -728,7 +729,15 @@ def test_director_prompt_silence_example_matches_the_real_formatter():
     assert f"54: {body}" in prompt
 
     gap = Gap(start=0.0, end=12.4, frames=[], description="x")
-    prefix = annotate_numbered_transcript("1: x", [(1, gap)]).split("\n")[1].split("x]")[0]
+    view = build_display_view(
+        [
+            (
+                Segment("A", None),
+                SegmentTranscript(["x"], 1, [(0.0, 1.0)], None, [(1, gap)], []),
+            )
+        ]
+    )
+    prefix = view.render().split("\n")[2].split("x]")[0]
     assert prefix == "    [silent gap: "
     assert prefix.strip() in prompt
 

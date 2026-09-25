@@ -1,11 +1,8 @@
-import re
-
 from nagare_clip.gap_context.context import (
     anchor_gaps,
-    annotate_numbered_transcript,
     format_gap_block,
 )
-from nagare_clip.gap_context.gaps import Gap, gaps_from_dict
+from nagare_clip.gap_context.gaps import Gap
 
 SEG_TIMES = [(0.0, 10.0), (20.0, 25.0), (25.5, 30.0)]
 GAP = Gap(start=10.0, end=20.0, frames=[], description="ビルドが走る")
@@ -55,51 +52,6 @@ def test_format_gap_block_before_the_first_line():
 
 def test_format_gap_block_empty_is_empty_string():
     assert format_gap_block([]) == ""
-
-
-def test_annotate_numbered_transcript_inserts_after_the_anchor_line():
-    transcript = "1: いち  [10.0s, gap 10.0s]\n2: に  [5.0s, gap 0.5s]\n3: さん  [4.5s]"
-    out = annotate_numbered_transcript(transcript, [(1, GAP)])
-    assert out == (
-        "1: いち  [10.0s, gap 10.0s]\n"
-        "    [silent gap: ビルドが走る]\n"
-        "2: に  [5.0s, gap 0.5s]\n"
-        "3: さん  [4.5s]"
-    )
-
-
-def test_annotate_numbered_transcript_anchor_zero_goes_first():
-    g = Gap(start=0.0, end=5.0, frames=[], description="タイトル画面")
-    out = annotate_numbered_transcript("1: いち", [(0, g)])
-    assert out == "    [silent gap: タイトル画面]\n1: いち"
-
-
-def test_annotate_numbered_transcript_carries_no_duration_of_its_own():
-    """One number per silence, and the line bracket owns it.
-
-    The annotation's seconds came from ffmpeg ``silencedetect`` while the
-    line's ``gap``/``silence`` figure comes from WhisperX timestamps: two
-    different measurements of overlapping intervals, which never agreed on the
-    real corpus (0 of 41 co-occurrences within 0.05s).  Reusing the line's own
-    figure is not an option either -- the mapping is one-to-many (one real
-    line carries four annotations under a single ``gap 37.0s``).  So the
-    annotation describes and does not measure.
-    """
-    out = annotate_numbered_transcript("1: いち  [10.0s, gap 10.0s]", [(1, GAP)])
-    annotation = out.split("\n")[1]
-    assert annotation == "    [silent gap: ビルドが走る]"
-    # No seconds figure anywhere between "silent gap" and the description.
-    assert re.search(r"silent gap[^:]", annotation) is None
-
-
-def test_annotate_numbered_transcript_is_byte_identical_when_empty():
-    transcript = "1: いち\n2: に"
-    assert annotate_numbered_transcript(transcript, []) == transcript
-
-
-def test_annotate_numbered_transcript_ignores_out_of_range_anchors():
-    transcript = "1: いち"
-    assert annotate_numbered_transcript(transcript, [(9, GAP)]) == transcript
 
 
 def test_anchor_gaps_picks_the_last_line_before_the_midpoint_not_the_first():
@@ -155,53 +107,6 @@ def test_anchor_gaps_gap_starting_inside_a_stretched_tail_anchors_after_it():
     seg_times = [(626.693, 629.016), (641.163, 645.047), (695.197, 700.0)]
     gap = Gap(start=644.890, end=680.160, frames=[], description="unscrews a fitting")
     assert anchor_gaps([gap], seg_times) == [(2, gap)]
-
-
-def test_annotate_numbered_transcript_gap_after_final_line():
-    """Regression: gaps anchored to len(lines) (trailing silence) must be appended."""
-    transcript = "1: いち\n2: に"
-    gap = Gap(start=30.0, end=35.0, frames=[], description="outro")
-    # Anchor = 2, which equals len(lines); should append after the final line
-    out = annotate_numbered_transcript(transcript, [(2, gap)])
-    assert out == ("1: いち\n2: に\n    [silent gap: outro]")
-
-
-def test_annotate_numbered_transcript_never_injects_a_fake_numbered_line():
-    """End-to-end-ish: a multi-line description read off a hand-edited
-    gaps.json (gaps_from_dict is where the file's whitespace gets collapsed)
-    must not, once spliced into the director's numbered transcript, produce a
-    physical line that starts with a digit and a colon -- that would look like
-    a real 'N: ...' transcript line to the director and break its unambiguous
-    line-number contract."""
-    raw = {
-        "gaps": [
-            {
-                "start": 10.0,
-                "end": 20.0,
-                "description": "Something happens.\n2: fake injected line\nmore text",
-            }
-        ]
-    }
-    gaps = gaps_from_dict(raw)
-    transcript = "1: いち  [10.0s, gap 10.0s]\n2: に  [5.0s]"
-    anchored = anchor_gaps(gaps, [(0.0, 10.0), (20.0, 25.0)])
-    out = annotate_numbered_transcript(transcript, anchored)
-
-    real_lines = set(transcript.split("\n"))
-    for line in out.split("\n"):
-        stripped = line.lstrip()
-        if stripped[:1].isdigit() and ":" in stripped:
-            assert line in real_lines, f"fake numbered line injected: {line!r}"
-
-
-def test_annotate_numbered_transcript_multiple_gaps_same_line():
-    """Regression: multiple gaps anchored to the same line must all appear."""
-    transcript = "1: いち\n2: に"
-    gap1 = Gap(start=10.0, end=15.0, frames=[], description="first")
-    gap2 = Gap(start=15.0, end=20.0, frames=[], description="second")
-    out = annotate_numbered_transcript(transcript, [(1, gap1), (1, gap2)])
-    # Both gaps should appear after line 1, in order
-    assert out == ("1: いち\n    [silent gap: first]\n    [silent gap: second]\n2: に")
 
 
 class TestAnchorGapsOnASegment:

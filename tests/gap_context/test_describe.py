@@ -123,7 +123,7 @@ def test_describe_gap_collapses_whitespace_in_a_multiline_response(gf):
     """A vision LLM that ignores the one-or-two-sentences instruction and
     replies with multiple lines (or a markdown bullet) must not inject raw
     newlines into the description -- those would corrupt the director's
-    numbered transcript when annotate_numbered_transcript splices it in."""
+    numbered transcript when the director view renders it."""
 
     def fake_llm(messages, cfg):
         return "Two things happen.\n2: fake injected line\n  extra   spaces "

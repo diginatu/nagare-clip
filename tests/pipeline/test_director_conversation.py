@@ -554,3 +554,76 @@ def test_the_stage_prices_brackets_with_the_projects_intervals_settings(project,
     st._director_run(ctx)
     assert seen
     assert all(i.intervals_cfg["keep_pre_margin"] == 0.123 for i in seen)
+
+
+def test_every_turn_is_traced_as_the_director(project, monkeypatch):
+    """Langfuse groups calls by the ``_trace`` the stage threads into cfg; a
+    turn sent without it lands ungrouped and unnamed."""
+    seen: list[dict] = []
+
+    def reply(messages, cfg):
+        seen.append(cfg)
+        asked = _asked(messages[-1]["content"])
+        if asked is None:
+            return json.dumps({"done": True})
+        return json.dumps({"range": list(asked), "reviewed_through": asked[1], "ops": []})
+
+    _run(monkeypatch, _ctx(project), reply=reply)
+    assert seen
+    assert all(c["_trace"]["generation_name"] == "director/director" for c in seen)
+
+
+def _answer(messages):
+    """A usable reply to whatever the newest message asks."""
+    asked = _asked(messages[-1]["content"])
+    if asked is None:
+        return json.dumps({"done": True})
+    return json.dumps({"range": list(asked), "reviewed_through": asked[1], "ops": []})
+
+
+class TestRetryWithinATurn:
+    """A turn's call is retried (``director.max_retries``) on a failed call or
+    an unusable reply; only when every attempt fails does the stage fail."""
+
+    def _flaky(self, first):
+        """Reply *first* (raise it if it is an exception) once, then answer."""
+        seen: list[tuple[list[dict], dict]] = []
+
+        def reply(messages, cfg):
+            seen.append((messages, cfg))
+            if len(seen) == 1:
+                if isinstance(first, Exception):
+                    raise first
+                return first
+            return _answer(messages)
+
+        return reply, seen
+
+    def test_a_failed_call_is_retried_with_the_same_ask(self, project, monkeypatch):
+        reply, seen = self._flaky(ConnectionError("down"))
+        _run(monkeypatch, _ctx(project, max_retries=2), reply=reply)
+        assert seen[1][0] == seen[0][0]
+
+    def test_an_unusable_reply_is_retried_with_its_error_attached(self, project, monkeypatch):
+        reply, seen = self._flaky("not json")
+        _run(monkeypatch, _ctx(project, max_retries=2), reply=reply)
+        first, retry = seen[0][0][-1]["content"], seen[1][0][-1]["content"]
+        assert retry.startswith(first)
+        assert "That reply could not be used:" in retry[len(first) :]
+
+    def test_a_retry_nudges_the_temperature_up(self, project, monkeypatch):
+        reply, seen = self._flaky(ConnectionError("down"))
+        ctx = _ctx(project, max_retries=2, temperature=0.2, retry_temp_step=0.3)
+        _run(monkeypatch, ctx, reply=reply)
+        assert seen[0][1]["temperature"] == pytest.approx(0.2)
+        assert seen[1][1]["temperature"] == pytest.approx(0.5)
+
+    def test_every_attempt_failing_fails_the_stage(self, project, monkeypatch):
+        calls = []
+
+        def boom(messages, cfg):
+            raise ConnectionError("down")
+
+        with pytest.raises(PipelineError, match="failed after all 3 attempt"):
+            _run(monkeypatch, _ctx(project, max_retries=2), reply=boom, calls=calls)
+        assert len(calls) == 3

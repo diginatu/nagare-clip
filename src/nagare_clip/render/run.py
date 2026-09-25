@@ -35,11 +35,6 @@ from nagare_clip.render.thumbnail import (
 )
 
 
-def empty_render() -> dict[str, Any]:
-    """The disabled-stage artifact: the full shape, with nothing in it."""
-    return {"renders": [], "skipped": []}
-
-
 def _load_publish(publish_json: Path) -> Any:
     """``publish.json``, or ``None`` when it is missing/unreadable.
 

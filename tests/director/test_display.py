@@ -219,6 +219,18 @@ class TestAnnotations:
         assert view.lines[0].annotations == ()
         assert "    [silent gap: タンクが映る]" in view.render()
 
+    def test_two_descriptions_on_one_line_both_show_in_order(self):
+        transcript = SegmentTranscript(
+            edit_lines=["あ1", "あ2"],
+            first_line=1,
+            seg_times=[(0.0, 20.0), (21.0, 22.0)],
+            silences=[15.0, 0.0],
+            gaps=[(1, Gap(2.0, 8.0, [], "一つ目")), (1, Gap(9.0, 15.0, [], "二つ目"))],
+            silence_lines=[],
+        )
+        rendered = build_display_view([(Segment("A", None), transcript)]).render()
+        assert "    [silent gap: 一つ目]\n    [silent gap: 二つ目]" in rendered
+
 
 class TestUntimedSegment:
     def test_a_segment_with_no_timings_still_numbers_its_lines(self):

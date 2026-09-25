@@ -173,37 +173,3 @@ def build_silence_lines(
         )
     leftover = [pair for i, pair in enumerate(anchored_gaps) if i not in claimed]
     return out, leftover
-
-
-def insert_silence_lines(transcript: str, silence_lines: Sequence[SilenceLine]) -> str:
-    """Put each silence line after the numbered line it follows.
-
-    Works on the RENDERED transcript (the same positional trick
-    :func:`~nagare_clip.gap_context.context.annotate_numbered_transcript` uses)
-    and after it, so a line's own annotations stay attached to it and the
-    silence that follows the line comes last.  A silence line whose anchor is
-    not in the transcript is dropped rather than moved.
-    """
-    if not silence_lines:
-        return transcript
-    by_anchor = {line.after_line: line for line in silence_lines}
-    out: list[str] = []
-    current: int | None = None
-
-    def flush() -> None:
-        if current is not None and current in by_anchor:
-            out.append(by_anchor[current].render())
-
-    for text in transcript.split("\n"):
-        number = _line_number(text)
-        if number is not None:
-            flush()
-            current = number
-        out.append(text)
-    flush()
-    return "\n".join(out)
-
-
-def _line_number(text: str) -> int | None:
-    head = text.split(":", 1)[0]
-    return int(head) if head.isdigit() else None

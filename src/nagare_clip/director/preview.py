@@ -654,7 +654,7 @@ def preview_segment(
 ) -> SegmentPreview:
     """The playback facts for one segment's *ops*, as the director holds them.
 
-    Takes what :func:`~.director_llm.generate_director_ops` holds: the raw
+    Takes one segment's inputs: the raw
     segment *edit_lines*, *seg_times*/*silences* for those lines,
     *anchored_gaps* with segment-relative anchors, the *silence_lines* the
     transcript shows, the segment's *first_line*, and the parsed *ops* plus the

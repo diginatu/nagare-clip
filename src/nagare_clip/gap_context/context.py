@@ -1,15 +1,13 @@
 """Consumer-side rendering of described gaps (summary + director).
 
 Pure: no I/O, no LLM.  Lives here (not in the consumers) so summary and
-director share one anchoring rule and one annotation format, and so neither
+director share one anchoring rule, and so neither
 stage has to import the other.
 """
 
 from __future__ import annotations
 
 from nagare_clip.gap_context.gaps import Gap
-
-_INDENT = "    "
 
 
 def anchor_gaps(
@@ -76,37 +74,3 @@ def format_gap_block(anchored: list[tuple[int, Gap]]) -> str:
             f"- {where} ({gap.start:.1f}s-{gap.end:.1f}s, {gap.duration:.1f}s): {gap.description}"
         )
     return "\n".join(lines)
-
-
-def annotate_numbered_transcript(transcript: str, anchored: list[tuple[int, Gap]]) -> str:
-    """Insert indented ``[silent gap …]`` lines into a numbered transcript.
-
-    The annotation carries no duration of its own: the anchor line's bracket
-    already reports that silence (as ``gap Zs`` or as ``Ys silence``), and the
-    two figures come from different detectors over different intervals --
-    ffmpeg ``silencedetect`` spans vs WhisperX segment timestamps -- so they
-    never agreed.  Reusing the line's own figure is not the fix either: the
-    mapping is one-to-many (up to four annotations under a single ``gap``).
-    One number per silence, owned by the bracket; the vision text describes.
-    ``format_gap_block`` keeps its duration -- it names its line explicitly
-    and prints the span alongside, so nothing there is ambiguous.
-
-    Annotation lines are deliberately un-numbered so the director's op line
-    references stay unambiguous.  An out-of-range anchor is ignored.  An empty
-    *anchored* returns *transcript* unchanged (byte-identical).
-    """
-    if not anchored:
-        return transcript
-    lines = transcript.split("\n")
-    by_anchor: dict[int, list[Gap]] = {}
-    for anchor, gap in anchored:
-        if 0 <= anchor <= len(lines):
-            by_anchor.setdefault(anchor, []).append(gap)
-    out: list[str] = []
-    for gap in by_anchor.get(0, []):
-        out.append(f"{_INDENT}[silent gap: {gap.description}]")
-    for i, line in enumerate(lines):
-        out.append(line)
-        for gap in by_anchor.get(i + 1, []):
-            out.append(f"{_INDENT}[silent gap: {gap.description}]")
-    return "\n".join(out)

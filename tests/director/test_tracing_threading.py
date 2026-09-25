@@ -1,4 +1,3 @@
-from nagare_clip.director.director_llm import generate_director_ops
 from nagare_clip.llm_report import Recorder
 from nagare_clip.plan.plan_llm import ProjectSummary, generate_plan
 from nagare_clip.summary.summarize import PartSummary, generate_project_summary, segment_video
@@ -10,19 +9,6 @@ def _capturing_call_llm(store, response):
         return response
 
     return fake
-
-
-def test_director_threads_trace_meta():
-    store = []
-    rec = Recorder("director", None, enabled=False)
-    generate_director_ops(
-        ["one", "two"],
-        {"prompt": "p", "max_retries": 0},
-        call_llm=_capturing_call_llm(store, '{"ops": []}'),
-        recorder=rec,
-        unit="vidA",
-    )
-    assert store and store[0]["_trace"]["generation_name"] == "director/vidA"
 
 
 def test_plan_threads_trace_meta():

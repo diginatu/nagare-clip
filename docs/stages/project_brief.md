@@ -55,7 +55,7 @@ already-merged `cfg` dict and no LLM module gained a new parameter:
 | `summary` | `prompt`, `overall_prompt` | both the per-video map call and the all-videos reduce call |
 | `plan` | `prompt` | — |
 | `plan_revise` | `prompt` | — (it edits directions, so it judges by the same brief `plan` wrote them under) |
-| `director` | `prompt` | brief first, then the summary/plan overview block appended by `generate_director_ops` |
+| `director` | `prompt` | brief first, then the summary/plan overview block (`director.context.project_context_block`), all in the cacheable system message |
 | `text_filter` | `prompt` | brief first, then `build_enhanced_prompt`'s per-video summary/keyword context (which stays closest to the transcript) |
 | `publish` | `prompt` | — (the audience/tone the title, lead and thumbnail copy are written for) |
 

@@ -1,9 +1,8 @@
-"""Tests for ffmpeg silencedetect parsing and arg building."""
+"""Tests for ffmpeg silencedetect parsing."""
 
 import pytest
 
 from nagare_clip.audio_silence.detect import (
-    build_ffmpeg_args,
     parse_silencedetect_output,
 )
 
@@ -71,21 +70,3 @@ def test_parse_ignores_unrelated_lines():
         "# this is not a real ffmpeg line\n"
     )
     assert parse_silencedetect_output(noisy) == [(1.0, 2.0)]
-
-
-# --- build_ffmpeg_args ---
-
-
-def test_build_ffmpeg_args():
-    args = build_ffmpeg_args("sub dir/clip.mp4", -30.0, 0.8)
-    assert args == [
-        "-hide_banner",
-        "-nostats",
-        "-i",
-        "sub dir/clip.mp4",
-        "-af",
-        "silencedetect=noise=-30.0dB:d=0.8",
-        "-f",
-        "null",
-        "-",
-    ]

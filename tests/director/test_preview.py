@@ -14,8 +14,8 @@ import pytest
 
 from nagare_clip.director.director_llm import (
     DirectorOp,
+    format_numbered_transcript_timed,
     line_seconds,
-    render_transcript,
     speech_seconds,
     try_parse_director_response,
 )
@@ -254,7 +254,7 @@ class TestOneFigurePerLine:
         rows = WATER + FISH
         times = [(r[0], r[1]) for r in rows]
         sil = [r[2] for r in rows]
-        rendered = render_transcript([r[3] for r in rows], times, sil).split("\n")
+        rendered = format_numbered_transcript_timed([r[3] for r in rows], times, sil).split("\n")
         figures = line_seconds(times, sil)
         for line, fig in zip(rendered, figures):
             assert re.search(rf"\[{fig:.1f}s[,\] ]", line), (line, fig)
