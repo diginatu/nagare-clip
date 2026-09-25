@@ -161,6 +161,12 @@ the whole design:
   name with `--from-stage`. If a second always-runs step ever appears, build the
   concept then.
 
+The file rows are in pipeline-flow order (`index_page._rows()`, pinned by a
+test): `plan_dialogue/history.md` (plan/plan_revise), `cut_report.md` (first
+written by `intervals`, re-written by `blender`), the `.blend`, `publish.md`,
+`render.md`, and `llm_report/index.md` last because it covers every call of the
+run rather than one stage.
+
 `index_page.py` reads only what is on disk (mtimes, `publish.json`,
 `render.json`, `llm_report/index.md`, the intervals JSONs + `timeline.json`) and
 sits at the package top level rather than under a stage dir, like `order_note.py`.

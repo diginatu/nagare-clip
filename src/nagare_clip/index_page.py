@@ -108,7 +108,21 @@ def _blend_row(output_dir: Path, blend: Path | None) -> Row:
 
 
 def _rows(output_dir: Path, blend: Path | None) -> list[Row]:
+    """The files in the order the pipeline writes them.
+
+    ``history.md`` (plan/plan_revise), then ``cut_report.md`` (first written by
+    ``intervals``, before ``blender``), the ``.blend``, ``publish.md`` and
+    ``render.md``.  The LLM report goes last: it covers every call of the run
+    rather than one stage.
+    """
     return [
+        Row("plan_dialogue/history.md", "history.md", "the plan conversation"),
+        Row(
+            "llm_report/notes/cut_report.md",
+            "cut_report.md",
+            "finished-cut metrics",
+        ),
+        _blend_row(output_dir, blend),
         Row(
             "publish/publish.md",
             "publish.md",
@@ -116,17 +130,10 @@ def _rows(output_dir: Path, blend: Path | None) -> list[Row]:
             or "titles, chapters, description",
         ),
         Row("render/render.md", "render.md", "the rendered thumbnails"),
-        Row("plan_dialogue/history.md", "history.md", "the plan conversation"),
         Row(
             "llm_report/index.md",
             "llm_report/index.md",
             _report_description(output_dir / "llm_report" / "index.md") or "the LLM call table",
-        ),
-        _blend_row(output_dir, blend),
-        Row(
-            "llm_report/notes/cut_report.md",
-            "cut_report.md",
-            "finished-cut metrics",
         ),
     ]
 

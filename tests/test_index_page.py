@@ -83,6 +83,23 @@ class TestWhatIsOnThePage:
         assert "[history.md](plan_dialogue/history.md)" in md
         assert "[llm_report/index.md](llm_report/index.md)" in md
 
+    def test_the_rows_follow_the_pipeline_flow(self, tmp_path):
+        # Each file sits where its stage runs; the LLM report covers the whole
+        # run rather than one stage, so it comes last.
+        output = _project(tmp_path)
+        md = build_index(output, CFG, blend=output / "blender" / "p_edited.blend")
+        rows = [line for line in md.splitlines() if line.startswith("| ") and "—" in line]
+        needles = [
+            "plan_dialogue/history.md",
+            "cut_report.md",
+            ".blend",
+            "publish/publish.md",
+            "render/render.md",
+            "llm_report/index.md",
+        ]
+        order = [next(i for i, row in enumerate(rows) if n in row) for n in needles]
+        assert order == sorted(order) and len(rows) == len(needles), rows
+
     def test_the_blend_is_named(self, tmp_path):
         output = _project(tmp_path)
         _touch(output / "blender" / "a_edited.blend")
