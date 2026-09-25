@@ -888,6 +888,10 @@ def test_the_reply_contract_is_stated_by_the_turn_that_needs_it():
     for claim in ("REPLACE", "re-send", "this transcript's numbers"):
         assert claim.lower() in REPLY_SHAPE.lower(), claim
     assert '"lines" are this transcript\'s numbers' not in prompt
+    # "Output only the JSON object" likewise: every turn ends in REPLY_SHAPE's
+    # "one JSON object and nothing else", directly above the reply.
+    assert "nothing else" in REPLY_SHAPE
+    assert "Output only the JSON object" not in prompt
     # What only the prefix can say -- one op cannot span two segments -- stays.
     assert "inside one [k] block" in prompt
 
@@ -1237,9 +1241,20 @@ def test_director_prompt_did_not_grow_for_the_silence_lines():
     6595 -> 6589: the bracket legend's new facts (speech + silence add up to
     the footage; a keep plays the silence; a timelapse plays speech+silence
     over its factor) were paid for by rewording the Timing/pacing lines and
-    deleting "Those are the only four forms" and "no timing, no bracket"."""
+    deleting "Those are the only four forms" and "no timing, no bracket".
+
+    6589 -> 6107, and the ceiling back BELOW 6289, the size before the silence
+    lines: the conversation's 311-character raise is repaid in full.  Only
+    restatements went -- sentences another part of the assembled message
+    already says: "Output only the JSON object" (REPLY_SHAPE, every turn),
+    "every segment in playback order" (VIEW_HEADER), "the stretch you really
+    reviewed" (the turn's ask), "different footage ... refused" (the loop's
+    refusal says both), the cut-overlap rule's second statement of itself,
+    the overlay's "not how long it shows" (its duration says so), and the
+    reasons trailing "buildup", "mishaps" and "note".  No fact left the
+    message; the next addition deletes before it adds."""
     prompt = get_effective_config(None, {})["director"]["prompt"]
-    assert len(prompt) < 6600
+    assert len(prompt) < 6289
 
 
 def _display_view(n: int = 100):

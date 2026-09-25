@@ -265,9 +265,8 @@ PLAN_REVISE_PROMPT = (
 
 DIRECTOR_PROMPT = (
     "You are a video editor. You are given the WHOLE finished video as "
-    "numbered lines — every segment of it in playback order, speech and "
-    "silence together, under ONE numbering — and you edit it over several "
-    "turns. Decide high-level "
+    "numbered lines — speech and silence together, under ONE numbering — "
+    "and edit it over several turns. Decide high-level "
     # No trigger list here: the overlay bullet already owns "turning points,
     # conclusions, failures, and mishaps", and a list stated twice is two
     # places to drift.
@@ -279,10 +278,9 @@ DIRECTOR_PROMPT = (
     # MEANS: that the range is approximate, that a reply owns its range, and
     # that the playback comes back — the three things that make rewriting an
     # earlier range a normal move rather than an admission.
-    "Each turn asks you for an approximate range; you reply with the ops for "
-    "the stretch you really reviewed, and are shown the COMPLETE edit — every "
-    "op, caption and the runtime — so check the whole-video requirements on "
-    "every turn. A "
+    "Each turn asks for an approximate range, and after each reply you are "
+    "shown the COMPLETE edit — every op, caption and the runtime — so check "
+    "the whole-video requirements every turn. A "
     # Also in loop.REPLY_SHAPE, on every turn — kept here deliberately.  That
     # copy is mechanical (how to format a reply); this one is strategic: being
     # able to go back and rewrite is the move the whole design exists for, and
@@ -339,8 +337,7 @@ DIRECTOR_PROMPT = (
     "Operations (line ranges are inclusive). "
     "Prefer a timelapse over a cut where the repetition is VISIBLE WORK building "
     "toward a payoff (failed attempts, assembly, waiting for a result) — "
-    "the buildup is part of the story, so timelapse it rather than "
-    "deleting it. Where the repetition is SPEECH, there is no fast option: "
+    "the buildup is part of the story. Where the repetition is SPEECH, there is no fast option: "
     "leave it at 1x, or cut the weakest passes. Reserve cut for spans "
     "that leave the throughline entirely (digressions, dead ends, "
     "redundant retakes with no payoff):\n"
@@ -349,15 +346,15 @@ DIRECTOR_PROMPT = (
     '- overlay: show an on-screen caption; give "text" and "duration" '
     "(how many seconds it stays on screen). Pick the duration from reading "
     "length — a short label needs about 2 seconds, a full sentence 4 to 6; "
-    'never a fixed value. Its "lines" say WHERE it appears (the caption '
-    "starts at the first line of the range), not how long it shows. Reach "
+    'never a fixed value. Its "lines" say WHERE it appears: at the first '
+    "line of the range. Reach "
     "for it at turning points, conclusions, failures, and mishaps — "
     # Not "a loose default target" any more.  A real project's brief states
     # the SAME 3-5 minutes as a floor, so the "if an editorial brief states
     # otherwise" escape hatch could never fire — two statements of one number
     # with opposite modality (a two-sided target vs a floor), and the softer
     # one arriving first.
-    "moments worth labeling on screen. Aim for one overlay per 3-5 minutes "
+    "Aim for one overlay per 3-5 minutes "
     "of finished video; an editorial brief may set a different rate.\n"
     # The keep op owns keep mechanics outright: the width rule and the
     # whole-event span.  Rescuing ONE silence is no longer a keep-width
@@ -392,16 +389,13 @@ DIRECTOR_PROMPT = (
     # the finished cut.  Stated where [k] is already explained, as a fact --
     # whether to cut one is the model's call, and this prompt has no room to
     # argue it either way.
-    "- One op stays inside one [k] block — those are different footage, and "
-    "an op across two is refused. Each was recorded as its own video, so a "
-    "[k] block can open with a greeting or end with a sign-off.\n"
-    '- A "cut" range must not overlap any other op\'s range: cutting deletes '
-    "the span, so never include a line you also keep/overlay/timelapse in "
-    "a cut (e.g. to cut lines 12-18 but keep line 18, emit cut [12, 17]). "
-    "Overlapping ops are clipped and the cut loses the shared lines.\n"
-    '- Use "note" to describe in natural language precisely WHERE in the '
-    "line(s) the edit starts and ends, so a downstream editor can place "
-    "it exactly.\n"
+    "- One op stays inside one [k] block. Each [k] block was recorded as its "
+    "own video, so it can open with a greeting or end with a sign-off.\n"
+    '- A "cut" range must not overlap any other op\'s range (to cut lines '
+    "12-18 but keep line 18, emit cut [12, 17]); overlapping ops are "
+    "clipped and the cut loses the shared lines.\n"
+    '- Use "note" to say precisely WHERE in the line(s) the edit starts '
+    "and ends.\n"
     "- Playing it back starts from what happens with no op at all: every "
     "line's speech plays once, at 1x, in the order given, and the silences "
     "inside and after it are dropped. Each op changes that for the lines in "
@@ -410,8 +404,7 @@ DIRECTOR_PROMPT = (
     "that reads fine as a spec can still play wrong, and the usual way is a "
     'span that opens one line too early — the spec says "timelapse the work", '
     "the playback has the viewer hearing that very work announced at 5x, "
-    "destroyed. Re-send the range with the boundary moved.\n"
-    "- Output only the JSON object, no other text."
+    "destroyed. Re-send the range with the boundary moved."
 )
 
 GUIDED_EDIT_PROMPT = (
