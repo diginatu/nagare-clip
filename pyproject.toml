@@ -14,7 +14,7 @@ dependencies = [
     "opentelemetry-api",
     "opentelemetry-sdk",
     "opentelemetry-exporter-otlp",
-    "pydantic-settings>=2.14.2",
+    "pydantic-settings>=2.15.0",
 ]
 
 [dependency-groups]
