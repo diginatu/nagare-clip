@@ -467,6 +467,10 @@ If environment allows, also validate with a full run:
 ./scripts/run_pipeline.sh
 ```
 
+## Dependency Updates
+
+Dependabot (`.github/dependabot.yml`) opens one grouped PR a week for every Python dependency (`uv.lock`) and one for the GitHub Actions; CI must pass before it is merged. CI never calls an LLM, so it cannot see a LiteLLM change that breaks a real request. When a Dependabot PR moves **litellm**, make one tiny real call per `(provider, model, reasoning_effort)` the project config uses (through `llm_client.call_llm` with that stage's config section, including one image call for the vision models) before merging. That is also the first step whenever a config switches to a newly released model: LiteLLM refuses parameters for a model it does not know yet (gpt-6-luna on 1.89.0: `UnsupportedParamsError ... reasoning_effort`), and the fix is to upgrade LiteLLM, not to work around it here.
+
 ## Documentation Policy
 
 Before touching a stage, **read its [`docs/stages/`](docs/stages/) file first**

@@ -1,0 +1,17 @@
+# Version updates. Security-only updates were already on in the repo settings,
+# which is why aiohttp/urllib3/requests moved and litellm sat at 1.89.0 for
+# three months: nothing flagged it, and a new model (gpt-6-luna) could not be
+# called until it moved.
+version: 2
+updates:
+  - package-ecosystem: "uv"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    groups:
+      python-deps:
+        patterns: ["*"]
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
