@@ -5,8 +5,11 @@ from __future__ import annotations
 import copy
 import logging
 import re
+from collections.abc import Mapping
+from dataclasses import dataclass
 from typing import Any
 
+from nagare_clip.edit_lines import gap_spans, parse_edit_lines
 from nagare_clip.text_filter.llm_filter import PATCH_RE, apply_patches_to_lines
 
 logger = logging.getLogger(__name__)
@@ -76,6 +79,11 @@ _CUT_PAIR_RE = re.compile(r"<cut>.*?</cut>")
 
 # Type alias: (kind, orig_start, orig_end, new_text)
 Region = tuple[str, int, int, str]
+
+#: ``{n: (start, end)}`` of the silence after speech line ``n`` —
+#: :func:`nagare_clip.edit_lines.gap_spans` of the ORIGINAL (pre-sync) JSON,
+#: so a ``<cut>`` that deletes line ``n`` does not move it.
+Silences = Mapping[int, tuple[float, float]]
 
 
 def _decompose_edit_line(edit_line: str, original_text: str) -> list[Region] | None:
@@ -298,8 +306,14 @@ def sync_text_to_json(
     :func:`extract_keep_ranges`, :func:`extract_speed_ranges`, and
     :func:`extract_overlay_marks` for the time extraction passes.
 
+    Silence lines (:mod:`nagare_clip.edit_lines`) carry no words: their
+    markers are folded onto the neighbouring speech lines first
+    (:meth:`~nagare_clip.edit_lines.EditFile.speech_projection`), so a
+    ``<cut>`` opened on the silence after line ``n`` deletes from line ``n+1``.
+
     Returns a new dict (deep copy).
     """
+    edit_lines = parse_edit_lines(edit_lines).speech_projection()
     expanded_lines = _expand_cut_tags(edit_lines)
     cleaned_lines = [
         OVERLAY_TAG_RE.sub("", SPEED_TAG_RE.sub("", KEEP_TAG_RE.sub("", line)))
@@ -412,8 +426,88 @@ def _resolve_keep_range(
     return (start_t, end_t)
 
 
+@dataclass(frozen=True)
+class _Anchor:
+    """Where a tag sits: a word position on a speech line, or a silence line.
+
+    *word* is ``(segment_index, position)``; *silence* the silence's
+    ``(start, end)`` — an opener there resolves to its start and a closer to
+    its end, wherever on the line the tag sits.  Both ``None``: a silence line
+    with no silence behind it, which resolves to nothing.
+    """
+
+    word: tuple[int, int] | None = None
+    silence: tuple[float, float] | None = None
+    on_silence: bool = False
+
+
+def _anchored_parts(
+    edit_lines: list[str],
+    segments: list[dict[str, Any]],
+    split_re: re.Pattern[str],
+    silences: Silences,
+):
+    """``(part, anchor)`` for every token of the file, in file order.
+
+    A speech line is split as the extractors always split it, each part
+    anchored at the word position before it.  A silence line contributes only
+    the markers around its opaque body, all anchored at the silence.  Stops at
+    a speech line past the JSON's segments, as the extractors always did.
+    """
+    for slot in parse_edit_lines(edit_lines).slots:
+        if slot.is_silence:
+            anchor = _Anchor(silence=silences.get(slot.speech_line), on_silence=True)
+            for part in split_re.split(slot.markers):
+                if part:
+                    yield part, anchor
+            continue
+        seg_idx = slot.speech_line - 1
+        if seg_idx >= len(segments):
+            return
+        output_pos = 0
+        for part in split_re.split(slot.text):
+            yield part, _Anchor(word=(seg_idx, output_pos))
+            if not split_re.fullmatch(part or " "):
+                output_pos += _patched_visible_length(part)
+
+
+def _anchor_start(segments: list[dict[str, Any]], anchor: _Anchor) -> float | None:
+    if anchor.on_silence:
+        return None if anchor.silence is None else anchor.silence[0]
+    word = _first_word_at_or_after(segments, *anchor.word) if anchor.word else None
+    return float(word["start"]) if word is not None and "start" in word else None
+
+
+def _anchor_end(segments: list[dict[str, Any]], anchor: _Anchor) -> float | None:
+    if anchor.on_silence:
+        return None if anchor.silence is None else anchor.silence[1]
+    word = _last_word_before(segments, *anchor.word) if anchor.word else None
+    return float(word["end"]) if word is not None and "end" in word else None
+
+
+def _resolve_anchors(
+    segments: list[dict[str, Any]], start: _Anchor, end: _Anchor
+) -> tuple[float, float] | None:
+    """A span's ``(start, end)`` seconds; ``None`` when empty or unresolvable."""
+    if not start.on_silence and not end.on_silence:
+        assert start.word is not None and end.word is not None
+        return _resolve_keep_range(segments, start.word, end.word)
+    start_t = _anchor_start(segments, start)
+    end_t = _anchor_end(segments, end)
+    if start_t is None or end_t is None or end_t <= start_t:
+        return None
+    return (start_t, end_t)
+
+
+def _silences_for(synced_json: dict[str, Any], silences: Silences | None) -> Silences:
+    return gap_spans(synced_json) if silences is None else silences
+
+
 def extract_keep_ranges(
-    edit_lines: list[str], synced_json: dict[str, Any]
+    edit_lines: list[str],
+    synced_json: dict[str, Any],
+    *,
+    silences: Silences | None = None,
 ) -> list[tuple[float, float]]:
     """Extract force-keep time ranges from `<keep>...</keep>` blocks.
 
@@ -421,38 +515,35 @@ def extract_keep_ranges(
     resolved range spans from the first wrapped word's start to the last
     wrapped word's end, with the in-between inter-segment silences falling
     inside.  Positions are tracked in the post-patch, whitespace-stripped
-    character stream of each segment.
+    character stream of each segment.  A tag on a silence line resolves to
+    that silence's edge instead: an opener to its start, a closer to its end
+    (*silences*; ``None`` derives them from *synced_json*).
 
     Empty / unclosed (at EOF) / unmatched / nested / invalid-resolved tags
     are skipped with a warning; they do not raise.
     """
     segments = synced_json.get("segments", [])
+    silences = _silences_for(synced_json, silences)
     ranges: list[tuple[float, float]] = []
     # `keep_start = None` means no `<keep>` is currently open.
-    keep_start: tuple[int, int] | None = None
+    keep_start: _Anchor | None = None
 
-    for seg_idx, line in enumerate(edit_lines):
-        if seg_idx >= len(segments):
-            break
-        output_pos = 0
-        for part in _KEEP_SPLIT_RE.split(line):
-            if part == "<keep>":
-                if keep_start is not None:
-                    logger.warning("Nested <keep> opener; ignoring inner tag")
-                    continue
-                keep_start = (seg_idx, output_pos)
-            elif part == "</keep>":
-                if keep_start is None:
-                    logger.warning("Unmatched </keep>; ignoring")
-                    continue
-                resolved = _resolve_keep_range(segments, keep_start, (seg_idx, output_pos))
-                keep_start = None
-                if resolved is None:
-                    logger.warning("<keep> resolved to an empty/invalid range; ignoring")
-                    continue
-                ranges.append(resolved)
-            else:
-                output_pos += _patched_visible_length(part)
+    for part, anchor in _anchored_parts(edit_lines, segments, _KEEP_SPLIT_RE, silences):
+        if part == "<keep>":
+            if keep_start is not None:
+                logger.warning("Nested <keep> opener; ignoring inner tag")
+                continue
+            keep_start = anchor
+        elif part == "</keep>":
+            if keep_start is None:
+                logger.warning("Unmatched </keep>; ignoring")
+                continue
+            resolved = _resolve_anchors(segments, keep_start, anchor)
+            keep_start = None
+            if resolved is None:
+                logger.warning("<keep> resolved to an empty/invalid range; ignoring")
+                continue
+            ranges.append(resolved)
 
     if keep_start is not None:
         logger.warning("Unclosed <keep>; ignoring")
@@ -461,52 +552,72 @@ def extract_keep_ranges(
 
 
 def extract_speed_ranges(
-    edit_lines: list[str], synced_json: dict[str, Any]
+    edit_lines: list[str],
+    synced_json: dict[str, Any],
+    *,
+    silences: Silences | None = None,
 ) -> list[tuple[float, float, float]]:
     """Extract `(start, end, factor)` triples from `<speed factor="N.N">...</speed>` blocks.
 
     Behaves like :func:`extract_keep_ranges` for span resolution (multi-line
-    spans, position tracking, error handling) but additionally returns the
-    speed factor parsed from each opening tag.
+    spans, position tracking, silence lines, error handling) but additionally
+    returns the speed factor parsed from each opening tag.
     """
     segments = synced_json.get("segments", [])
+    silences = _silences_for(synced_json, silences)
     ranges: list[tuple[float, float, float]] = []
     # `speed_start = None` means no `<speed>` is currently open.
-    speed_start: tuple[int, int] | None = None
+    speed_start: _Anchor | None = None
     speed_factor: float | None = None
 
-    for seg_idx, line in enumerate(edit_lines):
-        if seg_idx >= len(segments):
-            break
-        output_pos = 0
-        for part in _SPEED_SPLIT_RE.split(line):
-            open_match = _SPEED_OPEN_RE.fullmatch(part) if part else None
-            if open_match is not None:
-                if speed_start is not None:
-                    logger.warning("Nested <speed> opener; ignoring inner tag")
-                    continue
-                speed_start = (seg_idx, output_pos)
-                speed_factor = float(open_match.group(1))
-            elif part == "</speed>":
-                if speed_start is None:
-                    logger.warning("Unmatched </speed>; ignoring")
-                    continue
-                resolved = _resolve_keep_range(segments, speed_start, (seg_idx, output_pos))
-                factor = speed_factor
-                speed_start = None
-                speed_factor = None
-                if resolved is None or factor is None:
-                    logger.warning("<speed> resolved to an empty/invalid range; ignoring")
-                    continue
-                start_t, end_t = resolved
-                ranges.append((start_t, end_t, factor))
-            else:
-                output_pos += _patched_visible_length(part)
+    for part, anchor in _anchored_parts(edit_lines, segments, _SPEED_SPLIT_RE, silences):
+        open_match = _SPEED_OPEN_RE.fullmatch(part) if part else None
+        if open_match is not None:
+            if speed_start is not None:
+                logger.warning("Nested <speed> opener; ignoring inner tag")
+                continue
+            speed_start = anchor
+            speed_factor = float(open_match.group(1))
+        elif part == "</speed>":
+            if speed_start is None:
+                logger.warning("Unmatched </speed>; ignoring")
+                continue
+            resolved = _resolve_anchors(segments, speed_start, anchor)
+            factor = speed_factor
+            speed_start = None
+            speed_factor = None
+            if resolved is None or factor is None:
+                logger.warning("<speed> resolved to an empty/invalid range; ignoring")
+                continue
+            start_t, end_t = resolved
+            ranges.append((start_t, end_t, factor))
 
     if speed_start is not None:
         logger.warning("Unclosed <speed>; ignoring")
 
     return ranges
+
+
+def extract_cut_silences(edit_lines: list[str], silences: Silences) -> list[tuple[float, float]]:
+    """The silences a `<cut>` span covers, as ``(start, end)`` excludes.
+
+    A `<cut>` deletes words (:func:`sync_text_to_json`); a silence has none, so
+    the silence lines it covers are returned here for the intervals stage to
+    drop outright — whatever ``silence_threshold`` says.  A silence line is
+    covered when a cut is open as it begins or any cut tag sits on it (an
+    opener there starts at the silence's start, a closer ends at its end).
+    """
+    out: list[tuple[float, float]] = []
+    cut_open = False
+    for slot in parse_edit_lines(edit_lines).slots:
+        tags = _CUT_SPLIT_RE.findall(slot.markers)
+        if slot.is_silence and (cut_open or tags):
+            span = silences.get(slot.speech_line)
+            if span is not None:
+                out.append(span)
+        for tag in tags:
+            cut_open = tag == "<cut>"
+    return out
 
 
 def _resolve_point(
@@ -531,7 +642,10 @@ def _resolve_point(
 
 
 def extract_overlay_marks(
-    edit_lines: list[str], synced_json: dict[str, Any]
+    edit_lines: list[str],
+    synced_json: dict[str, Any],
+    *,
+    silences: Silences | None = None,
 ) -> list[tuple[float, float, str]]:
     """Extract `(start, duration, text)` triples from `<overlay .../>` point markers.
 
@@ -540,7 +654,8 @@ def extract_overlay_marks(
     attribute — seconds on the **edited** timeline — gives how long the text
     stays on screen (applied by the blender stage, which measures in output
     frames, so cuts and speed ranges inside the window cannot shorten it).
-    There is no closing tag and therefore no tag-placement failure mode.
+    There is no closing tag and therefore no tag-placement failure mode.  On a
+    silence line it starts where that silence starts.
 
     An empty ``text=""`` or a non-positive ``duration`` is skipped with a
     warning; neither raises.  The returned text is decoded with
@@ -548,29 +663,29 @@ def extract_overlay_marks(
     break for the blender stage's TEXT strip.
     """
     segments = synced_json.get("segments", [])
+    silences = _silences_for(synced_json, silences)
     marks: list[tuple[float, float, str]] = []
 
-    for seg_idx, line in enumerate(edit_lines):
-        if seg_idx >= len(segments):
-            break
-        output_pos = 0
-        for part in _OVERLAY_SPLIT_RE.split(line):
-            mark = _OVERLAY_MARK_RE.fullmatch(part) if part else None
-            if mark is None:
-                output_pos += _patched_visible_length(part)
-                continue
-            text = unescape_overlay_text(mark.group(1))
-            duration = float(mark.group(2))
-            if not text:
-                logger.warning("<overlay> has empty text; ignoring")
-                continue
-            if duration <= 0:
-                logger.warning("<overlay> duration %.3f is not positive; ignoring", duration)
-                continue
-            start_t = _resolve_point(segments, (seg_idx, output_pos))
-            if start_t is None:
-                logger.warning("<overlay> could not be anchored to a word time; ignoring")
-                continue
-            marks.append((start_t, duration, text))
+    for part, anchor in _anchored_parts(edit_lines, segments, _OVERLAY_SPLIT_RE, silences):
+        mark = _OVERLAY_MARK_RE.fullmatch(part) if part else None
+        if mark is None:
+            continue
+        text = unescape_overlay_text(mark.group(1))
+        duration = float(mark.group(2))
+        if not text:
+            logger.warning("<overlay> has empty text; ignoring")
+            continue
+        if duration <= 0:
+            logger.warning("<overlay> duration %.3f is not positive; ignoring", duration)
+            continue
+        if anchor.on_silence:
+            start_t = None if anchor.silence is None else anchor.silence[0]
+        else:
+            assert anchor.word is not None
+            start_t = _resolve_point(segments, anchor.word)
+        if start_t is None:
+            logger.warning("<overlay> could not be anchored to a word time; ignoring")
+            continue
+        marks.append((start_t, duration, text))
 
     return marks

@@ -18,6 +18,7 @@ from dataclasses import dataclass
 from functools import cache
 from typing import Any
 
+from nagare_clip.edit_lines import gap_spans
 from nagare_clip.intervals.bunsetu import build_bunsetu_times
 from nagare_clip.intervals.captions import apply_caption_margins, collect_captions
 from nagare_clip.intervals.intervals import (
@@ -30,7 +31,11 @@ from nagare_clip.intervals.intervals import (
     subtract_intervals,
 )
 from nagare_clip.intervals.speech import build_speech_spans, get_duration_sec
-from nagare_clip.intervals.sync_json import extract_keep_ranges, sync_text_to_json
+from nagare_clip.intervals.sync_json import (
+    extract_cut_silences,
+    extract_keep_ranges,
+    sync_text_to_json,
+)
 
 Range = tuple[float, float]
 
@@ -198,15 +203,19 @@ def dropped_ranges(
     The complement of :func:`compute_keep_intervals`' result, fed exactly what
     the stage feeds it: *edit_lines* are synced into the JSON first (patches
     and ``<cut>`` deletions change the word timings) and their ``<keep>`` spans
-    are honoured; ``None`` means no edits exist yet (the summary stage).
+    are honoured — on silence lines too, and a silence under ``<cut>`` is
+    dropped; ``None`` means no edits exist yet (the summary stage).
     *nlp* defaults to :func:`load_nlp`.
     """
     data = whisperx_data
     force_keep: list[Range] = []
+    cut_ranges = list(cut_ranges)
     if edit_lines is not None:
         lines = list(edit_lines)
+        silences = gap_spans(whisperx_data)
         data = sync_text_to_json(whisperx_data, lines)
-        force_keep = extract_keep_ranges(lines, data)
+        force_keep = extract_keep_ranges(lines, data, silences=silences)
+        cut_ranges += extract_cut_silences(lines, silences)
     bun = ivl["bunsetu"]
     bunsetu = build_bunsetu_times(
         data,
