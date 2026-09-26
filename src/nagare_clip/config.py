@@ -911,7 +911,7 @@ class GuidedEditConfig(BaseModel):
         "guided_edit stage (Pass B2): a small local LLM applies each director op,\n"
         "inserting <cut>/<speed>/<overlay>/<keep> tags (and {{old->new}} patches) into\n"
         "the verbatim _edits.txt, where the director's silence lines are written in\n"
-        "so an op on \"n~\" is a marker too. Disabled by default (copies edits\n"
+        'so an op on "n~" is a marker too. Disabled by default (copies edits\n'
         "through, silence lines added)."
     )
     enabled: bool = Field(False, description="Enable applying director ops")

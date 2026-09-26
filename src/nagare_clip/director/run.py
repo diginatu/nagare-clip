@@ -49,6 +49,7 @@ from nagare_clip.director.silence_lines import (
     SilenceLine,
     build_silence_lines,
 )
+from nagare_clip.edit_lines import parse_edit_lines
 from nagare_clip.edit_lines import silence_line_min as silence_line_min  # re-export
 from nagare_clip.gap_context.context import anchor_gaps
 from nagare_clip.gap_context.gaps import Gap, load_gaps
@@ -168,7 +169,11 @@ def load_segment_transcript(inputs: SegmentInputs) -> SegmentTranscript:
     missing cuts file no speech/silence split, a missing gaps file no gap lines.
     """
     segment = inputs.segment
-    all_lines = inputs.edits.read_text(encoding="utf-8").splitlines()
+    # Speech lines only: a silence line is not a transcript line, and counting
+    # one would shift every line after it off its segment.
+    all_lines = parse_edit_lines(
+        inputs.edits.read_text(encoding="utf-8").splitlines()
+    ).speech_lines()
     first, last = segment.lines or (1, len(all_lines))
     data: dict = {}
     seg_times = None

@@ -28,6 +28,7 @@ from nagare_clip.director.run import (
     run_director_conversation,
     silence_line_min,
 )
+from nagare_clip.edit_lines import parse_edit_lines
 from nagare_clip.gap_context.describe import GapFrames
 from nagare_clip.gap_context.run import run_gap_context
 from nagare_clip.gap_context.snapshot import (
@@ -480,7 +481,8 @@ def _line_counts(ctx: PipelineContext) -> dict[str, int]:
     for stem in project_stems(ctx.input_videos_dir) or ctx.stems:
         path = d / f"{stem}_edits.txt"
         try:
-            counts[stem] = len(path.read_text(encoding="utf-8").splitlines())
+            text = path.read_text(encoding="utf-8").splitlines()
+            counts[stem] = len(parse_edit_lines(text).speech_lines())
         except OSError:
             logging.debug("order: no line count for %s (%s)", stem, path)
     return counts
