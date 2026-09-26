@@ -292,6 +292,14 @@ DIRECTOR_PROMPT = (
     'Reply {"done": true} once every line has been reviewed '
     "and the playback is what you meant.\n"
     "\n"
+    # Who is talking.  Only the user side is labelled; the model is the
+    # assistant role.  A person joins by writing an editor entry into
+    # director/conversation.md -- nothing else in the pipeline treats them
+    # differently, so this sentence is the whole of their authority.
+    "Speakers: a Guide: part is the pipeline's routine guidance, worked out "
+    "from the state; an Editor: part is the human editor. Where they disagree "
+    "the editor wins, and answer every editor request before you reply done.\n"
+    "\n"
     # The plan is the director's own (the plan stage's directions are no
     # longer shown).  What a plan covers is in the first ask (loop.PLAN_REQUEST),
     # sent once; what belongs here is that it stays revisable and that its
@@ -901,8 +909,17 @@ class DirectorConfig(BaseModel):
         description=(
             "How many lines of the whole-video transcript one turn of the director's "
             "conversation is asked to review (approximately — it stops where the footage "
-            "breaks). The turn cap is ceil(display lines / this) * 2, and reaching it "
-            "fails the stage after writing the ops accepted so far"
+            "breaks). The turn cap per run is ceil(display lines / this) * 2 + 1 (the plan "
+            "turn); reaching it fails the stage, and every accepted turn is already saved "
+            "in the director's directory, so running it again continues"
+        ),
+    )
+    pause_after_plan: bool = Field(
+        False,
+        description=(
+            "Stop the pipeline (exit 0) after the director writes its first plan, with a "
+            "done mark in director/conversation.md: read director/plan.md, then delete "
+            "the mark (or use scripts/director_say.sh) and run again"
         ),
     )
     max_keep_lines: int = Field(

@@ -9,7 +9,7 @@ runtime behavior.
 
 ## Modules
 
-- `errors.py` — `PipelineError`, the single user-facing failure type. `cli.main()`
+- `errors.py` — `PipelineStop`, a deliberate stop that is not a failure (the director's `pause_after_plan`): `cli.main()` prints it to stdout and returns 0, and `run_stages` re-raises it unwrapped. `PipelineError`, the single user-facing failure type. `cli.main()`
   catches it, prints the message to stderr, and returns exit code 1 (no
   traceback for expected failures like a bad `--from-stage` name or a missing
   source file).
@@ -54,7 +54,7 @@ runtime behavior.
   a log line and no validation (they're intentionally not built yet); stages
   before `from_index` are skipped but each of their `required_outputs(ctx)`
   paths must already exist, else `PipelineError` ("Missing output ... required
-  when skipping ..."). Any stage exception other than `PipelineError` is
+  when skipping ..."). Any stage exception other than `PipelineError`/`PipelineStop` is
   wrapped as `PipelineError(f"[{stage.name}] failed: {exc}")` so the CLI's
   top-level handler is the only place that prints and exits non-zero.
 - `stages.py` — `STAGE_NAMES` (the thirteen canonical stage names, in order) and

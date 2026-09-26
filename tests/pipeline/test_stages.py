@@ -815,11 +815,25 @@ def test_plan_adapter_passes_history_path(tmp_path, monkeypatch):
     assert seen["history"] == out / "plan_dialogue" / "history.md"
 
 
-def _director_returning(ops, plan=""):
-    """A fake director conversation that emits *ops* for source ``a``."""
+def _director_returning(ops, plan="", ok=True, seen=None):
+    """A fake director conversation: one turn that emits *ops* for source ``a``.
+
+    It checkpoints like the real one, which is how the stage's files get
+    written; *seen* receives the ``Resume`` it was handed.
+    """
 
     def fake(inputs, cfg, **kw):
-        return ConversationResult(ops={"a": ops_from_dict({"ops": ops}, None)}, plan=plan)
+        if seen is not None:
+            seen["resume"] = kw["resume"]
+        result = ConversationResult(
+            ops={"a": ops_from_dict({"ops": ops}, None)},
+            plan=plan,
+            turns=1,
+            ok=ok,
+            error="" if ok else "cap",
+        )
+        kw["checkpoint"](result)
+        return result
 
     return fake
 
@@ -846,23 +860,33 @@ def test_director_adapter_writes_the_plan_for_the_human(tmp_path, monkeypatch):
     assert text == "# The director's plan\n\n筋はこう\n"
 
 
-def test_director_adapter_deletes_a_stale_plan(tmp_path, monkeypatch):
+def test_director_adapter_resumes_from_its_directory(tmp_path, monkeypatch):
+    """The directory is the state: a hand-edited plan, order and ops are what
+    the conversation resumes from."""
+    seen: dict = {}
     monkeypatch.setattr(st, "recorder_from_config", lambda *a, **k: _NullRec())
-    monkeypatch.setattr(st, "run_director_conversation", _director_returning([]))
-    stale = tmp_path / "out" / "director" / "plan.md"
-    stale.parent.mkdir(parents=True)
-    stale.write_text("old", encoding="utf-8")
+    monkeypatch.setattr(st, "run_director_conversation", _director_returning([], seen=seen))
+    d = tmp_path / "out" / "director"
+    d.mkdir(parents=True)
+    (d / "plan.md").write_text("# The director's plan\n\n人が直した方針\n", encoding="utf-8")
+    (d / "order.json").write_text('{"order": [{"stem": "a"}]}', encoding="utf-8")
+    (d / "a_director.json").write_text(
+        '{"ops": [{"type": "cut", "lines": [1, 2], "note": "n"}]}', encoding="utf-8"
+    )
+    (d / "conversation.md").write_text("## editor\n残して\n", encoding="utf-8")
     by_name = {s.name: s for s in st.STAGES}
     by_name["director"].run(_ctx(tmp_path, stems=("a",)))
-    assert not stale.exists()
+    resume = seen["resume"]
+    assert resume.plan == "人が直した方針"
+    assert [s.stem for s in resume.order] == ["a"]
+    assert [op.lines for op in resume.ops["a"]] == [(1, 2)]
+    assert resume.conversation[0].text == "残して"
 
 
 def test_director_adapter_writes_the_plan_before_it_fails(tmp_path, monkeypatch):
     monkeypatch.setattr(st, "recorder_from_config", lambda *a, **k: _NullRec())
     monkeypatch.setattr(
-        st,
-        "run_director_conversation",
-        lambda *a, **k: ConversationResult(ops={"a": []}, plan="途中まで", ok=False, error="cap"),
+        st, "run_director_conversation", _director_returning([], plan="途中まで", ok=False)
     )
     by_name = {s.name: s for s in st.STAGES}
     with pytest.raises(PipelineError):

@@ -4,9 +4,14 @@ Every other director test asserts a fragment.  This one pins the WHOLE thing
 against a file a person can read top to bottom: ``golden/conversation.txt``
 holds every message of every call (the cached system message once, since it
 never changes, then each turn's history and live ask), followed by the end
-result — each ``_director.json``, ``director/order.json``, ``director/plan.md``
-and the order resolved to source seconds, which is where a mistake is hardest
-to notice.
+result — every file of the director's directory (``_director.json``,
+``order.json``, ``plan.md``, ``conversation.md``) and the order resolved to
+source seconds, which is where a mistake is hardest to notice.
+
+Three runs of the stage over one directory: the first edits the video to a
+done mark; a person then deletes the mark and adds an editor entry
+(``director_say``), and the second run answers it; the third run finds the
+done mark again and makes no call at all.
 
 The project is small but has every moving part: two sources, a plan stage that
 reorders them (whose directions must NOT reach the prompt), the director's own
@@ -28,6 +33,7 @@ from pathlib import Path
 
 from nagare_clip.audio_silence.cuts_file import write_cuts
 from nagare_clip.config import get_effective_config
+from nagare_clip.director import conversation
 from nagare_clip.director import director_llm as dl
 from nagare_clip.intervals.manifest import build_manifest
 from nagare_clip.order import manifest_to_dict
@@ -111,6 +117,14 @@ REPLIES = [
     # Turn 4: an order whose break after line 10 would split that timelapse.
     {"order": [[11, 15], [1, 10]]},
     # Turn 5: finished.
+    {"done": True},
+]
+
+EDITOR_NOTE = "冒頭のあいさつ（2-3行目）は残して。"
+
+# Run 2 answers the editor: the cut is withdrawn by re-sending its range empty.
+RERUN_REPLIES = [
+    {"range": [1, 8], "reviewed_through": 8, "ops": []},
     {"done": True},
 ]
 
@@ -204,15 +218,20 @@ def _project(root: Path) -> PipelineContext:
     )
 
 
-def _render(calls: list[list[dict]], ctx: PipelineContext) -> str:
+def _render(runs: list[list[list[dict]]], ctx: PipelineContext) -> str:
     out: list[str] = []
+    calls = [call for run in runs for call in run]
     system = calls[0][0]["content"]
     assert all(call[0]["content"] == system for call in calls), "the system message varied"
     out += ["################ SYSTEM (identical on every call, cached) ################", system]
-    for i, call in enumerate(calls, start=1):
-        out.append(f"################ CALL {i}: after the system message ################")
-        for message in call[1:]:
-            out += [f"===== [{message['role']}] =====", message["content"]]
+    n = 0
+    for r, run in enumerate(runs, start=1):
+        out.append(f"################ RUN {r}: {len(run)} call(s) ################")
+        for call in run:
+            n += 1
+            out.append(f"################ CALL {n}: after the system message ################")
+            for message in call[1:]:
+                out += [f"===== [{message['role']}] =====", message["content"]]
     out.append("################ RESULT ################")
     director = ctx.stage_dir("director")
     for path in sorted(director.iterdir()):
@@ -234,17 +253,30 @@ def _render(calls: list[list[dict]], ctx: PipelineContext) -> str:
 
 def test_the_whole_conversation_and_its_result(tmp_path, monkeypatch):
     ctx = _project(tmp_path)
-    calls: list[list[dict]] = []
+    director = next(s for s in st.STAGES if s.name == "director")
+    runs: list[list[list[dict]]] = []
 
-    def fake(messages, cfg):
-        calls.append([dict(m) for m in messages])
-        return json.dumps(REPLIES[len(calls) - 1], ensure_ascii=False)
+    def run(replies):
+        calls: list[list[dict]] = []
 
-    monkeypatch.setattr(dl, "_call_llm", fake)
-    next(s for s in st.STAGES if s.name == "director").run(ctx)
-    text = _render(calls, ctx)
+        def fake(messages, cfg):
+            calls.append([dict(m) for m in messages])
+            return json.dumps(replies[len(calls) - 1], ensure_ascii=False)
+
+        monkeypatch.setattr(dl, "_call_llm", fake)
+        director.run(ctx)
+        runs.append(calls)
+
+    run(REPLIES)
+    conversation.say(ctx.stage_dir("director") / conversation.FILE_NAME, EDITOR_NOTE)
+    run(RERUN_REPLIES)
+    run([])
+    assert [len(r) for r in runs] == [len(REPLIES), len(RERUN_REPLIES), 0]
+
+    text = _render(runs, ctx)
     assert str(tmp_path) not in text, "a temporary path leaked into the golden file"
     assert "作業は速回しで" not in text, "the plan stage's direction reached the director"
+    assert f"Editor: {EDITOR_NOTE}" in text
 
     if os.environ.get("UPDATE_GOLDEN"):
         GOLDEN.parent.mkdir(parents=True, exist_ok=True)

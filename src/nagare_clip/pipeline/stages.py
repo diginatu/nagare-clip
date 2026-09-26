@@ -17,6 +17,7 @@ from nagare_clip.audio_silence.run import run_audio_silence
 from nagare_clip.blender.frames import ordered_sources
 from nagare_clip.blender.warnings_file import WARNINGS_FILENAME
 from nagare_clip.cut_report.report import build_cut_report
+from nagare_clip.director import conversation
 from nagare_clip.director.director_llm import (
     DirectorOp,
     collect_overlay_texts,
@@ -24,6 +25,7 @@ from nagare_clip.director.director_llm import (
     ops_to_dict,
 )
 from nagare_clip.director.run import (
+    Resume,
     SegmentInputs,
     run_director_conversation,
     silence_line_min,
@@ -54,7 +56,7 @@ from nagare_clip.order import (
     write_manifest,
 )
 from nagare_clip.order_note import format_order_note
-from nagare_clip.pipeline.errors import PipelineError
+from nagare_clip.pipeline.errors import PipelineError, PipelineStop
 from nagare_clip.pipeline.external import (
     build_blender_cmd,
     build_silencedetect_cmd,
@@ -604,24 +606,40 @@ def _write_director_ops(ctx: PipelineContext, stem: str, ops: list[DirectorOp]) 
         + "\n",
         encoding="utf-8",
     )
-    logging.info("director: wrote %s (%d operation(s))", path, len(ops))
+    logging.debug("director: wrote %s (%d operation(s))", path, len(ops))
 
 
 DIRECTOR_PLAN = "plan.md"
+PLAN_HEADING = "# The director's plan"
 
 
 def _director_plan_md(ctx: PipelineContext) -> Path:
     return ctx.stage_dir("director") / DIRECTOR_PLAN
 
 
+def _director_conversation_md(ctx: PipelineContext) -> Path:
+    return ctx.stage_dir("director") / conversation.FILE_NAME
+
+
 def _write_director_plan(ctx: PipelineContext, plan: str) -> None:
-    """The plan in force when the conversation ended, for the human to read."""
+    """The plan in force, for the human to read — and to edit: it is state."""
     if not plan:
         return
     path = _director_plan_md(ctx)
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(f"# The director's plan\n\n{plan}\n", encoding="utf-8")
-    logging.info("director: wrote %s", path)
+    path.write_text(f"{PLAN_HEADING}\n\n{plan}\n", encoding="utf-8")
+
+
+def _read_director_plan(ctx: PipelineContext) -> str:
+    """``plan.md`` without its heading; ``""`` when there is none."""
+    try:
+        text = _director_plan_md(ctx).read_text(encoding="utf-8")
+    except OSError:
+        return ""
+    lines = text.strip().splitlines()
+    if lines and lines[0].strip() == PLAN_HEADING:
+        lines = lines[1:]
+    return "\n".join(lines).strip()
 
 
 def _write_director_order(ctx: PipelineContext, order: list[Segment]) -> None:
@@ -632,23 +650,67 @@ def _write_director_order(ctx: PipelineContext, order: list[Segment]) -> None:
         json.dumps({"order": segments_to_dict(order)}, ensure_ascii=False, indent=2) + "\n",
         encoding="utf-8",
     )
-    logging.info("director: wrote %s (%d segment(s))", path, len(order))
+
+
+def _read_director_order(ctx: PipelineContext) -> list[Segment] | None:
+    """``order.json``'s order, or ``None`` when there is no usable one."""
+    path = _director_order_json(ctx)
+    if not path.is_file():
+        return None
+    try:
+        segments = order_from_dict(json.loads(path.read_text(encoding="utf-8")))
+    except (OSError, ValueError) as e:
+        logging.warning("director: could not read %s (%s); the seed order applies", path, e)
+        return None
+    return segments or None
+
+
+def _read_director_ops(ctx: PipelineContext, stems: list[str]) -> dict[str, list[DirectorOp]]:
+    out: dict[str, list[DirectorOp]] = {}
+    for stem in stems:
+        path = ctx.stage_dir("director") / f"{stem}_director.json"
+        if not path.is_file():
+            continue
+        try:
+            out[stem] = ops_from_dict(json.loads(path.read_text(encoding="utf-8")), None)
+        except (OSError, ValueError) as e:
+            logging.warning("director: could not read %s (%s); no ops for %s", path, e, stem)
+    return out
+
+
+def _write_director_state(ctx: PipelineContext, stems: list[str], result) -> None:
+    """Every state file, as the conversation holds it after one turn."""
+    for stem in stems:
+        _write_director_ops(ctx, stem, result.ops.get(stem, []))
+    _write_director_order(ctx, result.order)
+    _write_director_plan(ctx, result.plan)
+    conversation.save(_director_conversation_md(ctx), result.conversation)
+
+
+def _write_missing_director_outputs(ctx: PipelineContext, stems: list[str], seed) -> None:
+    """What ``guided_edit``/``intervals`` need, where nothing is there yet.
+
+    Only MISSING files: a run that takes no turn touches nothing that exists.
+    """
+    for stem in stems:
+        if not (ctx.stage_dir("director") / f"{stem}_director.json").is_file():
+            _write_director_ops(ctx, stem, [])
+    if not _director_order_json(ctx).is_file():
+        _write_director_order(ctx, seed)
 
 
 def _director_run(ctx: PipelineContext) -> None:
-    """ONE conversation over the whole finished video.
+    """One step over the director's directory: resume, take turns, write back.
 
-    Every segment's transcript is loaded once and numbered once; the director
-    is then asked for an approximate range per turn and answered with what its
-    ops will play (:func:`~nagare_clip.director.run.run_director_conversation`).
-    ``--source`` does not narrow it: one conversation owns the whole video, so
-    every source's ``_director.json`` is rewritten whatever this run was asked
-    to process.
+    The directory is the state — ``plan.md``, ``order.json``, every
+    ``{stem}_director.json`` and ``conversation.md`` — read at the start and
+    written after every accepted turn, so a crash or the turn cap loses at most
+    the turn in flight and a re-run continues.  A done mark in
+    ``conversation.md`` means there is nothing to do: no call, no file touched.
+    Anyone who wants more deletes it (``scripts/director_say.sh`` does, and
+    adds an editor entry).  Deleting the directory starts over.
 
-    The ops accepted so far are written even when the conversation ends badly
-    — the turn cap, or a turn that fails every retry — and only then does the
-    stage fail: the user inspects them and continues by hand from
-    ``guided_edit`` rather than losing the whole conversation.
+    ``--source`` does not narrow it: one conversation owns the whole video.
     """
     rec = _recorder(ctx, "director")
     rec.clear()
@@ -658,11 +720,10 @@ def _director_run(ctx: PipelineContext) -> None:
     seed = _resolve_order(ctx, director=False)[0]
     director_dir = ctx.stage_dir("director")
     text_filter_dir = ctx.stage_dir("text_filter")
-    stems = sorted({segment.stem for segment in segments})
+    stems = [segment.stem for segment in segments]
     if set(ctx.stems) != set(stems):
         logging.info(
-            "director: --source does not narrow the director; one conversation owns the "
-            "whole video, so every source's _director.json is rewritten"
+            "director: --source does not narrow the director; one conversation owns the whole video"
         )
 
     inputs = [
@@ -677,42 +738,40 @@ def _director_run(ctx: PipelineContext) -> None:
         )
         for segment in segments
     ]
+    resume = Resume(
+        plan=_read_director_plan(ctx),
+        order=_read_director_order(ctx),
+        ops=_read_director_ops(ctx, stems),
+        conversation=conversation.load(_director_conversation_md(ctx)),
+    )
 
-    # Nothing half-written survives: these are all about to be rewritten, and a
-    # file from a previous run was built under a different segmentation anyway.
-    for stem in stems:
-        path = director_dir / f"{stem}_director.json"
-        if path.is_file():
-            path.unlink()
-    for stale in (_director_order_json(ctx), _director_plan_md(ctx)):
-        if stale.is_file():
-            stale.unlink()
-
-    print(f"[director] Edit operations: {len(segments)} segment(s) in one conversation")
+    print(f"[director] Edit operations: {len(segments)} source(s) in one conversation")
     try:
         result = run_director_conversation(
             inputs,
             ctx.cfg,
             summary=ctx.stage_dir("summary") / "summary.json",
             order=seed,
+            resume=resume,
+            checkpoint=lambda r: _write_director_state(ctx, stems, r),
             recorder=rec,
         )
-        # Written BEFORE the failure, never after it: the ops are what the
-        # conversation is for, and a cap is not a reason to throw them away.
-        for stem in stems:
-            _write_director_ops(ctx, stem, result.ops.get(stem, []))
-        _write_director_order(ctx, result.order or seed)
-        _write_director_plan(ctx, result.plan)
+        _write_missing_director_outputs(ctx, stems, seed)
         if not result.ok:
-            files = ", ".join(f"{stem}_director.json" for stem in stems)
             raise PipelineError(
                 f"[director] {result.error}; reviewed through display line "
-                f"{result.reviewed_through}. The ops accepted so far are written to "
-                f"{director_dir} ({files}) — inspect them and continue by hand "
-                "(--from-stage guided_edit)"
+                f"{result.reviewed_through}. Every accepted turn is saved in {director_dir} "
+                "— run the director again to continue from there."
             )
         _remove_divergence_note(ctx)
         write_order_note(ctx)
+        if result.paused:
+            raise PipelineStop(
+                f"[director] Paused after the plan (director.pause_after_plan). Read "
+                f"{_director_plan_md(ctx)}, then either delete the '## done' line in "
+                f"{_director_conversation_md(ctx)} or add a note with "
+                './scripts/director_say.sh "…", and run again from --from-stage director.'
+            )
     finally:
         rec.rebuild_index()
 

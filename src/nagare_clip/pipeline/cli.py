@@ -17,7 +17,7 @@ from pathlib import Path
 from nagare_clip.config import get_effective_config
 from nagare_clip.index_page import write_index
 from nagare_clip.logging_setup import setup_logging
-from nagare_clip.pipeline.errors import PipelineError
+from nagare_clip.pipeline.errors import PipelineError, PipelineStop
 from nagare_clip.pipeline.runner import PipelineContext, resolve_window, run_stages
 from nagare_clip.pipeline.sources import (
     discover_sources,
@@ -166,6 +166,9 @@ def main(argv: list[str] | None = None) -> int:
                 print(f"Thumbnails: {ctx.stage_dir('render') / 'render.md'}")
         else:
             print(f"Done (stopped at --to-stage {p['to_stage']})")
+        return 0
+    except PipelineStop as exc:
+        print(exc)
         return 0
     except PipelineError as exc:
         print(exc, file=sys.stderr)

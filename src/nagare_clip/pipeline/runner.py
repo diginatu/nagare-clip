@@ -13,7 +13,7 @@ from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from nagare_clip.pipeline.errors import PipelineError
+from nagare_clip.pipeline.errors import PipelineError, PipelineStop
 from nagare_clip.pipeline.sources import SourceMedia
 
 
@@ -77,7 +77,7 @@ def run_stages(stages: Sequence[Stage], ctx: PipelineContext) -> None:
         if ctx.from_index <= idx <= ctx.to_index:
             try:
                 stage.run(ctx)
-            except PipelineError:
+            except (PipelineError, PipelineStop):
                 raise
             except Exception as exc:
                 logging.exception("[%s] stage failed", stage.name)

@@ -21,12 +21,14 @@ from __future__ import annotations
 import json
 import logging
 import math
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
 
 from nagare_clip.audio_silence.cuts_file import read_cuts
 from nagare_clip.brief import apply_brief
 from nagare_clip.config import DEFAULTS
+from nagare_clip.director import conversation as conv
 from nagare_clip.director import director_llm as director_llm_mod
 from nagare_clip.director.context import project_context_block
 from nagare_clip.director.director_llm import (
@@ -239,10 +241,32 @@ class ConversationResult:
     order: list[Segment] = field(default_factory=list)
     #: The plan in force when the conversation ended; ``""`` if none was written.
     plan: str = ""
+    #: Every entry of ``conversation.md`` after this run.
+    conversation: list[conv.Entry] = field(default_factory=list)
+    #: A done mark ends the conversation (the model's, or a pause's).
+    done: bool = False
+    #: The done mark was written by ``pause_after_plan``, not by the model.
+    paused: bool = False
     ok: bool = True
     error: str = ""
     reviewed_through: int = 0
     turns: int = 0
+
+
+@dataclass(frozen=True)
+class Resume:
+    """The director's directory as the conversation resumes from it.
+
+    Every field is what a file held (``plan.md``, ``order.json``, each
+    ``{stem}_director.json``, ``conversation.md``) — hand edits included, which
+    is how a person changes the plan, the order or an op directly.  *order*
+    ``None`` means no ``order.json``: the seed applies.
+    """
+
+    plan: str = ""
+    order: list[Segment] | None = None
+    ops: dict[str, list[DirectorOp]] = field(default_factory=dict)
+    conversation: list[conv.Entry] = field(default_factory=list)
 
 
 def project_context(summary: Path | None, view: DisplayView) -> str:
@@ -346,42 +370,52 @@ def run_director_conversation(
     *,
     summary: Path | None = None,
     order: list[Segment] | None = None,
+    resume: Resume | None = None,
+    checkpoint: Callable[[ConversationResult], None] | None = None,
     call_llm: director_llm_mod.CallLLM | None = None,
     recorder: Recorder = NULL_RECORDER,
     unit: str = "director",
 ) -> ConversationResult:
-    """Edit the whole video in ONE conversation, and return its ops per source.
+    """Take the director's next turns, from the state *resume* holds.
 
-    *summary* is the summary stage's ``summary.json``; it becomes the project
-    context block inside the cached prefix.  The first turn asks for the
-    model's own plan (:data:`~.loop.PLAN_REQUEST`); :attr:`ConversationResult.plan`
-    is the one in force at the end.
+    The director is a step over its own directory: while ``conversation.md``
+    holds no done mark, each turn reads the state (plan, order, ops, and how
+    far the replies say they reviewed), writes the guidance that state calls
+    for (:func:`~.loop.next_request`), and takes one reply
+    (:func:`~.loop.apply_reply`).  A done mark in *resume* means nothing to do:
+    no call, and the result carries the state unchanged with ``turns=0``.
 
-    *inputs* are the segments of the view — one whole source each, in shooting
-    order, as the stage builds them: the view never changes shape, so a display
-    number names one line for the whole conversation.  *order* seeds the
-    playback order (the plan's, in source coordinates); the model may replace
-    it on any turn, and :attr:`ConversationResult.order` is what it ended
-    with.  The transcripts are loaded once, numbered once (:func:`build_display_view`),
-    and rendered once into the system message; each turn then asks for an
-    approximate range (:func:`~.loop.next_request`), reads the reply into the
-    accumulated state (:func:`~.loop.apply_reply`) and answers with what those
-    ops will play (:func:`~.preview.preview_turn`).
+    *summary* is the summary stage's ``summary.json`` (the project context in
+    the cached prefix).  *order* is the seed (the plan stage's order) for when
+    *resume* has none.  *inputs* are the view's segments — one whole source
+    each, in shooting order: the view never changes shape.
 
-    Nothing is written here.  Ending badly — the turn cap, or a turn that fails
-    every retry — comes back as ``ok=False`` with the ops accepted so far, for
-    the caller to write BEFORE it fails the run: the user then continues by
-    hand from ``guided_edit`` instead of losing the conversation.
+    Nothing is written here.  *checkpoint* is called with the state after every
+    accepted turn, so the caller can put each one on disk; ending badly — the
+    turn cap, or a turn that fails every retry — comes back as ``ok=False``
+    with everything accepted so far, and the next run continues from it.
     """
     director_cfg = cfg["director"]
     # Resolved at call time, never bound as a default: the stage and the tests
     # both reach the real client by patching the module attribute.
     call = call_llm or director_llm_mod._call_llm
-    ops_by_stem: dict[str, list[DirectorOp]] = {i.segment.stem: [] for i in inputs}
-    seed = list(order) if order else identity_segments([i.segment.stem for i in inputs])
+    resume = resume or Resume()
+    stems = [i.segment.stem for i in inputs]
+    seed = list(order) if order else identity_segments(stems)
+    entries = list(resume.conversation)
+    unchanged = ConversationResult(
+        ops={stem: list(resume.ops.get(stem, [])) for stem in stems},
+        order=resume.order if resume.order is not None else seed,
+        plan=resume.plan,
+        conversation=entries,
+        done=conv.is_done(entries),
+    )
     if not director_cfg.get("enabled", False):
-        logging.info("director: disabled, no ops for %d segment(s)", len(inputs))
-        return ConversationResult(ops_by_stem, order=seed)
+        logging.info("director: disabled, no turn taken")
+        return unchanged
+    if unchanged.done:
+        logging.info("director: conversation.md holds a done mark; nothing to do")
+        return unchanged
 
     transcripts = [load_segment_transcript(i) for i in inputs]
     view = build_display_view([(i.segment, t) for i, t in zip(inputs, transcripts)])
@@ -389,45 +423,73 @@ def run_director_conversation(
     chunk = chunk_lines(director_cfg)
     cap = turn_cap(len(view.lines), chunk)
     max_keep_lines = _max_keep_lines(director_cfg)
+    pause_after_plan = bool(director_cfg.get("pause_after_plan", False))
+
+    state = LoopState(
+        plan=resume.plan,
+        order=_seed_ranges(view, unchanged.order, counts),
+        reviewed_through=min(conv.reviewed_through(entries), len(view.lines)),
+    )
+    index_of = {stem: n for n, stem in reversed(list(enumerate(stems, start=1)))}
+    for stem, ops in resume.ops.items():
+        if stem in index_of and ops:
+            state.ops[index_of[stem]] = list(ops)
     logging.info(
-        "director: %d display line(s) over %d segment(s), %d line(s) per turn, cap %d turn(s)",
+        "director: %d display line(s) over %d segment(s), %d line(s) per turn, cap %d "
+        "turn(s); resuming at line %d with %d op(s)%s",
         len(view.lines),
         len(inputs),
         chunk,
         cap,
+        state.reviewed_through,
+        sum(len(v) for v in state.ops.values()),
+        "" if state.plan else ", no plan yet",
     )
 
     stage_cfg = apply_brief(director_cfg, cfg)
     context = project_context(summary, view)
     system = system_message(stage_cfg, view, context)
-    # The model's own replies, each under the one line of the ask it answered.
-    # The replies are its trajectory — which turn made which op, what it has
-    # already rewritten — and no recomputed state can show that.  The asks are
-    # trimmed because what they carried IS recomputed: a stale state block read
-    # as current is the exact failure this design removes.
-    history: list[dict[str, str]] = []
-    state = LoopState(order=_seed_ranges(view, seed, counts))
     previous: ReplyResult | None = None
     error = ""
+    paused = done = False
+    turns = 0
+
+    def result(**kw) -> ConversationResult:
+        ops_by_stem: dict[str, list[DirectorOp]] = {stem: [] for stem in stems}
+        for index, ops in state.ops.items():
+            ops_by_stem[inputs[index - 1].segment.stem].extend(ops)
+        final = order_segments(view, state.order) if state.order else None
+        return ConversationResult(
+            ops=ops_by_stem,
+            order=normalise(final, counts) if final else seed,
+            plan=state.plan,
+            conversation=list(entries),
+            done=done,
+            paused=paused,
+            reviewed_through=state.reviewed_through,
+            turns=turns,
+            **kw,
+        )
 
     recorder.begin(unit)
     traced = with_trace_meta(stage_cfg, stage=recorder.stage, unit=unit)
     attempts = retry_attempts(traced)
     for turn in range(cap):
         request = next_request(view, state, chunk)
-        summary_line = request_summary(view, state, chunk)
+        guide_line = request_summary(view, state, chunk)
         base = _ask(view, transcripts, state, previous, request)
+        had_plan = bool(state.plan)
         section = f"turn {turn + 1}"
-        result: ReplyResult | None = None
+        accepted: ReplyResult | None = None
         complaint = ""
         for attempt in range(attempts):
             attempt_cfg = cfg_for_attempt(traced, attempt)
             # The complaint is the previous attempt's own parse error, handed
             # back: re-sending the identical message at a higher temperature is
             # the one thing that cannot use what went wrong.
-            content = f"{base}\n\n{complaint}" if complaint else base
-            ask = {"role": "user", "content": content}
-            turn_messages = [system] + history + [ask]
+            live = f"{base}\n\n{complaint}" if complaint else base
+            turn_messages = [system] + conv.messages(entries, live=live)
+            ask = turn_messages[-1]
             try:
                 reply = call(turn_messages, attempt_cfg)
             except Exception as e:  # noqa: BLE001 - recoverable
@@ -467,25 +529,29 @@ def run_director_conversation(
             if parsed.error:
                 complaint = f"That reply could not be used: {parsed.error}"
                 continue
-            # The ask goes into the history TRIMMED: one line naming the range,
-            # so the reply under it stays readable and nothing else is re-sent.
-            history.extend(
-                [
-                    {"role": "user", "content": summary_line},
-                    {"role": "assistant", "content": reply},
-                ]
-            )
-            result = parsed
+            accepted = parsed
             break
-        if result is None:
+        if accepted is None:
             error = f"turn {turn + 1} failed after all {attempts} attempt(s)"
             break
-        if result.done:
-            logging.info("director: done after %d turn(s)", turn + 1)
+        # The guidance goes on record as its one line: what it carried in full
+        # (the edit state) is recomputed from the files every turn.
+        entries.extend([conv.Entry(conv.GUIDE, guide_line), conv.Entry(conv.DIRECTOR, reply)])
+        turns += 1
+        if accepted.done:
+            done = True
+        elif pause_after_plan and not had_plan and state.plan:
+            done = paused = True
+        if done:
+            entries.append(conv.Entry(conv.DONE))
+        if checkpoint is not None:
+            checkpoint(result())
+        if done:
+            logging.info("director: %s after %d turn(s)", "paused" if paused else "done", turns)
             break
         # No separate record for the playback: it is the next turn's ask, and
         # that ask is recorded in full.  Writing it twice doubled the report.
-        previous = result
+        previous = accepted
         logging.info(
             "director: turn %d/%d reviewed through display line %d of %d (%d op(s))",
             turn + 1,
@@ -497,20 +563,7 @@ def run_director_conversation(
     else:
         error = f"the turn cap ({cap} turns) was reached"
 
-    for index, ops in state.ops.items():
-        ops_by_stem[inputs[index - 1].segment.stem].extend(ops)
-    final = order_segments(view, state.order) if state.order else None
-    final_order = normalise(final, counts) if final else seed
-    outcome = LLM_ERROR if error else OK
-    recorder.flush_unit(unit, outcome=outcome, reason=error)
+    recorder.flush_unit(unit, outcome=LLM_ERROR if error else OK, reason=error)
     if error:
         logger.error("director: %s", error)
-    return ConversationResult(
-        ops=ops_by_stem,
-        order=final_order,
-        plan=state.plan,
-        ok=not error,
-        error=error,
-        reviewed_through=state.reviewed_through,
-        turns=state.turns,
-    )
+    return result(ok=not error, error=error)

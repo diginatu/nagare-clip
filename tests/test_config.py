@@ -1217,6 +1217,12 @@ def test_revise_prompt_documents_the_ids_and_the_split():
     assert '"message"' in prompt
 
 
+def test_director_prompt_says_who_the_editor_is():
+    prompt = get_effective_config(None, {})["director"]["prompt"]
+    assert "Guide:" in prompt and "Editor:" in prompt
+    assert "the editor wins" in prompt
+
+
 def test_director_prompt_explains_the_plan():
     prompt = get_effective_config(None, {})["director"]["prompt"]
     assert "your first reply is a plan" in prompt
@@ -1279,9 +1285,14 @@ def test_director_prompt_did_not_grow_for_the_silence_lines():
     stage's directions are no longer shown).  The prompt says only that the
     plan exists, stays revisable and marks sections, not op boundaries; what a
     plan covers is in loop.PLAN_REQUEST, sent once.  The prefix as a whole
-    SHRANK: the directions list and SECTION_BOUNDARY_NOTE left it."""
+    SHRANK: the directions list and SECTION_BOUNDARY_NOTE left it.
+
+    -> ceiling 7150: the Speakers paragraph.  The director resumes from its
+    directory and a person joins by writing an editor entry; the prompt is the
+    only place that says what an Editor: part is and that it wins, since no
+    code treats the person differently."""
     prompt = get_effective_config(None, {})["director"]["prompt"]
-    assert len(prompt) < 6900
+    assert len(prompt) < 7150
 
 
 def _display_view(n: int = 100):

@@ -19,6 +19,7 @@ import pytest
 
 from nagare_clip.audio_silence.cuts_file import write_cuts
 from nagare_clip.config import get_effective_config
+from nagare_clip.director import conversation
 from nagare_clip.director import director_llm as dl
 from nagare_clip.director.display import build_display_view
 from nagare_clip.director.loop import PLAN_REQUEST
@@ -26,7 +27,7 @@ from nagare_clip.director.preview import STATE_HEADER
 from nagare_clip.director.run import VIEW_HEADER, SegmentInputs, load_segment_transcript
 from nagare_clip.llm_client import CACHEABLE_PREFIX_KEY
 from nagare_clip.pipeline import stages as st
-from nagare_clip.pipeline.errors import PipelineError
+from nagare_clip.pipeline.errors import PipelineError, PipelineStop
 from nagare_clip.pipeline.runner import PipelineContext
 from nagare_clip.pipeline.sources import SourceMedia
 
@@ -188,7 +189,7 @@ def _run(monkeypatch, ctx, reply=None, calls=None, replies=None):
 
 
 HISTORY_LINE = re.compile(
-    r"^(Write the plan\.|Review around lines \d+ to \d+\.|Every line has been reviewed\.)$"
+    r"^Guide: (Write the plan\.|Review around lines \d+ to \d+\.|Every line has been reviewed\.)$"
 )
 
 
@@ -256,7 +257,7 @@ class TestTheMessages:
     def test_the_very_first_turn_already_carries_the_whole_state(self, project, monkeypatch):
         first = _run(monkeypatch, _ctx(project, chunk_lines=4))[0]
         assert len(first) == 2
-        assert first[-1]["content"].startswith(STATE_HEADER)
+        assert first[-1]["content"].startswith(f"Guide: {STATE_HEADER}")
         assert "(no ops: every line plays its default)" in first[-1]["content"]
 
     def test_the_state_covers_every_segment_on_every_turn(self, project, monkeypatch):
@@ -391,11 +392,13 @@ class TestTheCap:
             )
         return json.dumps({"range": [2, 2], "reviewed_through": 1, "ops": []})
 
-    def test_the_error_names_the_last_reviewed_line_and_the_files(self, project, monkeypatch):
+    def test_the_error_names_the_last_reviewed_line_and_says_to_run_again(
+        self, project, monkeypatch
+    ):
         ctx = _ctx(project, chunk_lines=4)
         _calls, message = _run_failing(monkeypatch, ctx, self._silent)
         assert "line 1" in message
-        assert "dev_director.json" in message and "mix_director.json" in message
+        assert "run the director again to continue" in message
 
 
 class TestATurnThatNeverParses:
@@ -672,3 +675,95 @@ def test_the_view_header_says_shooting_order(project, monkeypatch):
     system = _run(monkeypatch, _ctx(project, chunk_lines=40))[0][0]["content"]
     assert "shooting order" in system[system.index(VIEW_HEADER) :][:200]
     assert "playback order under one numbering" not in system
+
+
+class TestTheDirectory:
+    """The directory is the state: a run is one step over it."""
+
+    def _director(self, ctx):
+        return ctx.stage_dir("director")
+
+    def test_a_finished_run_leaves_a_done_mark_and_every_state_file(self, project, monkeypatch):
+        ctx = _ctx(project, chunk_lines=40)
+        _run(monkeypatch, ctx)
+        d = self._director(ctx)
+        for name in ("plan.md", "order.json", "dev_director.json", "conversation.md"):
+            assert (d / name).is_file(), name
+        entries = conversation.load(d / "conversation.md")
+        assert conversation.is_done(entries)
+        assert entries[0] == conversation.Entry(conversation.GUIDE, "Write the plan.")
+
+    def test_a_done_directory_makes_no_call_and_touches_no_file(self, project, monkeypatch):
+        ctx = _ctx(project, chunk_lines=40)
+        _run(monkeypatch, ctx)
+        d = self._director(ctx)
+        before = {p.name: (p.read_bytes(), p.stat().st_mtime_ns) for p in d.iterdir()}
+        assert _run(monkeypatch, ctx) == []
+        after = {p.name: (p.read_bytes(), p.stat().st_mtime_ns) for p in d.iterdir()}
+        assert after == before
+
+    def test_an_editor_entry_resumes_the_conversation(self, project, monkeypatch):
+        ctx = _ctx(project, chunk_lines=40)
+        _run(monkeypatch, ctx)
+        conversation.say(self._director(ctx) / "conversation.md", "冒頭は残して")
+        calls = _run(monkeypatch, ctx)
+        assert len(calls) == 1  # all reviewed already: one turn, the model says done
+        newest = calls[0][-1]["content"]
+        assert newest.startswith("Editor: 冒頭は残して\n\nGuide: ")
+        assert "Every line" in newest
+        # the earlier turns are the history it reads
+        assert [m["role"] for m in calls[0][1:3]] == ["user", "assistant"]
+
+    def test_a_hand_edited_plan_is_the_plan_in_force(self, project, monkeypatch):
+        ctx = _ctx(project, chunk_lines=40)
+        _run(monkeypatch, ctx)
+        d = self._director(ctx)
+        (d / "plan.md").write_text("# The director's plan\n\n人が書いた方針\n", encoding="utf-8")
+        conversation.say(d / "conversation.md", "方針を直した")
+        newest = _run(monkeypatch, ctx)[0][-1]["content"]
+        assert "YOUR PLAN (in force" in newest and "人が書いた方針" in newest
+
+    def test_a_failed_run_keeps_its_turns_and_the_next_run_continues(self, project, monkeypatch):
+        ctx = _ctx(project, chunk_lines=4, max_retries=0)
+        total = len(_view(ctx).lines)
+        broken = {"on": True}
+
+        def script(messages, cfg):
+            asked = _asked(messages[-1]["content"])
+            if asked is None:
+                return json.dumps({"done": True})
+            first, last = asked
+            if first > 4 and broken["on"]:
+                return "not json"
+            return json.dumps(
+                {"range": [first, last], "reviewed_through": last, "ops": [_cut_op(first)]}
+            )
+
+        with pytest.raises(PipelineError, match="run the director again"):
+            _run(monkeypatch, ctx, reply=script)
+        d = self._director(ctx)
+        entries = conversation.load(d / "conversation.md")
+        assert conversation.reviewed_through(entries) == 4
+        assert not conversation.is_done(entries)
+        broken["on"] = False
+        calls = _run(monkeypatch, ctx, reply=script)
+        assert "around lines 5 to" in calls[0][-1]["content"]  # no plan turn again
+        assert conversation.reviewed_through(conversation.load(d / "conversation.md")) == total
+
+    def test_pause_after_plan_stops_cleanly_with_the_mark_written(self, project, monkeypatch):
+        ctx = _ctx(project, chunk_lines=40, pause_after_plan=True)
+        calls: list = []
+        with pytest.raises(PipelineStop, match="plan.md"):
+            _run(monkeypatch, ctx, calls=calls)
+        assert len(calls) == 1
+        d = self._director(ctx)
+        assert (d / "plan.md").read_text(encoding="utf-8").endswith("PLAN\n")
+        assert conversation.is_done(conversation.load(d / "conversation.md"))
+        # Deleting the mark continues, and the plan already exists: no pause again.
+        conversation.say(d / "conversation.md", "この方針でいい")
+        _run(monkeypatch, ctx)
+        assert conversation.is_done(conversation.load(d / "conversation.md"))
+
+
+def _cut_op(line):
+    return {"type": "cut", "lines": [line, line], "note": "x"}
