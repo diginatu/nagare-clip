@@ -1,6 +1,6 @@
 # Silence lines in `_edits.txt` — design
 
-Status: spec (phase 1). Nothing here is implemented yet.
+Status: spec; §12's decisions were taken on 2026-09-26.
 Branch: `feat/silence-lines-in-edits` (from `main` c0479c4).
 
 ## 1. Problem
@@ -75,7 +75,17 @@ A silence line, after its marker tags are removed, is exactly the text
 This is the same string the director's whole-video view prints after
 `N: ` (`display.py`, `DisplayLine.text` for `is_silence=True`).
 
-The parser only needs the shape: markers stripped, then
+**The bracket body is opaque.** It starts at `[silent ` and ends at the first
+**unescaped** `]`. `silence_body` escapes only `\` (as `\\`) and `]` (as `\]`)
+inside descriptions, using the same backslash convention as
+`escape_overlay_text`. The director's view goes through the same renderer, so it
+shows the same escapes. Markers and `{{old->new}}` patches are recognised
+**only outside** the body: a description that contains `<keep>` or `{{` is
+description text, never a marker.
+
+A physical line is a silence line iff it is
+`<marker tags>* [silent <number>s(: <body>)?] <marker tags>*`: nothing but
+valid marker tags (and whitespace) outside the body, and the body matches
 `^\[silent [0-9]+(?:\.[0-9]+)?s(?:: .*)?\]$`. **The parser ignores the seconds
 and the description text.** Editing either is not an error (user decision).
 
@@ -91,7 +101,8 @@ and `order.py`; pure, no I/O):
 
 | Name | What it does | Moved from |
 |---|---|---|
-| `silence_body(seconds, descriptions=(), after_line=None)` | The one formatter for a silence bracket | `director/silence_lines.py` (re-exported there, so existing imports keep working) |
+| `silence_body(seconds, descriptions=(), after_line=None)` | The one formatter for a silence bracket; escapes `\` and `]` in descriptions (§2.2) | `director/silence_lines.py` (re-exported there, so existing imports keep working) |
+| `split_silence_line(line) -> (before, body, after) \| None` | Finds the opaque body (first unescaped `]`) and checks that only markers sit outside it | new |
 | `gap_spans(whisperx_data)` | `{n: (start, end)}` for every between-line gap, from `line_speech_spans` | `director/silence_lines.py` (re-exported) |
 | `silence_line_min(cfg_section)` | Defensive read of `director.silence_line_min` | `director/run.py` (re-exported) |
 | `SILENCE_LINE_RE` | The shape in §2.2 | new |
@@ -128,7 +139,7 @@ JSON and one number, so `check_edits` and `intervals` can recompute it.
 This is a superset of what the director saw when the plan reorders a source.
 Per segment, `build_silence_lines(lines=(a, b))` leaves out the silence after
 `b`. Every `n~` the director can write still maps to exactly one line; the
-extra lines at segment ends carry no op. See open question Q1.
+extra lines at segment ends carry no op. See Q1 (§12).
 
 A `n~` from a hand-written `_director.json` that names a silence with **no**
 silence line (shorter than `silence_line_min`, or no gap) is reported as
@@ -159,8 +170,11 @@ class EditFile:
 
 Rules:
 
-- A physical line is a silence line iff it matches `SILENCE_LINE_RE` after
-  `KEEP/SPEED/OVERLAY/CUT` tags are stripped. Otherwise it is a speech line.
+- A physical line is a silence line iff `split_silence_line` accepts it (§2.2).
+  Otherwise it is a speech line.
+- For a silence line, every consumer (extractors, tag checks, `clean_old`,
+  projection) sees only the markers in `before` and `after`. The body is never
+  scanned for tags or patches.
 - A silence line's `speech_line` is the number of speech lines seen before it.
 - The parser never raises. Structural problems (a silence line before the first
   speech line, two in a row, `{{…}}` or other text on one) are reported by
@@ -326,8 +340,8 @@ mentions `extra`.
 - **Existing projects whose ops have `~` edges** (water_pump_4 included) lose
   those ops when `intervals` re-runs: nothing reads `_director.json` there any
   more. Re-running `--from-stage guided_edit` restores them. For span ops that
-  costs no LLM call; only `edit` ops call the small model. But it overwrites
-  hand edits in `guided_edit/_edits.txt`. See Q4.
+  costs no LLM call; only `edit` ops call the small model. It overwrites hand
+  edits in `guided_edit/_edits.txt`. There is no migration command (Q4).
 - `sentence_split` re-run, or a changed `silence_line_min` after `guided_edit`:
   the silence set no longer matches and `intervals` fails with a message that
   names the line and says to re-run `guided_edit`. Today a changed segment
@@ -364,7 +378,7 @@ Add to `AGENTS.md` → Hard Constraints, right after "Preserve the interval JSON
 >   No stage may feed `intervals` an edit from another source; an edit the file
 >   cannot express is a format change to `_edits.txt`, not a side channel.
 
-The parenthetical depends on Q6.
+The parenthetical is Q6 (§12).
 
 Guard tests (`tests/intervals/test_single_edit_record.py`):
 
@@ -455,8 +469,12 @@ the new path on the same inputs, and lists any range that differs.
 - **A speech line that looks like a silence line.** WhisperX text that is exactly
   `[silent 3.0s]` would parse as silence. It is very unlikely, and
   `silence_problems` then reports it as unexpected, naming the line.
-- **Marker syntax inside a description.** A vision description containing
-  `<keep>`, `</speed>` or `{{` would be read as a marker (Q7).
+- **Marker syntax inside a description.** This is handled by the opaque body
+  (§2.2): markers are recognised only outside it, and its end is the first
+  unescaped `]`. What remains is a hand edit that deletes an escape backslash:
+  the body then ends early, the tail is non-marker text outside it, so the line
+  no longer parses as a silence line, and `check_edits` reports a missing
+  silence line (and a line-count mismatch) at that line.
 - **Clip behaviour drift** for ops without `~` edges. Physical ranges now
   contain silence lines, so run lengths in `clip_range` change and ties may break
   differently. The clip-edge rule restores the placed words. The existing
@@ -470,40 +488,32 @@ the new path on the same inputs, and lists any range that differs.
   The grep in §6 plus a test that feeds a silence-lined file to every reader
   covered by an existing test mitigate this.
 
-## 12. Open questions
+## 12. Decisions (formerly open questions)
 
-- **Q1 — which silence set.** The spec uses the whole-source set
-  (`build_silence_lines(lines=None)`). It covers every `n~` the director can
-  write and needs no plan order to recompute, so `check_edits` stays a
-  JSON+number check. It adds a silence line after a segment's last line under a
-  reorder, which the director never saw. The alternative is the exact per-segment
-  union, which needs the order in guided_edit, check_edits and intervals.
-  Recommendation: whole-source.
-- **Q2 — speech edge of a `~` op.** Marker semantics (raw word start/end, and
-  `seg_times` for the caption) keep ops without `~` byte-identical, but differ
-  from `_span_bounds` where the last word is stretched. The alternative is to
-  resolve every edge of every tag through `line_speech_spans`, which changes
-  today's output for every op. Recommendation: marker semantics; equivalence is
-  asserted on the silence edge, and the divergence is pinned by a test.
-- **Q3 — `guided_edit.enabled: false`.** Recommendation: still insert silence
-  lines, so a human can add `<keep>` around a silence without the director. The
-  cost is that the disabled path is no longer a byte-identical copy.
-- **Q4 — existing projects with `~` ops.** (a) Accept: re-run `guided_edit`
-  (overwrites hand edits in `guided_edit/_edits.txt`). (b) Add a deterministic,
-  no-LLM migration command that inserts silence lines into an existing
-  `guided_edit/_edits.txt` and applies only its `~` span ops, keeping hand edits.
-  Recommendation: (b), if hand-edited guided_edit files exist in live projects;
-  otherwise (a).
-- **Q5 — telling legacy from all-deleted.** A file where every silence line was
-  hand-deleted looks legacy and passes. Alternatives: a header line (it would
-  break "line N is a segment" for plain readers), or a sidecar. Recommendation:
-  accept the gap.
-- **Q6 — `_cuts.txt` and the new rule.** `intervals` also applies audio_silence's
-  human-editable `_cuts.txt`, which is not in `_edits.txt`. As worded, the rule
-  would forbid that. Recommendation: name `_cuts.txt` as the one other input (a
-  detection result the human prunes, not an edit decision), as in the draft
-  bullet in §9. Or fold the cut list into `_edits.txt` in a later change.
-- **Q7 — sanitising descriptions.** Recommendation: `silence_body` replaces
-  `< > { }` in descriptions with their full-width forms. Because it is the one
-  renderer, the director's view changes the same way; that affects only
-  descriptions containing those characters.
+The user decided each of these on 2026-09-26. The `Qn` labels are kept because
+the sections above refer to them.
+
+- **Q1 — which silence set: the whole source.** `build_silence_lines(lines=None)`
+  covers every `n~` the director can write, and it needs no plan order to
+  recompute. `check_edits` therefore stays a check against the JSON plus one
+  number. Under a reorder, it adds a silence line after a segment's last line
+  that the director never saw.
+- **Q2 — speech edge of a `~` op: marker semantics.** A speech edge resolves to
+  the raw word start/end, and a timelapse caption to `seg_times`. Ops without a
+  `~` edge stay byte-identical. Equivalence with `_span_bounds` is asserted on
+  the silence edge. The stretched-word divergence is pinned by a test.
+- **Q3 — `guided_edit.enabled: false`: silence lines are still inserted.** A
+  human can then add a `<keep>` around a silence without the director. The
+  disabled path is no longer a byte-identical copy.
+- **Q4 — existing projects with `~` ops: (a).** Re-run `guided_edit`; there is
+  no migration command. water_pump_4 will re-run `guided_edit`.
+- **Q5 — a file with every silence line deleted: accepted as legacy.** It is a
+  known gap.
+- **Q6 — `_cuts.txt`: named as the one other input** to `intervals` in the
+  AGENTS.md rule (§9's draft bullet). It is a detection result the human
+  prunes, not an editorial decision.
+- **Q7 — descriptions: no substitution.** The bracket body is opaque to every
+  marker and patch extractor, and ends at the first unescaped `]`.
+  `silence_body` escapes only `\` and `]` with a backslash (the
+  `escape_overlay_text` convention). The director view shares the renderer.
+  See §2.2.
