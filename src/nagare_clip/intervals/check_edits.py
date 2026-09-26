@@ -13,7 +13,13 @@ correct them all in a single pass.  It never raises; it collects.
 Checks performed (mirroring the real intervals-stage parsing in ``sync_json.py``
 so the verdict matches what the intervals stage would do):
 
-- line count vs. number of JSON segments (lines map 1:1 to segments);
+- speech-line count vs. number of JSON segments (speech lines map 1:1 to
+  segments);
+- silence lines (``guided_edit`` writes one after speech line ``n`` for every
+  wait of at least ``director.silence_line_min``): missing, duplicated,
+  unexpected or text-carrying ones are named by physical line.  Their bracket
+  body is opaque — never scanned for tags or patches — and its seconds and
+  description are not compared;
 - ``{{old->new}}`` patch syntax (unbalanced braces, empty no-op ``{{->}}``);
 - decomposition integrity (text changed outside markers, ``old`` side not
   matching the original, line not covering the whole segment);
@@ -33,6 +39,13 @@ import sys
 from pathlib import Path
 from typing import Any, NamedTuple
 
+from nagare_clip.edit_lines import (
+    DEFAULT_SILENCE_LINE_MIN,
+    MARKER_RE,
+    expected_silences,
+    parse_edit_lines,
+    silence_problems,
+)
 from nagare_clip.intervals.sync_json import (
     _OVERLAY_MARK_RE,
     CUT_TAG_RE,
@@ -47,8 +60,9 @@ from nagare_clip.text_filter.llm_filter import PATCH_RE, apply_patches_to_lines
 class Problem(NamedTuple):
     """A single validation problem.
 
-    ``line`` is the 1-based line number in ``_edits.txt`` (``None`` for
-    file-level problems such as a line-count mismatch).
+    ``line`` is the 1-based PHYSICAL line number in ``_edits.txt``, silence
+    lines counted (``None`` for file-level problems such as a line-count
+    mismatch).
     """
 
     line: int | None
@@ -58,12 +72,7 @@ class Problem(NamedTuple):
 # Any recognised marker tag (valid openers/closers), in the same forms the
 # intervals-stage extractors accept.  Used to tokenise a line for balance checking and,
 # by subtraction, to spot malformed tags.
-_ANY_TAG_RE = re.compile(
-    r"<keep>|</keep>"
-    r'|<speed\s+factor="[0-9.]+">|</speed>'
-    r'|<overlay\s+text="[^"]*"\s+duration="[0-9.]+"\s*/>'
-    r"|<cut>|</cut>"
-)
+_ANY_TAG_RE = MARKER_RE
 # A tag-like fragment that survives stripping the valid tags above → malformed.
 _TAGLIKE_RE = re.compile(r"</?(?:keep|speed|overlay|cut)\b")
 
@@ -143,14 +152,16 @@ def _diagnose_decomposition(edit_line: str, original_text: str) -> str | None:
     return None
 
 
-def _check_tags(edit_lines: list[str]) -> list[Problem]:
+def _check_tags(edit_lines: list[tuple[int, str]]) -> list[Problem]:
     """Check keep/speed/cut tag balance, overlay markers, and well-formedness.
 
     Tracks one open state per *span* tag type (nesting of the same type is not
     allowed, matching the intervals-stage extractors).  ``<overlay .../>`` is a
     self-closing point marker with no balance to track — only its attributes
-    are validated.  ``edit_lines`` must already be sliced to the segment count,
-    mirroring the extractors' ``break`` at ``seg_idx >= len(segments)``.
+    are validated.  ``edit_lines`` are ``(physical line, scannable text)`` —
+    a silence line contributes only the markers around its body — already
+    sliced to the segment count, mirroring the extractors' stop at the first
+    speech line past the JSON's segments.
     """
     problems: list[Problem] = []
     # tag name -> opening line number (None == not open)
@@ -160,8 +171,7 @@ def _check_tags(edit_lines: list[str]) -> list[Problem]:
         "cut": None,
     }
 
-    for idx, line in enumerate(edit_lines):
-        lineno = idx + 1
+    for lineno, line in edit_lines:
         for tok in _ANY_TAG_RE.finditer(line):
             text = tok.group()
             mark = _OVERLAY_MARK_RE.match(text)
@@ -201,45 +211,66 @@ def _check_tags(edit_lines: list[str]) -> list[Problem]:
     return problems
 
 
-def check_edits(edit_lines: list[str], json_data: dict[str, Any]) -> list[Problem]:
-    """Validate ``edit_lines`` against ``json_data`` and return all problems."""
+def check_edits(
+    edit_lines: list[str],
+    json_data: dict[str, Any],
+    *,
+    silence_line_min: float = DEFAULT_SILENCE_LINE_MIN,
+) -> list[Problem]:
+    """Validate ``edit_lines`` against ``json_data`` and return all problems.
+
+    *silence_line_min* is ``director.silence_line_min``: the shortest wait
+    guided_edit writes a silence line for, which decides where one belongs.
+    """
     segments = json_data.get("segments", [])
     problems: list[Problem] = []
+    parsed = parse_edit_lines(edit_lines)
+    speech = [slot for slot in parsed.slots if not slot.is_silence]
 
-    if len(edit_lines) != len(segments):
+    if len(speech) != len(segments):
         problems.append(
             Problem(
                 None,
-                f"edits file has {len(edit_lines)} line(s) but JSON has "
+                f"edits file has {len(speech)} line(s) but JSON has "
                 f"{len(segments)} segment(s); lines must map 1:1 to segments",
             )
         )
 
-    # Only the first len(segments) lines are consumed by the intervals stage.
-    in_range = edit_lines[: len(segments)]
-    problems.extend(_check_tags(in_range))
+    problems.extend(
+        Problem(line, message)
+        for line, message in silence_problems(
+            parsed, expected_silences(json_data, silence_line_min), silence_line_min
+        )
+    )
+
+    # Only the lines up to the len(segments)-th speech line are consumed by
+    # the intervals stage.
+    in_range = [slot for slot in parsed.slots if slot.speech_line <= len(segments)]
+    problems.extend(_check_tags([(slot.file_line, slot.markers) for slot in in_range]))
 
     # A line must never contain a newline. Read from a file it cannot; but an
     # in-memory list (guided_edit checks its result before writing) can, and
     # every other check here still passes because the list length is right.
     # The newline only becomes an extra physical line at "\n".join() time,
     # shifting every later line off its segment — so catch it before the write.
-    for idx, line in enumerate(in_range):
-        if "\n" in line or "\r" in line:
+    for slot in in_range:
+        if "\n" in slot.text or "\r" in slot.text:
             problems.append(
-                Problem(idx + 1, "line contains an embedded newline; one line per segment")
+                Problem(slot.file_line, "line contains an embedded newline; one line per segment")
             )
 
-    for idx, line in enumerate(in_range):
-        lineno = idx + 1
-        cleaned = _strip_tags(line)
+    for slot in in_range:
+        if slot.is_silence:
+            continue
+        lineno = slot.file_line
+        cleaned = _strip_tags(slot.text)
         syntax = _check_patch_syntax(cleaned)
         if syntax:
             problems.extend(Problem(lineno, msg) for msg in syntax)
             # Don't pile a confusing decomposition error onto a syntax error.
             continue
 
-        original = segments[idx].get("text", "").strip()
+        original = segments[slot.speech_line - 1].get("text", "").strip()
         corrected = apply_patches_to_lines([cleaned])[0].strip()
         # Only diagnose lines that actually changed (skip untouched segments);
         # a None cause means the line decomposes cleanly — a legitimate edit.
@@ -258,7 +289,7 @@ def check_edits(edit_lines: list[str], json_data: dict[str, Any]) -> list[Proble
             sync_text_to_json(json_data, edit_lines)
         except ValueError as exc:
             m = re.search(r"Segment (\d+)", str(exc))
-            lineno = int(m.group(1)) + 1 if m else None
+            lineno = parsed.file_index(int(m.group(1)) + 1, False) if m else None
             problems.append(Problem(lineno, f"intervals-stage sync rejects this file: {exc}"))
 
     problems.sort(key=lambda p: (p.line is None, p.line or 0))
@@ -284,6 +315,16 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         help="_edits.txt path (may contain {{old->new}} and keep/speed/overlay/cut markers)",
     )
     parser.add_argument("--json", required=True, dest="json_path", help="WhisperX JSON path")
+    parser.add_argument(
+        "--silence-line-min",
+        type=float,
+        default=DEFAULT_SILENCE_LINE_MIN,
+        dest="silence_line_min",
+        help=(
+            "director.silence_line_min: the shortest wait guided_edit writes a "
+            f"silence line for (default {DEFAULT_SILENCE_LINE_MIN})"
+        ),
+    )
     return parser.parse_args(argv)
 
 
@@ -293,7 +334,7 @@ def main(argv: list[str] | None = None) -> None:
     with open(args.json_path, encoding="utf-8") as f:
         json_data = json.load(f)
 
-    problems = check_edits(edit_lines, json_data)
+    problems = check_edits(edit_lines, json_data, silence_line_min=args.silence_line_min)
     for p in problems:
         print(_format(p))
     if problems:
