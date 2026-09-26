@@ -895,7 +895,9 @@ class DirectorConfig(BaseModel):
             "Shortest wait between two lines (seconds) shown to the director as a "
             'silence line of its own, addressable as "n~"; a shorter one stays a '
             "`gap Xs` figure in the preceding line's bracket. Matches gap_context."
-            "min_gap by default, so every described gap has a line to land in"
+            "min_gap by default, so every described gap has a line to land in. "
+            "guided_edit writes the same silence lines into its _edits.txt, and "
+            "check_edits/intervals use this value to know where they belong"
         ),
     )
     prompt: str = _commented(
@@ -908,7 +910,9 @@ class GuidedEditConfig(BaseModel):
     section_comment: ClassVar[str] = (
         "guided_edit stage (Pass B2): a small local LLM applies each director op,\n"
         "inserting <cut>/<speed>/<overlay>/<keep> tags (and {{old->new}} patches) into\n"
-        "the verbatim _edits.txt. Disabled by default (copies edits through)."
+        "the verbatim _edits.txt, where the director's silence lines are written in\n"
+        "so an op on \"n~\" is a marker too. Disabled by default (copies edits\n"
+        "through, silence lines added)."
     )
     enabled: bool = Field(False, description="Enable applying director ops")
     provider: str = Field(

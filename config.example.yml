@@ -191,12 +191,14 @@ director:
   retry_temp_cap: 0.8   # Maximum temperature any retry uses
   chunk_lines: 40   # How many lines of the whole-video transcript one turn of the director's conversation is asked to review (approximately — it stops where the footage breaks). The turn cap is ceil(display lines / this) * 2, and reaching it fails the stage after writing the ops accepted so far
   max_keep_lines: 8   # Reject a "keep" op wider than this many lines (0 = no limit); a keep may span a continuous on-screen event, but one this wide is marking talking, not an event
-  silence_line_min: 5.0   # Shortest wait between two lines (seconds) shown to the director as a silence line of its own, addressable as "n~"; a shorter one stays a `gap Xs` figure in the preceding line's bracket. Matches gap_context.min_gap by default, so every described gap has a line to land in
+  silence_line_min: 5.0   # Shortest wait between two lines (seconds) shown to the director as a silence line of its own, addressable as "n~"; a shorter one stays a `gap Xs` figure in the preceding line's bracket. Matches gap_context.min_gap by default, so every described gap has a line to land in. guided_edit writes the same silence lines into its _edits.txt, and check_edits/intervals use this value to know where they belong
   # prompt: "..."   # System prompt (has a sensible default)
 
 # guided_edit stage (Pass B2): a small local LLM applies each director op,
 # inserting <cut>/<speed>/<overlay>/<keep> tags (and {{old->new}} patches) into
-# the verbatim _edits.txt. Disabled by default (copies edits through).
+# the verbatim _edits.txt, where the director's silence lines are written in
+# so an op on "n~" is a marker too. Disabled by default (copies edits
+# through, silence lines added).
 guided_edit:
   enabled: false   # Enable applying director ops
   provider: ollama_chat   # LiteLLM provider prefix: ollama_chat | openai | gemini | anthropic

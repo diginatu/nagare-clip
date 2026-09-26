@@ -9,6 +9,53 @@ See the [stage overview in AGENTS.md](../../AGENTS.md#intervals--patch-applicati
 - `extract_overlay_marks()` returns `(start, duration, text)` for each self-closing `<overlay text="..." duration="N.N"/>` marker and writes them to a top-level `overlays` array (`{start, duration, text}` — **no end time**); overlays skip `subtract_intervals()`/speed annotation entirely. There is no wrapping form and no closing tag: an overlay's on-screen time used to be whatever the `</overlay>` position happened to span, which turned a single-line director op into a 75.8s caption on real footage. The marker's position resolves via `_resolve_point()` to the start of the first word at or after it (falling through to later segments, so a marker at a line's end starts with the next line; past the last word it falls back to that word's end). An empty `text=""` or a non-positive `duration` is skipped with a warning. `duration` is **edited-timeline** seconds: the blender stage's `place_overlays()` maps only the start through `tl_map` (speed-aware) and sets the strip length to `duration * fps` output frames, so cuts and speed ranges inside the window cannot shorten it; the strip is clamped to the end of that source's timeline map so it can't bleed onto the next source, and an anchor that falls on no keep interval is skipped. That last case is now rare, because `run_intervals()` calls `intervals.snap_overlay_starts(overlay_marks, timing.segment_times(...), keep_intervals_dicts)` after **every** keep-interval pass (margins, caption expansion, min_keep, min_cut) — an anchor on cut footage is moved to the earliest keep interval overlapping the marker's own transcript line, clamped to that line's start so a keep interval reaching in from the previous line can't pull the caption backwards, and preferring a keep interval *after* the anchor over one before it (mid-line markers move forward with their words). Rationale: an overlay anchors at the start of its line and a line's opening seconds are routinely cut (silence detection reaches them, `keep_pre_margin` does not reach back far enough) — a real run lost the series-recap caption to a 1.99s miss on `2.495` vs. a first keep interval of `4.488-12.638`. `duration` is deliberately **not** clipped to the line's surviving footage: it is stated reading time, and deriving a length from surrounding cuts is the failure mode the point marker replaced. Containment is half-open (`start <= t < end`) to match `place_overlays()`'s `tl_map` lookup; the anchor is snapped onto the interval dicts *as they will be written* (rounded to 3 dp by `ensure_keep_covers_captions`/`enforce_min_keep_duration`, the same rounding the overlay start gets), so the two agree byte-for-byte in the JSON — `test_snapped_anchor_lands_inside_a_written_keep_interval` pins that. An overlay is left untouched (and skipped a stage later, with the warning that is how this was found) only when its line has no keep interval at all, when no line contains the anchor, or when the line has no timing. Placement is on `OVERLAY_CHANNEL = 5` (topmost text channel). Quotes inside `text="..."` are unsupported, and the attribute order (`text` then `duration`) is fixed. A **line break** inside a caption travels escaped as the two characters `\n` and is decoded by `unescape_overlay_text()` on the way out (`escape_overlay_text()` encodes it on the way in — used by `guided_edit.apply_point_op()`); only `\\` and `\n` are recognised, any other backslash sequence passes through verbatim. The escape exists because the marker must occupy a single `_edits.txt` line: a raw newline spliced into it becomes an extra physical line at `"\n".join()` write time, shifting every later line off its segment — which `sync_text_to_json` then reports as `text changed without {{old->new}} markers` a stage later. `check_edits()` reports an embedded newline directly (`line contains an embedded newline`), so guided_edit's pre-write check catches any future injection route rather than deferring it to the intervals crash. Overlay text is bunsetsu-spaced before it reaches the JSON (`intervals.bunsetu.bunsetu_join_text`, called from `run_intervals` right after the snap pass, reusing the same `nlp` and `caption.bunsetu_separator` the caption chunker uses — no separate config key) — Blender's TEXT strip wraps only at spaces and free-form overlay text otherwise has none; segmentation runs per `\n`-separated line so an author's explicit line break is never merged into a single GiNZA parse.
 - `<cut>` is handled entirely in `sync_json._expand_cut_tags()` (runs before the keep/speed/overlay marker-strip): it desugars to `{{wrapped->}}` deletion patches, so there's no `extract_cut_ranges()` or intervals-stage logic — the resulting gap is cut by word-gap silence detection (`run.py`'s `run_intervals()` silence-gap loop), threshold-dependent (deleted text has no caption, so caption re-expansion can't restore it). When building a deletion patch, leading/trailing whitespace of the wrapped text stays **outside** the `{{old->}}` (a text_filter LLM sometimes leaves a trailing space after a patch; folding it into the old side made the old no longer match the stripped original segment text and crashed `sync_text_to_json` — regression-pinned by `test_cut_over_line_with_trailing_space_after_patch`); whitespace-only wrapped text emits no patch at all. `_patched_visible_length()` strips `<cut>...</cut>` so it doesn't shift neighbouring tag positions; don't overlap it with other tags on the same span (guided_edit enforces this for director ops — see AGENTS.md's guided_edit overview). Guarded by `tests/intervals/test_cut_tag.py` and `tests/intervals/test_run_cut_marker.py`.
 
+## Silence lines
+
+guided_edit writes the director's silence lines into its `_edits.txt`: after
+speech line `n`, wherever the wait after `n` is at least
+`director.silence_line_min`, a line reading exactly what the director's view
+printed — `[silent 29.9s: <description>]`, rendered by
+`SilenceLine.body()` → `edit_lines.silence_body()`. A director op on `"n~"`
+is then an ordinary marker on that line, and `_edits.txt` stays the single
+record of every edit (the old time-resolved side channel, `op_times.py` +
+`run_intervals(extra=)`, is deleted).
+
+- **One parser.** `nagare_clip.edit_lines.parse_edit_lines()` splits the file
+  into speech lines (one per WhisperX segment) and silence lines identified by
+  **position** (which speech lines they sit between). Every reader goes
+  through it; a file with no silence line (text_filter's output, older
+  guided_edit output) parses to exactly "line i == segment i".
+- **Opaque body.** The bracket runs from `[silent ` to the first **unescaped**
+  `]`; `silence_body` escapes `\` and `]` in descriptions. Markers are
+  recognised only outside it, so a description mentioning `<keep>` or `{{` is
+  text. The parser ignores the seconds and the description.
+- **Time semantics.** An opener on the silence line after `n` resolves to that
+  silence's start (line `n`'s last speech span end), a closer to its end (line
+  `n+1`'s first speech span start), wherever on the line the tag sits; an
+  `<overlay/>` there starts at the silence's start. The times come from
+  `edit_lines.gap_spans()` of the **original** JSON (before sync), so a `<cut>`
+  that deletes line `n` does not move the silence. Tags on speech lines keep
+  their word-position semantics.
+- **`<cut>`.** For word deletion a silence line's markers fold onto its
+  neighbours (`EditFile.speech_projection()`: an opener moves to the start of
+  the next speech line, a closer to the end of the previous one, a pair on one
+  silence line covers no words) — so a cut from `"n~"` spares line `n`. Every
+  silence a `<cut>` covers (`extract_cut_silences()`) is added to the excludes,
+  so it is dropped whatever `silence_threshold` says.
+- **Validation.** Silence lines are generated, never hand-added. `run_intervals`
+  refuses (`ValueError`, naming the physical line) a file whose silence lines
+  are missing, moved, duplicated or carry text; `check_edits` reports all of
+  them at once. The expected set is `edit_lines.expected_silences(json,
+  director.silence_line_min)` — so re-running `sentence_split`, or changing
+  `silence_line_min`, after guided_edit makes intervals refuse the old file
+  until guided_edit re-runs. A file with no silence line at all is the legacy
+  shape and is not checked.
+- **Equivalence.** `tests/intervals/test_silence_equivalence.py` compares the
+  marker path against frozen output of the deleted time-resolved path. The one
+  known difference: a speech-side edge resolves to the raw word end/start
+  where the old path used the clamped speech span, which differs only when a
+  line's last word is stretched past `silence_max_word_span`.
+
 ## check_edits parity guard
 
 `check_edits()`'s per-line checks approximate the intervals-stage parsing, but `_expand_cut_tags` is stateful **across** lines, so the approximation can drift. After every itemised check passes, `check_edits` therefore runs the real `sync_text_to_json` under `try/except ValueError` and reports a rejection as a line-numbered `Problem` (parsing the `Segment N` index out of the message). The checker can never say "no problems found" for a file the intervals stage would raise on (`tests/intervals/test_check_edits.py::TestSyncParityGuard`). The guard only runs when no other problem was found — otherwise sync's first-failure message would just duplicate an already-reported item.
