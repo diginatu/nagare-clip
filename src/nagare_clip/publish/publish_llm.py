@@ -44,7 +44,6 @@ from nagare_clip.llm_report import (
     Recorder,
 )
 from nagare_clip.llm_retry import cfg_for_attempt, retry_attempts
-from nagare_clip.plan.plan_llm import PartDirection
 from nagare_clip.render.thumbnail import (
     MAX_THUMB_LINES,
     VALID_ROLES,
@@ -80,15 +79,15 @@ class PublishCopy:
 
 def format_publish_context(
     project_summary: ProjectSummary,
-    directions: Sequence[PartDirection] | None = None,
+    plan: str = "",
     overlay_texts: Sequence[str] | None = None,
 ) -> str:
     """The whole project as one document: summaries, parts, plan, captions.
 
     Parts are numbered globally 1-based — the same numbering the response's
-    ``chapters[].index`` refers to.
+    ``chapters[].index`` refers to.  *plan* is the director's own plan
+    (``director/plan.md``): what the edit set out to do, in its words.
     """
-    by_part = {(d.stem, d.lines): d.direction for d in directions or []}
     lines: list[str] = []
     if project_summary.summary:
         lines.append(f"Overall: {project_summary.summary}")
@@ -101,9 +100,11 @@ def format_publish_context(
             lines.append(
                 f'Video "{part.stem}": {video_summary}' if video_summary else f'Video "{part.stem}"'
             )
-        head = f"{i + 1}: {part.stem} [{part.lines[0]}-{part.lines[1]}] — {part.summary}"
-        direction = by_part.get((part.stem, part.lines))
-        lines.append(f"{head} (plan: {direction})" if direction else head)
+        lines.append(f"{i + 1}: {part.stem} [{part.lines[0]}-{part.lines[1]}] — {part.summary}")
+    if plan:
+        lines.append("")
+        lines.append("The editor's plan for the finished video:")
+        lines.append(plan)
     if overlay_texts:
         lines.append("")
         lines.append("On-screen captions the edit places at its payoff moments:")
@@ -218,7 +219,7 @@ def generate_publish_copy(
     project_summary: ProjectSummary,
     cfg: dict[str, Any],
     *,
-    directions: Sequence[PartDirection] | None = None,
+    plan: str = "",
     overlay_texts: Sequence[str] | None = None,
     call_llm: CallLLM = _call_llm,
     recorder: Recorder = NULL_RECORDER,
@@ -233,7 +234,7 @@ def generate_publish_copy(
         {"role": "system", "content": cfg.get("prompt", "")},
         {
             "role": "user",
-            "content": format_publish_context(project_summary, directions, overlay_texts),
+            "content": format_publish_context(project_summary, plan, overlay_texts),
         },
     ]
     recorder.begin(unit)

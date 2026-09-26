@@ -1,8 +1,8 @@
 """Tests for resolving the segment order in the orchestrator.
 
-`plan` is the authority on the order up to and including `intervals`; this is
-where its `plan.json` becomes the list of segments every stage consults, and
-where an invalid one falls back to shooting order.
+The director is the authority on the order up to and including `intervals`;
+this is where its `director/order.json` becomes the list of segments every
+stage consults, and where an invalid one falls back to shooting order.
 """
 
 from __future__ import annotations
@@ -47,13 +47,12 @@ def project(tmp_path):
     return tmp_path
 
 
-def _write_plan(tmp_path, order, *, revised=False):
-    d = tmp_path / "out" / ("plan_revise" if revised else "plan")
+def _write_plan(tmp_path, order):
+    """Write ``director/order.json`` (the name is the tests' history)."""
+    d = tmp_path / "out" / "director"
     d.mkdir(parents=True, exist_ok=True)
-    payload = {"directions": []}
-    if order is not None:
-        payload["order"] = order
-    (d / "plan.json").write_text(json.dumps(payload), encoding="utf-8")
+    payload = {} if order is None else {"order": order}
+    (d / "order.json").write_text(json.dumps(payload), encoding="utf-8")
 
 
 class TestLineCounts:
@@ -70,14 +69,14 @@ class TestLineCounts:
 
 
 class TestTimelineSegments:
-    def test_no_plan_is_shooting_order(self, project):
+    def test_no_order_json_is_shooting_order(self, project):
         assert st._timeline_segments(_ctx(project)) == [Segment("a", None), Segment("b", None)]
 
-    def test_a_plan_without_an_order_is_shooting_order(self, project):
+    def test_an_order_json_without_an_order_is_shooting_order(self, project):
         _write_plan(project, None)
         assert st._timeline_segments(_ctx(project)) == [Segment("a", None), Segment("b", None)]
 
-    def test_a_plan_without_an_order_says_nothing_about_validity(self, project, caplog):
+    def test_an_order_json_without_an_order_says_nothing_about_validity(self, project, caplog):
         # The default path: "no order" is not a rejected order, and warning
         # about it on every run would drown the warning that matters.
         _write_plan(project, None)
@@ -133,21 +132,16 @@ class TestTimelineSegments:
         _write_plan(project, [{"stem": "a"}])
         assert st._timeline_segments(_ctx(project)) == [Segment("a", None), Segment("b", None)]
 
-    def test_the_revised_plan_wins_over_the_plan(self, project):
-        _write_plan(project, [{"stem": "a"}, {"stem": "b"}])
-        _write_plan(project, [{"stem": "b"}, {"stem": "a"}], revised=True)
-        assert st._timeline_segments(_ctx(project)) == [Segment("b", None), Segment("a", None)]
-
     def test_an_order_is_rejected_when_the_line_counts_are_unknown(self, project):
         for stem in ("a", "b"):
             (project / "out" / "text_filter" / f"{stem}_edits.txt").unlink()
         _write_plan(project, [{"stem": "b"}, {"stem": "a"}])
         assert st._timeline_segments(_ctx(project)) == [Segment("a", None), Segment("b", None)]
 
-    def test_unreadable_plan_json_is_shooting_order(self, project):
-        d = project / "out" / "plan"
+    def test_unreadable_order_json_is_shooting_order(self, project):
+        d = project / "out" / "director"
         d.mkdir(parents=True, exist_ok=True)
-        (d / "plan.json").write_text("{not json", encoding="utf-8")
+        (d / "order.json").write_text("{not json", encoding="utf-8")
         assert st._timeline_segments(_ctx(project)) == [Segment("a", None), Segment("b", None)]
 
 

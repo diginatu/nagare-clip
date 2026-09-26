@@ -22,7 +22,7 @@ the thing being changed sits *between* the two halves — a background that
 should have been the next frame over, a headline the model got nearly right. A
 stage boundary is exactly the mechanism this pipeline already has for "stop
 here, edit the artifact, resume", and every other hand-editable contract in the
-repo (`_director.json`, `plan.json`, `history.md`) sits on one:
+repo (`_director.json`, `order.json`, `conversation.md`) sits on one:
 
 ```bash
 $EDITOR output/publish/publish.json          # retype a hook, swap a colour
@@ -200,7 +200,7 @@ order — `\` → `\\`, then `%` → `%%`, then a leading `@` → `\@` — so th
 backslash added last is not re-escaped by the first rule.
 
 **Every command is an argument list, never a shell string.** The publish
-prompt is fed the summaries, the plan directions and the director's captions —
+prompt is fed the summaries, the director's plan and its captions —
 all derived from the video's transcript — so anything said on camera reaches
 the model that would author a `magick` invocation, and `magick` reads and
 writes files (`@`, `-write`, MSL). With an allowlisted operator set and argv

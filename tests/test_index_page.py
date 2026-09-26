@@ -26,7 +26,7 @@ CFG = {"general": {"image_markup": "html"}}
 def _project(tmp_path, name="water_pump_4"):
     """An output dir shaped like a real one: the stage dirs, nothing in them."""
     output = tmp_path / name / "video-editor-ai"
-    for stage in ("blender", "intervals", "llm_report", "plan_dialogue", "publish", "render"):
+    for stage in ("blender", "director", "intervals", "llm_report", "publish", "render"):
         (output / stage).mkdir(parents=True)
     return output
 
@@ -75,12 +75,14 @@ class TestWhatIsOnThePage:
         output = _project(tmp_path)
         _touch(output / "publish" / "publish.md")
         _touch(output / "render" / "render.md")
-        _touch(output / "plan_dialogue" / "history.md")
+        _touch(output / "director" / "plan.md")
+        _touch(output / "director" / "conversation.md")
         _touch(output / "llm_report" / "index.md")
         md = build_index(output, CFG)
         assert "[publish.md](publish/publish.md)" in md
         assert "[render.md](render/render.md)" in md
-        assert "[history.md](plan_dialogue/history.md)" in md
+        assert "[plan.md](director/plan.md)" in md
+        assert "[conversation.md](director/conversation.md)" in md
         assert "[llm_report/index.md](llm_report/index.md)" in md
 
     def test_the_rows_follow_the_pipeline_flow(self, tmp_path):
@@ -90,7 +92,8 @@ class TestWhatIsOnThePage:
         md = build_index(output, CFG, blend=output / "blender" / "p_edited.blend")
         rows = [line for line in md.splitlines() if line.startswith("| ") and "—" in line]
         needles = [
-            "plan_dialogue/history.md",
+            "director/plan.md",
+            "director/conversation.md",
             ".blend",
             "publish/publish.md",
             "render/render.md",

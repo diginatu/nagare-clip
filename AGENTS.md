@@ -12,14 +12,12 @@ Maintain and improve a multi-stage rough-cut pipeline:
 4. gap_context — a vision LLM snapshots+describes long silent gaps (audio_silence spans) so summary/director can see what the transcript can't (disabled by default)
 5. summary — a larger LLM segments every video into line-range parts + summaries (and lists per-video misspelling-prone keywords) and writes one all-videos summary (project-wide)
 6. Text editing checkpoint — copies `.txt` or runs LLM filter with `{{old->new}}` markers, optionally primed with the summary stage's summaries/keywords
-7. plan — a larger LLM gives coarse, cross-video rough directions per part (project-wide); the director no longer reads them — only the starting order and `publish` do
-8. plan_revise — a larger LLM applies the human's conversation to those directions as delete/add/update operations (project-wide, no call unless a turn is unanswered)
-9. director — a larger LLM writes its own plan in its first turn, then proposes high-level edits (cut/timelapse/overlay/keep/edit) as a reviewable JSON op list and decides the playback order (fed the summaries; the plan's order is only its starting point)
-10. guided_edit — a small LLM applies the director's ops into `_edits.txt`, deterministically verified
-11. Patch application + keep-interval computation in Python (audio cuts unioned in)
-12. Blender VSE auto-layout in headless mode
-13. publish — title candidates, a description with chapter timestamps taken from the finished timeline, thumbnail copy and candidate stills (disabled by default)
-14. render — composites one thumbnail per copy set with ImageMagick; the last stage, and the only one that never makes an LLM call
+7. director — a larger LLM writes its own plan in its first turn, then proposes high-level edits (cut/timelapse/overlay/keep/edit) as a reviewable JSON op list and decides the playback order (fed the summaries); a step over its own directory, where a person joins by writing an editor note
+8. guided_edit — a small LLM applies the director's ops into `_edits.txt`, deterministically verified
+9. Patch application + keep-interval computation in Python (audio cuts unioned in)
+10. Blender VSE auto-layout in headless mode
+11. publish — title candidates, a description with chapter timestamps taken from the finished timeline, thumbnail copy and candidate stills (disabled by default)
+12. render — composites one thumbnail per copy set with ImageMagick; the last stage, and the only one that never makes an LLM call
 
 Plus three deterministic, non-stage artifacts (no LLM call):
 
@@ -34,7 +32,7 @@ composited from it.
 > **Naming convention:** Stages are identified only by their **functional /
 > config-section name** — there are no stage numbers anywhere. The canonical
 > identifiers are: `transcription:`, `audio_silence:`, `sentence_split:`,
-> `gap_context:`, `summary:`, `text_filter:`, `plan:`, `plan_revise:`, `director:`, `guided_edit:`,
+> `gap_context:`, `summary:`, `text_filter:`, `director:`, `guided_edit:`,
 > `intervals:`, `blender:`, `publish:`, `render:`.
 > Package dirs (`src/nagare_clip/<name>/`), `output/<name>/` subdirs, and
 > `run_pipeline.sh --from-stage`/`--to-stage` all use these same names. A new
@@ -78,7 +76,7 @@ See [`docs/stages/gap_context.md`](docs/stages/gap_context.md) for gap selection
 
 ### summary — Project-Wide Summaries
 
-A larger LLM (config `summary:`, disabled by default) runs **once project-wide, between sentence_split and text_filter**. For each video it maps the numbered transcript into line-range **parts** with a one-sentence summary each, plus misspelling-prone keywords and a mandatory whole-video summary (`summarize.segment_video()`, `{"parts":[{"lines":[a,b],"summary":...}],"keywords":[...],"video_summary":"..."}` → `(parts, keywords, video_summary)`; a missing/non-string/empty `video_summary` is a hard parse failure that retries, same as a missing `parts` array), then reduces all parts into one all-videos summary (`generate_project_summary()`); `build_summary()` is the map-then-reduce entry point and also collects each video's summary into `ProjectSummary.video_summaries` (`{stem: video_summary}`). The reduce call's input is grouped per video — a `## <stem> — <video_summary>` header per video with its parts nested beneath, global 1-based part numbering preserved across the whole document (`_format_parts_doc()`). Keywords are coerced leniently — non-string/empty entries dropped, empty list on absence. Reuses `director_llm`'s transcript-formatting helpers and `llm_retry`; any failure degrades gracefully to empty parts/summary/keywords/video_summaries. `summary.json` (`{summary, parts:[{stem,lines,summary,start?,end?,silence?}], keywords:{stem:[...]}, video_summaries:{stem:"..."}}`) is human-reviewable and feeds `text_filter`/`plan`/`director`; `summary_from_dict` reads `video_summaries` leniently and stays backward-compatible with files that lack it (absent → `{}`). Each part's optional `start`/`end` (seconds, via `timing.segment_times`, from the `json_paths` passed to `run_summary`) lets `plan` render per-part duration/gap; omitted when timing is unavailable. Each part also optionally carries `silence`: seconds of the part's span the `intervals` stage would drop with no op (`intervals.keep.dropped_ranges` over the sentence_split JSON and the `cuts_paths` ranges, measured with `timing.span_silence`), set only when > 0.0 and rendered by `plan` as a speech/silence split bracket. When `gap_context` produced described gaps for a video, `run_summary` anchors them to that video's transcript lines (`gap_context.context.anchor_gaps()`) and appends a `## Silent gaps (visual context)` block (`format_gap_block()`) to that video's `segment_video()` user content — an absent/empty gaps file leaves the prompt byte-identical. Disabled → `{"summary":"","parts":[],"keywords":{},"video_summaries":{}}` no-op.
+A larger LLM (config `summary:`, disabled by default) runs **once project-wide, between sentence_split and text_filter**. For each video it maps the numbered transcript into line-range **parts** with a one-sentence summary each, plus misspelling-prone keywords and a mandatory whole-video summary (`summarize.segment_video()`, `{"parts":[{"lines":[a,b],"summary":...}],"keywords":[...],"video_summary":"..."}` → `(parts, keywords, video_summary)`; a missing/non-string/empty `video_summary` is a hard parse failure that retries, same as a missing `parts` array), then reduces all parts into one all-videos summary (`generate_project_summary()`); `build_summary()` is the map-then-reduce entry point and also collects each video's summary into `ProjectSummary.video_summaries` (`{stem: video_summary}`). The reduce call's input is grouped per video — a `## <stem> — <video_summary>` header per video with its parts nested beneath, global 1-based part numbering preserved across the whole document (`_format_parts_doc()`). Keywords are coerced leniently — non-string/empty entries dropped, empty list on absence. Reuses `director_llm`'s transcript-formatting helpers and `llm_retry`; any failure degrades gracefully to empty parts/summary/keywords/video_summaries. `summary.json` (`{summary, parts:[{stem,lines,summary,start?,end?,silence?}], keywords:{stem:[...]}, video_summaries:{stem:"..."}}`) is human-reviewable and feeds `text_filter`/`director`/`publish`; `summary_from_dict` reads `video_summaries` leniently and stays backward-compatible with files that lack it (absent → `{}`). Each part's optional `start`/`end` (seconds, via `timing.segment_times`, from the `json_paths` passed to `run_summary`) lets `publish` place each chapter on the finished timeline; omitted when timing is unavailable. Each part also optionally carries `silence`: seconds of the part's span the `intervals` stage would drop with no op (`intervals.keep.dropped_ranges` over the sentence_split JSON and the `cuts_paths` ranges, measured with `timing.span_silence`), set only when > 0.0; it was rendered by the removed `plan` stage and nothing reads it now. When `gap_context` produced described gaps for a video, `run_summary` anchors them to that video's transcript lines (`gap_context.context.anchor_gaps()`) and appends a `## Silent gaps (visual context)` block (`format_gap_block()`) to that video's `segment_video()` user content — an absent/empty gaps file leaves the prompt byte-identical. Disabled → `{"summary":"","parts":[],"keywords":{},"video_summaries":{}}` no-op.
 
 - **Inputs:** every sentence_split `{stem}.txt`, passed as `txts` (stem derived from basename); optionally the sentence_split `{stem}.json` per source, passed as `json_paths` (for part `start`/`end` times); optionally each source's gap_context `{stem}_gaps.json`, passed as `gaps_paths` (for the `## Silent gaps` block); optionally each source's audio_silence `{stem}_cuts.txt`, passed as `cuts_paths` (for per-part `silence`)
 - **Outputs:** `output/summary/summary.json`
@@ -98,37 +96,6 @@ A human (never the LLM filter, which runs before them) may also add markers, eac
 - **Outputs:** `{stem}_edits.txt`
 
 Validate a hand-edited `_edits.txt` before resuming with `python -m nagare_clip.intervals.check_edits --edits-txt <file> --json <file>` (`src/nagare_clip/intervals/check_edits.py`). Unlike the interval stage's fail-fast `ValueError`, it collects **every** problem at once (by physical line, exit 1 if any): speech-line count vs. JSON segments, misplaced silence lines (`--silence-line-min`), `{{old->new}}` syntax, decomposition integrity, and tag balance/validity for all four markers. When every itemised check passes, a final **parity guard** runs the real `sync_text_to_json` and reports any rejection as a Problem — the checker can never bless a file the intervals stage would crash on. Pure `check_edits(edit_lines, json_data) -> list[Problem]`, never raises.
-
-### plan — Cross-Video Rough Directions
-
-A larger LLM (config `plan:`, disabled by default) runs once project-wide after `summary`, reading all per-part summaries plus the overall summary to emit a coarse **cross-video** direction per part (`plan_llm.generate_plan()`, `{"directions":[{"index":N,"direction":...}]}` mapped back by 1-based index). Context lines render each part's duration + gap-to-next (`N: stem [a-b] [12.4s, gap 1.5s] — summary`, gap shown only within the same video and omitted when it would render 0.0s; times come from `summary.json`); when the part carries `silence`, the bracket splits into `[12.9s speech, 62.9s silence]` — the default `plan.prompt` documents both forms (a test pins them to `timing.format_dur_gap`'s output). `format_parts_for_plan()` prints a `Video "<stem>": <video_summary>` header above each video's first part when that video has a summary. The plan vocabulary deliberately avoids the word **keep**: `keep` is a director *op* with a mechanical cost (it restores every silence in its range) and `plan.json` is fed to the director, so the prompt offers `feature`/`retain`/`emphasise` and forbids `keep` in a direction (a test asserts every occurrence of the word in the prompt is that rule, and that no example direction verb is a `director_llm.VALID_TYPES` op name). Out-of-range/malformed entries are dropped (logged); parse/LLM failure retries via `llm_retry`, then degrades to empty. Disabled → `{"directions":[]}` no-op.
-
-- Every response carries a **`message`** — an account of the plan just made — appended to `plan_dialogue/history.md` as a `## plan` turn below the divider, followed by a `## human` heading to reply under. It is written on every run; a missing/empty message only logs a warning.
-- `plan` is a **pure function of the summaries**: it reads neither its previous output nor the conversation. A `plan` run therefore invalidates what was built on the plan it replaces: it deletes `plan_revise/plan.json` (on the disabled path too) and appends a `--- plan re-ran … ---` divider to `plan_dialogue/history.md` (turns are divided, not deleted; nothing is appended when nothing was said since the last divider). **Do not re-run `plan` to apply a turn** — re-run `plan_revise`.
-- A direction may carry its own **`"lines": [a, b]`** inside its part's range, and several directions may share one `index`, so `plan` can **split** a part `summary` got wrong. A range outside the part is dropped, not clamped.
-- Consumers read one plan file only — `plan_revise/plan.json` when it exists, `plan/plan.json` otherwise (`pipeline.stages._effective_plan_json`: the director's starting order and `publish`) — and must not read `plan_dialogue/`. The **director does not read the directions**: it writes its own plan (see below).
-- There is no plan/director divergence note any more (`plan/divergence.py` is gone): the director no longer reads the directions it would diverge from. The director stage deletes a stale `llm_report/notes/plan_divergence.md`.
-- A response may carry an **`order`** (playback order as segments). It is the **director's starting order**, not the final one: the director may replace it (see below). It must cover every line of every source exactly once; any problem drops it **whole** and the pipeline falls back to shooting order. An empty order writes no `order` key at all, and a full-range segment is normalised to the whole-source form, so a present-and-identity order behaves exactly like an absent one. The prompt carries no worked reorder. See [`docs/stages/order.md`](docs/stages/order.md).
-
-See [`docs/stages/plan.md`](docs/stages/plan.md) for the purity contract, the `message`, the split rules and who still reads the directions.
-
-- **Inputs:** `output/summary/summary.json`; optionally `output/plan_dialogue/history.md`, passed as `history` (a divider is appended to it), and `output/plan_revise/plan.json`, passed as `revised` (deleted)
-- **Outputs:** `output/plan/plan.json`; a divider plus its own `## plan` account in `output/plan_dialogue/history.md`
-
-### plan_revise — Revising the Plan with the Human Editor
-
-A larger LLM (config `plan_revise:`, disabled by default) runs once project-wide between `plan` and `director`. It owns the **conversation** (`plan/dialogue.py`, `output/plan_dialogue/history.md`) and expresses a revision as **operations** against the directions `plan` wrote: `{"delete":["k7f2"], "add":[{"index":21,"lines":[60,83],"direction":"…"}], "update":[{"id":"m3q8","direction":"…"}], "message":"…"}`, where `message` is a reply to the person. A direction no operation names is carried through **by the code** (`revise_llm.apply_revision`), so output size is proportional to the change. It writes `plan_revise/plan.json`, never into `plan/`, so `diff plan/plan.json plan_revise/plan.json` is exactly the human's influence.
-
-- **It only fires when a human turn is unanswered** (`dialogue.has_unanswered_human` over the turns after the last divider): no conversation, no LLM call. A failed call answers nothing, so the next run retries; when it does not fire, an existing `plan_revise/plan.json` is left alone.
-- A human appends a turn with `./scripts/plan_say.sh "…"` (or types into the file) and re-runs `--from-stage plan_revise --to-stage plan_revise`. The history is forgiving markdown: `## human`/`## plan` headings at any level, text before the first heading read as a human turn, `<!-- … -->` stripped, divider lines skipped, blank turns dropped, nothing raises. It lives in its own output subdir and deliberately **not** in the `project:` brief, which reaches more stages than intended.
-- `add` carries **no insertion position** (part `index` + `lines` fully determine order); `add`/`update` reuse `plan_llm.coerce_lines`; `update` changes only the text. Unknown/ambiguous ids are dropped and logged; only invalid JSON, or a response with none of the four keys, retries. Operations are not persisted.
-- Ids (`plan_revise/ids.py`) are a **hash of `(stem, lines)`** abbreviated to the shortest unique prefix (floor 4). A human never types an id.
-- The input renders the current `order` and the response restates it whole; an omitted or rejected order is inherited from the plan, so `plan_revise/plan.json` always carries the effective order.
-
-See [`docs/stages/plan_revise.md`](docs/stages/plan_revise.md) for the firing condition, the operation contract, the id rules and the invalidation behaviour in detail.
-
-- **Inputs:** `output/plan/plan.json`; `output/summary/summary.json` (the parts document an `add` addresses); `output/plan_dialogue/history.md`, passed as `history`
-- **Outputs:** `output/plan_revise/plan.json` (only when it fires); an appended `## plan` turn in `output/plan_dialogue/history.md`
 
 ### director — LLM High-Level Edit Operations (Pass A)
 
@@ -157,7 +124,7 @@ See [`docs/stages/plan_revise.md`](docs/stages/plan_revise.md) for the firing co
 
 **Playback preview** (`director/preview.py`, pure, no LLM): `preview_segment()` takes one segment's inputs (edit lines, `seg_times`, silences, segment-relative anchored gaps, `first_line`, the parsed ops and the parser's `drops`, optionally `elsewhere_seconds`) and states, per op, what it will play: range as sent and as clipped (with which op took the lost lines); footage seconds → on-screen seconds beside the default seconds for the same lines (what a span *buys*, not only what it costs — showing only costs has pushed this stage off timelapses before); for keep/timelapse both boundary gaps (by `timing.gap_shown`) as "outside this op — dropped" with any `[silent gap: …]` describing that gap; for any span at `UNINTELLIGIBLE_FACTOR` (2.0x, the one threshold) or faster every line inside with its bracket figure and first 24 characters, the total speech as unintelligible, and the footage split into speech / gaps between lines / silence within lines; caption seconds (`timelapse.caption_duration`) and any other caption on screen at the same time (one Blender channel); for a cut the lines and seconds removed; then **what the segment looks like in order** (`timeline_runs()`): consecutive display lines grouped into runs by their fate — `1x`, `1x+silence` (a keep), `timelapse`/`speed` with the factor and caption, `cut` — each with its on-screen seconds and line range, a run ending wherever the governing OP changes, so the island of 1x footage between two timelapses is a run of its own. The runs sum to the runtime the footer prints (a test pins it). An overlay changes no runtime and rides the run it starts in. Then the parser's drops and `default → with these ops` for the segment. Overlap resolution is **not** re-modelled: `resolve_placements()` runs the real `expand_timelapse_ops()` and `guided_edit.apply.resolve_span_ops()` — the same `span_op_order()` (cuts last) and `place_span_op()` that `apply_ops()` calls — and a table test asserts both give identical ranges. A line is quoted with its bracket figure (`director_llm.line_seconds()` / `timing.bracket_seconds()`, which fold a sub-second silence back in), while segment runtimes sum `speech_seconds()`, since the audio_silence cut removes that silence regardless. `./scripts/director_preview.sh --config <yml> [--source X] [--director-dir DIR] [--report-dir DIR]` (`python -m nagare_clip.director.preview_cli`) prints it for every segment in playback order, loading inputs with `load_segment_transcript()`; it writes nothing. Drops are not in `_director.json`, so they are recovered by re-parsing the last recorded response in the director LLM report (default `llm_report/director`). Markers already in the edit lines steer the clipping but are not played back.
 
-- **Inputs:** every source's `{stem}_edits.txt` (from text_filter), whole, in shooting order; optionally the sentence_split `{stem}.json`, passed as `json_path` (for per-line timing), the gap_context `{stem}_gaps.json`, passed as `gaps`, the audio_silence `{stem}_cuts.txt`, passed as `cuts_txt` (for the speech/silence split), `output/summary/summary.json`, and the effective plan (`output/plan_revise/plan.json` when it exists, `output/plan/plan.json` otherwise) for its `order` only, which seeds the conversation's
+- **Inputs:** every source's `{stem}_edits.txt` (from text_filter), whole, in shooting order; optionally the sentence_split `{stem}.json`, passed as `json_path` (for per-line timing), the gap_context `{stem}_gaps.json`, passed as `gaps`, the audio_silence `{stem}_cuts.txt`, passed as `cuts_txt` (for the speech/silence split), `output/summary/summary.json`; its own directory (below) is its state, and the playback order starts from shooting order
 - **Outputs (and state):** `{stem}_director.json`; `director/order.json` (the playback order); `director/plan.md` (the director's own plan); `director/conversation.md` (the conversation and its done mark) — all hand-editable, all read back on the next run
 
 ### guided_edit — Apply Director Ops (Pass B2)
@@ -177,7 +144,7 @@ Only **`edit` ops** (a within-line `{{old->new}}` described in prose) use the sm
 
 Applies `{{old->new}}` patches from `_edits.txt`, syncs corrected text back into WhisperX JSON timing data, then runs NLP analysis (GiNZA/spaCy bunsetsu segmentation) to compute keep intervals. The audio_silence `_cuts.txt` ranges are unioned into the exclude set (via `cuts_txt`) before inversion, and `<keep>` ranges are subtracted from the excludes so the wrapped audio survives both silence sources. `<speed>` spans do **not** force-keep audio: they are written verbatim to a top-level `speed_ranges` array, and the blender stage splits keep intervals at their boundaries. `<overlay/>` markers go to a top-level `overlays` array as `{start, duration, text}` (no end time anywhere in the contract), with the start snapped once the keep intervals are final, and their text bunsetsu-spaced (reusing `caption.bunsetu_separator`) because Blender's TEXT strip only wraps at spaces. A final `merge_close_intervals` pass (`intervals.min_cut`, default 0.4s, `0` disables) absorbs any remaining gap between adjacent keep intervals shorter than the threshold — the only pass constraining gaps rather than intervals. Runs per source in-process. See [`docs/stages/intervals.md`](docs/stages/intervals.md) for the markers, margins and captions.
 
-`intervals` is also the **single conversion point from lines to seconds**: it resolves the order (`director/order.json`, else the effective plan, else shooting order) and writes `output/intervals/timeline.json` (`{"segments": [{stem, lines?, start, end}]}`, source seconds, playback order). Each segment owns the silent gap *preceding* its first line — unless the segment before ends `"b~"`, which puts that boundary at `max(end(b), start(b+1) − keep_pre_margin)` — and an unresolvable boundary degrades the **whole** manifest to shooting order. **The authority rule:** the director is the authority on the order up to and including `intervals`; `intervals/timeline.json` is the authority after it; nothing downstream of `intervals` re-derives a time from a line number, and nothing upstream reasons in seconds. See [`docs/stages/order.md`](docs/stages/order.md).
+`intervals` is also the **single conversion point from lines to seconds**: it resolves the order (`director/order.json`, else shooting order) and writes `output/intervals/timeline.json` (`{"segments": [{stem, lines?, start, end}]}`, source seconds, playback order). Each segment owns the silent gap *preceding* its first line — unless the segment before ends `"b~"`, which puts that boundary at `max(end(b), start(b+1) − keep_pre_margin)` — and an unresolvable boundary degrades the **whole** manifest to shooting order. **The authority rule:** the director is the authority on the order up to and including `intervals`; `intervals/timeline.json` is the authority after it; nothing downstream of `intervals` re-derives a time from a line number, and nothing upstream reasons in seconds. See [`docs/stages/order.md`](docs/stages/order.md).
 
 **Silence lines** (`edit_lines.py`): every `_edits.txt` reader goes through `parse_edit_lines()` (speech lines + silence lines identified by position; the `[silent …]` body is opaque to marker/patch scans). A tag on the silence line after `n` resolves to that silence's edge (opener → start, closer → end, from the pre-sync JSON); `<cut>` deletes only the speech it wraps and drops every silence it covers. A missing, moved, duplicated or text-carrying silence line is refused; a file with none is the legacy shape. See [`docs/stages/intervals.md`](docs/stages/intervals.md#silence-lines).
 
@@ -216,11 +183,11 @@ A larger LLM (config `publish:`, disabled by default) runs **once project-wide a
 - **Thumbnail frame candidates** come from the director's ops (`thumbs.select_candidates()`), capped by `publish.max_frames` (`cap_candidates()`), extracted in one `docker compose run` via `build_snapshot_batch_cmd`. Images are embedded per `general.image_markup` via `markdown.embed_image()`. **`publish` composites nothing** — that is `render`; `publish.json`'s `thumbnail_copy` is the hand-editable contract for the look.
 - **Pairing** (`publish/pairing.py`, `publish.pairing:`, enabled by default) is a second, text-only call that picks each set's frame **by index** (resolved to a path by `apply_pairing()`) and its look in ImageMagick's vocabulary. It is separate from the copy call because frame descriptions in front of the copy call anchor it to captioning the pictures. Values are not validated here; `render` falls back per key to a preset. It uses `publish:`'s provider/model and sampling settings (`_pairing_cfg()`); its `temperature`/`max_retries`/`retry_temp_step`/`retry_temp_cap` default to `None` = **inherit**, because a hardcoded default beside an inherited model can be one that model rejects. `llm_retry.cfg_for_attempt()` bounds only a rise (`min(base + step*attempt, max(cap, base))`), so a retry never drops below the configured base, and `retry_temp_step: 0` pins the temperature.
 
-Every input is optional — a missing `summary.json`/`plan.json`/`_director.json`/`_intervals.json` degrades only the part that needed it. Disabled → `publish.json` holds the full shape with nothing in it, no LLM or Docker call.
+Every input is optional — a missing `summary.json`/`plan.md`/`_director.json`/`_intervals.json` degrades only the part that needed it. Disabled → `publish.json` holds the full shape with nothing in it, no LLM or Docker call.
 
 See [`docs/stages/publish.md`](docs/stages/publish.md) for the timeline mapping, the chapter rules, the frame descriptions, the pairing and the frame shortlist in detail.
 
-- **Inputs:** `output/summary/summary.json`; optionally `output/plan/plan.json`, each source's `{stem}_intervals.json` (in blender's concatenation order, as `intervals_paths`), `{stem}_director.json` and the sentence_split `{stem}.json` (for the frame shortlist and the caption list)
+- **Inputs:** `output/summary/summary.json`; optionally the director's `output/director/plan.md` (as `plan`, context for the copy), each source's `{stem}_intervals.json` (in blender's concatenation order, as `intervals_paths`), `{stem}_director.json` and the sentence_split `{stem}.json` (for the frame shortlist and the caption list)
 - **Outputs:** `output/publish/publish.md` (reviewable), `output/publish/publish.json` (the hand-editable look contract), `output/publish/frames.json` (the described shortlist), `output/publish/frames/{stem}/{t}.jpg`
 
 ### render — Compositing the Thumbnails (no LLM call, ever)
@@ -262,9 +229,9 @@ src/nagare_clip/          # Main Python package (src layout)
   index_page.py               # output/index.md: the one page at the top of the output dir (no LLM)
   order.py                    # Segment/TimelineSegment: the playback order, identity, coverage contract, manifest
   order_note.py               # format_order_note(): says plainly when the order is not shooting order (no LLM)
-  brief.py                    # project: editorial brief -> format_brief()/apply_brief() (summary/plan/director/text_filter prompts)
+  brief.py                    # project: editorial brief -> format_brief()/apply_brief() (summary/director/text_filter/publish prompts)
   edit_lines.py               # _edits.txt line contract: silence_body() renderer + parse_edit_lines()
-  timing.py                   # Pure timing helpers: segment_times(), span_silence(), segment_silences(), format_dur_gap() (plan/director duration context)
+  timing.py                   # Pure timing helpers: segment_times(), span_silence(), segment_silences(), format_dur_gap() (director duration context)
   __main__.py                 # python -m nagare_clip support (re-aliased to the pipeline CLI)
   pipeline/                   # pipeline orchestrator (replaces bash run_pipeline.sh)
     errors.py                 # PipelineError — user-facing orchestration failure
@@ -296,15 +263,6 @@ src/nagare_clip/          # Main Python package (src layout)
   summary/                    # summary stage (project-wide): per-part + all-videos summaries
     summarize.py              # PartSummary/ProjectSummary(+keywords), segment_video(), build_summary()
     run.py                    # run_summary() (repeated sentence_split txt/json paths -> summary.json)
-  plan/                       # plan stage (project-wide): cross-video rough directions
-    plan_llm.py               # PartDirection, generate_plan(), format_parts_for_plan(), plan_to/from_dict()
-    dialogue.py               # plan_dialogue/history.md: turns, the divider + the plan_say CLI
-    # plan_llm also owns the order: order_from_dict/format_order/coerce_order
-    run.py                    # run_plan() (summary.json -> plan.json; invalidates the revision)
-  plan_revise/                # plan_revise stage (project-wide): the conversation, as operations
-    ids.py                    # (stem, lines) hash ids, abbreviated to the shortest unique prefix
-    revise_llm.py             # ReviseOps/Revision: parse delete/add/update, apply_revision()
-    run.py                    # run_plan_revise() (fires only on an unanswered human turn)
   director/                   # director stage (Pass A): high-level edit ops
     director_llm.py           # DirectorOp, parse/validate JSON ops, generate via LLM
     context.py                # project_context_block(): the summaries -> the cached prefix
@@ -355,7 +313,6 @@ src/nagare_clip/          # Main Python package (src layout)
     run.py                    # run_render() (publish.json -> render.json + render.md)
 scripts/
   run_pipeline.sh             # Shim: exec uv run python -m nagare_clip.pipeline "$@"
-  plan_say.sh                 # Shim: append a human turn to plan_dialogue/history.md
   director_preview.sh         # Shim: print the director playback preview (python -m nagare_clip.director.preview_cli)
   director_say.sh             # Shim: remove the director's done mark and append an editor entry
 docs/
@@ -370,8 +327,6 @@ tests/
   gap_context/                # gap_context (snapshot / gaps / describe / context / run) unit tests
   text_filter/                # text-editing checkpoint unit tests
   summary/                    # summary segment/build + run() tests
-  plan/                       # plan generate/parse + dialogue + run() tests
-  plan_revise/                # plan_revise ids / operation parse+apply / run() / loop tests
   director/                   # director op parsing/generation + context + run() tests
   guided_edit/                # guided_edit apply/reconcile + run() tests
   intervals/                  # interval-stage unit tests (incl. <keep>/<cut> markers, cuts_txt union)
@@ -412,7 +367,7 @@ The `project:` section is the project-wide **editorial brief** (audience,
 purpose, target_duration, tone, story_so_far, previous_summary — all free text,
 all empty by default). `nagare_clip.brief.apply_brief()` appends the rendered
 brief to the system prompts of `summary` (both `prompt` and `overall_prompt`),
-`plan`, `plan_revise`, `director`, `text_filter` and `publish`, called from those stages' `run.py`
+`director`, `text_filter` and `publish`, called from those stages' `run.py`
 so no LLM module needed a new parameter. `previous_summary` is a path to a previous
 project's `summary.json`; its overall summary joins the brief (a missing/unreadable
 file drops only that line). Every field empty → `apply_brief` returns the same
@@ -420,7 +375,7 @@ dict and prompts are byte-identical to a run without the section — regression-
 per stage. `gap_context`/`sentence_split`/`guided_edit` are deliberately not briefed
 (mechanical stages). See [`docs/stages/project_brief.md`](docs/stages/project_brief.md).
 
-All LLM stages (`sentence_split`, `gap_context`, `summary`, `text_filter`, `plan`, `plan_revise`, `director`, `guided_edit`, `publish`) route through `nagare_clip.llm_client.call_llm` (LiteLLM). Each block selects its backend with a `provider` key (default `ollama_chat`); the model id sent to LiteLLM is `"<provider>/<model>"`. An empty `api_base` falls back to `http://localhost:11434` for an ollama provider, or is omitted for a cloud provider. `api_key` is forwarded when set (or use the provider's env var). `response_format: "json"` maps to a JSON-object request; `reasoning_effort` is passed to LiteLLM as `reasoning_effort` **unchanged** — the user reads the config key as "this goes straight to LiteLLM", so there is no translation and no per-provider special case (what a value means for a model is LiteLLM's contract; working around its behaviour is not this pipeline's job). Unset (`null`, the default) sends nothing, so the model runs at its own default. The old `thinking` key (which *was* translated: `false` → off, `true` → `"high"`) is **removed, not aliased**: `config._reject_removed_keys()` fails `get_effective_config` on a `thinking` key anywhere in the merged config, before validation, with a message naming every such path and saying to use `reasoning_effort` — a silent alias would hand the old values a different meaning.
+All LLM stages (`sentence_split`, `gap_context`, `summary`, `text_filter`, `director`, `guided_edit`, `publish`) route through `nagare_clip.llm_client.call_llm` (LiteLLM). Each block selects its backend with a `provider` key (default `ollama_chat`); the model id sent to LiteLLM is `"<provider>/<model>"`. An empty `api_base` falls back to `http://localhost:11434` for an ollama provider, or is omitted for a cloud provider. `api_key` is forwarded when set (or use the provider's env var). `response_format: "json"` maps to a JSON-object request; `reasoning_effort` is passed to LiteLLM as `reasoning_effort` **unchanged** — the user reads the config key as "this goes straight to LiteLLM", so there is no translation and no per-provider special case (what a value means for a model is LiteLLM's contract; working around its behaviour is not this pipeline's job). Unset (`null`, the default) sends nothing, so the model runs at its own default. The old `thinking` key (which *was* translated: `false` → off, `true` → `"high"`) is **removed, not aliased**: `config._reject_removed_keys()` fails `get_effective_config` on a `thinking` key anywhere in the merged config, before validation, with a message naming every such path and saying to use `reasoning_effort` — a silent alias would hand the old values a different meaning.
 
 Only `blender/blender_cli.py` still takes a `--config <path>` flag on its command line — it runs as a separate Blender subprocess, so the pipeline CLI (`nagare_clip.pipeline.cli`) passes its resolved `config_path` through explicitly. Every other stage receives the already-merged `cfg` dict in-process (no subprocess, no re-parsing of `--config`).
 
@@ -432,19 +387,17 @@ read the relevant file first when you need to touch a stage, and keep every
 `docs/stages/` file up to date whenever you change that stage's behavior** (see
 the [Documentation Policy](#documentation-policy)):
 
-- project brief (`project:` config → summary/plan/director/text_filter/publish prompts) → [`docs/stages/project_brief.md`](docs/stages/project_brief.md)
+- project brief (`project:` config → summary/director/text_filter/publish prompts) → [`docs/stages/project_brief.md`](docs/stages/project_brief.md)
 - audio_silence → [`docs/stages/audio_silence.md`](docs/stages/audio_silence.md)
 - sentence_split (re-segmentation, windowing/carry-over, force-split) → [`docs/stages/sentence_split.md`](docs/stages/sentence_split.md)
 - gap_context (gap selection, frame sampling/extraction, vision-call contract, summary/director consumption) → [`docs/stages/gap_context.md`](docs/stages/gap_context.md)
-- plan (purity, part splitting, who still reads the directions) → [`docs/stages/plan.md`](docs/stages/plan.md)
-- plan_revise (the conversation, revision operations, ids, invalidation) → [`docs/stages/plan_revise.md`](docs/stages/plan_revise.md)
 - text_filter (+ summary-stage filter context) → [`docs/stages/text_filter.md`](docs/stages/text_filter.md)
 - intervals (`<keep>`/`<speed>`/`<overlay/>`/`<cut>` markers, margins, captions) → [`docs/stages/intervals.md`](docs/stages/intervals.md)
 - blender (VSE layout, text styling, retiming) → [`docs/stages/blender.md`](docs/stages/blender.md)
 - publish (finished-timeline mapping, chapter rules, thumbnail material) → [`docs/stages/publish.md`](docs/stages/publish.md)
 - render (style validation, layout/escaping, the zero-call loop) → [`docs/stages/render.md`](docs/stages/render.md)
 - cut_report (finished-cut metrics + checks, Blender-warning capture) → [`docs/stages/cut_report.md`](docs/stages/cut_report.md)
-- segment order (the director's `order`, seeded by the plan's; the `intervals/timeline.json` manifest; the order note) → [`docs/stages/order.md`](docs/stages/order.md)
+- segment order (the director's `order`; the `intervals/timeline.json` manifest; the order note) → [`docs/stages/order.md`](docs/stages/order.md)
 - pipeline orchestration (`nagare_clip.pipeline`) → [`docs/stages/pipeline.md`](docs/stages/pipeline.md)
 - observability (LLM report + Langfuse tracing) → [`docs/stages/observability.md`](docs/stages/observability.md)
 

@@ -90,20 +90,9 @@ Playback of these ops, computed from line timings (approximate):
 (no ops: every line plays its default)
 
 segment [2] mix as it plays:
-  1x          21.5 s  lines 5-12
-  1x           7.0 s  lines 13-15
+  1x          28.5 s  lines 5-15
 
 segment [2] mix: default 28.5 s → with these ops 28.5 s
-
-THE VIDEO AS IT PLAYS, in the order in force (the segments above are in the transcript's order, not this one):
-order: 13-15, 1-4, 5-12
-▶ lines 13-15
-  1x           7.0 s  lines 13-15
-  seam 15 → 1: 「今日はここまで、ありがとうございました」 → 「こんにちは、今日はポンプを直します」
-▶ lines 1-4
-  1x          10.5 s  lines 1-4
-▶ lines 5-12
-  1x          21.5 s  lines 5-12
 
 Captions in playback order (0): none yet.
 

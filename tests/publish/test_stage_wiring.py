@@ -95,7 +95,7 @@ def test_adapter_passes_project_paths(ctx, monkeypatch):
     assert seen["out"] == out / "publish" / "publish.json"
     assert seen["markdown"] == out / "publish" / "publish.md"
     assert seen["frames_json"] == out / "publish" / "frames.json"
-    assert seen["plan_json"] == out / "plan" / "plan.json"
+    assert seen["plan"] == ""  # no director/plan.md yet
     # The finished video, already sliced to the manifest's playback order --
     # publish never re-derives a time from a line number.
     assert [stem for stem, _ in seen["ordered"]] == ["a"]

@@ -71,7 +71,7 @@ record of every edit (the old time-resolved side channel, `op_times.py` +
 ## The timeline manifest
 
 `intervals` is the single conversion point from lines to seconds: after the
-per-source loop it resolves the plan's order and writes
+per-source loop it resolves the director's order and writes
 `output/intervals/timeline.json`. A segment `[a, b]` runs from the end of line
 `a-1` to the end of line `b`, so each segment owns the silent gap preceding its
 first line and a moved segment takes its own run-up with it.

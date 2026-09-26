@@ -2,8 +2,8 @@
 
 Runs **once project-wide, after `blender`** — the last stage. Everything it
 emits already existed somewhere in the pipeline (`summary.json` knows what the
-video is about, the `project:` brief knows who it is for, `plan.json` has the
-editorial shape, the intervals know what survived), but nothing past the
+video is about, the `project:` brief knows who it is for, the director's
+`plan.md` has the editorial shape, the intervals know what survived), but nothing past the
 `.blend` used any of it, so it was retyped by hand for every upload.
 
 Output is **reviewable, not published**: the stage writes files, a human
@@ -221,7 +221,7 @@ copy being padded to fill a template. A set longer than three lines is trimmed
 
 The LLM is handed the on-screen captions the director placed
 (`collect_overlay_texts()`, from `overlay` and `timelapse` ops) alongside the
-summaries and the plan directions — those captions are the edit's own account
+summaries and the director's plan (`director/plan.md`, as `plan`) — those captions are the edit's own account
 of where the payoffs are, which is exactly the register a title or hook wants.
 
 Parsing follows the house style: a hard failure (invalid JSON, no usable
@@ -264,7 +264,7 @@ human call.
 ## Every input is optional
 
 The stage runs last, so an earlier stage may have been disabled or its output
-removed. A missing `summary.json`, `plan.json`, `_director.json`,
+removed. A missing `summary.json`, `plan.md`, `_director.json`,
 `{stem}.json` or `{stem}_intervals.json` degrades that part of the output and
 nothing else — the titles and thumbnail copy do not depend on the timeline, and
 the chapters simply come back empty.

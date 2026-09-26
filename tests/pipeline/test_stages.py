@@ -54,8 +54,6 @@ def test_stage_names_canonical_order():
         "gap_context",
         "summary",
         "text_filter",
-        "plan",
-        "plan_revise",
         "director",
         "guided_edit",
         "intervals",
@@ -799,22 +797,6 @@ def test_extract_gap_frames_unparseable_stats_content_excluded_from_min(gap_ctx,
     assert result["talk1"][0].ssim == pytest.approx(0.81)
 
 
-def test_plan_adapter_passes_history_path(tmp_path, monkeypatch):
-    seen = {}
-    monkeypatch.setattr(st, "recorder_from_config", lambda *a, **k: _NullRec())
-    monkeypatch.setattr(
-        st,
-        "run_plan",
-        lambda summary, out, cfg, **kw: seen.update(summary=summary, out=out, **kw),
-    )
-    by_name = {s.name: s for s in st.STAGES}
-    by_name["plan"].run(_ctx(tmp_path, stems=("a",)))
-    out = tmp_path / "out"
-    assert seen["summary"] == out / "summary" / "summary.json"
-    assert seen["out"] == out / "plan" / "plan.json"
-    assert seen["history"] == out / "plan_dialogue" / "history.md"
-
-
 def _director_returning(ops, plan="", ok=True, seen=None):
     """A fake director conversation: one turn that emits *ops* for source ``a``.
 
@@ -898,51 +880,4 @@ def test_director_adapter_survives_a_missing_plan(tmp_path, monkeypatch):
     monkeypatch.setattr(st, "recorder_from_config", lambda *a, **k: _NullRec())
     monkeypatch.setattr(st, "run_director_conversation", _director_returning([]))
     by_name = {s.name: s for s in st.STAGES}
-    by_name["director"].run(_ctx(tmp_path, stems=("a",)))  # no plan.json, no ops on disk
-
-
-# --- plan_revise wiring ------------------------------------------------------
-
-
-def test_plan_revise_sits_between_plan_and_director():
-    assert st.STAGE_NAMES.index("plan_revise") == st.STAGE_NAMES.index("plan") + 1
-    assert st.STAGE_NAMES.index("plan_revise") == st.STAGE_NAMES.index("director") - 1
-    assert [s.name for s in st.STAGES] == st.STAGE_NAMES
-
-
-def test_plan_revise_requires_no_output(tmp_path):
-    """Its absence is meaningful (director falls back to plan/plan.json), so a
-    --from-stage director run must not demand the file."""
-    stage = next(s for s in st.STAGES if s.name == "plan_revise")
-    assert stage.required_outputs(_ctx(tmp_path)) == []
-
-
-def test_plan_run_is_told_what_to_invalidate(tmp_path, monkeypatch):
-    seen = {}
-    monkeypatch.setattr(st, "run_plan", lambda *a, **kw: seen.update(args=a, kw=kw))
-    ctx = _ctx(tmp_path)
-    st._plan_run(ctx)
-    assert seen["args"][1] == tmp_path / "out" / "plan" / "plan.json"
-    assert seen["kw"]["revised"] == tmp_path / "out" / "plan_revise" / "plan.json"
-    assert seen["kw"]["history"] == tmp_path / "out" / "plan_dialogue" / "history.md"
-
-
-def test_plan_revise_run_reads_plan_and_the_conversation(tmp_path, monkeypatch):
-    seen = {}
-    monkeypatch.setattr(st, "run_plan_revise", lambda *a, **kw: seen.update(args=a, kw=kw))
-    ctx = _ctx(tmp_path)
-    st._plan_revise_run(ctx)
-    assert seen["args"][0] == tmp_path / "out" / "summary" / "summary.json"
-    assert seen["args"][1] == tmp_path / "out" / "plan" / "plan.json"
-    assert seen["args"][2] == tmp_path / "out" / "plan_revise" / "plan.json"
-    assert seen["kw"]["history"] == tmp_path / "out" / "plan_dialogue" / "history.md"
-
-
-def test_director_prefers_the_revised_plan(tmp_path):
-    ctx = _ctx(tmp_path)
-    plan_json = tmp_path / "out" / "plan" / "plan.json"
-    revised = tmp_path / "out" / "plan_revise" / "plan.json"
-    assert st._effective_plan_json(ctx) == plan_json
-    revised.parent.mkdir(parents=True)
-    revised.write_text('{"directions": []}', encoding="utf-8")
-    assert st._effective_plan_json(ctx) == revised
+    by_name["director"].run(_ctx(tmp_path, stems=("a",)))  # nothing in director/ yet

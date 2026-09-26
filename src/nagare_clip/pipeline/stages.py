@@ -50,6 +50,7 @@ from nagare_clip.order import (
     TimelineSegment,
     identity_segments,
     normalise,
+    order_from_dict,
     read_manifest,
     segments_to_dict,
     validate_segments,
@@ -67,10 +68,6 @@ from nagare_clip.pipeline.external import (
 )
 from nagare_clip.pipeline.runner import PipelineContext, Stage
 from nagare_clip.pipeline.sources import SourceMedia, project_stems
-from nagare_clip.plan.dialogue import HUMAN, history_path, unanswered_turns
-from nagare_clip.plan.plan_llm import order_from_dict
-from nagare_clip.plan.run import run_plan
-from nagare_clip.plan_revise.run import run_plan_revise
 from nagare_clip.publish.run import run_publish
 from nagare_clip.publish.thumbs import (
     ThumbCandidate,
@@ -94,8 +91,6 @@ STAGE_NAMES = [
     "gap_context",
     "summary",
     "text_filter",
-    "plan",
-    "plan_revise",
     "director",
     "guided_edit",
     "intervals",
@@ -382,93 +377,6 @@ def _text_filter_required(ctx: PipelineContext) -> list[Path]:
     return [d / f"{s}_edits.txt" for s in ctx.stems]
 
 
-# --- plan --------------------------------------------------------------------
-
-
-def _plan_run(ctx: PipelineContext) -> None:
-    print("[plan] Cross-video rough directions")
-    rec = _recorder(ctx, "plan")
-    rec.clear()
-    try:
-        run_plan(
-            ctx.stage_dir("summary") / "summary.json",
-            ctx.stage_dir("plan") / "plan.json",
-            ctx.cfg,
-            history=history_path(ctx.output_dir),
-            revised=_revised_plan_json(ctx),
-            recorder=rec,
-            line_counts=_line_counts(ctx),
-        )
-    finally:
-        rec.rebuild_index()
-
-
-def _plan_required(ctx: PipelineContext) -> list[Path]:
-    return [ctx.stage_dir("plan") / "plan.json"]
-
-
-def check_unanswered_turns(ctx: PipelineContext, *, retire_turns: bool = False) -> None:
-    """Refuse a run whose ``plan`` stage would retire unapplied instructions.
-
-    A ``plan`` re-run appends a divider to ``plan_dialogue/history.md``, and the
-    turns above a divider stop being applied.  That is right for turns
-    ``plan_revise`` has already answered and wrong for one it has not: the
-    instruction stays readable in the file, ``plan_revise`` then reports nothing
-    unanswered and makes no call, and the edit silently comes out without it.
-    Nothing looks broken, which is what makes it expensive.
-
-    Checked here, before ``run_stages``, rather than inside ``_plan_run``: a
-    ``--from-stage summary --to-stage blender`` reaches ``plan`` too, and should
-    not spend the summary stage on the way to a refusal.
-
-    ``--retire-turns`` is the deliberate way through, for when the turns really
-    are spent.
-    """
-    if retire_turns:
-        return
-    plan_index = STAGE_NAMES.index("plan")
-    if not (ctx.from_index <= plan_index <= ctx.to_index):
-        return
-    history = history_path(ctx.output_dir)
-    turns = unanswered_turns(history)
-    if not turns:
-        return
-    humans = sum(1 for t in turns if t.role == HUMAN)
-    raise PipelineError(
-        f"plan: refusing to run over an unanswered conversation.\n"
-        f"\n"
-        f"{history} has {humans} unanswered human turn(s) below the last\n"
-        f"'--- plan re-ran ... ---' divider.  Re-running plan appends a new divider,\n"
-        f"which retires all {len(turns)} turn(s) below the current one: they stay in the\n"
-        f"file but stop being applied, plan_revise then reports nothing unanswered and\n"
-        f"makes no call, and the edit comes out without them with nothing looking broken.\n"
-        f"\n"
-        f"To apply them instead, run only the stage that answers them:\n"
-        f"    --from-stage plan_revise --to-stage plan_revise\n"
-        f"\n"
-        f"To discard them on purpose, re-run this command with --retire-turns."
-    )
-
-
-# --- plan_revise -------------------------------------------------------------
-
-
-def _revised_plan_json(ctx: PipelineContext) -> Path:
-    return ctx.stage_dir("plan_revise") / "plan.json"
-
-
-def _effective_plan_json(ctx: PipelineContext) -> Path:
-    """The plan the downstream stages read: the revised one when it exists.
-
-    ``plan_revise`` writes its own directory rather than into ``plan/``, so
-    ``diff plan/plan.json plan_revise/plan.json`` is exactly the human's
-    influence on the edit.  A ``plan`` re-run deletes the revised file, which is
-    what makes this fall back rather than go stale.
-    """
-    revised = _revised_plan_json(ctx)
-    return revised if revised.is_file() else ctx.stage_dir("plan") / "plan.json"
-
-
 def _line_counts(ctx: PipelineContext) -> dict[str, int]:
     """Lines per source, for validating an order against the real transcripts.
 
@@ -497,26 +405,20 @@ def _director_order_json(ctx: PipelineContext) -> Path:
     return ctx.stage_dir("director") / DIRECTOR_ORDER
 
 
-def _resolve_order(
-    ctx: PipelineContext, *, director: bool = True
-) -> tuple[list[Segment], list[str]]:
+def _resolve_order(ctx: PipelineContext) -> tuple[list[Segment], list[str]]:
     """The playback order plus the problems that made it fall back (if any).
 
-    The director's ``order.json`` is the authority when it exists — the
-    director decides the order, seeded with the plan's — then the effective
-    plan, then shooting order.  *director* False skips the first: that is the
-    seed the director itself starts from.
+    The director's ``order.json`` is the authority when it exists; otherwise
+    shooting order.
     """
     shooting = identity_segments(project_stems(ctx.input_videos_dir) or ctx.stems)
-    plan_json = _effective_plan_json(ctx)
-    if director and _director_order_json(ctx).is_file():
-        plan_json = _director_order_json(ctx)
-    if not plan_json.is_file():
+    order_json = _director_order_json(ctx)
+    if not order_json.is_file():
         return shooting, []
     try:
-        segments = order_from_dict(json.loads(plan_json.read_text(encoding="utf-8")))
+        segments = order_from_dict(json.loads(order_json.read_text(encoding="utf-8")))
     except (OSError, ValueError) as e:
-        logging.warning("order: could not read %s: %s", plan_json, e)
+        logging.warning("order: could not read %s: %s", order_json, e)
         return shooting, []
     if not segments:
         return shooting, []
@@ -526,7 +428,7 @@ def _resolve_order(
     if problems:
         logging.warning(
             "order: %s does not cover every line exactly once; falling back to shooting order (%s)",
-            plan_json,
+            order_json,
             "; ".join(problems),
         )
         return shooting, problems
@@ -542,7 +444,7 @@ def write_order_note(ctx: PipelineContext) -> None:
     A reorder changes the shape of the finished video more than any other single
     decision, and the failure mode to avoid is a human noticing it only while
     watching the result.  Nothing is written when the resolved order IS shooting
-    order — including a plan that states it explicitly, which is not a reorder.
+    order — including an order that states it explicitly, which is not a reorder.
     """
     note = ctx.llm_report_dir / "notes" / ORDER_NOTE
     try:
@@ -568,30 +470,12 @@ def _timeline_segments(ctx: PipelineContext) -> list[Segment]:
     missing, unparseable or invalid order degrades to.
 
     The order is validated against the real line counts every time, because
-    ``plan.json`` is hand-editable and ``sentence_split``/``summary`` can re-run
+    ``order.json`` is hand-editable and ``sentence_split``/``summary`` can re-run
     underneath it.  On any problem the fallback is shooting order for the
     **whole project** — never a partial repair, which would be a video with a
     scene silently moved.
     """
     return _resolve_order(ctx)[0]
-
-
-def _plan_revise_run(ctx: PipelineContext) -> None:
-    print("[plan_revise] Revising the plan with the human editor")
-    rec = _recorder(ctx, "plan_revise")
-    rec.clear()
-    try:
-        run_plan_revise(
-            ctx.stage_dir("summary") / "summary.json",
-            ctx.stage_dir("plan") / "plan.json",
-            _revised_plan_json(ctx),
-            ctx.cfg,
-            history=history_path(ctx.output_dir),
-            recorder=rec,
-            line_counts=_line_counts(ctx),
-        )
-    finally:
-        rec.rebuild_index()
 
 
 # --- director ----------------------------------------------------------------
@@ -643,7 +527,7 @@ def _read_director_plan(ctx: PipelineContext) -> str:
 
 
 def _write_director_order(ctx: PipelineContext, order: list[Segment]) -> None:
-    """The playback order the director ended with — hand-editable, like plan.json's."""
+    """The playback order the director ended with — hand-editable."""
     path = _director_order_json(ctx)
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(
@@ -715,9 +599,9 @@ def _director_run(ctx: PipelineContext) -> None:
     rec = _recorder(ctx, "director")
     rec.clear()
     # The view is ALWAYS shooting order: the order is the conversation's to
-    # decide, seeded with the plan's, not the shape of what it reads.
+    # decide, starting from shooting order, not the shape of what it reads.
     segments = identity_segments(project_stems(ctx.input_videos_dir) or ctx.stems)
-    seed = _resolve_order(ctx, director=False)[0]
+    seed = list(segments)
     director_dir = ctx.stage_dir("director")
     text_filter_dir = ctx.stage_dir("text_filter")
     stems = [segment.stem for segment in segments]
@@ -779,7 +663,7 @@ def _director_run(ctx: PipelineContext) -> None:
 def _remove_divergence_note(ctx: PipelineContext) -> None:
     """Delete the plan/director divergence note an older run may have left.
 
-    The director no longer reads the plan's directions — it writes its own
+    There is no plan stage any more — the director writes its own
     plan — so there is no second opinion to diverge from.
     """
     note = ctx.llm_report_dir / "notes" / "plan_divergence.md"
@@ -856,7 +740,7 @@ def _write_manifest(ctx: PipelineContext) -> list[TimelineSegment]:
     """Resolve the order into source seconds and write ``intervals/timeline.json``.
 
     This stage is the single conversion point between the two coordinate
-    systems: the plan is the authority on the order up to here, the manifest is
+    systems: the director is the authority on the order up to here, the manifest is
     the authority after it, and nothing downstream re-derives a time from a line
     number.  An order that cannot be resolved degrades the whole manifest to
     shooting order rather than resolving some of it.
@@ -1078,7 +962,7 @@ def _publish_run(ctx: PipelineContext) -> None:
             d / "publish.json",
             ctx.cfg,
             ordered=_ordered_sources(ctx),
-            plan_json=_effective_plan_json(ctx),
+            plan=_read_director_plan(ctx),
             overlay_texts=overlay_texts,
             thumbs=thumbs,
             frames_json=d / "frames.json",
@@ -1118,8 +1002,6 @@ STAGES = [
     Stage("gap_context", _gap_context_run, _gap_context_required),
     Stage("summary", _summary_run, _summary_required),
     Stage("text_filter", _text_filter_run, _text_filter_required),
-    Stage("plan", _plan_run, _plan_required),
-    Stage("plan_revise", _plan_revise_run),
     Stage("director", _director_run, _director_required),
     Stage("guided_edit", _guided_edit_run, _guided_edit_required),
     Stage("intervals", _intervals_run, _intervals_required),

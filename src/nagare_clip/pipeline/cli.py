@@ -24,7 +24,7 @@ from nagare_clip.pipeline.sources import (
     resolve_cli_sources,
     stage_sources,
 )
-from nagare_clip.pipeline.stages import STAGE_NAMES, STAGES, check_unanswered_turns
+from nagare_clip.pipeline.stages import STAGE_NAMES, STAGES
 
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
 
@@ -59,14 +59,6 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         help="Stop after this stage (inclusive)",
     )
     parser.add_argument("--align-model", default=None, dest="align_model")
-    parser.add_argument(
-        "--retire-turns",
-        action="store_true",
-        dest="retire_turns",
-        help="Let a plan re-run retire unanswered turns in plan_dialogue/history.md "
-        "(they stay in the file but stop being applied). Without it, plan refuses "
-        "to run while a human turn is unanswered.",
-    )
     return parser.parse_args(argv)
 
 
@@ -130,9 +122,6 @@ def main(argv: list[str] | None = None) -> int:
             from_index=from_index,
             to_index=to_index,
         )
-        # Before the first stage, not inside plan: a window that merely reaches
-        # plan should not pay for the stages ahead of it on the way to a refusal.
-        check_unanswered_turns(ctx, retire_turns=args.retire_turns)
         try:
             run_stages(STAGES, ctx)
         finally:

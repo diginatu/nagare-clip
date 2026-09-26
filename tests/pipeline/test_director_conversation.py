@@ -4,10 +4,8 @@ Driven through the real stage with only the LLM faked, because what matters
 here is the assembled conversation — what is cached, what each turn carries,
 what reaches disk when it ends badly — not any one function's return value.
 
-The project is the same shape as ``test_director_whole_video``'s: ``dev``
-whole, then ``mix`` split into three stretches and reordered by the plan.  The
-view is shooting order whatever the plan says — one ``[k]`` block per source —
-and the plan's order is the conversation's starting order, not its shape.
+The project: two sources, ``dev`` and ``mix``.  The view is shooting order —
+one ``[k]`` block per source — whatever order the director decides.
 """
 
 from __future__ import annotations
@@ -92,7 +90,7 @@ def _ctx(tmp_path, stems=("mix", "dev"), **director):
 def project(tmp_path, monkeypatch):
     out = tmp_path / "out"
     (tmp_path / "in").mkdir()
-    for sub in ("text_filter", "sentence_split", "audio_silence", "gap_context", "plan"):
+    for sub in ("text_filter", "sentence_split", "audio_silence", "gap_context"):
         (out / sub).mkdir(parents=True)
     for stem, times in TIMES.items():
         (tmp_path / "in" / f"{stem}.mp4").touch()
@@ -108,20 +106,6 @@ def project(tmp_path, monkeypatch):
     (out / "gap_context" / "mix_gaps.json").write_text(
         json.dumps(
             {"gaps": [{"start": 4.0, "end": 10.0, "frames": [], "description": "バルブを外す"}]}
-        ),
-        encoding="utf-8",
-    )
-    (out / "plan" / "plan.json").write_text(
-        json.dumps(
-            {
-                "directions": [],
-                "order": [
-                    {"stem": "dev"},
-                    {"stem": "mix", "lines": [4, 6]},
-                    {"stem": "mix", "lines": [1, 3]},
-                    {"stem": "mix", "lines": [7, 9]},
-                ],
-            }
         ),
         encoding="utf-8",
     )
@@ -436,17 +420,9 @@ class TestRecording:
 # --- the project context in the cached prefix ---------------------------------
 
 
-ORDER = [
-    {"stem": "dev"},
-    {"stem": "mix", "lines": [4, 6]},
-    {"stem": "mix", "lines": [1, 3]},
-    {"stem": "mix", "lines": [7, 9]},
-]
-
-
 @pytest.fixture
 def planned(project):
-    """The same project, with a summary and a plan that has real directions."""
+    """The same project, with a summary."""
     out = project / "out"
     (out / "summary").mkdir(parents=True, exist_ok=True)
     (out / "summary" / "summary.json").write_text(
@@ -459,37 +435,17 @@ def planned(project):
         ),
         encoding="utf-8",
     )
-    (out / "plan" / "plan.json").write_text(
-        json.dumps(
-            {
-                "order": ORDER,
-                "directions": [
-                    {"stem": "mix", "lines": [4, 6], "direction": "keep the fitting"},
-                    {"stem": "dev", "lines": [1, 4], "direction": "trim the preamble"},
-                ],
-            }
-        ),
-        encoding="utf-8",
-    )
     return project
 
 
 class TestTheProjectContext:
     """The summary stage's facts, in the cached prefix: the overall summary and
-    each source's whole-video summary.  The plan stage's directions are not
-    shown — the director's first turn writes its own plan."""
+    each source's whole-video summary — facts, not instructions: the director's
+    first turn writes its own plan."""
 
     def test_the_overall_summary_reaches_the_model(self, planned, monkeypatch):
         system = _run(monkeypatch, _ctx(planned, chunk_lines=4))[0][0]["content"]
         assert "Overall: ポンプの修理" in system
-
-    def test_the_plan_stages_directions_are_not_shown(self, planned, monkeypatch):
-        """The director writes its own plan; the plan stage's directions —
-        the least-informed opinion — no longer frame it."""
-        system = _run(monkeypatch, _ctx(planned, chunk_lines=4))[0][0]["content"]
-        assert "keep the fitting" not in system
-        assert "trim the preamble" not in system
-        assert "section boundaries, not op boundaries" not in system
 
     def test_each_sources_summary_reaches_the_model(self, planned, monkeypatch):
         system = _run(monkeypatch, _ctx(planned, chunk_lines=4))[0][0]["content"]
@@ -615,63 +571,61 @@ class TestRetryWithinATurn:
 
 
 class TestTheOrder:
-    """The director decides the order, seeded with the plan's, and writes it to
-    ``director/order.json`` — which every later reader then prefers."""
+    """The director decides the order, starting from shooting order, and writes
+    it to ``director/order.json`` — which every later reader then prefers."""
 
     def _order_json(self, ctx):
         return json.loads((ctx.stage_dir("director") / "order.json").read_text(encoding="utf-8"))
 
-    def test_the_plans_order_passes_through_when_the_model_never_sends_one(
+    def test_shooting_order_passes_through_when_the_model_never_sends_one(
         self, project, monkeypatch
     ):
         ctx = _ctx(project, chunk_lines=40)
         _run(monkeypatch, ctx)
-        assert self._order_json(ctx)["order"] == [
-            {"stem": "dev"},
-            {"stem": "mix", "lines": [4, 6]},
-            {"stem": "mix", "lines": [1, 3]},
-            {"stem": "mix", "lines": [7, 9]},
-        ]
+        assert self._order_json(ctx)["order"] == [{"stem": "dev"}, {"stem": "mix"}]
 
-    def test_the_seed_reaches_the_model_as_its_starting_order(self, project, monkeypatch):
-        ctx = _ctx(project, chunk_lines=40)
-        first = _run(monkeypatch, ctx)[0][-1]["content"]
-        assert "THE VIDEO AS IT PLAYS" in first
+    def test_shooting_order_shows_no_reordered_playback(self, project, monkeypatch):
+        first = _run(monkeypatch, _ctx(project, chunk_lines=40))[0][-1]["content"]
+        assert "THE VIDEO AS IT PLAYS" not in first
 
     def test_the_models_order_wins(self, project, monkeypatch):
         ctx = _ctx(project, chunk_lines=40)
         total = len(_view(ctx).lines)
+        dev_end = _view(ctx).segments[0].last
 
         def script(messages, cfg):
             if _asked(messages[-1]["content"]) is None:
                 return json.dumps({"done": True})
             return json.dumps(
-                {"range": [1, total], "reviewed_through": total, "ops": [], "order": [[1, total]]}
+                {
+                    "range": [1, total],
+                    "reviewed_through": total,
+                    "ops": [],
+                    "order": [[dev_end + 1, total], [1, dev_end]],
+                }
             )
 
         _run(monkeypatch, ctx, reply=script)
-        assert self._order_json(ctx)["order"] == [{"stem": "dev"}, {"stem": "mix"}]
-        assert st._timeline_segments(ctx) == [st.Segment("dev"), st.Segment("mix")]
+        assert self._order_json(ctx)["order"] == [{"stem": "mix"}, {"stem": "dev"}]
+        assert st._timeline_segments(ctx) == [st.Segment("mix"), st.Segment("dev")]
 
     def test_a_disabled_director_still_writes_the_seed(self, project, monkeypatch):
         ctx = _ctx(project, enabled=False)
         _run(monkeypatch, ctx)
-        assert len(self._order_json(ctx)["order"]) == 4
+        assert self._order_json(ctx)["order"] == [{"stem": "dev"}, {"stem": "mix"}]
 
-    def test_the_directors_order_beats_the_plans(self, project):
+    def test_the_directors_order_is_the_order(self, project):
         ctx = _ctx(project)
         (ctx.stage_dir("director")).mkdir(parents=True, exist_ok=True)
         (ctx.stage_dir("director") / "order.json").write_text(
             json.dumps({"order": [{"stem": "mix"}, {"stem": "dev"}]}), encoding="utf-8"
         )
         assert st._timeline_segments(ctx) == [st.Segment("mix"), st.Segment("dev")]
-        # ...but never for the director's own seed.
-        assert len(st._resolve_order(ctx, director=False)[0]) == 4
 
 
 def test_the_view_header_says_shooting_order(project, monkeypatch):
-    # The plan reorders this project, and the transcript is still shooting
-    # order: a header claiming playback order would be a lie the model reads.
+    # The transcript is shooting order whatever the order in force is: a
+    # header claiming playback order would be a lie the model reads.
     system = _run(monkeypatch, _ctx(project, chunk_lines=40))[0][0]["content"]
     assert "shooting order" in system[system.index(VIEW_HEADER) :][:200]
     assert "playback order under one numbering" not in system

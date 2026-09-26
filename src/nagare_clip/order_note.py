@@ -36,7 +36,7 @@ def format_order_note(
                 [
                     HEADING,
                     "",
-                    "The order in force (`director/order.json`, else the plan's) does not "
+                    "The order in force (`director/order.json`) does not "
                     "cover every line of every source exactly once, so it was **rejected "
                     "whole** and the finished video is in shooting order. Fix that `order` "
                     "and re-run from `intervals`, or re-run the director.",

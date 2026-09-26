@@ -1,9 +1,8 @@
 # project brief — runtime notes
 
 The `project:` config section is not a stage: it is a project-wide **editorial
-brief** appended to the system prompts of the six LLM stages that make
-editorial judgements — `summary`, `plan`, `plan_revise`, `director`,
-`text_filter` and `publish`. It
+brief** appended to the system prompts of the four LLM stages that make
+editorial judgements — `summary`, `director`, `text_filter` and `publish`. It
 carries what no transcript can state: who the video is for, how long it should
 be, how it should feel, and what happened in a previous episode of a series.
 
@@ -53,9 +52,7 @@ already-merged `cfg` dict and no LLM module gained a new parameter:
 | Stage | Prompt key(s) briefed | Ordering |
 |-------|----------------------|----------|
 | `summary` | `prompt`, `overall_prompt` | both the per-video map call and the all-videos reduce call |
-| `plan` | `prompt` | — |
-| `plan_revise` | `prompt` | — (it edits directions, so it judges by the same brief `plan` wrote them under) |
-| `director` | `prompt` | brief first, then the summary/plan overview block (`director.context.project_context_block`), all in the cacheable system message |
+| `director` | `prompt` | brief first, then the summaries block (`director.context.project_context_block`), all in the cacheable system message |
 | `text_filter` | `prompt` | brief first, then `build_enhanced_prompt`'s per-video summary/keyword context (which stays closest to the transcript) |
 | `publish` | `prompt` | — (the audience/tone the title, lead and thumbnail copy are written for) |
 
@@ -67,17 +64,10 @@ reaches every source's LLM call independently and each one obeys it from its own
 vantage point. A real 7-source run put the same "explain the rig early on" recap
 caption on four of the videos, each op individually correct.
 
-Nothing in the brief mechanism prevents that — the fix lives in the `director`
-stage's context block, which states the video's position in the finished
-timeline (`video 3 of 7`, FIRST/LAST marked, siblings split into earlier/later)
-and lists the captions already committed on the earlier videos. So a START/END
-instruction is readable as being about one particular video rather than about
-each one. Deliberately no rule was added to `director.prompt` saying so: the
-position is a fact the model can reason from, and this prompt anchors hard on
-whatever examples it carries. `summary`, `plan`, `plan_revise`, `text_filter`
-and `publish` have no equivalent — `summary`/`plan`/`plan_revise`/`publish`
-already run once project-wide, and `text_filter` makes no editorial placement
-decisions.
+The `director` no longer has this problem: it reads the whole video in one
+conversation, so a START/END instruction is about the one finished video it is
+editing. `summary` and `publish` run once project-wide, and `text_filter`
+makes no editorial placement decisions.
 
 `gap_context`, `sentence_split` and `guided_edit` are deliberately **not**
 briefed: they are mechanical (describe frames / split sentences / apply an op

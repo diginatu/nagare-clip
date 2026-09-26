@@ -1,7 +1,6 @@
 """The deterministic order note: a reorder must never be invisible.
 
-No LLM call, in the same spirit as the plan/director divergence note and the
-cut report: the machine states what happened and the human decides whether it
+No LLM call, in the same spirit as the cut report: the machine states what happened and the human decides whether it
 was right.
 """
 
@@ -46,12 +45,11 @@ def project(tmp_path):
 
 
 def _plan(tmp_path, order):
-    d = tmp_path / "out" / "plan"
+    """Write the director's ``order.json``."""
+    d = tmp_path / "out" / "director"
     d.mkdir(parents=True, exist_ok=True)
-    payload = {"directions": []}
-    if order is not None:
-        payload["order"] = order
-    (d / "plan.json").write_text(json.dumps(payload), encoding="utf-8")
+    payload = {} if order is None else {"order": order}
+    (d / "order.json").write_text(json.dumps(payload), encoding="utf-8")
 
 
 def _note(tmp_path):

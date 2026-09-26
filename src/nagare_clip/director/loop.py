@@ -8,8 +8,8 @@ back a JSON object of ops, and asks for the next.
 
 Two rules carry the design:
 
-* **Approximate, never a hard boundary.**  The plan stage's line ranges were
-  hard, and the director copied them straight into its op boundaries — a
+* **Approximate, never a hard boundary.**  The (since removed) plan stage's
+  line ranges were hard, and the director copied them straight into its op boundaries — a
   timelapse that opened on the line announcing the work.  The range here is a
   suggestion; the model says where it actually stopped
   (``reviewed_through``) and the next request starts after THAT line.
@@ -312,7 +312,7 @@ def order_ranges(view: DisplayView, segments: list[Segment]) -> list[Range]:
     """Source-coordinate *segments* as display ranges, or ``[]`` if they don't map.
 
     The inverse of :func:`order_segments`, for seeding the conversation with
-    the plan's order.  A segment starting at ``a`` takes the silence line
+    an ``order.json``.  A segment starting at ``a`` takes the silence line
     before ``a`` unless another segment ends on it (``a-1~``).  Anything that
     does not tile the view comes back ``[]`` — shooting order.
     """

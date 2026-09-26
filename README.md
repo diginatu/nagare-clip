@@ -10,17 +10,15 @@ The pipeline creates a rough-cut Blender project for human review and fine-tunin
 2. audio_silence: Audio-silence (jump-cut) detection -> `_cuts.txt` editable cut list
 3. sentence_split (optional): LLM re-segments the transcript into one-sentence-per-line units -> `output/sentence_split/{stem}.json` + `{stem}.txt`; disabled by default (byte-identical copy-through)
 4. gap_context (optional): a vision LLM snapshots+describes long silent gaps (from `_cuts.txt`) so summary/director can see what the transcript can't -> reviewable `output/gap_context/{stem}_gaps.json` + JPEG frames; disabled by default (no-op)
-5. summary (optional, project-wide): a larger LLM segments every video into line-range parts + summaries, a whole-video summary, and misspelling-prone keywords, and writes one all-videos summary -> reviewable `output/summary/summary.json`; the per-video summary and keywords are used by text_filter/plan/director
+5. summary (optional, project-wide): a larger LLM segments every video into line-range parts + summaries, a whole-video summary, and misspelling-prone keywords, and writes one all-videos summary -> reviewable `output/summary/summary.json`; the per-video summary and keywords are used by text_filter/director
 6. text_filter: Text editing checkpoint -> `_edits.txt` (copy of `.txt`, or LLM-corrected with `{{old->new}}` markers), optionally primed with summary-stage context
-7. plan (optional, project-wide): a larger LLM gives a coarse, cross-video rough direction per part — and may state the **order the finished video plays in** — -> reviewable `output/plan/plan.json`, plus a plain-language account of the plan in `output/plan_dialogue/history.md`
-8. plan_revise (optional, project-wide): a larger LLM applies your conversation to those directions as delete/add/update operations (and restates the order) -> `output/plan_revise/plan.json` (no LLM call unless you left a turn unanswered)
-9. director (optional): a larger LLM proposes high-level edits, **one call per segment of the finished video** -> reviewable `_director.json` op list (fed the summary/plan overview context, and gap_context's described gaps)
-10. guided_edit (optional): a small LLM applies the director's ops into `_edits.txt` (deterministically verified)
-11. intervals: Patch application + keep intervals -> `*_intervals.json` keep ranges (audio cuts unioned in), plus `output/intervals/timeline.json` — the order in seconds
-12. blender: Blender headless -> `.blend` with VSE strips arranged back-to-back, in the order `timeline.json` gives
-13. publish (optional, project-wide): title candidates, a description with chapter timestamps taken from the finished timeline, thumbnail copy and candidate stills -> reviewable `output/publish/publish.md` + `publish.json`
+7. director (optional): a larger LLM writes its own plan, then proposes high-level edits and the playback order in **one conversation over the whole video** -> reviewable `output/director/` (`plan.md`, `order.json`, `_director.json`, `conversation.md` — where you can talk to it)
+8. guided_edit (optional): a small LLM applies the director's ops into `_edits.txt` (deterministically verified)
+9. intervals: Patch application + keep intervals -> `*_intervals.json` keep ranges (audio cuts unioned in), plus `output/intervals/timeline.json` — the order in seconds
+10. blender: Blender headless -> `.blend` with VSE strips arranged back-to-back, in the order `timeline.json` gives
+11. publish (optional, project-wide): title candidates, a description with chapter timestamps taken from the finished timeline, thumbnail copy and candidate stills -> reviewable `output/publish/publish.md` + `publish.json`
 
-Stages are referenced by name (`--from-stage <name>`); the gap_context/summary/plan/plan_revise/director/guided_edit/publish stages are no-ops unless enabled in config.
+Stages are referenced by name (`--from-stage <name>`); the gap_context/summary/director/guided_edit/publish stages are no-ops unless enabled in config.
 
 ## Human Editing Workflow
 
@@ -35,15 +33,15 @@ The optional `director` + `guided_edit` stages automate steps like the above wit
 
 A director `keep` op protects a span from cutting **including its silences**, and its width follows what is on screen: the narrowest range (normally `[N, N+1]`) to rescue one silent gap, or the whole run of lines when a continuous event is playing out — an accident and the cleanup after it, a demo running — since chopping such a sequence into per-gap keeps reads as jump cuts through the payoff. What it is *not* is a way to mark a long span of **talking** as important: speech is never dropped by default, so a keep over talking only restores its pauses (in one real run, keep ops of 20-35 lines took a 22.3-minute cut to 53.9 minutes). `director.max_keep_lines` (default `8`, `0` = no limit) drops any wider `keep` the LLM proposes — a continuous event fits well inside that, precisely because nobody is talking through it — logged, and listed in the LLM report — so those lines fall back to the normal behaviour (speech kept, internal silence cut). The limit is stated to the director in its prompt automatically, so raising or lowering it needs no prompt edit. It applies only to the LLM's output: a `keep` you write by hand into `{stem}_director.json` is always honoured. The cap has no exceptions — a fast span that needs a keep of its own belongs in a `timelapse` op instead, which carries its protection as part of what the op means rather than asking the cap to look the other way.
 
-The optional `summary` + `plan` stages run **once over all source videos** (project-wide) and give downstream stages cross-video context. Enable `summary.enabled`/`plan.enabled` in config: `summary` runs before `text_filter`, segments each sentence_split transcript into line-range parts with a summary each, lists per-video misspelling-prone keywords, generates a whole-video summary per video, and writes one all-videos summary to `output/summary/summary.json` (`{summary, parts, keywords, video_summaries}`) — its per-video summary/part summaries/keywords also prime the `text_filter` LLM's prompt; `plan` still runs before `director`, reading those summaries and writing a coarse, cross-video rough direction per part (e.g. "remove — repeats an earlier part", "shorten — trim the setup") to `output/plan/plan.json`. Both files are human-reviewable/editable (and `plan_revise` revises the directions from your side of the conversation, writing `output/plan_revise/plan.json`, which `director` then prefers). Note the plan's vocabulary avoids the word "keep" on purpose — in the `director` stage `keep` is an *op* that also restores every silence in its range, and a direction reading "keep — …" was being copied across as one, inflating the finished runtime; write "feature", "retain" or "emphasise" instead when hand-editing `plan.json`. The `director` does **not** read those directions: it receives the overall summary and each video's whole-video summary, and writes its **own** plan in its first turn (below). `plan` still supplies the starting playback order, and `publish` still reads the directions. They share the same `max_retries`/`retry_temp_step`/`retry_temp_cap` retry knobs.
+The optional `summary` stage runs **once over all source videos** (project-wide) and gives downstream stages cross-video context. Enable `summary.enabled` in config: it runs before `text_filter`, segments each sentence_split transcript into line-range parts with a summary each, lists per-video misspelling-prone keywords, generates a whole-video summary per video, and writes one all-videos summary to `output/summary/summary.json` (`{summary, parts, keywords, video_summaries}`) — its per-video summary/part summaries/keywords also prime the `text_filter` LLM's prompt, the `director` reads the overall and per-video summaries as facts, and `publish` builds its chapters from the parts. (There used to be `plan`/`plan_revise` stages between them; the director now writes its own plan, and you talk to it directly — see below.)
 
 #### The order of the finished video
 
 By default the finished video is the source clips concatenated in name order.
 The **director** decides the order: in any reply of its conversation it may send
 an `order` — the ranges of its transcript in the order they should play, down to
-a single line — and it can change it again on any later turn. It starts from the
-plan's order when `plan` states one. The order it ends with is written to
+a single line — and it can change it again on any later turn. It starts from
+shooting order. The order it ends with is written to
 `output/director/order.json` as a list of *segments* (one stretch of one source)
 in playback order:
 
@@ -64,90 +62,12 @@ lines out is rejected whole and the pipeline falls back to shooting order. The
 director also refuses an order that would split one of its timelapses in two.
 
 You can hand-edit `director/order.json` and resume with `--from-stage intervals`;
-it is validated on every run. Without one (the director never ran), the plan's
-`order` is used; `plan.json` keeps the same shape without the `~` form.
+it is validated on every run. Without one (the director never ran), the video
+is in shooting order.
 
 A reorder is never silent: whenever the finished video is not in shooting order
 (or an order was rejected), `output/llm_report/notes/order.md` says so — which
 segment plays where, and where it was before.
-
-#### Talking to the plan (`plan_revise`)
-
-`plan_revise` is the stage you argue with. It reads a conversation file —
-`output/plan_dialogue/history.md` — plus the directions `plan` wrote, and
-revises them by naming only what changes. So instead of hand-editing JSON you
-write one sentence and re-run a single stage:
-
-```bash
-./scripts/plan_say.sh "PXL_1234 [31,83] は 60-83 だけがデモ本体、33-59 は脱線"
-./scripts/run_pipeline.sh --from-stage plan_revise --to-stage plan_revise   # 1 LLM call
-```
-
-It answers under a `## plan` heading, saying how it read your instruction and
-what it changed — and you can reply again. **With nothing unanswered it makes no
-LLM call at all**, so leaving the stage enabled costs nothing on an ordinary run.
-
-`plan` writes to the same file even though it never reads it: **every** run it
-appends its own account of the plan it just made — how it read the project, what
-it compressed, what it gave room to, where it was unsure — so you can take in
-two dozen directions without reading them one by one. That account is the
-`## plan` turn just below the divider, and it is what you reply to. (Before
-this, the message was defined only as a reply to a conversation, so the run that
-built the whole plan from scratch said nothing about it at all.)
-
-The revision goes to `output/plan_revise/plan.json`, never into `plan/`, and
-`director` prefers it when it exists. `diff output/plan/plan.json
-output/plan_revise/plan.json` is therefore exactly what your sentence changed.
-The model returns only `delete`/`add`/`update` operations; every direction it
-does not name is carried through by the code, so nothing can be lost by the
-model economising on a long restatement. Directions are named by a short id
-(`[k7f2]`) derived from the footage they cover — you never type one, it is only
-how the model points at a direction.
-
-`plan` itself is a pure function of the summaries: it does not read the
-conversation. **Re-running `plan` therefore retires the turns above it** — it
-writes a `--- plan re-ran … — turns above this line no longer apply ---` divider
-into the history and deletes `plan_revise/plan.json`, because both refer to
-directions it has just rebuilt. Nothing is deleted from the file: an instruction
-that still holds can be copied down below the divider. To apply a turn, re-run
-`plan_revise`, not `plan`.
-
-That used to be advice, and advice lost an argument with muscle memory: a
-`plan` re-run retired a re-typed instruction a second time, `plan_revise` then
-reported "nothing unanswered", and the edit came out without it with nothing
-looking broken. So `plan` now **refuses to start** while a human turn below the
-last divider is unanswered — it prints how many turns the divider would retire,
-points at `--from-stage plan_revise --to-stage plan_revise`, and offers
-`--retire-turns` for when you do mean to throw them away. The check runs before
-the first stage, so a window that merely *reaches* `plan` fails at once instead
-of after an hour of transcription.
-
-`plan_say.sh` is a convenience: the file is plain markdown with `## human` /
-`## plan` headings and opening it in an editor and typing works just as well
-(text before the first heading counts as yours). It is stored under `output/`
-because every turn refers to line ranges that this `summary` run defines —
-delete `output/` and the conversation goes with it. Do **not** put per-run
-corrections in the `project:` brief instead: that reaches `summary` and
-`text_filter` too, and has been observed rewriting what the speaker actually
-said.
-
-A direction may also cover **part** of a summary part (`"lines": [60, 83]`), and
-several directions may share one part — so a part `summary` got wrong can be
-split (one `delete` plus one `add` per thread), which is what makes "that part
-is really two things" actionable rather than merely heard. The range must sit
-inside its part's own range. `summary` deliberately stays non-conversational so
-the line numbers your turns refer to never move under them, and `director` reads
-one plan file only.
-
-After `director` runs, the pipeline also notes — with no LLM call — where the
-ops that landed **argue with** the plan: a part directed `feature` that got
-mostly cut, a part directed `remove` that got a `keep`/`overlay`/`timelapse`, a
-part directed `timelapse` that got none. The share and the threshold are printed
-so the call is arguable, along with the director's own note explaining itself.
-It appears at the bottom of `output/llm_report/index.md`. The director is *not*
-made to obey the plan — it is the first stage that reads the actual lines and
-its override is often right; what was missing was any record that they
-disagreed.
 
 The director edits the whole finished video in **one conversation**, not one call per segment. Every source's transcript is rendered once, in shooting order, under a single line numbering that covers speech lines and long silences alike, and that rendering plus the project's context sits inside the cached system prefix — byte-identical on every turn. Each turn asks for an *approximate* range ("around lines 41 to 80"), the reply's ops come back priced by a computed playback preview, and any earlier range may be rewritten at any time; the model ends with `done`. A reply may also reorder the video (see *The order of the finished video*): the transcript keeps its numbering, and the preview then lists the video as it plays, range by range, quoting both sides of every new seam. `director.chunk_lines` (default `40`) sets the size of the range asked for, and the turn cap is `ceil(display lines / chunk_lines) * 2` — reaching it fails the stage, but every accepted turn is already saved, so running the director again continues. `--source` no longer narrows the director: one conversation owns the whole video. This replaces the per-segment arrangement and everything that propped it up — the seam lines at each join, the captions and ops already committed earlier, and the `[k]N`-qualified whole-video reference — because the conversation now reads both sides of every join and remembers its own edits. What the seam note SAID is not gone, though: seeing a join is not the same as knowing it is one, and the sign-offs survived the first whole-video cut — so `director.prompt` states, where it explains `[k]`, that each block was recorded as its own video and can therefore open with a greeting or end with a sign-off. Whether to cut one is the model's call.
 
@@ -162,7 +82,7 @@ The director's **first turn is its plan**: before any op it reads the whole vide
 
 The director reads your note as `Editor:` (its own routine guidance is labelled `Guide:`), is told the editor wins, and answers before finishing again. You can also edit `plan.md`, `order.json` or a `_director.json` directly between runs — the next run starts from what the files say. To start over, delete `output/director/`. With `director.pause_after_plan: true` the pipeline stops (exit 0) right after the plan is written, so you can read `plan.md` and steer before any op is made.
 
-To help the LLMs reason about pacing, the `plan` and `director` stages now also see **calculated durations and in-between gaps**: the `director`'s numbered transcript annotates each line with `[4.2s, gap 0.8s]` (per-sentence duration + gap to the next line) and the `plan`'s per-part context shows each part's duration and gap. Both stages' default prompts explain the bracket notation (what the duration is, that the gap is the silence before the next line/part, and that a negligible gap — or the last line/part — shows no gap at all), so the LLM can act on it. These times come from the WhisperX `{stem}.json`; the orchestrator feeds each stage the sentence_split `{stem}.json` automatically, so there's nothing to wire up yourself. `director` splits that duration into what plays vs. what the `intervals` stage will drop, e.g. `[12.9s speech, 62.9s silence]` — computed live with the same keep-interval code the `intervals` stage runs (word gaps over `intervals.silence_threshold`, the audio_silence `{stem}_cuts.txt`, keep margins, captions, `min_cut`), so the two figures add up to the line's footage and the speech figure is exactly what plays with no op; `plan` never computes it itself — it renders the same split only when `summary` persisted a per-part `silence` value into `summary.json` (priced the same way). Both fall back to the plain `[Ns, gap Ns]` form when nothing inside the span is dropped. Because of this, hand-editing `_cuts.txt` (an explicitly supported human step) silently stales `summary.json`'s persisted `silence` — `director` recomputes it live, so the two can briefly disagree until `summary` is re-run; harmless in the documented workflow, which resumes at `--from-stage intervals` and never re-reads `summary.json`'s stale `silence` for anything but display. To run a single stage on its own (reusing its inputs from a previous pipeline run), use `./scripts/run_pipeline.sh --from-stage X --to-stage X`.
+To help the LLM reason about pacing, the `director` also sees **calculated durations and in-between gaps**: its numbered transcript annotates each line with `[4.2s, gap 0.8s]` (per-sentence duration + gap to the next line). Its default prompt explains the bracket notation (what the duration is, that the gap is the silence before the next line, and that a negligible gap — or the last line — shows no gap at all), so the LLM can act on it. These times come from the WhisperX `{stem}.json`; the orchestrator feeds the stage the sentence_split `{stem}.json` automatically, so there's nothing to wire up yourself. `director` splits that duration into what plays vs. what the `intervals` stage will drop, e.g. `[12.9s speech, 62.9s silence]` — computed live with the same keep-interval code the `intervals` stage runs (word gaps over `intervals.silence_threshold`, the audio_silence `{stem}_cuts.txt`, keep margins, captions, `min_cut`), so the two figures add up to the line's footage and the speech figure is exactly what plays with no op. It falls back to the plain `[Ns, gap Ns]` form when nothing inside the span is dropped. To run a single stage on its own (reusing its inputs from a previous pipeline run), use `./scripts/run_pipeline.sh --from-stage X --to-stage X`.
 
 Before resuming, you can validate your edits in one pass (reports **every** problem at once, with line numbers, instead of failing on the first like the intervals stage does):
 
@@ -189,9 +109,9 @@ The `<cut>...</cut>` tag deletes the wrapped text. It is a shorthand for `{{wrap
 Every invocation of the pipeline — whatever stage range you asked for, and even
 one that failed partway — rewrites one page at the top of the output directory.
 It names the `.blend` (the deliverable is otherwise mentioned in no file at
-all), links the four files written to be read by a human, states
+all), links the files written to be read by a human, states
 the finished cut in one line, and embeds the rendered thumbnails. The rows
-follow the pipeline's flow: `plan_dialogue/history.md`, the `.blend`,
+follow the pipeline's flow: `director/plan.md` and `director/conversation.md`, the `.blend`,
 `publish/publish.md`, `render/render.md`, and last `llm_report/index.md`,
 which covers the whole run's LLM calls rather than one stage. The cut report
 has no row of its own: `llm_report/index.md` already embeds it, and the
@@ -309,7 +229,7 @@ just does not draw the segmented progress bar. When the conditions are not met,
 
 ### LLM report (`output/llm_report/`)
 
-Every LLM stage (`sentence_split`, `gap_context`, `text_filter`, `summary`, `plan`, `plan_revise`, `director`, `guided_edit`, `publish`)
+Every LLM stage (`sentence_split`, `gap_context`, `text_filter`, `summary`, `director`, `guided_edit`, `publish`)
 writes a per-call record under `output/llm_report/`: an `index.md` table
 (stage, unit, attempts, outcome, reason) linking to per-call detail files under
 `<stage>/<unit>.md` that hold the full prompt and raw response for every attempt,
@@ -490,7 +410,7 @@ Parameters resolve in this priority order (highest wins):
 
 ### project: the editorial brief
 
-The `project:` section tells the editorial LLM stages what the transcript never says — who the video is for, how long it should be, how it should feel, and what happened last episode. Everything set here is appended to the system prompts of `summary`, `plan`, `plan_revise`, `director` and `text_filter`; every field is optional free text and defaults to empty (with nothing set, prompts are exactly as they were before this section existed).
+The `project:` section tells the editorial LLM stages what the transcript never says — who the video is for, how long it should be, how it should feel, and what happened last episode. Everything set here is appended to the system prompts of `summary`, `director`, `text_filter` and `publish`; every field is optional free text and defaults to empty (with nothing set, prompts are exactly as they were before this section existed).
 
 ```yaml
 project:
@@ -503,13 +423,13 @@ project:
   previous_summary: "../water_pump_2/video-editor-ai/summary/summary.json"
 ```
 
-`previous_summary` is how a series carries over: point it at the earlier project's `output/summary/summary.json` and the director learns what "これ" refers to when the cut opens mid-story. A missing or unreadable file just drops that one line (logged), leaving the rest of the brief intact. `target_duration` and `tone` are what stop `plan` from defaulting every part to a conservative "shorten" and let `director` deviate from its default ~1-overlay-per-3-5-minutes density. The mechanical stages (`gap_context`, `sentence_split`, `guided_edit`) are deliberately not briefed.
+`previous_summary` is how a series carries over: point it at the earlier project's `output/summary/summary.json` and the director learns what "これ" refers to when the cut opens mid-story. A missing or unreadable file just drops that one line (logged), leaving the rest of the brief intact. `target_duration` and `tone` are what let `director` plan for the runtime you want and deviate from its default ~1-overlay-per-3-5-minutes density. The mechanical stages (`gap_context`, `sentence_split`, `guided_edit`) are deliberately not briefed.
 
-The config file covers all sections, each named after its stage: `general`, `project`, `transcription`, `audio_silence`, `sentence_split`, `gap_context`, `text_filter`, `summary`, `plan`, `plan_revise`, `director`, `guided_edit`, `intervals`, `blender`, `publish`, `pipeline`. See `config.example.yml` for the full list of keys and their defaults.
+The config file covers all sections, each named after its stage: `general`, `project`, `transcription`, `audio_silence`, `sentence_split`, `gap_context`, `text_filter`, `summary`, `director`, `guided_edit`, `intervals`, `blender`, `publish`, `render`, `cut_report`, `pipeline`. The old `plan:`/`plan_revise:` sections are rejected with a message: those stages were removed. See `config.example.yml` for the full list of keys and their defaults.
 
 ### Choosing an LLM provider
 
-Every LLM stage (`sentence_split`, `gap_context`, `text_filter`, `summary`, `plan`, `plan_revise`, `director`, `guided_edit`, `publish`) routes through a unified transport backed by the [LiteLLM](https://github.com/BerriAI/litellm) library, so you can point any stage at a local or cloud provider. On a stage's config block, set `provider:` to one of `ollama_chat` (default, local Ollama), `openai`, `gemini`, or `anthropic`, and set `model:` to that provider's model name — LiteLLM receives the combined `"<provider>/<model>"`. Supply credentials with `api_key:` (or the provider's standard environment variable, e.g. `OPENAI_API_KEY`, `GEMINI_API_KEY`, `ANTHROPIC_API_KEY`). Leave `api_base:` empty for cloud providers; for `ollama_chat` an empty `api_base` falls back to local Ollama (`http://localhost:11434`). Each stage chooses its provider independently, so you can mix (e.g. a cloud model for `director` and local Ollama for `guided_edit`).
+Every LLM stage (`sentence_split`, `gap_context`, `text_filter`, `summary`, `director`, `guided_edit`, `publish`) routes through a unified transport backed by the [LiteLLM](https://github.com/BerriAI/litellm) library, so you can point any stage at a local or cloud provider. On a stage's config block, set `provider:` to one of `ollama_chat` (default, local Ollama), `openai`, `gemini`, or `anthropic`, and set `model:` to that provider's model name — LiteLLM receives the combined `"<provider>/<model>"`. Supply credentials with `api_key:` (or the provider's standard environment variable, e.g. `OPENAI_API_KEY`, `GEMINI_API_KEY`, `ANTHROPIC_API_KEY`). Leave `api_base:` empty for cloud providers; for `ollama_chat` an empty `api_base` falls back to local Ollama (`http://localhost:11434`). Each stage chooses its provider independently, so you can mix (e.g. a cloud model for `director` and local Ollama for `guided_edit`).
 
 ```yaml
 director:
@@ -662,7 +582,7 @@ Options:
 - `--source FILE` — source video file (may be repeated for multiple sources); when omitted, all videos in `--input-videos-dir` are processed alphabetically.
 - `--config FILE` — path to a YAML config file; config values fill in between CLI overrides and built-in defaults.
 - `--language LANG` — ISO 639-1 language code passed to WhisperX (default: `ja`). Also settable via `transcription.language` in config.
-- `--from-stage NAME` — start from stage `NAME`, reusing earlier stage outputs. `NAME` is a stage name: `transcription`, `audio_silence`, `sentence_split`, `gap_context`, `summary`, `text_filter`, `plan`, `plan_revise`, `director`, `guided_edit`, `intervals`, `blender`, `publish`. Also settable via `pipeline.from_stage` in config.
+- `--from-stage NAME` — start from stage `NAME`, reusing earlier stage outputs. `NAME` is a stage name: `transcription`, `audio_silence`, `sentence_split`, `gap_context`, `summary`, `text_filter`, `director`, `guided_edit`, `intervals`, `blender`, `publish`, `render`. Also settable via `pipeline.from_stage` in config.
 - `--to-stage NAME` — stop **after** stage `NAME` (inclusive); later stages are skipped. Same stage names as `--from-stage`, and must not precede it. Defaults to `publish` (run to the end). Also settable via `pipeline.to_stage` in config. Combine with `--from-stage` to run a window of stages, e.g. `--from-stage summary --to-stage director`.
 - Defaults: input videos under `src_video/`, outputs under `output/`.
 - If `--source` contains `/`, it is treated as the exact path; otherwise it is resolved inside `--input-videos-dir`.
@@ -755,7 +675,7 @@ blender --background --factory-startup --python-exit-code 1 --python src/nagare_
 ./scripts/run_pipeline.sh --from-stage publish --to-stage publish --config my_project.yml
 ```
 
-Reuses `output/summary/summary.json`, the plan (`output/plan_revise/plan.json` when it exists, else `output/plan/plan.json`), each source's
+Reuses `output/summary/summary.json`, the director's plan (`output/director/plan.md`), each source's
 `output/director/{stem}_director.json` and `output/intervals/{stem}_intervals.json`,
 so it can be re-run on its own to get a different set of title/thumbnail
 candidates without touching the cut. Any of those inputs missing degrades just

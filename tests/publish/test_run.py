@@ -198,23 +198,18 @@ def test_overlay_texts_reach_the_llm(tmp_path, monkeypatch):
     assert seen["overlay_texts"] == ["水浸し！"]
 
 
-def test_plan_directions_reach_the_llm(tmp_path, monkeypatch):
+def test_the_directors_plan_reaches_the_llm(tmp_path, monkeypatch):
     seen: dict = {}
     _fake_generate(monkeypatch, _copy(), seen)
-    plan = tmp_path / "plan.json"
-    plan.write_text(
-        json.dumps({"directions": [{"stem": "a", "lines": [1, 10], "direction": "feature"}]}),
-        encoding="utf-8",
-    )
-    _write(tmp_path, {"publish": {"enabled": True}}, plan_json=plan)
-    assert [d.direction for d in seen["directions"]] == ["feature"]
+    _write(tmp_path, {"publish": {"enabled": True}}, plan="結果を冒頭に")
+    assert seen["plan"] == "結果を冒頭に"
 
 
-def test_missing_plan_file_degrades_without_failing(tmp_path, monkeypatch):
+def test_no_plan_degrades_without_failing(tmp_path, monkeypatch):
     seen: dict = {}
     _fake_generate(monkeypatch, _copy(), seen)
-    _write(tmp_path, {"publish": {"enabled": True}}, plan_json=tmp_path / "nope.json")
-    assert seen["directions"] == []
+    _write(tmp_path, {"publish": {"enabled": True}})
+    assert seen["plan"] == ""
 
 
 def test_project_brief_is_appended_to_the_publish_prompt(tmp_path, monkeypatch):

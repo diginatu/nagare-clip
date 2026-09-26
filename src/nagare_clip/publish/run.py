@@ -44,7 +44,6 @@ from typing import Any
 from nagare_clip.brief import apply_brief
 from nagare_clip.llm_report import NULL_RECORDER, Recorder
 from nagare_clip.markdown import embed_image
-from nagare_clip.plan.plan_llm import PartDirection, plan_from_dict
 from nagare_clip.publish.chapters import (
     MIN_CHAPTER_SECONDS,
     Chapter,
@@ -235,7 +234,7 @@ def run_publish(
     cfg: dict,
     *,
     ordered: Sequence[tuple[str, dict]],
-    plan_json: Path | None = None,
+    plan: str = "",
     overlay_texts: dict[str, list[str]] | None = None,
     thumbs: Sequence[ThumbShot] | None = None,
     frames_json: Path | None = None,
@@ -269,14 +268,13 @@ def run_publish(
             logging.info("publish: wrote %s", frames_json)
 
         project = summary_from_dict(_load_json(summary_json))
-        directions: list[PartDirection] = plan_from_dict(_load_json(plan_json))
         flat_overlays = [
             text for stem in _ordered_stems(ordered) for text in (overlay_texts or {}).get(stem, [])
         ]
         copy = generate_publish_copy(
             project,
             apply_brief(publish_cfg, cfg),
-            directions=directions,
+            plan=plan,
             overlay_texts=flat_overlays,
             recorder=recorder,
         )

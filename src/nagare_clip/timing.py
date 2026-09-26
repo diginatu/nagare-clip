@@ -1,4 +1,4 @@
-"""Pure timing helpers shared by the plan and director stages.
+"""Pure timing helpers shared by the summary and director stages.
 
 Extract per-segment times from a WhisperX JSON, measure how much of a span
 a set of dropped ranges covers (``span_silence``/``segment_silences`` — the

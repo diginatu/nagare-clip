@@ -5,7 +5,6 @@ from __future__ import annotations
 
 import json
 
-from nagare_clip.plan.plan_llm import PartDirection
 from nagare_clip.publish.publish_llm import (
     PublishCopy,
     ThumbLine,
@@ -160,23 +159,24 @@ def test_empty_thumbnail_set_is_dropped():
 # --- context ---------------------------------------------------------------
 
 
-def test_context_carries_summaries_parts_and_overlays():
+def test_context_carries_summaries_parts_the_plan_and_overlays():
     doc = format_publish_context(
         _ps(),
-        directions=[PartDirection("talk1", (13, 40), "feature this")],
+        plan="結果を冒頭に見せてから経緯を追う",
         overlay_texts=["水浸し！", "呼び水、完成！"],
     )
     assert "装置を水槽に取り付けてテストする回。" in doc
     assert '"talk1"' in doc
     assert "1: talk1 [1-12] — 前回の装置を振り返る" in doc
-    assert "feature this" in doc
+    assert "The editor's plan for the finished video:\n結果を冒頭に見せてから経緯を追う" in doc
+    assert doc.index("結果を冒頭") > doc.index("2: talk1")  # after the parts
     assert "水浸し！" in doc
 
 
 def test_context_without_optional_material_still_lists_the_parts():
-    doc = format_publish_context(_ps(), directions=None, overlay_texts=None)
+    doc = format_publish_context(_ps(), plan="", overlay_texts=None)
     assert "2: talk1 [13-40] — 水槽に取り付ける" in doc
-    assert "feature" not in doc
+    assert "plan" not in doc
 
 
 # --- generation ------------------------------------------------------------

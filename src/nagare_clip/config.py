@@ -112,158 +112,6 @@ SUMMARY_OVERALL_PROMPT = (
     "Output only the JSON object, no other text."
 )
 
-PLAN_PROMPT = (
-    "You are a video editor planning a rough cut across several source "
-    "videos. You receive numbered PARTS (each with a source video, a line "
-    "range, and a summary) plus an overall summary. For each part, give a "
-    "ROUGH editorial direction — what to do with it (e.g. remove, shorten, "
-    "speed up, feature, emphasise) and why, considering the whole project "
-    "(e.g. a part that repeats an earlier one can be removed). Reference "
-    "parts by their 1-based index. Output ONLY a JSON object.\n"
-    "\n"
-    # Same four shapes as DIRECTOR_PROMPT's legend, for the same reason: the
-    # four-part form was 20% of a real run's part brackets and undocumented.
-    "Timing: a part may carry a bracket after its line range. [4.2s] is the "
-    "part's duration; [4.2s, gap 0.8s] adds the silent gap before the next "
-    "part of the same video. A part holding long internal silence splits it "
-    "instead — [13.0s speech, 62.9s silence] means only 13.0 seconds are "
-    "spoken and the 62.9 silent seconds are dropped by default — and may "
-    "carry a gap too: [13.0s speech, 62.9s silence, gap 0.8s]. Those are the "
-    "only four forms; a negligible gap is omitted; no timing, no bracket. "
-    "Judge pacing from the speech figure. "
-    "Use these numbers to judge pacing: long parts are candidates "
-    "for shortening or speeding up, and long gaps mean dead air.\n"
-    "\n"
-    "By default, non-speech stretches are dropped. If a part's silent "
-    "moments are themselves worth watching (something visible happens, a "
-    "result arrives), say so in the direction — a later stage decides how "
-    "to preserve them.\n"
-    "\n"
-    "A part's line range may hold more than one thread — an announcement, a "
-    "digression, and the event itself. When it does, SPLIT it: emit several "
-    'directions for that part, each with its own "lines" range inside the '
-    "part's range, so each thread gets the direction it deserves.\n"
-    "\n"
-    "The finished video is a sequence of SEGMENTS: a segment is one stretch of "
-    "one source video, and they play in the order you give. Omit "
-    '"order" to play the sources whole, in the order they are listed above. '
-    "Include it to state a different one.\n"
-    "\n"
-    'Always write a "message" — every run, without exception. It is a short '
-    "account of the plan you have just made: how you read the project as a "
-    "whole, what you decided to compress and what you gave room to, and where "
-    "you were unsure. A human reads it instead of reading every direction, so "
-    "it must stand on its own. It explains this plan; it is NOT a reply and is "
-    "not addressed to anyone.\n"
-    "\n"
-    "JSON shape:\n"
-    '{"directions": [\n'
-    '  {"index": 1, "direction": "feature — the product\'s operating noise '
-    'is the point"},\n'
-    '  {"index": 2, "direction": "remove — repeats part 1"},\n'
-    '  {"index": 3, "lines": [12, 20], "direction": "emphasise — the '
-    'demonstration itself"}\n'
-    "],\n"
-    ' "order": [{"stem": "<source A>"}, {"stem": "<source B>", "lines": [1, 30]},'
-    ' {"stem": "<source B>", "lines": [31, 97]}],\n'
-    ' "message": "how you read the project, what you compressed and what you '
-    'gave room to, and where you were unsure"}\n'
-    "\n"
-    "Rules:\n"
-    '- "index" must be one of the given part numbers.\n'
-    '- "lines" is optional: omit it to direct the whole part, or give a range '
-    "inside that part's own range to direct only some of it. Several "
-    "directions may share one index.\n"
-    "- One short, actionable phrase per direction.\n"
-    '- Never use the word "keep" in a direction: a later stage reads it as '
-    "a mechanical instruction to restore every silent second of the part. "
-    'Say "feature", "retain" or "emphasise" instead.\n'
-    '- "message" is required and never empty.\n'
-    '- "order" is optional. Omit it and the parts play in the order listed '
-    "above. "
-    "When you give one, its segments must cover every line of every source "
-    "EXACTLY ONCE — no gap, no overlap, no source left out. Dropping footage is "
-    "a later stage's job, so an order that leaves lines out is rejected whole "
-    "and the given order is used instead.\n"
-    '- Each segment is {"stem": ..., "lines": [a, b]}; omit "lines" for a whole '
-    "source. A source may appear more than once, as several segments.\n"
-    '- If your "order" differs from the order the parts are listed in, say so '
-    'and why in "message" — a change to the order of the finished video must '
-    "never arrive unannounced.\n"
-    "- Output only the JSON object, no other text."
-)
-
-PLAN_REVISE_PROMPT = (
-    "You are a video editor revising an existing rough-cut plan together with "
-    "the human editor. You receive the numbered PARTS of the project (source "
-    "video, line range, summary) with the CURRENT directions listed under the "
-    "part each belongs to, every one tagged with a short id in square "
-    "brackets, plus the CURRENT ORDER of the finished video and the "
-    "conversation with the human editor (oldest first). "
-    "Output ONLY a JSON object.\n"
-    "\n"
-    "State only what changes. Every direction you do not name stays exactly as "
-    "it is — you never restate one to preserve it. Change nothing the "
-    "conversation does not ask about.\n"
-    "\n"
-    "Timing: a part may carry a bracket after its line range — "
-    "[4.2s, gap 0.8s] means the part has a duration of 4.2 seconds and is "
-    "followed by a 0.8-second silent gap before the next part of the same "
-    "video. A part containing long internal silences splits its duration — "
-    "[13.0s speech, 62.9s silence] means only 13.0 seconds are spoken; the "
-    "silent seconds are dropped by default. Judge pacing from the speech "
-    "figure.\n"
-    "\n"
-    "Operations:\n"
-    '- "delete": the ids of directions that should stop existing.\n'
-    '- "add": new directions — the part "index" it belongs to, an optional '
-    '"lines" range inside that part, and its "direction" text. There is no '
-    "insertion position: a direction sits where its part and lines put it.\n"
-    '- "update": an existing direction\'s id plus its new "direction" text; '
-    "its line range is unchanged. To move a boundary, delete it and add.\n"
-    '- "order": the WHOLE playback order of the finished video, restated. '
-    "Unlike a direction, an order cannot be edited in pieces — the order IS "
-    "the position — so give all of it, or omit the key and the current order "
-    'stands unchanged. Omit "order" to leave it exactly as it is.\n'
-    '- "message": your REPLY to the human — how you read the last instruction, '
-    "what you changed because of it, and what you would like confirmed. It "
-    "answers a person, so it is not a summary of the plan (the plan stage "
-    "already wrote one); the human reads it and may reply again.\n"
-    "\n"
-    "To SPLIT a part the human says holds several threads: delete the "
-    "direction covering it and add one per thread, each with its own "
-    '"lines".\n'
-    "\n"
-    "JSON shape:\n"
-    '{"delete": ["k7f2"],\n'
-    ' "add": [{"index": 21, "lines": [60, 83], "direction": "feature — the '
-    'demonstration itself"}],\n'
-    ' "update": [{"id": "m3q8", "direction": "shorten heavily — the setup '
-    'drags"}],\n'
-    ' "order": [{"stem": "<source A>"}, {"stem": "<source B>", "lines": [1, 30]},'
-    ' {"stem": "<source B>", "lines": [31, 97]}],\n'
-    ' "message": "part 21 was one direction over two threads, so I split it '
-    'at line 60 — is that the right boundary?"}\n'
-    "\n"
-    "Rules:\n"
-    "- Use only ids shown in the parts document; never invent one.\n"
-    '- "index" must be one of the given part numbers, and "lines" must sit '
-    "inside that part's own range.\n"
-    "- One short, actionable phrase per direction.\n"
-    '- Never use the word "keep" in a direction: a later stage reads it as '
-    "a mechanical instruction to restore every silent second of the part. "
-    'Say "feature", "retain" or "emphasise" instead.\n'
-    '- "order", when given, must cover every line of every source EXACTLY ONCE '
-    "— no gap, no overlap, no source left out. Dropping footage is a later "
-    "stage's job, so an order that leaves lines out is rejected whole and the "
-    'current one stands. Each segment is {"stem": ..., "lines": [a, b]}; omit '
-    '"lines" for a whole source, and a source may appear more than once.\n'
-    '- If you change the order, say what moved and why in "message".\n'
-    "- Every key is optional: answer a question with a message alone.\n"
-    "- Output only the JSON object, no other text."
-)
-
-
 DIRECTOR_PROMPT = (
     "You are a video editor. You are given the WHOLE finished video as "
     "numbered lines — speech and silence together, under ONE numbering — "
@@ -300,21 +148,19 @@ DIRECTOR_PROMPT = (
     "from the state; an Editor: part is the human editor. Where they disagree "
     "the editor wins, and answer every editor request before you reply done.\n"
     "\n"
-    # The plan is the director's own (the plan stage's directions are no
-    # longer shown).  What a plan covers is in the first ask (loop.PLAN_REQUEST),
-    # sent once; what belongs here is that it stays revisable and that its
-    # ranges are sections -- the rule SECTION_BOUNDARY_NOTE carried for the
-    # plan stage's ranges, now about the model's own.
+    # The plan is the director's own (there is no plan stage any more).  What a
+    # plan covers is in the first ask (loop.PLAN_REQUEST), sent once; what
+    # belongs here is that it stays revisable and that its ranges are sections:
+    # a measured run once copied a plan's part boundaries into its op starts.
     "Plan: your first reply is a plan for the whole video, in prose. It stays "
     'in force, shown atop every turn, until you send "plan" again — change it '
     "whenever the footage proves it wrong. Its line ranges mark sections, not "
     "op boundaries: choose each op's edges from the lines themselves.\n"
     "\n"
-    # The order is the conversation's to decide (the plan's is only the
-    # start).  Its meaning lives here, in the cached prefix; REPLY_SHAPE only
-    # names the key.  No worked reorder, for the reason plan.prompt has none:
-    # the editorial call belongs to the brief, and an example anchors harder
-    # than the instruction around it.
+    # The order is the conversation's to decide, from shooting order.  Its
+    # meaning lives here, in the cached prefix; REPLY_SHAPE only names the key.
+    # No worked reorder: the editorial call belongs to the brief, and an
+    # example anchors harder than the instruction around it.
     "Order: the transcript is numbered in shooting order and stays so. To "
     'change what plays when, add "order": [[first, last], ...] to any reply — '
     "the ranges in the order they PLAY, covering every line exactly once (cut "
@@ -504,8 +350,8 @@ PUBLISH_PROMPT = (
     "You write the publishing material for a finished video: the title, the "
     "description lead, the chapter titles and the thumbnail copy. You receive "
     "an overall summary of the project, a per-video summary, and the video's "
-    "numbered PARTS (each with a line range and a one-sentence summary); some "
-    "parts may carry the editing plan's direction for them, and a list of the "
+    "numbered PARTS (each with a line range and a one-sentence summary), the "
+    "editor's plan for the finished video, and a list of the "
     "on-screen captions the edit places at its payoff moments. Write in the "
     "same language as those summaries. Output ONLY a JSON object.\n"
     "\n"
@@ -602,8 +448,8 @@ class ProjectConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
     section_comment: ClassVar[str] = (
         "project: the editorial brief for this project (all fields optional, free text).\n"
-        "Whatever is set here is appended to the system prompts of the summary, plan,\n"
-        "director and text_filter stages, so those LLMs know what the transcript cannot\n"
+        "Whatever is set here is appended to the system prompts of the summary,\n"
+        "director, text_filter and publish stages, so those LLMs know what the transcript cannot\n"
         "tell them: who the video is for, how long it should be, how it should feel, and\n"
         "what happened previously in a series. Leave everything empty (the default) and\n"
         "every prompt is byte-identical to a run without this section."
@@ -766,7 +612,7 @@ class SummaryConfig(BaseModel):
         "and text_filter. A larger LLM segments each transcript into line-range parts\n"
         "and summarises each (also listing misspelling-prone keywords per video), then\n"
         "a reduce step writes one all-videos summary. Output summary.json is a\n"
-        "reviewable intermediate consumed by the text_filter, plan and director stages.\n"
+        "reviewable intermediate consumed by the text_filter, director and publish stages.\n"
         "Disabled by default (writes an empty summary = no-op)."
     )
     enabled: bool = Field(False, description="Enable the summary LLM")
@@ -800,78 +646,6 @@ class SummaryConfig(BaseModel):
         SUMMARY_OVERALL_PROMPT,
         sample='"..."',
         description="All-videos reduce prompt (has a sensible default)",
-    )
-
-
-class PlanConfig(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-    section_comment: ClassVar[str] = (
-        "plan stage: runs once project-wide after summary, before director. A larger\n"
-        "LLM reads the per-part summaries (with line ranges) of all videos and gives a\n"
-        "coarse, cross-video editorial direction per part. Output plan.json is a\n"
-        "reviewable intermediate consumed by director. Disabled by default (no-op)."
-    )
-    enabled: bool = Field(False, description="Enable the plan LLM")
-    provider: str = Field(
-        "ollama_chat",
-        description="LiteLLM provider prefix: ollama_chat | openai | gemini | anthropic",
-    )
-    api_base: str = Field(
-        "",
-        description="Base URL; empty -> Ollama localhost default; leave empty for cloud providers",
-    )
-    model: str = Field(
-        "gpt-oss:120b", description='A larger model (passed to LiteLLM as "<provider>/<model>")'
-    )
-    api_key: str = Field("", description="API key for the provider (or set the provider's env var)")
-    temperature: float = Field(0.3)
-    reasoning_effort: str | None = Field(None)
-    timeout: int = Field(300)
-    response_format: str = Field("json")
-    max_retries: int = Field(
-        2, description="Extra attempts on LLM error / unparseable JSON (0 = single attempt)"
-    )
-    retry_temp_step: float = Field(0.2)
-    retry_temp_cap: float = Field(0.8)
-    prompt: str = _commented(
-        PLAN_PROMPT, sample='"..."', description="System prompt (has a sensible default)"
-    )
-
-
-class PlanReviseConfig(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-    section_comment: ClassVar[str] = (
-        "plan_revise stage: runs once project-wide between plan and director. It reads\n"
-        "plan/plan.json and the conversation in plan_dialogue/history.md and revises the\n"
-        "directions as operations (delete/add/update), writing plan_revise/plan.json --\n"
-        "which director prefers over plan/plan.json. It makes NO LLM call unless a human\n"
-        "turn is unanswered, and a plan re-run invalidates its output. Disabled by\n"
-        "default (no-op)."
-    )
-    enabled: bool = Field(False, description="Enable the plan_revise LLM")
-    provider: str = Field(
-        "ollama_chat",
-        description="LiteLLM provider prefix: ollama_chat | openai | gemini | anthropic",
-    )
-    api_base: str = Field(
-        "",
-        description="Base URL; empty -> Ollama localhost default; leave empty for cloud providers",
-    )
-    model: str = Field(
-        "gpt-oss:120b", description='A larger model (passed to LiteLLM as "<provider>/<model>")'
-    )
-    api_key: str = Field("", description="API key for the provider (or set the provider's env var)")
-    temperature: float = Field(0.3)
-    reasoning_effort: str | None = Field(None)
-    timeout: int = Field(300)
-    response_format: str = Field("json")
-    max_retries: int = Field(
-        2, description="Extra attempts on LLM error / unparseable JSON (0 = single attempt)"
-    )
-    retry_temp_step: float = Field(0.2)
-    retry_temp_cap: float = Field(0.8)
-    prompt: str = _commented(
-        PLAN_REVISE_PROMPT, sample='"..."', description="System prompt (has a sensible default)"
     )
 
 
@@ -1535,8 +1309,6 @@ class NagareClipConfig(BaseModel):
     gap_context: GapContextConfig = Field(default_factory=GapContextConfig)
     summary: SummaryConfig = Field(default_factory=SummaryConfig)
     text_filter: TextFilterConfig = Field(default_factory=TextFilterConfig)
-    plan: PlanConfig = Field(default_factory=PlanConfig)
-    plan_revise: PlanReviseConfig = Field(default_factory=PlanReviseConfig)
     director: DirectorConfig = Field(default_factory=DirectorConfig)
     guided_edit: GuidedEditConfig = Field(default_factory=GuidedEditConfig)
     intervals: IntervalsConfig = Field(default_factory=IntervalsConfig)
@@ -1603,8 +1375,23 @@ def _key_paths(d: dict, key: str, prefix: str = "") -> Iterator[str]:
             yield from _key_paths(v, key, path + ".")
 
 
+#: Top-level sections of stages that no longer exist, and what replaced them.
+REMOVED_SECTIONS = {
+    "plan": "the director writes its own plan in its first turn (director/plan.md)",
+    "plan_revise": (
+        "talk to the director instead: add an '## editor' entry to "
+        "director/conversation.md (scripts/director_say.sh)"
+    ),
+}
+
+
 def _reject_removed_keys(merged: dict) -> None:
-    """Fail on the removed ``thinking`` key with a message that names it.
+    """Fail on a removed key or section with a message that names it.
+
+    A removed stage section fails the same way: the generic "extra inputs"
+    line would not say what replaced it.
+
+    The ``thinking`` key:
 
     Not a silent alias: ``thinking`` used to be translated (``false`` ->
     reasoning off), ``reasoning_effort`` is not, so the same value no longer
@@ -1612,6 +1399,13 @@ def _reject_removed_keys(merged: dict) -> None:
     open-ended Blender pass-through blocks cannot quietly accept it and the
     error is this sentence rather than a generic "extra inputs" line.
     """
+    gone = [name for name in REMOVED_SECTIONS if name in merged]
+    if gone:
+        raise ValueError(
+            "config section(s) removed with their stage: "
+            + "; ".join(f"`{name}:` -- {REMOVED_SECTIONS[name]}" for name in gone)
+            + ". Delete the section(s) from the config."
+        )
     paths = list(_key_paths(merged, "thinking"))
     if paths:
         raise ValueError(

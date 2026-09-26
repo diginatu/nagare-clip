@@ -386,7 +386,7 @@ def run_director_conversation(
     no call, and the result carries the state unchanged with ``turns=0``.
 
     *summary* is the summary stage's ``summary.json`` (the project context in
-    the cached prefix).  *order* is the seed (the plan stage's order) for when
+    the cached prefix).  *order* is the seed (shooting order) for when
     *resume* has none.  *inputs* are the view's segments — one whole source
     each, in shooting order: the view never changes shape.
 

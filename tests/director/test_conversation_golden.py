@@ -13,9 +13,8 @@ done mark; a person then deletes the mark and adds an editor entry
 (``director_say``), and the second run answers it; the third run finds the
 done mark again and makes no call at all.
 
-The project is small but has every moving part: two sources, a plan stage that
-reorders them (whose directions must NOT reach the prompt), the director's own
-planning turn replacing that order, a long silence with a gap description, a
+The project is small but has every moving part: two sources, a summary, the
+director's own planning turn reordering them, a long silence with a gap description, a
 cut, a timelapse over a silence line, a caption, a revised plan, and an order
 refused because it would split the timelapse.  The model is a script; everything else
 is the real stage.
@@ -82,9 +81,9 @@ DURATIONS = {"dev": 14.0, "mix": 72.0}
 #   dev 1-4; mix 5, 6 = the silence after mix 1, 7-10 = mix 2-5,
 #   11 = the 31 s silence after mix 5 (described), 12-15 = mix 6-9.
 REPLIES = [
-    # Turn 1, the planning turn: the plan, and an order replacing the plan
-    # stage's: the result first, then dev, then mix up to and INCLUDING the
-    # long silence (11 ends a range).
+    # Turn 1, the planning turn: the plan, and an order replacing shooting
+    # order: the result first, then dev, then mix up to and INCLUDING the long
+    # silence (11 ends a range).
     {
         "plan": "ポンプ修理の一本。結果（動いた！）を冒頭に見せてから経緯を追う。"
         "道具紹介(2-3)は削る。配管作業(10-11)は速回し。",
@@ -132,7 +131,7 @@ RERUN_REPLIES = [
 def _project(root: Path) -> PipelineContext:
     out = root / "out"
     (root / "in").mkdir()
-    for sub in ("text_filter", "sentence_split", "audio_silence", "gap_context", "plan", "summary"):
+    for sub in ("text_filter", "sentence_split", "audio_silence", "gap_context", "summary"):
         (out / sub).mkdir(parents=True)
     for stem, times in TIMES.items():
         (root / "in" / f"{stem}.mp4").touch()
@@ -183,20 +182,6 @@ def _project(root: Path) -> PipelineContext:
                 "summary": "ポンプの修理",
                 "parts": [{"stem": "mix", "lines": [1, 9], "summary": "修理作業"}],
                 "video_summaries": {"mix": "ポンプを外して直す"},
-            },
-            ensure_ascii=False,
-        ),
-        encoding="utf-8",
-    )
-    (out / "plan" / "plan.json").write_text(
-        json.dumps(
-            {
-                "directions": [{"stem": "mix", "lines": [5, 6], "direction": "作業は速回しで"}],
-                "order": [
-                    {"stem": "mix", "lines": [7, 9]},
-                    {"stem": "dev"},
-                    {"stem": "mix", "lines": [1, 6]},
-                ],
             },
             ensure_ascii=False,
         ),
@@ -275,7 +260,6 @@ def test_the_whole_conversation_and_its_result(tmp_path, monkeypatch):
 
     text = _render(runs, ctx)
     assert str(tmp_path) not in text, "a temporary path leaked into the golden file"
-    assert "作業は速回しで" not in text, "the plan stage's direction reached the director"
     assert f"Editor: {EDITOR_NOTE}" in text
 
     if os.environ.get("UPDATE_GOLDEN"):

@@ -561,7 +561,7 @@ def test_director_prompt_timing_line_does_not_offer_speed_for_long_duration():
     assert "timelapse" in lowered
 
 
-@pytest.mark.parametrize("stage", ["director", "plan"])
+@pytest.mark.parametrize("stage", ["director"])
 def test_prompt_documents_duration_and_gap_bracket(stage):
     """The director/plan inputs carry a `[4.2s, gap 0.8s]` bracket per line/part
     (rendered by timing.format_dur_gap).  The prompt must explain that notation,
@@ -619,7 +619,6 @@ def test_llm_sections_default_provider_and_empty_api_base():
     sections = [
         DEFAULTS["text_filter"],
         DEFAULTS["summary"],
-        DEFAULTS["plan"],
         DEFAULTS["director"],
         DEFAULTS["guided_edit"],
     ]
@@ -656,9 +655,9 @@ def test_section_named_env_var_does_not_override_default(monkeypatch):
 def test_scalar_env_var_colliding_with_section_does_not_crash(monkeypatch):
     """A non-JSON env var whose name collides with a section must not make
     get_effective_config raise."""
-    monkeypatch.setenv("PLAN", "short")
+    monkeypatch.setenv("SUMMARY", "short")
     cfg = get_effective_config(None)  # must not raise
-    assert cfg["plan"]["enabled"] is False
+    assert cfg["summary"]["enabled"] is False
 
 
 def test_gap_context_defaults():
@@ -818,35 +817,6 @@ def test_director_prompt_documents_overlay_density_target():
     prompt = cfg["director"]["prompt"]
     assert "3-5 minutes" in prompt
     assert "editorial brief" in prompt.lower()
-
-
-def test_plan_prompt_never_offers_keep_as_a_direction_word():
-    """`keep` means two different things one stage apart: "this part earns its
-    place" (plan) vs. "restore every silence in this range" (a director op).
-    plan.json is fed to the director as context, so the director copies the word
-    across and pays the mechanical price.  The plan vocabulary must not contain
-    it — every occurrence in the prompt must be the rule forbidding it."""
-    cfg = get_effective_config(None, {})
-    prompt = cfg["plan"]["prompt"]
-
-    assert "feature" in prompt  # the editorial-sense replacement
-    assert 'Never use the word "keep" in a direction' in prompt
-
-    # Drop the rule (a single line) — no other line may mention the word.
-    remainder = [line for line in prompt.splitlines() if 'Never use the word "keep"' not in line]
-    assert not [line for line in remainder if "keep" in line.lower()]
-
-
-def test_plan_prompt_example_directions_are_not_director_op_names():
-    """The plan's own JSON example is what the LLM imitates most closely."""
-    from nagare_clip.director.director_llm import VALID_TYPES
-
-    cfg = get_effective_config(None, {})
-    examples = [line for line in cfg["plan"]["prompt"].splitlines() if '"direction":' in line]
-    assert examples
-    for line in examples:
-        verb = line.split('"direction": "')[1].split(" ")[0].strip('",')
-        assert verb not in VALID_TYPES, f"plan example uses director op name {verb!r}"
 
 
 def test_director_prompt_scales_keep_width_to_what_is_on_screen():
@@ -1095,128 +1065,6 @@ def test_a_config_still_carrying_publish_thumbnail_fails_loudly(tmp_path):
     assert "thumbnail" in str(e.value)
 
 
-def _plan_prompt() -> str:
-    return get_effective_config(None, {})["plan"]["prompt"]
-
-
-def test_plan_prompt_examples_survive_the_parser():
-    """Every documented direction example must parse, or the prompt teaches a
-    shape the parser drops."""
-    from nagare_clip.plan.plan_llm import try_parse_plan_response
-    from nagare_clip.summary.summarize import PartSummary
-
-    parts = [PartSummary("v", (1, 40), f"part {i}") for i in range(1, 4)]
-    examples = [ln.strip().rstrip(",") for ln in _plan_prompt().splitlines() if '"index": ' in ln]
-    assert examples
-    for example in examples:
-        parsed = try_parse_plan_response('{"directions": [' + example + "]}", parts)
-        assert parsed, f"prompt example dropped: {example}"
-
-
-def test_plan_prompt_asks_for_a_message_every_run():
-    """The run that builds 22 directions from nothing is the one a human most
-    needs explained, and it is the run with no conversation to reply to.  A
-    message defined only as "your reply to the human" is therefore not written
-    at all on a first run — the real one said "No changes requested since last
-    plan; repeating all directions unchanged." about a plan it had just built
-    from scratch."""
-    prompt = _plan_prompt()
-    assert '"message"' in prompt
-    lowered = prompt.lower()
-    assert "every run" in lowered or "always" in lowered
-    # it explains the plan; it is not addressed to anyone
-    assert "not a reply" in lowered or "not a reply to" in lowered
-
-
-def test_plan_message_example_does_not_assume_a_conversation():
-    """An example anchors harder than an instruction: a message example ending
-    in "is that right?" teaches the model to answer a conversation that, on this
-    stage, no longer exists."""
-    prompt = _plan_prompt()
-    message_lines = [ln for ln in prompt.splitlines() if '"message"' in ln]
-    assert message_lines
-    for line in message_lines:
-        assert "?" not in line, f"plan message example asks the human a question: {line}"
-
-
-def test_plan_prompt_says_nothing_about_the_conversation():
-    """plan is a pure function of the summaries; revising against what the human
-    said is plan_revise's job.  An edit vocabulary in this prompt would put
-    instructions about deleting existing directions in front of a first run that
-    has none, and everything added competes with the editorial brief."""
-    prompt = _plan_prompt().lower()
-    for word in ("conversation", "previous", "human editor"):
-        assert word not in prompt, f"plan prompt still talks about the {word}"
-
-
-def test_plan_prompt_documents_the_line_range_split():
-    """A direction may narrow to part of its part — that is what makes the
-    human's "[31,83] is really two things" actionable rather than merely heard."""
-    prompt = _plan_prompt()
-    assert '"lines"' in prompt
-    assert "split" in prompt.lower()
-
-
-def _revise_prompt() -> str:
-    return get_effective_config(None, {})["plan_revise"]["prompt"]
-
-
-def test_revise_prompt_examples_survive_the_parser():
-    """The documented JSON shape must parse as written, or the prompt teaches a
-    shape the parser drops."""
-    from nagare_clip.plan.plan_llm import PartDirection
-    from nagare_clip.plan_revise.revise_llm import try_parse_revision
-    from nagare_clip.summary.summarize import PartSummary
-
-    parts = [PartSummary("v", (1, 100), f"part {i}") for i in range(1, 26)]
-    lines = _revise_prompt().splitlines()
-    start = next(i for i, ln in enumerate(lines) if ln.startswith('{"delete"'))
-    end = next(i for i in range(start, len(lines)) if lines[i].rstrip().endswith("}"))
-    ops = try_parse_revision("\n".join(lines[start : end + 1]), parts)
-    assert ops is not None, "the prompt's own JSON shape does not parse"
-    assert ops.delete and ops.update and ops.message
-    assert ops.add == [PartDirection("v", (60, 83), "feature — the demonstration itself")], (
-        "the prompt's add example is dropped by the parser"
-    )
-
-
-def test_revise_prompt_states_the_carry_through_contract():
-    """Output must be proportional to the change: a restated plan grows with the
-    project and invites the model to economise, and an omitted direction is then
-    indistinguishable from a deletion."""
-    prompt = _revise_prompt().lower()
-    assert "conversation" in prompt
-    assert "do not name" in prompt or "not named" in prompt
-    for op in ("delete", "add", "update", "message"):
-        assert f'"{op}"' in _revise_prompt()
-
-
-def test_revise_prompt_never_offers_keep_as_a_direction_word():
-    """Same trap as the plan prompt: `keep` is a director op with a mechanical
-    cost, and these directions are fed to the director as context."""
-    prompt = _revise_prompt()
-    assert 'Never use the word "keep" in a direction' in prompt
-    remainder = [ln for ln in prompt.splitlines() if 'Never use the word "keep"' not in ln]
-    assert not [ln for ln in remainder if "keep" in ln.lower()]
-
-
-def test_revise_prompt_message_is_a_reply_not_a_plan_summary():
-    """Both stages have a "message" and they are different things: plan explains
-    the plan it just made, plan_revise answers the human."""
-    prompt = _revise_prompt()
-    assert '"message"' in prompt
-    lowered = prompt.lower()
-    assert "reply" in lowered
-    assert "the human" in lowered
-
-
-def test_revise_prompt_documents_the_ids_and_the_split():
-    prompt = _revise_prompt()
-    assert "id" in prompt.lower()
-    assert "split" in prompt.lower()
-    assert '"message"' in prompt
-
-
 def test_director_prompt_says_who_the_editor_is():
     prompt = get_effective_config(None, {})["director"]["prompt"]
     assert "Guide:" in prompt and "Editor:" in prompt
@@ -1383,8 +1231,6 @@ _LLM_SECTIONS = [
     ("sentence_split",),
     ("text_filter",),
     ("summary",),
-    ("plan",),
-    ("plan_revise",),
     ("director",),
     ("guided_edit",),
     ("gap_context",),
@@ -1437,8 +1283,23 @@ def test_old_thinking_key_fails_naming_the_key_and_its_replacement(tmp_path: Pat
 
 def test_old_thinking_key_reports_every_occurrence(tmp_path: Path):
     cfg_file = tmp_path / "cfg.yml"
-    cfg_file.write_text(yaml.dump({"director": {"thinking": True}, "plan": {"thinking": "high"}}))
+    cfg_file.write_text(
+        yaml.dump({"director": {"thinking": True}, "summary": {"thinking": "high"}})
+    )
     with pytest.raises(ValueError) as e:
         get_effective_config(cfg_file)
     assert "director.thinking" in str(e.value)
-    assert "plan.thinking" in str(e.value)
+    assert "summary.thinking" in str(e.value)
+
+
+@pytest.mark.parametrize("section", ["plan", "plan_revise"])
+def test_a_removed_stage_section_fails_naming_what_replaced_it(tmp_path: Path, section):
+    """The plan stages are gone; a config that still configures them must say
+    so and point at the director, not fail with a generic "extra inputs"."""
+    cfg_file = tmp_path / "cfg.yml"
+    cfg_file.write_text(yaml.dump({section: {"enabled": True}}))
+    with pytest.raises(ValueError) as e:
+        get_effective_config(cfg_file)
+    msg = str(e.value)
+    assert f"`{section}:`" in msg and "director" in msg
+    assert "extra" not in msg.lower()

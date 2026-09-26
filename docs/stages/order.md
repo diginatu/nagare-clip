@@ -2,7 +2,7 @@
 
 The finished video is a sequence of **segments**, not of source files. A segment
 is one stretch of one source, and the **director** chooses both the segments and
-their sequence, starting from the plan's `order` when there is one
+their sequence, starting from shooting order
 (`docs/superpowers/specs/2026-09-26-director-decided-order-design.md`).
 
 Before this existed, the finished video was the sources concatenated in name
@@ -32,7 +32,7 @@ the whole source). Coverage is still counted in lines: a gap is not a line.
 
 **`lines=None` means the whole source**, and that is what makes the fallback
 free: shooting order is `identity_segments(project_stems(input_dir))`, which
-needs no transcript, no summary and no plan. Every consumer's `None` branch *is*
+needs no transcript and no summary. Every consumer's `None` branch *is*
 the code path the pipeline had before segments existed.
 
 `Segment(stem, (1, N))` and `Segment(stem, None)` mean the same thing, so
@@ -66,12 +66,11 @@ same order a full run would.
 a partial repair, which would be a video with a scene silently moved. Validation
 runs twice on purpose:
 
-- at **parse time** in `plan`/`plan_revise`, so the artifact never carries a
-  contract that has not been checked (with no line counts, no order is written
-  at all), and in the director's loop (`loop._read_order`, in display numbers);
-- at **resolve time** in `pipeline/stages._resolve_order`, because both
-  `director/order.json` and `plan.json` are hand-editable and
-  `sentence_split`/`summary` can re-run underneath them.
+- at **parse time** in the director's loop (`loop._read_order`, in display
+  numbers), so a model's order is refused before it is ever written;
+- at **resolve time** in `pipeline/stages._resolve_order`, because
+  `director/order.json` is hand-editable and `sentence_split`/`summary` can
+  re-run underneath it.
 
 ## The director decides it
 
@@ -98,8 +97,9 @@ message never changes.
   cross a break — on disk they stay one op and `intervals` computes them once.
   A break is a range end whose next range does not start on the next line
   (`loop.order_breaks`).
-- **The seed** is the plan's resolved order (`_resolve_order(ctx, director=False)`),
-  converted by `loop.order_ranges`; it reaches the model as its starting order.
+- **The start** is `director/order.json` when the directory already holds one
+  (the director resumes from its directory), converted by `loop.order_ranges`;
+  otherwise shooting order.
 - **What the model sees**: when the order moves anything, `edit_state` adds the
   video as it plays — `timeline_runs()` takes the breaks as forced run ends, so
   every run lies inside one range and is listed there — with both sides of every
@@ -116,8 +116,8 @@ failing conversation raises.
 > `intervals`. `intervals/timeline.json` is the authority after it. `intervals`
 > is the single conversion point from lines to seconds.**
 
-`pipeline/stages._resolve_order` reads `director/order.json`, else the effective
-plan, else shooting order. The manifest builder and the order note read it
+`pipeline/stages._resolve_order` reads `director/order.json`, else shooting
+order. The manifest builder and the order note read it
 (through `_timeline_segments`); `director_preview` does too, per segment in
 playback order. `blender`, `publish` and `cut_report` read the manifest and
 never an order. Nothing downstream of `intervals` re-derives a time from a line
@@ -200,8 +200,8 @@ human decides whether it was right.
 It is written when the resolved order differs from shooting order (each
 segment's position, and where it was), and when an order was **rejected** (the
 problems, and that the pipeline fell back). Nothing is written when the resolved
-order *is* shooting order, including a plan that states shooting order
-explicitly — that is not a reorder. A stale note is deleted.
+order *is* shooting order, including an `order.json` that states shooting
+order explicitly — that is not a reorder. A stale note is deleted.
 
 `write_order_note(ctx)` is called from the `director` adapter and again from
 `intervals`, the same idempotent double-write `write_cut_report` uses, so a
@@ -212,26 +212,18 @@ reorder changes the shape of the finished video more than any other single
 decision, and the failure mode to avoid is a human noticing it only while
 watching the result.
 
-## What the prompts say, and what they deliberately do not
+## What the prompt says, and what it deliberately does not
 
-The default `plan.prompt` gives the segment vocabulary, states the coverage
-contract as a **rule**, shows a minimal JSON shape, and requires a changed order
-to be announced in the `message`.
+`DIRECTOR_PROMPT`'s Order paragraph gives the `order` key, the coverage contract
+as a **rule**, and what a silence line and a timelapse do at a range edge.
 
 It carries **no worked reorder**. The editorial call belongs in the `project:`
 brief — which on the project this was built for asks for the device thread first
 and the fish thread second, and says the sources need not stay in shooting
 order. A prompt that also argued for reordering would compete with the brief,
 and this project has repeatedly watched the brief lose that competition; a
-worked example in these prompts anchors harder than the instruction around it
-(improvement 11). A test asserts the shape example is not itself a reorder, so
-one cannot creep back in.
+worked example anchors harder than the instruction around it (improvement 11).
 
-`plan_revise` is **shown** the current order (`plan_llm.format_order`, in the
-same terms its response uses) and restates it **whole**: order *is* position, so
-unlike a direction it cannot be edited in pieces, and restating something whole
-requires seeing it whole. An identity order renders *as* identity rather than
-being omitted, so "no reorder yet" is a visible state and not an absence. An
-omitted or rejected `order` is **inherited** by the code, not cleared — the same
-rule that carries an unnamed direction through — so `plan_revise/plan.json`
-always holds the effective order, since `director` reads exactly one plan file.
+(The order used to be the `plan` stage's to state and `plan_revise`'s to
+restate; both stages were removed when the director took the order, its own
+plan and the human conversation over.)

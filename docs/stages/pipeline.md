@@ -57,21 +57,21 @@ runtime behavior.
   when skipping ..."). Any stage exception other than `PipelineError`/`PipelineStop` is
   wrapped as `PipelineError(f"[{stage.name}] failed: {exc}")` so the CLI's
   top-level handler is the only place that prints and exits non-zero.
-- `stages.py` — `STAGE_NAMES` (the thirteen canonical stage names, in order) and
+- `stages.py` — `STAGE_NAMES` (the twelve canonical stage names, in order) and
   `STAGES` (the `Stage` registry consumed by `runner.run_stages`). One adapter
   function per stage translates `PipelineContext` into that stage's typed
   `run()` call (`run_audio_silence`, `run_sentence_split`, `run_gap_context`,
-  `run_summary`, `run_text_filter`, `run_plan`, `run_plan_revise`, `run_director`,
+  `run_summary`, `run_text_filter`, `run_director_conversation`,
   `run_guided_edit`, `run_intervals`, `run_publish`) or an external command
-  (`transcription`, `blender`). `transcription`, `summary`, `plan`, `plan_revise`, `blender`
+  (`transcription`, `blender`). `transcription`, `summary`, `director`, `blender`
   and `publish` run once per pipeline invocation; `audio_silence`,
-  `sentence_split`, `gap_context`, `text_filter`, `director`, `guided_edit`,
+  `sentence_split`, `gap_context`, `text_filter`, `guided_edit`,
   and `intervals` loop per source inside their adapter. `publish` runs once
   but still reads per-source material (its frame shortlist and caption list),
   which it gathers in the adapter before a single batched Docker call — the
   same shape as `gap_context`'s extraction. Each LLM stage adapter
-  (`sentence_split`, `gap_context`, `summary`, `text_filter`, `plan`,
-  `plan_revise`, `director`, `guided_edit`, `publish`) owns its `llm_report.Recorder`
+  (`sentence_split`, `gap_context`, `summary`, `text_filter`, `director`,
+  `guided_edit`, `publish`) owns its `llm_report.Recorder`
   lifecycle: it builds one
   recorder via `recorder_from_config(stage, cfg, override_dir=...)`, calls
   `rec.clear()` **once before** its stem loop (so a stage's `output/llm_report/`
@@ -135,8 +135,8 @@ interpreter exit, instead of once per stage subprocess under the old script.
 ## Output layout
 
 Output dirs are one per stage by name, created up front by `cli.main()`:
-`output/transcription|audio_silence|sentence_split|gap_context|summary|text_filter|plan|plan_revise|director|guided_edit|intervals|blender|publish/`.
-`sentence_split`/`gap_context`/`summary`/`plan`/`plan_revise`/`director`/`guided_edit`/`publish` all still run
+`output/transcription|audio_silence|sentence_split|gap_context|summary|text_filter|director|guided_edit|intervals|blender|publish|render/`.
+`sentence_split`/`gap_context`/`summary`/`director`/`guided_edit`/`publish` all still run
 unconditionally (cheap no-ops when their stage is disabled in config), exactly
 as under the bash orchestrator — see [AGENTS.md](../../AGENTS.md#pipeline-overview)
 for what each no-op produces.
@@ -162,7 +162,7 @@ the whole design:
   concept then.
 
 The file rows are in pipeline-flow order (`index_page._rows()`, pinned by a
-test): `plan_dialogue/history.md` (plan/plan_revise), the `.blend`,
+test): `director/plan.md` and `director/conversation.md`, the `.blend`,
 `publish.md`, `render.md`, and `llm_report/index.md` last because it covers
 every call of the run rather than one stage. `cut_report.md` deliberately has
 no row: `llm_report/index.md` inlines it (its `## finished cut` section) and the
@@ -198,11 +198,9 @@ by a writer who cannot see the run.
 
 `pipeline/stages.py` owns the one point every stage consults for the finished
 video's playback order: `_timeline_segments(ctx)` (validate + normalise
-`director/order.json`, else the effective plan's `order`, else shooting order
-from `project_stems`). `_line_counts`, `_write_manifest`, `_ordered_sources` and
-`write_order_note` sit beside it. The `director` does **not** read it for its
-view — its view is always shooting order — only for its seed
-(`_resolve_order(ctx, director=False)`, which skips its own `order.json`), and
-writes `director/order.json` itself.
+`director/order.json`, else shooting order from `project_stems`).
+`_line_counts`, `_write_manifest`, `_ordered_sources` and `write_order_note` sit
+beside it. The `director` does **not** read it: its view is always shooting
+order, it resumes its own `order.json` as state, and writes it itself.
 
 See [`order.md`](order.md).

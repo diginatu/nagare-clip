@@ -21,8 +21,8 @@ general:
   image_markup: html   # How the reviewable markdown files (publish.md, render.md) embed images: html = <img> tags (sized), markdown = ![alt](path) for viewers that strip raw HTML. A property of your viewer, so it is set once here
 
 # project: the editorial brief for this project (all fields optional, free text).
-# Whatever is set here is appended to the system prompts of the summary, plan,
-# director and text_filter stages, so those LLMs know what the transcript cannot
+# Whatever is set here is appended to the system prompts of the summary,
+# director, text_filter and publish stages, so those LLMs know what the transcript cannot
 # tell them: who the video is for, how long it should be, how it should feel, and
 # what happened previously in a series. Leave everything empty (the default) and
 # every prompt is byte-identical to a run without this section.
@@ -99,7 +99,7 @@ gap_context:
 # and text_filter. A larger LLM segments each transcript into line-range parts
 # and summarises each (also listing misspelling-prone keywords per video), then
 # a reduce step writes one all-videos summary. Output summary.json is a
-# reviewable intermediate consumed by the text_filter, plan and director stages.
+# reviewable intermediate consumed by the text_filter, director and publish stages.
 # Disabled by default (writes an empty summary = no-op).
 summary:
   enabled: false   # Enable the summary LLM
@@ -132,46 +132,6 @@ text_filter:
   temperature: 0.1   # LLM sampling temperature
   reasoning_effort: null   # Passed to LiteLLM as reasoning_effort, unchanged (e.g. "none"/"low"/"high"); null sends nothing
   # keywords: []   # Constant keywords always injected into the filter LLM prompt
-
-# plan stage: runs once project-wide after summary, before director. A larger
-# LLM reads the per-part summaries (with line ranges) of all videos and gives a
-# coarse, cross-video editorial direction per part. Output plan.json is a
-# reviewable intermediate consumed by director. Disabled by default (no-op).
-plan:
-  enabled: false   # Enable the plan LLM
-  provider: ollama_chat   # LiteLLM provider prefix: ollama_chat | openai | gemini | anthropic
-  api_base: ""   # Base URL; empty -> Ollama localhost default; leave empty for cloud providers
-  model: "gpt-oss:120b"   # A larger model (passed to LiteLLM as "<provider>/<model>")
-  api_key: ""   # API key for the provider (or set the provider's env var)
-  temperature: 0.3
-  reasoning_effort: null
-  timeout: 300
-  response_format: json
-  max_retries: 2   # Extra attempts on LLM error / unparseable JSON (0 = single attempt)
-  retry_temp_step: 0.2
-  retry_temp_cap: 0.8
-  # prompt: "..."   # System prompt (has a sensible default)
-
-# plan_revise stage: runs once project-wide between plan and director. It reads
-# plan/plan.json and the conversation in plan_dialogue/history.md and revises the
-# directions as operations (delete/add/update), writing plan_revise/plan.json --
-# which director prefers over plan/plan.json. It makes NO LLM call unless a human
-# turn is unanswered, and a plan re-run invalidates its output. Disabled by
-# default (no-op).
-plan_revise:
-  enabled: false   # Enable the plan_revise LLM
-  provider: ollama_chat   # LiteLLM provider prefix: ollama_chat | openai | gemini | anthropic
-  api_base: ""   # Base URL; empty -> Ollama localhost default; leave empty for cloud providers
-  model: "gpt-oss:120b"   # A larger model (passed to LiteLLM as "<provider>/<model>")
-  api_key: ""   # API key for the provider (or set the provider's env var)
-  temperature: 0.3
-  reasoning_effort: null
-  timeout: 300
-  response_format: json
-  max_retries: 2   # Extra attempts on LLM error / unparseable JSON (0 = single attempt)
-  retry_temp_step: 0.2
-  retry_temp_cap: 0.8
-  # prompt: "..."   # System prompt (has a sensible default)
 
 # director stage (Pass A): a larger LLM reads the whole numbered transcript and
 # emits high-level edit operations as {stem}_director.json. It never re-outputs

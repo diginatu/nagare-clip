@@ -194,7 +194,7 @@ def _number(value: Any) -> float | None:
 
 
 def segments_to_dict(segments: Iterable[Segment]) -> list[dict[str, Any]]:
-    """The ``order`` array of ``plan.json``; a whole-source segment omits ``lines``."""
+    """The ``order`` array of ``order.json``; a whole-source segment omits ``lines``."""
     out: list[dict[str, Any]] = []
     for seg in segments:
         entry: dict[str, Any] = {"stem": seg.stem}
@@ -304,3 +304,15 @@ def write_manifest(path: Path | str, entries: Iterable[TimelineSegment]) -> None
         json.dumps(manifest_to_dict(entries), ensure_ascii=False, indent=2) + "\n",
         encoding="utf-8",
     )
+
+
+def order_from_dict(data: Any) -> list[Segment]:
+    """The ``order`` array of an ``order.json`` — the finished video's playback order.
+
+    Absent reads as no order, which the orchestrator resolves to shooting order.
+    Not validated here: validation needs the per-source line counts, which live
+    in the orchestrator.
+    """
+    if not isinstance(data, dict):
+        return []
+    return segments_from_dict(data.get("order"))
