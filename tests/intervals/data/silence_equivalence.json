@@ -1,0 +1,367 @@
+{
+ "keep_one_silence": {
+  "keep_intervals": [
+   {
+    "start": 0.0,
+    "end": 13.0
+   },
+   {
+    "start": 21.0,
+    "end": 22.0
+   },
+   {
+    "start": 28.0,
+    "end": 31.0
+   }
+  ],
+  "speed_ranges": [],
+  "overlays": [],
+  "old_edits": [
+   "あい",
+   "うえ",
+   "おか",
+   "きく",
+   "けこ",
+   "さし"
+  ]
+ },
+ "keep_from_silence": {
+  "keep_intervals": [
+   {
+    "start": 0.0,
+    "end": 13.0
+   },
+   {
+    "start": 21.0,
+    "end": 22.0
+   },
+   {
+    "start": 28.0,
+    "end": 31.0
+   }
+  ],
+  "speed_ranges": [],
+  "overlays": [],
+  "old_edits": [
+   "あい",
+   "うえ",
+   "おか",
+   "きく",
+   "けこ",
+   "さし"
+  ]
+ },
+ "keep_to_silence": {
+  "keep_intervals": [
+   {
+    "start": 0.0,
+    "end": 1.1
+   },
+   {
+    "start": 11.1,
+    "end": 22.0
+   },
+   {
+    "start": 28.0,
+    "end": 31.0
+   }
+  ],
+  "speed_ranges": [],
+  "overlays": [],
+  "old_edits": [
+   "あい",
+   "うえ",
+   "おか",
+   "きく",
+   "けこ",
+   "さし"
+  ]
+ },
+ "keep_silence_to_silence": {
+  "keep_intervals": [
+   {
+    "start": 0.0,
+    "end": 22.0
+   },
+   {
+    "start": 28.0,
+    "end": 31.0
+   }
+  ],
+  "speed_ranges": [],
+  "overlays": [],
+  "old_edits": [
+   "あい",
+   "うえ",
+   "おか",
+   "きく",
+   "けこ",
+   "さし"
+  ]
+ },
+ "speed_in_keep_over_silences": {
+  "keep_intervals": [
+   {
+    "start": 0.0,
+    "end": 1.1
+   },
+   {
+    "start": 11.1,
+    "end": 31.0
+   }
+  ],
+  "speed_ranges": [
+   {
+    "start": 13.0,
+    "end": 28.0,
+    "factor": 5.0
+   }
+  ],
+  "overlays": [],
+  "old_edits": [
+   "あい",
+   "うえ",
+   "おか",
+   "きく",
+   "けこ",
+   "さし"
+  ]
+ },
+ "timelapse_one_silence": {
+  "keep_intervals": [
+   {
+    "start": 0.0,
+    "end": 13.0
+   },
+   {
+    "start": 21.0,
+    "end": 22.0
+   },
+   {
+    "start": 28.0,
+    "end": 31.0
+   }
+  ],
+  "speed_ranges": [
+   {
+    "start": 1.1,
+    "end": 11.1,
+    "factor": 8.0
+   }
+  ],
+  "overlays": [
+   {
+    "start": 1.1,
+    "duration": 1.25,
+    "text": "準備"
+   }
+  ],
+  "old_edits": [
+   "あい",
+   "うえ",
+   "おか",
+   "きく",
+   "けこ",
+   "さし"
+  ]
+ },
+ "timelapse_from_silence": {
+  "keep_intervals": [
+   {
+    "start": 0.0,
+    "end": 13.0
+   },
+   {
+    "start": 21.0,
+    "end": 22.0
+   },
+   {
+    "start": 28.0,
+    "end": 31.0
+   }
+  ],
+  "speed_ranges": [
+   {
+    "start": 1.1,
+    "end": 13.0,
+    "factor": 7.0
+   }
+  ],
+  "overlays": [
+   {
+    "start": 1.1,
+    "duration": 1.7,
+    "text": "作業"
+   }
+  ],
+  "old_edits": [
+   "あい",
+   "うえ",
+   "おか",
+   "きく",
+   "けこ",
+   "さし"
+  ]
+ },
+ "timelapse_to_silence": {
+  "keep_intervals": [
+   {
+    "start": 0.0,
+    "end": 1.1
+   },
+   {
+    "start": 11.1,
+    "end": 13.0
+   },
+   {
+    "start": 21.0,
+    "end": 31.0
+   }
+  ],
+  "speed_ranges": [
+   {
+    "start": 21.0,
+    "end": 28.0,
+    "factor": 4.0
+   }
+  ],
+  "overlays": [
+   {
+    "start": 21.0,
+    "duration": 1.75,
+    "text": "片付け"
+   }
+  ],
+  "old_edits": [
+   "あい",
+   "うえ",
+   "おか",
+   "きく",
+   "けこ",
+   "さし"
+  ]
+ },
+ "overlay_on_silence": {
+  "keep_intervals": [
+   {
+    "start": 0.0,
+    "end": 1.1
+   },
+   {
+    "start": 11.1,
+    "end": 13.0
+   },
+   {
+    "start": 21.0,
+    "end": 22.0
+   },
+   {
+    "start": 28.0,
+    "end": 31.0
+   }
+  ],
+  "speed_ranges": [],
+  "overlays": [
+   {
+    "start": 12.5,
+    "duration": 2.0,
+    "text": "待ち"
+   }
+  ],
+  "old_edits": [
+   "あい",
+   "うえ",
+   "おか",
+   "きく",
+   "けこ",
+   "さし"
+  ]
+ },
+ "two_timelapses": {
+  "keep_intervals": [
+   {
+    "start": 0.0,
+    "end": 22.0
+   },
+   {
+    "start": 28.0,
+    "end": 31.0
+   }
+  ],
+  "speed_ranges": [
+   {
+    "start": 1.1,
+    "end": 12.0,
+    "factor": 5.0
+   },
+   {
+    "start": 12.5,
+    "end": 21.0,
+    "factor": 5.0
+   }
+  ],
+  "overlays": [
+   {
+    "start": 1.1,
+    "duration": 2.18,
+    "text": "一"
+   },
+   {
+    "start": 12.5,
+    "duration": 1.7,
+    "text": "二"
+   }
+  ],
+  "old_edits": [
+   "あい",
+   "うえ",
+   "おか",
+   "きく",
+   "けこ",
+   "さし"
+  ]
+ },
+ "silence_ops_beside_line_ops": {
+  "keep_intervals": [
+   {
+    "start": 0.0,
+    "end": 13.0
+   },
+   {
+    "start": 21.0,
+    "end": 22.0
+   },
+   {
+    "start": 30.0,
+    "end": 31.0
+   }
+  ],
+  "speed_ranges": [
+   {
+    "start": 1.1,
+    "end": 11.1,
+    "factor": 8.0
+   }
+  ],
+  "overlays": [
+   {
+    "start": 11.1,
+    "duration": 1.5,
+    "text": "見出し"
+   },
+   {
+    "start": 1.1,
+    "duration": 1.25,
+    "text": "準備"
+   }
+  ],
+  "old_edits": [
+   "あい",
+   "<overlay text=\"見出し\" duration=\"1.5\"/>うえ",
+   "おか",
+   "きく",
+   "<cut>けこ</cut>",
+   "<keep>さし</keep>"
+  ]
+ }
+}
