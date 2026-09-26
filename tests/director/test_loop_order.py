@@ -72,7 +72,7 @@ class TestTheView:
 
 class TestAnOrderIsAccepted:
     def test_it_becomes_the_state(self):
-        view, state = _view(), LoopState()
+        view, state = _view(), LoopState(plan="p")
         result = apply_reply(view, state, _reply([[4, 6], [1, 3], [7, 9]]))
         assert result.reordered and result.refusal is None
         assert state.order == [(4, 6), (1, 3), (7, 9)]
@@ -94,25 +94,25 @@ class TestAnOrderIsAccepted:
         assert segments == [Segment("A", (4, 5)), Segment("B", (1, 3)), Segment("A", (1, 3))]
 
     def test_one_line_is_a_range(self):
-        view, state = _view(), LoopState()
+        view, state = _view(), LoopState(plan="p")
         apply_reply(view, state, _reply([[5, 5], [1, 4], [6, 9]]))
         assert state.order == [(5, 5), (1, 4), (6, 9)]
 
     def test_the_last_reply_replaces_it_whole(self):
-        view, state = _view(), LoopState()
+        view, state = _view(), LoopState(plan="p")
         apply_reply(view, state, _reply([[4, 6], [1, 3], [7, 9]]))
         apply_reply(view, state, _reply([[7, 9], [1, 6]]))
         assert state.order == [(7, 9), (1, 6)]
 
     def test_a_reply_without_it_keeps_the_order_in_force(self):
-        view, state = _view(), LoopState()
+        view, state = _view(), LoopState(plan="p")
         apply_reply(view, state, _reply([[7, 9], [1, 6]]))
         result = apply_reply(view, state, _reply(ops=[_cut(1, 1)]))
         assert state.order == [(7, 9), (1, 6)]
         assert not result.reordered
 
     def test_it_may_come_alone(self):
-        view, state = _view(), LoopState()
+        view, state = _view(), LoopState(plan="p")
         apply_reply(view, state, _reply(ops=[_cut(1, 1)], range_=(1, 4)))
         result = apply_reply(view, state, json.dumps({"order": [[7, 9], [1, 6]]}))
         assert result.error is None and result.reordered
@@ -122,14 +122,14 @@ class TestAnOrderIsAccepted:
 
     def test_alone_it_cannot_carry_ops(self):
         result = apply_reply(
-            _view(), LoopState(), json.dumps({"order": [[1, 9]], "ops": [_cut(1, 1)]})
+            _view(), LoopState(plan="p"), json.dumps({"order": [[1, 9]], "ops": [_cut(1, 1)]})
         )
         assert result.error is not None
 
 
 class TestAnOrderIsRefused:
     def _refused(self, order):
-        view, state = _view(), LoopState(order=[(7, 9), (1, 6)])
+        view, state = _view(), LoopState(plan="p", order=[(7, 9), (1, 6)])
         result = apply_reply(view, state, _reply(order, ops=[_cut(1, 1)]))
         assert state.order == [(7, 9), (1, 6)], "the previous order stays"
         assert result.ops, "the reply's ops still land"
@@ -157,14 +157,14 @@ class TestTimelapses:
     two with its caption on one side only; cut/keep survive it."""
 
     def test_an_order_that_splits_one_is_refused(self):
-        view, state = _view(), LoopState()
+        view, state = _view(), LoopState(plan="p")
         apply_reply(view, state, _reply(ops=[_timelapse(4, 6)]))
         result = apply_reply(view, state, _reply([[1, 5], [7, 9], [6, 6]], range_=(7, 9)))
         assert state.order == []
         assert "splits timelapse [4,6]" in result.refusal
 
     def test_one_reply_may_move_the_timelapse_out_of_the_way(self):
-        view, state = _view(), LoopState()
+        view, state = _view(), LoopState(plan="p")
         apply_reply(view, state, _reply(ops=[_timelapse(4, 6)]))
         result = apply_reply(
             view, state, _reply([[1, 5], [7, 9], [6, 6]], range_=(4, 6), ops=[_timelapse(4, 5)])
@@ -173,13 +173,13 @@ class TestTimelapses:
         assert state.order == [(1, 5), (7, 9), (6, 6)]
 
     def test_a_new_one_across_a_break_is_refused(self):
-        view, state = _view(), LoopState(order=[(1, 5), (7, 9), (6, 6)])
+        view, state = _view(), LoopState(plan="p", order=[(1, 5), (7, 9), (6, 6)])
         result = apply_reply(view, state, _reply(ops=[_timelapse(4, 6)]))
         assert "crosses the order's break after line 5" in result.refusal
         assert not state.ops
 
     def test_a_cut_across_a_break_lands(self):
-        view, state = _view(), LoopState(order=[(1, 5), (7, 9), (6, 6)])
+        view, state = _view(), LoopState(plan="p", order=[(1, 5), (7, 9), (6, 6)])
         result = apply_reply(view, state, _reply(ops=[_cut(4, 6)]))
         assert result.refusal is None and result.ops
 
@@ -217,13 +217,13 @@ class TestSeeding:
 
 class TestWithDone:
     def test_an_order_sent_with_done_is_applied(self):
-        view, state = _view(), LoopState(reviewed_through=9)
+        view, state = _view(), LoopState(plan="p", reviewed_through=9)
         result = apply_reply(view, state, json.dumps({"done": True, "order": [[7, 9], [1, 6]]}))
         assert result.done and result.reordered
         assert state.order == [(7, 9), (1, 6)]
 
     def test_a_refused_one_is_not_done(self):
-        view, state = _view(), LoopState(reviewed_through=9)
+        view, state = _view(), LoopState(plan="p", reviewed_through=9)
         result = apply_reply(view, state, json.dumps({"done": True, "order": [[1, 6]]}))
         assert not result.done
         assert "order not applied" in result.refusal

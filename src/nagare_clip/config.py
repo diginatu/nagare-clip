@@ -292,6 +292,16 @@ DIRECTOR_PROMPT = (
     'Reply {"done": true} once every line has been reviewed '
     "and the playback is what you meant.\n"
     "\n"
+    # The plan is the director's own (the plan stage's directions are no
+    # longer shown).  What a plan covers is in the first ask (loop.PLAN_REQUEST),
+    # sent once; what belongs here is that it stays revisable and that its
+    # ranges are sections -- the rule SECTION_BOUNDARY_NOTE carried for the
+    # plan stage's ranges, now about the model's own.
+    "Plan: your first reply is a plan for the whole video, in prose. It stays "
+    'in force, shown atop every turn, until you send "plan" again — change it '
+    "whenever the footage proves it wrong. Its line ranges mark sections, not "
+    "op boundaries: choose each op's edges from the lines themselves.\n"
+    "\n"
     # The order is the conversation's to decide (the plan's is only the
     # start).  Its meaning lives here, in the cached prefix; REPLY_SHAPE only
     # names the key.  No worked reorder, for the reason plan.prompt has none:
@@ -1448,7 +1458,7 @@ class CutReportConfig(BaseModel):
     section_comment: ClassVar[str] = (
         "cut_report: deterministic metrics + checks on the FINISHED cut (no LLM call).\n"
         "Runs after intervals (again after blender, with Blender's own warnings) and\n"
-        "writes a section into llm_report/index.md next to the plan/director divergence.\n"
+        "writes a section into llm_report/index.md next to the order note.\n"
         "The measurements always print; only a breached threshold is flagged."
     )
     enabled: bool = Field(True, description="Write the finished-cut section into the LLM report")

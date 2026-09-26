@@ -4,6 +4,8 @@ You are a video editor. You are given the WHOLE finished video as numbered lines
 
 Each turn asks for an approximate range, and after each reply you are shown the COMPLETE edit — every op, caption and the runtime — so check the whole-video requirements every turn. A reply OWNS the range it names: re-send a range and its ops REPLACE the ones you gave for it. Reply {"done": true} once every line has been reviewed and the playback is what you meant.
 
+Plan: your first reply is a plan for the whole video, in prose. It stays in force, shown atop every turn, until you send "plan" again — change it whenever the footage proves it wrong. Its line ranges mark sections, not op boundaries: choose each op's edges from the lines themselves.
+
 Order: the transcript is numbered in shooting order and stays so. To change what plays when, add "order": [[first, last], ...] to any reply — the ranges in the order they PLAY, covering every line exactly once (cut removes footage; order only moves it). It replaces the order in force whole. A silence line plays with the range it is in, and a timelapse must lie inside one range. The edit you are shown then lists the video as it plays, quoting both sides of every seam.
 
 Timing: a line may carry a bracket after its text. [4.2s] is the line's duration; [4.2s, gap 0.8s] adds the silent gap before the next line. A line holding long internal silence splits it instead — [13.0s speech, 62.9s silence]: 13.0 s plays and 62.9 s is dropped by default; the two add up to the line's footage — and may carry a gap too: [13.0s speech, 62.9s silence, gap 0.8s]. A negligible gap is omitted. A bracket's gap is a SHORT one — a longer wait is a [silent …] line of its own, below.
@@ -41,12 +43,7 @@ A "keep" op may span at most 8 line(s); a wider one is rejected and has no effec
 
 Project context (all videos):
 Overall: ポンプの修理
-
-These are section boundaries, not op boundaries: a direction says what a stretch is FOR, and you choose where each op actually starts and ends. A direction saying "keep" means emphasis, not a keep op.
-[1] dev:
-- (no directions)
-[2] mix:
-- lines 10-12: 作業は速回しで
+[2] mix: ポンプを外して直す
 
 The whole video below, every source in shooting order under one numbering. [k] heads each source; your ops and your order address these numbers.
 
@@ -108,11 +105,73 @@ Captions in playback order (0): none yet.
 
 whole video so far: default 39.0 s (0.7 min) → with the ops accepted so far 39.0 s (0.7 min)
 
-Reviewed through line 0 of 15. Next, review around lines 1 to 8 — approximately: stop where the action ends, a few lines earlier or later, wherever the footage actually breaks. Do not stop at line 8 because it was asked for. Emit the ops for the stretch you really reviewed, and say which line you reviewed through.
+Before any op, write your plan for the whole video. Read all of it first. In prose, say: the throughline — what this video is about and what the viewer should come away with; what to cut and what to compress, roughly where (approximate line numbers are fine — they mark sections, not op boundaries); the moments worth a caption; the order, and why, if it should not be shooting order; and the runtime you expect against the brief.
 
-Reply with one JSON object and nothing else: {"range": [first, last], "reviewed_through": <the last line you actually reviewed>, "ops": [...]}. "range" is the stretch this reply owns: every op accepted earlier whose first line falls inside it is REPLACED by the ops below, and nothing outside it changes — so re-sending a range you already covered is how you rewrite it. Op line numbers are this transcript's numbers. Optionally add "order": [[first, last], ...]; {"order": ...} alone changes nothing else.
+Reply with one JSON object and nothing else: {"plan": "<your plan>"}, optionally with "order": [[first, last], ...]. No ops yet: the next turns ask for them range by range, and any later reply may send "plan" again to replace this one.
 
 ################ CALL 2: after the system message ################
+
+===== [user] =====
+
+Write the plan.
+
+===== [assistant] =====
+
+{"plan": "ポンプ修理の一本。結果（動いた！）を冒頭に見せてから経緯を追う。道具紹介(2-3)は削る。配管作業(10-11)は速回し。", "order": [[12, 15], [1, 4], [5, 11]]}
+
+===== [user] =====
+
+THE COMPLETE EDIT AS IT STANDS. Every segment of the video, every op accepted so far and what it plays, then every caption in order and the runtime. This block is the whole state of the edit: it is recomputed from scratch each turn, so nothing earlier in this conversation describes the edit as it is now.
+
+YOUR PLAN (in force — send "plan" in any reply to replace it):
+ポンプ修理の一本。結果（動いた！）を冒頭に見せてから経緯を追う。道具紹介(2-3)は削る。配管作業(10-11)は速回し。
+
+Playback of these ops, computed from line timings (approximate):
+
+(no ops: every line plays its default)
+
+segment [1] dev as it plays:
+  1x          10.5 s  lines 1-4
+
+segment [1] dev: default 10.5 s → with these ops 10.5 s
+
+Playback of these ops, computed from line timings (approximate):
+
+(no ops: every line plays its default)
+
+segment [2] mix as it plays:
+  1x          20.5 s  lines 5-11
+  1x           8.0 s  lines 12-15
+
+segment [2] mix: default 28.5 s → with these ops 28.5 s
+
+THE VIDEO AS IT PLAYS, in the order in force (the segments above are in the transcript's order, not this one):
+order: 12-15, 1-4, 5-11
+▶ lines 12-15
+  1x           8.0 s  lines 12-15
+  seam 15 → 1: 「今日はここまで、ありがとうございました」 → 「こんにちは、今日はポンプを直します」
+▶ lines 1-4
+  1x          10.5 s  lines 1-4
+▶ lines 5-11
+  1x          20.5 s  lines 5-11
+
+Captions in playback order (0): none yet.
+
+whole video so far: default 39.0 s (0.7 min) → with the ops accepted so far 39.0 s (0.7 min)
+
+Reviewed through line 0 of 15. Next, review around lines 1 to 8 — approximately: stop where the action ends, a few lines earlier or later, wherever the footage actually breaks. Do not stop at line 8 because it was asked for. Emit the ops for the stretch you really reviewed, and say which line you reviewed through.
+
+Reply with one JSON object and nothing else: {"range": [first, last], "reviewed_through": <the last line you actually reviewed>, "ops": [...]}. "range" is the stretch this reply owns: every op accepted earlier whose first line falls inside it is REPLACED by the ops below, and nothing outside it changes — so re-sending a range you already covered is how you rewrite it. Op line numbers are this transcript's numbers. Optionally add "order": [[first, last], ...] and/or "plan": "..."; either alone changes nothing else.
+
+################ CALL 3: after the system message ################
+
+===== [user] =====
+
+Write the plan.
+
+===== [assistant] =====
+
+{"plan": "ポンプ修理の一本。結果（動いた！）を冒頭に見せてから経緯を追う。道具紹介(2-3)は削る。配管作業(10-11)は速回し。", "order": [[12, 15], [1, 4], [5, 11]]}
 
 ===== [user] =====
 
@@ -120,11 +179,14 @@ Review around lines 1 to 8.
 
 ===== [assistant] =====
 
-{"range": [1, 8], "reviewed_through": 8, "ops": [{"type": "cut", "lines": [2, 3], "note": "道具紹介は冗長"}], "order": [[12, 15], [1, 4], [5, 11]]}
+{"range": [1, 8], "reviewed_through": 8, "ops": [{"type": "cut", "lines": [2, 3], "note": "道具紹介は冗長"}]}
 
 ===== [user] =====
 
 THE COMPLETE EDIT AS IT STANDS. Every segment of the video, every op accepted so far and what it plays, then every caption in order and the runtime. This block is the whole state of the edit: it is recomputed from scratch each turn, so nothing earlier in this conversation describes the edit as it is now.
+
+YOUR PLAN (in force — send "plan" in any reply to replace it):
+ポンプ修理の一本。結果（動いた！）を冒頭に見せてから経緯を追う。道具紹介(2-3)は削る。配管作業(10-11)は速回し。
 
 Playback of these ops, computed from line timings (approximate):
 
@@ -167,9 +229,17 @@ whole video so far: default 39.0 s (0.7 min) → with the ops accepted so far 33
 
 Reviewed through line 8 of 15. Next, review around lines 9 to 15 — approximately: stop where the action ends, a few lines earlier or later, wherever the footage actually breaks. Do not stop at line 15 because it was asked for. Emit the ops for the stretch you really reviewed, and say which line you reviewed through.
 
-Reply with one JSON object and nothing else: {"range": [first, last], "reviewed_through": <the last line you actually reviewed>, "ops": [...]}. "range" is the stretch this reply owns: every op accepted earlier whose first line falls inside it is REPLACED by the ops below, and nothing outside it changes — so re-sending a range you already covered is how you rewrite it. Op line numbers are this transcript's numbers. Optionally add "order": [[first, last], ...]; {"order": ...} alone changes nothing else.
+Reply with one JSON object and nothing else: {"range": [first, last], "reviewed_through": <the last line you actually reviewed>, "ops": [...]}. "range" is the stretch this reply owns: every op accepted earlier whose first line falls inside it is REPLACED by the ops below, and nothing outside it changes — so re-sending a range you already covered is how you rewrite it. Op line numbers are this transcript's numbers. Optionally add "order": [[first, last], ...] and/or "plan": "..."; either alone changes nothing else.
 
-################ CALL 3: after the system message ################
+################ CALL 4: after the system message ################
+
+===== [user] =====
+
+Write the plan.
+
+===== [assistant] =====
+
+{"plan": "ポンプ修理の一本。結果（動いた！）を冒頭に見せてから経緯を追う。道具紹介(2-3)は削る。配管作業(10-11)は速回し。", "order": [[12, 15], [1, 4], [5, 11]]}
 
 ===== [user] =====
 
@@ -177,7 +247,7 @@ Review around lines 1 to 8.
 
 ===== [assistant] =====
 
-{"range": [1, 8], "reviewed_through": 8, "ops": [{"type": "cut", "lines": [2, 3], "note": "道具紹介は冗長"}], "order": [[12, 15], [1, 4], [5, 11]]}
+{"range": [1, 8], "reviewed_through": 8, "ops": [{"type": "cut", "lines": [2, 3], "note": "道具紹介は冗長"}]}
 
 ===== [user] =====
 
@@ -185,11 +255,14 @@ Review around lines 9 to 15.
 
 ===== [assistant] =====
 
-{"range": [9, 15], "reviewed_through": 15, "ops": [{"type": "timelapse", "lines": [10, 11], "factor": 8.0, "text": "配管の締め直し", "note": ""}, {"type": "overlay", "lines": [14, 14], "text": "動いた！", "duration": 2.0, "note": ""}]}
+{"range": [9, 15], "reviewed_through": 15, "plan": "ポンプ修理の一本。結果を冒頭に見せてから経緯を追う。道具紹介は削る。配管作業は速回し、「動いた！」にキャプション。", "ops": [{"type": "timelapse", "lines": [10, 11], "factor": 8.0, "text": "配管の締め直し", "note": ""}, {"type": "overlay", "lines": [14, 14], "text": "動いた！", "duration": 2.0, "note": ""}]}
 
 ===== [user] =====
 
 THE COMPLETE EDIT AS IT STANDS. Every segment of the video, every op accepted so far and what it plays, then every caption in order and the runtime. This block is the whole state of the edit: it is recomputed from scratch each turn, so nothing earlier in this conversation describes the edit as it is now.
+
+YOUR PLAN (in force — send "plan" in any reply to replace it):
+ポンプ修理の一本。結果を冒頭に見せてから経緯を追う。道具紹介は削る。配管作業は速回し、「動いた！」にキャプション。
 
 Playback of these ops, computed from line timings (approximate):
 
@@ -243,9 +316,17 @@ whole video so far: default 39.0 s (0.7 min) → with the ops accepted so far 28
 
 Every line (1-15) has been reviewed. Reply {"done": true} to finish, or send one more range to rewrite a stretch you want to change.
 
-Reply with one JSON object and nothing else: {"range": [first, last], "reviewed_through": <the last line you actually reviewed>, "ops": [...]}. "range" is the stretch this reply owns: every op accepted earlier whose first line falls inside it is REPLACED by the ops below, and nothing outside it changes — so re-sending a range you already covered is how you rewrite it. Op line numbers are this transcript's numbers. Optionally add "order": [[first, last], ...]; {"order": ...} alone changes nothing else.
+Reply with one JSON object and nothing else: {"range": [first, last], "reviewed_through": <the last line you actually reviewed>, "ops": [...]}. "range" is the stretch this reply owns: every op accepted earlier whose first line falls inside it is REPLACED by the ops below, and nothing outside it changes — so re-sending a range you already covered is how you rewrite it. Op line numbers are this transcript's numbers. Optionally add "order": [[first, last], ...] and/or "plan": "..."; either alone changes nothing else.
 
-################ CALL 4: after the system message ################
+################ CALL 5: after the system message ################
+
+===== [user] =====
+
+Write the plan.
+
+===== [assistant] =====
+
+{"plan": "ポンプ修理の一本。結果（動いた！）を冒頭に見せてから経緯を追う。道具紹介(2-3)は削る。配管作業(10-11)は速回し。", "order": [[12, 15], [1, 4], [5, 11]]}
 
 ===== [user] =====
 
@@ -253,7 +334,7 @@ Review around lines 1 to 8.
 
 ===== [assistant] =====
 
-{"range": [1, 8], "reviewed_through": 8, "ops": [{"type": "cut", "lines": [2, 3], "note": "道具紹介は冗長"}], "order": [[12, 15], [1, 4], [5, 11]]}
+{"range": [1, 8], "reviewed_through": 8, "ops": [{"type": "cut", "lines": [2, 3], "note": "道具紹介は冗長"}]}
 
 ===== [user] =====
 
@@ -261,7 +342,7 @@ Review around lines 9 to 15.
 
 ===== [assistant] =====
 
-{"range": [9, 15], "reviewed_through": 15, "ops": [{"type": "timelapse", "lines": [10, 11], "factor": 8.0, "text": "配管の締め直し", "note": ""}, {"type": "overlay", "lines": [14, 14], "text": "動いた！", "duration": 2.0, "note": ""}]}
+{"range": [9, 15], "reviewed_through": 15, "plan": "ポンプ修理の一本。結果を冒頭に見せてから経緯を追う。道具紹介は削る。配管作業は速回し、「動いた！」にキャプション。", "ops": [{"type": "timelapse", "lines": [10, 11], "factor": 8.0, "text": "配管の締め直し", "note": ""}, {"type": "overlay", "lines": [14, 14], "text": "動いた！", "duration": 2.0, "note": ""}]}
 
 ===== [user] =====
 
@@ -277,6 +358,9 @@ order not applied: its break after line 10 splits timelapse [10,11]. Move the br
 
 THE COMPLETE EDIT AS IT STANDS. Every segment of the video, every op accepted so far and what it plays, then every caption in order and the runtime. This block is the whole state of the edit: it is recomputed from scratch each turn, so nothing earlier in this conversation describes the edit as it is now.
 
+YOUR PLAN (in force — send "plan" in any reply to replace it):
+ポンプ修理の一本。結果を冒頭に見せてから経緯を追う。道具紹介は削る。配管作業は速回し、「動いた！」にキャプション。
+
 Playback of these ops, computed from line timings (approximate):
 
 cut [2,3]
@@ -329,7 +413,7 @@ whole video so far: default 39.0 s (0.7 min) → with the ops accepted so far 28
 
 Every line (1-15) has been reviewed. Reply {"done": true} to finish, or send one more range to rewrite a stretch you want to change.
 
-Reply with one JSON object and nothing else: {"range": [first, last], "reviewed_through": <the last line you actually reviewed>, "ops": [...]}. "range" is the stretch this reply owns: every op accepted earlier whose first line falls inside it is REPLACED by the ops below, and nothing outside it changes — so re-sending a range you already covered is how you rewrite it. Op line numbers are this transcript's numbers. Optionally add "order": [[first, last], ...]; {"order": ...} alone changes nothing else.
+Reply with one JSON object and nothing else: {"range": [first, last], "reviewed_through": <the last line you actually reviewed>, "ops": [...]}. "range" is the stretch this reply owns: every op accepted earlier whose first line falls inside it is REPLACED by the ops below, and nothing outside it changes — so re-sending a range you already covered is how you rewrite it. Op line numbers are this transcript's numbers. Optionally add "order": [[first, last], ...] and/or "plan": "..."; either alone changes nothing else.
 
 ################ RESULT ################
 
@@ -396,6 +480,12 @@ Reply with one JSON object and nothing else: {"range": [first, last], "reviewed_
     }
   ]
 }
+
+===== director/plan.md =====
+
+# The director's plan
+
+ポンプ修理の一本。結果を冒頭に見せてから経緯を追う。道具紹介は削る。配管作業は速回し、「動いた！」にキャプション。
 
 ===== intervals/timeline.json (resolved from the above) =====
 

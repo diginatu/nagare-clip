@@ -85,57 +85,26 @@ rather than clamped. Omitting `lines` means the whole part, exactly as before.
 Directions come back ordered by part, then by line; a repeated `(index, lines)`
 pair keeps the last one.
 
-## Downstream: the director reads split directions
+## Downstream: one plan file
 
-`director/context.py` matches directions to parts by **overlap**, not by an exact
-`(stem, lines)` key. A part with one whole-part direction renders exactly as it
-always did:
+The consumers of `plan.json` (the director's starting order, `publish`) read
+**one** plan file — `plan_revise/plan.json` when it exists and `plan/plan.json`
+otherwise (`pipeline.stages._effective_plan_json`) — and must **not** read
+`plan_dialogue/`.
 
-```
-- lines 1-4: intro → direction: feature — sets up the build
-```
+## Who reads the directions
 
-A split part renders its directions with their own ranges:
+Not the director. Since the director writes its own plan in its first turn
+(`docs/superpowers/specs/2026-09-27-director-writes-its-plan-design.md`), the
+directions are no longer rendered into its prompt: the model with the least
+information no longer frames the one with the most, and the plan's line ranges
+no longer leak into op boundaries. The plan/director **divergence note** that
+reported where the two disagreed went with it (`plan/divergence.py` is gone; the
+director stage deletes a stale `llm_report/notes/plan_divergence.md`).
 
-```
-- lines 31-83: the pump demonstration → directions:
-    - lines 31-59: remove — digression
-    - lines 60-83: feature — the demonstration itself
-```
-
-`director` reads **one** plan file — `plan_revise/plan.json` when it exists and
-`plan/plan.json` otherwise (`pipeline.stages._effective_plan_json`) — and must
-**not** read `plan_dialogue/`. Two channels of editorial intent into one stage
-would contradict each other; `plan_revise` owns translating what the human said
-into directions. (A `director_dialogue/` is a reasonable later change,
-deliberately out of scope.)
-
-## The divergence note
-
-After `director` finishes (no LLM call, `plan/divergence.py`), each direction of
-the plan the director was actually given — the revised one when it exists — is
-compared against the ops that landed in its line range and the conflicts are
-written to `llm_report/notes/plan_divergence.md`, which `rebuild_index()` inlines
-into `llm_report/index.md`. It lives in `notes/` so it survives later stages'
-index rebuilds; an empty result deletes a stale note.
-
-Three conflicts, each reporting its number so the threshold is arguable:
-
-| kind | condition |
-|---|---|
-| `cut-over-feature` | a `feature`/`retain`/`emphasise` direction whose lines are covered by `cut` ops at or above `DEFAULT_CUT_SHARE` (0.5) |
-| `protected-over-remove` | a `remove`/`cut`/`drop` direction that received a `keep`/`overlay`/`timelapse` op |
-| `no-timelapse` | a `timelapse`/`speed` direction where no `timelapse` op landed |
-
-Each entry carries the director's own `note` — the argument for the override.
-
-The director is **not** made to obey the plan: in the case that motivated this,
-the override was substantially correct (it cut 27 lines of digression the plan
-had called the payoff). The defect was silence, not disobedience. Direction text
-is free-form, so the verb is read from the direction's **leading clause** (before
-the first dash/colon) — the `feature — why` shape the default prompt asks for; a
-clause with no known verb is ignored rather than guessed at, and the vocabulary
-is English (what the default prompt produces).
+What still reads `plan.json`: the director's **starting order** (the `order` key,
+[`order.md`](order.md)) and `publish`, which uses the directions as context for
+its chapter titles.
 
 ## Failure modes
 

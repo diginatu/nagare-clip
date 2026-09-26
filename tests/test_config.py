@@ -1217,6 +1217,12 @@ def test_revise_prompt_documents_the_ids_and_the_split():
     assert '"message"' in prompt
 
 
+def test_director_prompt_explains_the_plan():
+    prompt = get_effective_config(None, {})["director"]["prompt"]
+    assert "your first reply is a plan" in prompt
+    assert "not op boundaries" in prompt
+
+
 def test_director_prompt_explains_the_order():
     prompt = get_effective_config(None, {})["director"]["prompt"]
     assert '"order": [[first, last], ...]' in prompt
@@ -1267,9 +1273,15 @@ def test_director_prompt_did_not_grow_for_the_silence_lines():
     silence line travels with its range, a timelapse stays inside one range)
     belongs in this cached prefix, not in REPLY_SHAPE, which every turn re-sends
     UNCACHED -- so REPLY_SHAPE was cut to naming the key.  Nothing else to
-    delete paid for it; the next addition deletes before it adds."""
+    delete paid for it; the next addition deletes before it adds.
+
+    6580 -> 6865, ceiling 6900: the director writes its own plan (the plan
+    stage's directions are no longer shown).  The prompt says only that the
+    plan exists, stays revisable and marks sections, not op boundaries; what a
+    plan covers is in loop.PLAN_REQUEST, sent once.  The prefix as a whole
+    SHRANK: the directions list and SECTION_BOUNDARY_NOTE left it."""
     prompt = get_effective_config(None, {})["director"]["prompt"]
-    assert len(prompt) < 6600
+    assert len(prompt) < 6900
 
 
 def _display_view(n: int = 100):
@@ -1329,7 +1341,7 @@ def test_director_prompt_turn_shape_is_the_one_the_loop_parses():
     start = prompt.index('{"range"')
     shape = prompt[start : prompt.index("]}", start) + 2]
     view = _display_view()
-    state = LoopState()
+    state = LoopState(plan="p")  # the range shape follows the planning turn
     result = apply_reply(view, state, shape)
     assert result.error is None and result.refusal is None
     assert {op.type for op in result.ops} == {"cut", "timelapse", "overlay", "keep", "edit"}

@@ -2,10 +2,10 @@
 
 Deterministic metrics and checks on the finished cut. **No LLM call.** Writes
 `llm_report/notes/cut_report.md`, which `llm_report.rebuild_index()` inlines
-into `llm_report/index.md` next to the plan/director divergence section.
+into `llm_report/index.md` next to the order note.
 
 Not a stage: it has no `output/cut_report/` dir, no place in `STAGE_NAMES`, and
-nothing depends on its output. It is a report, like `plan/divergence.py`.
+nothing depends on its output. It is a report, like the order note.
 
 ## Why
 
@@ -64,7 +64,7 @@ keep fragments           140   min 1.70s, median 4.41s, below 1.00s: 0
 plus one table row per `speed_range` (span, factor, on-screen seconds).
 
 **Findings print only on a breach**, each carrying the threshold it breached so
-the number is arguable rather than hidden — the rule the divergence note follows.
+the number is arguable rather than hidden.
 
 | kind | condition | threshold |
 |---|---|---|

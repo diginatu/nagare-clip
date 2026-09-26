@@ -4,13 +4,15 @@ Every other director test asserts a fragment.  This one pins the WHOLE thing
 against a file a person can read top to bottom: ``golden/conversation.txt``
 holds every message of every call (the cached system message once, since it
 never changes, then each turn's history and live ask), followed by the end
-result — each ``_director.json``, ``director/order.json`` and the order
-resolved to source seconds, which is where a mistake is hardest to notice.
+result — each ``_director.json``, ``director/order.json``, ``director/plan.md``
+and the order resolved to source seconds, which is where a mistake is hardest
+to notice.
 
-The project is small but has every moving part: two sources, a plan that
-reorders them, a long silence with a gap description, a cut, a timelapse over
-a silence line, a caption, an order the model replaces, and an order refused
-because it would split the timelapse.  The model is a script; everything else
+The project is small but has every moving part: two sources, a plan stage that
+reorders them (whose directions must NOT reach the prompt), the director's own
+planning turn replacing that order, a long silence with a gap description, a
+cut, a timelapse over a silence line, a caption, a revised plan, and an order
+refused because it would split the timelapse.  The model is a script; everything else
 is the real stage.
 
 After an intended change, regenerate and READ the diff:
@@ -74,18 +76,27 @@ DURATIONS = {"dev": 14.0, "mix": 72.0}
 #   dev 1-4; mix 5, 6 = the silence after mix 1, 7-10 = mix 2-5,
 #   11 = the 31 s silence after mix 5 (described), 12-15 = mix 6-9.
 REPLIES = [
-    # Turn 1: a cut, and an order replacing the plan's: the sign-off first,
-    # then dev, then mix up to and INCLUDING the long silence (11 ends a range).
+    # Turn 1, the planning turn: the plan, and an order replacing the plan
+    # stage's: the result first, then dev, then mix up to and INCLUDING the
+    # long silence (11 ends a range).
+    {
+        "plan": "ポンプ修理の一本。結果（動いた！）を冒頭に見せてから経緯を追う。"
+        "道具紹介(2-3)は削る。配管作業(10-11)は速回し。",
+        "order": [[12, 15], [1, 4], [5, 11]],
+    },
+    # Turn 2: a cut.
     {
         "range": [1, 8],
         "reviewed_through": 8,
         "ops": [{"type": "cut", "lines": [2, 3], "note": "道具紹介は冗長"}],
-        "order": [[12, 15], [1, 4], [5, 11]],
     },
-    # Turn 2: a timelapse over the work and its silence line, and a caption.
+    # Turn 3: a timelapse over the work and its silence line, a caption, and
+    # the plan restated now that the caption is decided.
     {
         "range": [9, 15],
         "reviewed_through": 15,
+        "plan": "ポンプ修理の一本。結果を冒頭に見せてから経緯を追う。道具紹介は削る。"
+        "配管作業は速回し、「動いた！」にキャプション。",
         "ops": [
             {
                 "type": "timelapse",
@@ -97,9 +108,9 @@ REPLIES = [
             {"type": "overlay", "lines": [14, 14], "text": "動いた！", "duration": 2.0, "note": ""},
         ],
     },
-    # Turn 3: an order whose break after line 10 would split that timelapse.
+    # Turn 4: an order whose break after line 10 would split that timelapse.
     {"order": [[11, 15], [1, 10]]},
-    # Turn 4: finished.
+    # Turn 5: finished.
     {"done": True},
 ]
 
@@ -204,7 +215,7 @@ def _render(calls: list[list[dict]], ctx: PipelineContext) -> str:
             out += [f"===== [{message['role']}] =====", message["content"]]
     out.append("################ RESULT ################")
     director = ctx.stage_dir("director")
-    for path in sorted(director.glob("*.json")):
+    for path in sorted(director.iterdir()):
         out += [f"===== director/{path.name} =====", path.read_text(encoding="utf-8").rstrip()]
     # The order in seconds, as intervals will write timeline.json.
     segments = st._timeline_segments(ctx)
@@ -233,6 +244,7 @@ def test_the_whole_conversation_and_its_result(tmp_path, monkeypatch):
     next(s for s in st.STAGES if s.name == "director").run(ctx)
     text = _render(calls, ctx)
     assert str(tmp_path) not in text, "a temporary path leaked into the golden file"
+    assert "作業は速回しで" not in text, "the plan stage's direction reached the director"
 
     if os.environ.get("UPDATE_GOLDEN"):
         GOLDEN.parent.mkdir(parents=True, exist_ok=True)

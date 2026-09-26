@@ -1,7 +1,7 @@
 """Where the finished cut breaches a number the pipeline already states.
 
 Each finding carries the threshold it breached, so the number is arguable
-rather than hidden -- the rule ``plan/divergence.py`` follows.  A check that
+rather than hidden.  A check that
 flags everything is the same as no check, so nothing here fires on a shape
 that is merely unusual: 148 readable captions rode inside one 8x range on the
 run this was built from, and only the seven already too dense to read before

@@ -99,6 +99,9 @@ STATE_HEADER = (
 
 CAPTIONS_HEADER = "Captions in playback order"
 
+#: Heads the plan in force, which leads the edit state once there is one.
+PLAN_HEADER = 'YOUR PLAN (in force — send "plan" in any reply to replace it):'
+
 #: Heads the reordered playback, when the order is not the view's order.
 REORDERED_HEADER = (
     "THE VIDEO AS IT PLAYS, in the order in force (the segments above are in "
@@ -1071,6 +1074,7 @@ def edit_state(
     *,
     drops: Sequence[str] = (),
     order: Sequence[tuple[int, int]] = (),
+    plan: str = "",
 ) -> str:
     """The complete current edit: what one turn's user message carries.
 
@@ -1090,6 +1094,9 @@ def edit_state(
     also listed in that order, range by range, with every seam quoted — the
     transcript is numbered in shooting order, and this is where the model
     reads the video it actually made.
+
+    *plan* is the plan in force (:attr:`~.loop.LoopState.plan`); it leads the
+    block, so the ops below are read against it every turn.
     """
     breaks = _order_breaks(order, len(view.lines))
     previews = [
@@ -1115,7 +1122,8 @@ def edit_state(
         position = _playback_position(order)
         captions.sort(key=lambda row: position(row[0]))
         blocks.append(_reordered(view, order, [run for p in previews for run in p.runs]))
-    return "\n\n".join([STATE_HEADER, *blocks, _caption_block(captions), "\n".join(footer)])
+    head = [STATE_HEADER] + ([f"{PLAN_HEADER}\n{plan}"] if plan else [])
+    return "\n\n".join([*head, *blocks, _caption_block(captions), "\n".join(footer)])
 
 
 def _order_breaks(order: Sequence[tuple[int, int]], total: int) -> frozenset[int]:

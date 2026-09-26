@@ -193,8 +193,8 @@ finished video.
 ## The order note
 
 `llm_report/notes/order.md` (`order_note.py::format_order_note`), inlined into
-`index.md` beside the plan/director divergence note and the cut report. No LLM
-call — the same spirit as those two: the machine states what happened and the
+`index.md` beside the cut report. No LLM call — the same spirit: the machine
+states what happened and the
 human decides whether it was right.
 
 It is written when the resolved order differs from shooting order (each

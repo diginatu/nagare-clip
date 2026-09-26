@@ -21,6 +21,7 @@ from nagare_clip.audio_silence.cuts_file import write_cuts
 from nagare_clip.config import get_effective_config
 from nagare_clip.director import director_llm as dl
 from nagare_clip.director.display import build_display_view
+from nagare_clip.director.loop import PLAN_REQUEST
 from nagare_clip.director.preview import STATE_HEADER
 from nagare_clip.director.run import VIEW_HEADER, SegmentInputs, load_segment_transcript
 from nagare_clip.llm_client import CACHEABLE_PREFIX_KEY
@@ -171,6 +172,12 @@ def _run(monkeypatch, ctx, reply=None, calls=None, replies=None):
 
     def fake(messages, cfg):
         calls.append([dict(m) for m in messages])
+        # The planning turn is answered here for every scripted model: each
+        # test's own script only has to know about ranges.
+        if PLAN_REQUEST in messages[-1]["content"]:
+            out = json.dumps({"plan": "PLAN"})
+            replies.append(out)
+            return out
         out = (reply or script)(messages, cfg)
         replies.append(out)
         return out
@@ -180,7 +187,9 @@ def _run(monkeypatch, ctx, reply=None, calls=None, replies=None):
     return calls
 
 
-HISTORY_LINE = re.compile(r"^(Review around lines \d+ to \d+\.|Every line has been reviewed\.)$")
+HISTORY_LINE = re.compile(
+    r"^(Write the plan\.|Review around lines \d+ to \d+\.|Every line has been reviewed\.)$"
+)
 
 
 class TestTheMessages:
@@ -266,12 +275,12 @@ class TestTheMessages:
         assert "Captions in playback order" in newest
 
     def test_the_state_prices_what_the_model_just_sent(self, project, monkeypatch):
-        second = _run(monkeypatch, _ctx(project, chunk_lines=4))[1][-1]["content"]
+        second = _run(monkeypatch, _ctx(project, chunk_lines=4))[2][-1]["content"]
         assert "cut [1,1]" in second
         assert "whole video so far" in second
 
     def test_an_op_note_survives_into_the_next_turns_state(self, project, monkeypatch):
-        second = _run(monkeypatch, _ctx(project, chunk_lines=4))[1][-1]["content"]
+        second = _run(monkeypatch, _ctx(project, chunk_lines=4))[2][-1]["content"]
         assert "note: x" in second
 
     def test_a_refusal_reaches_the_model_above_the_state(self, project, monkeypatch):
@@ -290,7 +299,7 @@ class TestTheMessages:
             return json.dumps({"range": list(asked), "reviewed_through": asked[1], "ops": []})
 
         calls = _run(monkeypatch, _ctx(project, chunk_lines=4), reply=script)
-        second = calls[1][-1]["content"]
+        second = calls[2][-1]["content"]
         assert "not done: lines 1-" in second
         assert second.index("not done") < second.index(STATE_HEADER)
 
@@ -308,7 +317,7 @@ class TestTheMessages:
                 }
             )
 
-        second = _run(monkeypatch, _ctx(project, chunk_lines=4), reply=script)[1][-1]["content"]
+        second = _run(monkeypatch, _ctx(project, chunk_lines=4), reply=script)[2][-1]["content"]
         assert "dropped by the parser (no effect):" in second
 
 
@@ -352,7 +361,7 @@ class TestTheCap:
         ctx = _ctx(project, chunk_lines=4)
         lines = len(_view(ctx).lines)
         calls, _error = _run_failing(monkeypatch, ctx, self._silent)
-        assert len(calls) == -(-lines // 4) * 2
+        assert len(calls) == -(-lines // 4) * 2 + 1  # + the planning turn
 
     def test_the_ops_are_written_before_it_raises(self, project, monkeypatch):
         ctx = _ctx(project, chunk_lines=4)
@@ -463,35 +472,25 @@ def planned(project):
 
 
 class TestTheProjectContext:
-    """The plan's directions and the project summary, which the conversation
-    dropped when it stopped calling ``build_director_context``.
-
-    Without them the model edits a transcript with no brief at all -- and
-    without the section-boundaries sentence that travels with them, a measured
-    run copied plan boundaries into 19 of 56 op starts and into all three
-    timelapses.
-    """
+    """The summary stage's facts, in the cached prefix: the overall summary and
+    each source's whole-video summary.  The plan stage's directions are not
+    shown — the director's first turn writes its own plan."""
 
     def test_the_overall_summary_reaches_the_model(self, planned, monkeypatch):
         system = _run(monkeypatch, _ctx(planned, chunk_lines=4))[0][0]["content"]
         assert "Overall: ポンプの修理" in system
 
-    def test_a_direction_arrives_in_display_numbers(self, planned, monkeypatch):
-        ctx = _ctx(planned, chunk_lines=4)
-        system = _run(monkeypatch, ctx)[0][0]["content"]
-        view = _view(ctx)
-        # mix follows dev in the view, so its lines 4-6 are not display 4-6.
-        first = view.from_source(2, 4)
-        last = view.from_source(2, 6)
-        assert (first, last) != (4, 6)
-        assert f"- lines {first}-{last}: keep the fitting" in system
-        assert "lines 4-6: keep the fitting" not in system
-
-    def test_the_boundary_note_travels_with_them(self, planned, monkeypatch):
+    def test_the_plan_stages_directions_are_not_shown(self, planned, monkeypatch):
+        """The director writes its own plan; the plan stage's directions —
+        the least-informed opinion — no longer frame it."""
         system = _run(monkeypatch, _ctx(planned, chunk_lines=4))[0][0]["content"]
-        marker = "section boundaries, not op boundaries"
-        assert marker in system
-        assert system.index(marker) < system.index("- lines ")
+        assert "keep the fitting" not in system
+        assert "trim the preamble" not in system
+        assert "section boundaries, not op boundaries" not in system
+
+    def test_each_sources_summary_reaches_the_model(self, planned, monkeypatch):
+        system = _run(monkeypatch, _ctx(planned, chunk_lines=4))[0][0]["content"]
+        assert "[2] mix: mixの全体" in system
 
     def test_it_sits_between_the_prompt_and_the_transcript(self, planned, monkeypatch):
         ctx = _ctx(planned, chunk_lines=4)
@@ -517,24 +516,6 @@ class TestTheProjectContext:
         system = _run(monkeypatch, ctx)[0][0]["content"]
         assert "- Audience: DIY viewers" in system
         assert system.index("- Audience: DIY viewers") < system.index("Overall: ")
-
-    def test_the_revised_plan_wins(self, planned, monkeypatch):
-        revised = planned / "out" / "plan_revise"
-        revised.mkdir(parents=True, exist_ok=True)
-        (revised / "plan.json").write_text(
-            json.dumps(
-                {
-                    "order": ORDER,
-                    "directions": [
-                        {"stem": "mix", "lines": [4, 6], "direction": "人間が直した指示"}
-                    ],
-                }
-            ),
-            encoding="utf-8",
-        )
-        system = _run(monkeypatch, _ctx(planned, chunk_lines=4))[0][0]["content"]
-        assert "人間が直した指示" in system
-        assert "keep the fitting" not in system
 
 
 def test_the_stage_prices_brackets_with_the_projects_intervals_settings(project, monkeypatch):
@@ -627,7 +608,7 @@ class TestRetryWithinATurn:
 
         with pytest.raises(PipelineError, match="failed after all 3 attempt"):
             _run(monkeypatch, _ctx(project, max_retries=2), reply=boom, calls=calls)
-        assert len(calls) == 3
+        assert len(calls) == 1 + 3  # the plan, then one turn's three attempts
 
 
 class TestTheOrder:

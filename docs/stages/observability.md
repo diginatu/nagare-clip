@@ -21,11 +21,11 @@ produced with **no LLM call**:
 
 | file | written by | covers |
 |---|---|---|
-| `plan_divergence.md` | `pipeline.stages._write_divergence_note` after `director` | directions (of the plan the director was given — see [plan_revise.md](plan_revise.md)) the ops that landed argue with ([plan.md](plan.md)) |
+| `order.md` | `pipeline.stages.write_order_note` after `director` and `intervals` | whether the finished video is out of shooting order, or an order was rejected ([order.md](order.md)) |
 | `cut_report.md` | `pipeline.stages.write_cut_report` after `intervals`, again after `blender` | the finished cut's measurements + threshold breaches ([cut_report.md](cut_report.md)) |
 
-Both follow the same rule: state the number that was breached, so the threshold
-is arguable rather than hidden. An empty result deletes a stale note.
+Both state plainly what happened (the cut report with the number each finding
+breached, so the threshold is arguable). An empty result deletes a stale note.
 
 ## Langfuse tracing
 

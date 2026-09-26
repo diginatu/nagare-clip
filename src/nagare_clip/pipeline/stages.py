@@ -66,8 +66,7 @@ from nagare_clip.pipeline.external import (
 from nagare_clip.pipeline.runner import PipelineContext, Stage
 from nagare_clip.pipeline.sources import SourceMedia, project_stems
 from nagare_clip.plan.dialogue import HUMAN, history_path, unanswered_turns
-from nagare_clip.plan.divergence import find_divergences, format_divergences
-from nagare_clip.plan.plan_llm import order_from_dict, plan_from_dict
+from nagare_clip.plan.plan_llm import order_from_dict
 from nagare_clip.plan.run import run_plan
 from nagare_clip.plan_revise.run import run_plan_revise
 from nagare_clip.publish.run import run_publish
@@ -608,6 +607,23 @@ def _write_director_ops(ctx: PipelineContext, stem: str, ops: list[DirectorOp]) 
     logging.info("director: wrote %s (%d operation(s))", path, len(ops))
 
 
+DIRECTOR_PLAN = "plan.md"
+
+
+def _director_plan_md(ctx: PipelineContext) -> Path:
+    return ctx.stage_dir("director") / DIRECTOR_PLAN
+
+
+def _write_director_plan(ctx: PipelineContext, plan: str) -> None:
+    """The plan in force when the conversation ended, for the human to read."""
+    if not plan:
+        return
+    path = _director_plan_md(ctx)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(f"# The director's plan\n\n{plan}\n", encoding="utf-8")
+    logging.info("director: wrote %s", path)
+
+
 def _write_director_order(ctx: PipelineContext, order: list[Segment]) -> None:
     """The playback order the director ended with — hand-editable, like plan.json's."""
     path = _director_order_json(ctx)
@@ -668,8 +684,9 @@ def _director_run(ctx: PipelineContext) -> None:
         path = director_dir / f"{stem}_director.json"
         if path.is_file():
             path.unlink()
-    if _director_order_json(ctx).is_file():
-        _director_order_json(ctx).unlink()
+    for stale in (_director_order_json(ctx), _director_plan_md(ctx)):
+        if stale.is_file():
+            stale.unlink()
 
     print(f"[director] Edit operations: {len(segments)} segment(s) in one conversation")
     try:
@@ -677,7 +694,6 @@ def _director_run(ctx: PipelineContext) -> None:
             inputs,
             ctx.cfg,
             summary=ctx.stage_dir("summary") / "summary.json",
-            plan=_effective_plan_json(ctx),
             order=seed,
             recorder=rec,
         )
@@ -686,6 +702,7 @@ def _director_run(ctx: PipelineContext) -> None:
         for stem in stems:
             _write_director_ops(ctx, stem, result.ops.get(stem, []))
         _write_director_order(ctx, result.order or seed)
+        _write_director_plan(ctx, result.plan)
         if not result.ok:
             files = ", ".join(f"{stem}_director.json" for stem in stems)
             raise PipelineError(
@@ -694,43 +711,21 @@ def _director_run(ctx: PipelineContext) -> None:
                 f"{director_dir} ({files}) — inspect them and continue by hand "
                 "(--from-stage guided_edit)"
             )
-        _write_divergence_note(ctx)
+        _remove_divergence_note(ctx)
         write_order_note(ctx)
     finally:
         rec.rebuild_index()
 
 
-def _write_divergence_note(ctx: PipelineContext) -> None:
-    """Record where the ops that landed argue with plan.json (no LLM call).
+def _remove_divergence_note(ctx: PipelineContext) -> None:
+    """Delete the plan/director divergence note an older run may have left.
 
-    Written into the LLM report's notes/ dir so it survives later stages'
-    index rebuilds.  Best-effort: every input is optional and a failure here
-    must never fail the director stage.
+    The director no longer reads the plan's directions — it writes its own
+    plan — so there is no second opinion to diverge from.
     """
     note = ctx.llm_report_dir / "notes" / "plan_divergence.md"
-    try:
-        plan_json = _effective_plan_json(ctx)
-        directions = (
-            plan_from_dict(json.loads(plan_json.read_text(encoding="utf-8")))
-            if plan_json.is_file()
-            else []
-        )
-        ops_by_stem = {}
-        for stem in ctx.stems:
-            path = ctx.stage_dir("director") / f"{stem}_director.json"
-            if path.is_file():
-                ops_by_stem[stem] = ops_from_dict(
-                    json.loads(path.read_text(encoding="utf-8")), None
-                )
-        text = format_divergences(find_divergences(directions, ops_by_stem))
-        if text:
-            note.parent.mkdir(parents=True, exist_ok=True)
-            note.write_text(text, encoding="utf-8")
-            print(f"[director] plan/director divergence: see {note}")
-        elif note.is_file():
-            note.unlink()
-    except (OSError, ValueError) as e:
-        logging.warning("director: could not write the divergence note: %s", e)
+    if note.is_file():
+        note.unlink()
 
 
 def _director_required(ctx: PipelineContext) -> list[Path]:
@@ -864,9 +859,8 @@ def write_cut_report(ctx: PipelineContext) -> None:
     """Measure the finished cut and write the LLM report's note (no LLM call).
 
     Called after `intervals` (which owns every number but Blender's own
-    warnings) and again after `blender`, which adds them.  Like the
-    plan/director divergence note it lives in the report's notes/ dir so it
-    survives a later stage's rebuild of index.md.  Best-effort throughout: a
+    warnings) and again after `blender`, which adds them.  Like the order
+    note it lives in the report's notes/ dir so it survives a later stage's rebuild of index.md.  Best-effort throughout: a
     failure here must never fail the stage that produced the cut.
     """
     note = ctx.llm_report_dir / "notes" / CUT_REPORT_NOTE

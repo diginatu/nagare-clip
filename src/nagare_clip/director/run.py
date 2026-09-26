@@ -68,7 +68,6 @@ from nagare_clip.llm_report import (
 )
 from nagare_clip.llm_retry import cfg_for_attempt, retry_attempts
 from nagare_clip.order import Segment, identity_segments, normalise
-from nagare_clip.plan.plan_llm import plan_from_dict
 from nagare_clip.summary.summarize import ProjectSummary, summary_from_dict
 from nagare_clip.timing import segment_silences, segment_times
 
@@ -238,33 +237,25 @@ class ConversationResult:
     #: and normalised — the seed when the model never sent one.  Empty only
     #: when there was nothing to order.
     order: list[Segment] = field(default_factory=list)
+    #: The plan in force when the conversation ended; ``""`` if none was written.
+    plan: str = ""
     ok: bool = True
     error: str = ""
     reviewed_through: int = 0
     turns: int = 0
 
 
-def project_context(
-    summary: Path | None,
-    plan: Path | None,
-    segments: list[Segment],
-    view: DisplayView,
-) -> str:
-    """The project's summary and the plan's directions, for the whole video.
+def project_context(summary: Path | None, view: DisplayView) -> str:
+    """The summary stage's facts about the project, for the whole video.
 
-    Read off the same artifacts the per-segment director read — the summary
-    stage's ``summary.json`` and the EFFECTIVE plan (the revised one when the
-    human wrote one, which the caller resolves) — and rendered once, in display
-    numbers (:func:`~.context.project_context_block`).  Missing or empty
-    artifacts give ``""``, which leaves the system message exactly as it was.
+    The ``plan`` stage's directions are deliberately NOT read: the director
+    writes its own plan in its first turn.  A missing or empty ``summary.json``
+    gives ``""``, which leaves the system message exactly as it was.
     """
     project_summary = ProjectSummary(summary="", parts=[])
     if summary and summary.is_file():
         project_summary = summary_from_dict(json.loads(summary.read_text(encoding="utf-8")))
-    directions = []
-    if plan and plan.is_file():
-        directions = plan_from_dict(json.loads(plan.read_text(encoding="utf-8")))
-    return project_context_block(project_summary, directions, segments, view)
+    return project_context_block(project_summary, view)
 
 
 def system_message(director_cfg: dict, view: DisplayView, context: str = "") -> dict[str, str]:
@@ -310,8 +301,8 @@ def _seed_ranges(view: DisplayView, seed: list[Segment], counts: dict[str, int])
 
 
 def turn_cap(lines: int, chunk_lines: int) -> int:
-    """Two turns per chunk: one to review it, one to come back and fix it."""
-    return math.ceil(lines / max(chunk_lines, 1)) * 2
+    """The planning turn, then two per chunk: one to review it, one to fix it."""
+    return math.ceil(lines / max(chunk_lines, 1)) * 2 + 1
 
 
 def chunk_lines(director_cfg: dict) -> int:
@@ -342,7 +333,9 @@ def _ask(
     """
     parts = [previous.refusal] if previous is not None and previous.refusal else []
     drops = previous.drops if previous is not None else ()
-    parts.append(edit_state(view, transcripts, state.ops, drops=drops, order=state.order))
+    parts.append(
+        edit_state(view, transcripts, state.ops, drops=drops, order=state.order, plan=state.plan)
+    )
     parts.append(request)
     return "\n\n".join(parts)
 
@@ -352,7 +345,6 @@ def run_director_conversation(
     cfg: dict,
     *,
     summary: Path | None = None,
-    plan: Path | None = None,
     order: list[Segment] | None = None,
     call_llm: director_llm_mod.CallLLM | None = None,
     recorder: Recorder = NULL_RECORDER,
@@ -360,8 +352,10 @@ def run_director_conversation(
 ) -> ConversationResult:
     """Edit the whole video in ONE conversation, and return its ops per source.
 
-    *summary*/*plan* are the summary stage's ``summary.json`` and the effective
-    plan; they become the project context block inside the cached prefix.
+    *summary* is the summary stage's ``summary.json``; it becomes the project
+    context block inside the cached prefix.  The first turn asks for the
+    model's own plan (:data:`~.loop.PLAN_REQUEST`); :attr:`ConversationResult.plan`
+    is the one in force at the end.
 
     *inputs* are the segments of the view — one whole source each, in shooting
     order, as the stage builds them: the view never changes shape, so a display
@@ -404,7 +398,7 @@ def run_director_conversation(
     )
 
     stage_cfg = apply_brief(director_cfg, cfg)
-    context = project_context(summary, plan, [i.segment for i in inputs], view)
+    context = project_context(summary, view)
     system = system_message(stage_cfg, view, context)
     # The model's own replies, each under the one line of the ask it answered.
     # The replies are its trajectory — which turn made which op, what it has
@@ -514,6 +508,7 @@ def run_director_conversation(
     return ConversationResult(
         ops=ops_by_stem,
         order=final_order,
+        plan=state.plan,
         ok=not error,
         error=error,
         reviewed_through=state.reviewed_through,

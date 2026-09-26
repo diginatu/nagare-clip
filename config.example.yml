@@ -432,7 +432,7 @@ render:
 
 # cut_report: deterministic metrics + checks on the FINISHED cut (no LLM call).
 # Runs after intervals (again after blender, with Blender's own warnings) and
-# writes a section into llm_report/index.md next to the plan/director divergence.
+# writes a section into llm_report/index.md next to the order note.
 # The measurements always print; only a breached threshold is flagged.
 cut_report:
   enabled: true   # Write the finished-cut section into the LLM report

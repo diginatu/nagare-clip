@@ -1,7 +1,6 @@
 """Say plainly when the finished video is not in shooting order.
 
-Deterministic and free — no LLM call — in the same spirit as the plan/director
-divergence note and the cut report: the machine states what happened and the
+Deterministic and free — no LLM call — in the same spirit as the cut report: the machine states what happened and the
 human decides whether it was right.
 
 A reorder changes the shape of the finished video more than any other single

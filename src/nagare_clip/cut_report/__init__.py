@@ -8,6 +8,6 @@ a fifth of a second inside an 8x timelapse and a timelapse that was over in
 15.5 seconds; both took a human twenty minutes of reading JSON to find, and the
 first had already happened once before.
 
-Same shape as ``plan/divergence.py`` and ``publish``'s ``chapter_issues``: a
+Same shape as the order note and ``publish``'s ``chapter_issues``: a
 machine check whose verdict is stated plainly rather than left implied.
 """

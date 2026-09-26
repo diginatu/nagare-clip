@@ -10,6 +10,7 @@ from nagare_clip.config import get_effective_config
 from nagare_clip.director.director_llm import ops_from_dict
 from nagare_clip.director.run import ConversationResult
 from nagare_clip.pipeline import stages as st
+from nagare_clip.pipeline.errors import PipelineError
 from nagare_clip.pipeline.runner import PipelineContext
 from nagare_clip.pipeline.sources import SourceMedia
 
@@ -814,53 +815,59 @@ def test_plan_adapter_passes_history_path(tmp_path, monkeypatch):
     assert seen["history"] == out / "plan_dialogue" / "history.md"
 
 
-def _director_returning(ops):
-    """A fake director conversation that emits *ops* for source ``a``.
-
-    The divergence note is built from what this run wrote, and the adapter
-    deletes a stale file before the conversation (so a failure cannot leave one
-    standing), so the ops have to come from the call, not from disk.
-    """
+def _director_returning(ops, plan=""):
+    """A fake director conversation that emits *ops* for source ``a``."""
 
     def fake(inputs, cfg, **kw):
-        return ConversationResult(ops={"a": ops_from_dict({"ops": ops}, None)})
+        return ConversationResult(ops={"a": ops_from_dict({"ops": ops}, None)}, plan=plan)
 
     return fake
 
 
-def _plan_and_ops(tmp_path, direction, ops):
-    out = tmp_path / "out"
-    (out / "plan").mkdir(parents=True, exist_ok=True)
-    (out / "director").mkdir(parents=True, exist_ok=True)
-    (out / "plan" / "plan.json").write_text(
-        json.dumps({"directions": [{"stem": "a", "lines": [1, 10], "direction": direction}]}),
-        encoding="utf-8",
-    )
-    (out / "director" / "a_director.json").write_text(json.dumps({"ops": ops}), encoding="utf-8")
-    return out / "llm_report" / "notes" / "plan_divergence.md"
-
-
-def test_director_adapter_writes_plan_divergence_note(tmp_path, monkeypatch):
-    monkeypatch.setattr(st, "recorder_from_config", lambda *a, **k: _NullRec())
-    ops = [{"type": "cut", "lines": [1, 9], "note": "a long digression"}]
-    monkeypatch.setattr(st, "run_director_conversation", _director_returning(ops))
-    note = _plan_and_ops(tmp_path, "feature — the payoff", ops)
-    by_name = {s.name: s for s in st.STAGES}
-    by_name["director"].run(_ctx(tmp_path, stems=("a",)))
-    text = note.read_text(encoding="utf-8")
-    assert "a [1-10]" in text
-    assert "a long digression" in text
-
-
 def test_director_adapter_clears_a_stale_divergence_note(tmp_path, monkeypatch):
+    """The director no longer reads the plan's directions, so an old run's
+    plan/director divergence note would describe a comparison nobody makes."""
     monkeypatch.setattr(st, "recorder_from_config", lambda *a, **k: _NullRec())
     monkeypatch.setattr(st, "run_director_conversation", _director_returning([]))
-    note = _plan_and_ops(tmp_path, "feature — the payoff", [])
+    note = tmp_path / "out" / "llm_report" / "notes" / "plan_divergence.md"
     note.parent.mkdir(parents=True, exist_ok=True)
     note.write_text("stale", encoding="utf-8")
     by_name = {s.name: s for s in st.STAGES}
     by_name["director"].run(_ctx(tmp_path, stems=("a",)))
     assert not note.exists()
+
+
+def test_director_adapter_writes_the_plan_for_the_human(tmp_path, monkeypatch):
+    monkeypatch.setattr(st, "recorder_from_config", lambda *a, **k: _NullRec())
+    monkeypatch.setattr(st, "run_director_conversation", _director_returning([], "筋はこう"))
+    by_name = {s.name: s for s in st.STAGES}
+    by_name["director"].run(_ctx(tmp_path, stems=("a",)))
+    text = (tmp_path / "out" / "director" / "plan.md").read_text(encoding="utf-8")
+    assert text == "# The director's plan\n\n筋はこう\n"
+
+
+def test_director_adapter_deletes_a_stale_plan(tmp_path, monkeypatch):
+    monkeypatch.setattr(st, "recorder_from_config", lambda *a, **k: _NullRec())
+    monkeypatch.setattr(st, "run_director_conversation", _director_returning([]))
+    stale = tmp_path / "out" / "director" / "plan.md"
+    stale.parent.mkdir(parents=True)
+    stale.write_text("old", encoding="utf-8")
+    by_name = {s.name: s for s in st.STAGES}
+    by_name["director"].run(_ctx(tmp_path, stems=("a",)))
+    assert not stale.exists()
+
+
+def test_director_adapter_writes_the_plan_before_it_fails(tmp_path, monkeypatch):
+    monkeypatch.setattr(st, "recorder_from_config", lambda *a, **k: _NullRec())
+    monkeypatch.setattr(
+        st,
+        "run_director_conversation",
+        lambda *a, **k: ConversationResult(ops={"a": []}, plan="途中まで", ok=False, error="cap"),
+    )
+    by_name = {s.name: s for s in st.STAGES}
+    with pytest.raises(PipelineError):
+        by_name["director"].run(_ctx(tmp_path, stems=("a",)))
+    assert (tmp_path / "out" / "director" / "plan.md").is_file()
 
 
 def test_director_adapter_survives_a_missing_plan(tmp_path, monkeypatch):
@@ -915,27 +922,3 @@ def test_director_prefers_the_revised_plan(tmp_path):
     revised.parent.mkdir(parents=True)
     revised.write_text('{"directions": []}', encoding="utf-8")
     assert st._effective_plan_json(ctx) == revised
-
-
-def test_divergence_note_is_written_against_the_plan_the_director_read(tmp_path):
-    ctx = _ctx(tmp_path, stems=("a",))
-    out = tmp_path / "out"
-    (out / "plan").mkdir(parents=True)
-    (out / "plan" / "plan.json").write_text(
-        json.dumps({"directions": [{"stem": "a", "lines": [1, 4], "direction": "feature — x"}]}),
-        encoding="utf-8",
-    )
-    (out / "plan_revise").mkdir(parents=True)
-    (out / "plan_revise" / "plan.json").write_text(
-        json.dumps({"directions": [{"stem": "a", "lines": [1, 4], "direction": "remove — y"}]}),
-        encoding="utf-8",
-    )
-    (out / "director").mkdir(parents=True)
-    (out / "director" / "a_director.json").write_text(
-        json.dumps({"ops": [{"type": "keep", "lines": [1, 4], "note": "n"}]}),
-        encoding="utf-8",
-    )
-    st._write_divergence_note(ctx)
-    note = (out / "llm_report" / "notes" / "plan_divergence.md").read_text(encoding="utf-8")
-    # the revised direction (remove) is the one the director was given
-    assert "protected-over-remove" in note

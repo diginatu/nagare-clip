@@ -37,6 +37,13 @@ boundary would split a timelapse, is refused and the previous one stays; a new
 timelapse across a boundary of the order in force is refused like one across a
 source boundary.
 
+The conversation opens with a PLANNING turn: the first ask is for a plan in
+prose (``{"plan": "...", "order": ...}``), and a first reply without one is
+unusable.  The plan is state like the order — replaced whole by any later reply
+that sends ``"plan"`` — and every turn's edit state leads with the plan in
+force, so a plan the ops drifted from stays in front of the one who can fix
+either.
+
 Nothing here raises on a bad reply: a malformed one comes back as
 :attr:`ReplyResult.error`, for the caller's retry ladder.
 
@@ -70,8 +77,8 @@ REPLY_SHAPE = (
     "first line falls inside it is REPLACED by the ops below, and nothing "
     "outside it changes — so re-sending a range you already covered is how you "
     "rewrite it. Op line numbers are this transcript's numbers. "
-    'Optionally add "order": [[first, last], ...]; {"order": ...} alone '
-    "changes nothing else."
+    'Optionally add "order": [[first, last], ...] and/or "plan": "..."; either '
+    "alone changes nothing else."
 )
 
 #: A display range, 1-based inclusive.
@@ -92,6 +99,8 @@ class LoopState:
     turns: int = 0
     #: The playback order in force, as display ranges; empty = shooting order.
     order: list[Range] = field(default_factory=list)
+    #: The plan in force, in the model's own words; empty until the first turn.
+    plan: str = ""
 
 
 @dataclass(frozen=True)
@@ -111,6 +120,25 @@ class ReplyResult:
     reordered: bool = False
     refusal: str | None = None
     error: str | None = None
+
+
+#: The planning turn's ask.  Sent once; later turns carry only the one-line
+#: history summary.  What a plan covers is listed here rather than in the
+#: prompt, which only has to say that the plan exists and stays revisable.
+PLAN_REQUEST = (
+    "Before any op, write your plan for the whole video. Read all of it first. "
+    "In prose, say: the throughline — what this video is about and what the "
+    "viewer should come away with; what to cut and what to compress, roughly "
+    "where (approximate line numbers are fine — they mark sections, not op "
+    "boundaries); the moments worth a caption; the order, and why, if it should "
+    "not be shooting order; and the runtime you expect against the brief.\n\n"
+    'Reply with one JSON object and nothing else: {"plan": "<your plan>"}, '
+    'optionally with "order": [[first, last], ...]. No ops yet: the next turns '
+    'ask for them range by range, and any later reply may send "plan" again to '
+    "replace this one."
+)
+
+PLAN_SUMMARY = "Write the plan."
 
 
 def _next_span(view: DisplayView, state: LoopState, chunk_lines: int) -> tuple[int, int] | None:
@@ -137,6 +165,8 @@ def request_summary(view: DisplayView, state: LoopState, chunk_lines: int) -> st
     turn recomputes it.  Repeating either through the history is uncached
     tokens on every turn for nothing.
     """
+    if not state.plan:
+        return PLAN_SUMMARY
     span = _next_span(view, state, chunk_lines)
     if span is None:
         return "Every line has been reviewed."
@@ -151,6 +181,8 @@ def next_request(view: DisplayView, state: LoopState, chunk_lines: int) -> str:
     range the code asked for last time.
     """
     total = len(view.lines)
+    if not state.plan:
+        return PLAN_REQUEST
     span = _next_span(view, state, chunk_lines)
     if span is None:
         return (
@@ -341,8 +373,21 @@ def apply_reply(
     if not isinstance(data, dict):
         return ReplyResult(error="the reply is not a JSON object. " + REPLY_SHAPE)
 
+    plan: str | None = None
+    if "plan" in data:
+        raw = data["plan"]
+        if not isinstance(raw, str) or not raw.strip():
+            return ReplyResult(error='"plan" must be your plan as non-empty text.')
+        plan = raw.strip()
+    elif not state.plan:
+        return ReplyResult(
+            error='there is no plan yet: reply {"plan": "<your plan>"} first, before any op.'
+        )
+
     if data.get("done") is True:
         state.turns += 1
+        if plan is not None:
+            state.plan = plan
         reordered = False
         if "order" in data:
             # Never silently dropped: a refused order is not a finished edit.
@@ -361,12 +406,16 @@ def apply_reply(
             ),
         )
 
-    if "range" not in data and "order" in data:
+    if "range" not in data and ("order" in data or plan is not None):
         if data.get("ops"):
             return ReplyResult(
                 error='the reply has "ops" but no "range" for them to own. ' + REPLY_SHAPE
             )
         state.turns += 1
+        if plan is not None:
+            state.plan = plan
+        if "order" not in data:
+            return ReplyResult()
         refusal = _apply_order(view, state, data["order"], state.ops)
         return ReplyResult(refusal=refusal, reordered=refusal is None)
     if "range" not in data:
@@ -465,6 +514,8 @@ def apply_reply(
     for index in state.ops:
         state.ops[index].sort(key=_sort_key)
 
+    if plan is not None:
+        state.plan = plan
     state.reviewed_through = max(state.reviewed_through, reviewed)
     state.turns += 1
     return ReplyResult(
