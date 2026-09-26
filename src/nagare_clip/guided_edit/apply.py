@@ -20,6 +20,7 @@ from dataclasses import dataclass, replace
 from typing import Any
 
 from nagare_clip.director.director_llm import DirectorOp
+from nagare_clip.edit_lines import EditFile, parse_edit_lines
 from nagare_clip.guided_edit.reconcile import verify_op
 from nagare_clip.intervals.op_times import RESOLVED_TYPES
 from nagare_clip.intervals.sync_json import (
@@ -77,7 +78,8 @@ def occupied_lines(lines: list[str], op_type: str) -> set[int]:
     """
     occ: set[int] = set()
     depth = 0
-    for i, line in enumerate(lines, start=1):
+    # A silence line's bracket is opaque: only the markers around it count.
+    for i, line in enumerate(parse_edit_lines(lines).marker_text(), start=1):
         opens, closes = _open_close_counts(line, op_type)
         if depth > 0 or opens or closes:
             occ.add(i)
@@ -166,6 +168,56 @@ def is_time_resolved(op: DirectorOp) -> bool:
     return (op.gap_start or op.gap_end) and op.type in RESOLVED_TYPES
 
 
+def to_physical(parsed: EditFile, op: DirectorOp) -> DirectorOp | str:
+    """*op* re-addressed to physical ``_edits.txt`` lines, or why it cannot be.
+
+    A plain edge is its speech line's physical line; a ``"n~"`` edge is the
+    silence line after ``n`` — an ordinary line index like any other, so every
+    op lands as a marker.  An overlay is a point: only its start is mapped.  A
+    ``"n~"`` whose silence has no line (shorter than
+    ``director.silence_line_min``, or no gap at all) is not guessed at.
+    """
+    if op.type == "edit" and (op.gap_start or op.gap_end):
+        return "edit op cannot address a silence (it has no words to patch)"
+    ends = [(op.lines[0], op.gap_start), (op.lines[1], op.gap_end)]
+    mapped: list[int] = []
+    for line, gap in ends:
+        index = parsed.file_index(line, gap)
+        if index is None:
+            if gap:
+                return (
+                    f"{op.type} op addresses the silence after line {line}, which has no "
+                    "silence line (shorter than director.silence_line_min, or no gap)"
+                )
+            return f"{op.type} op: line {line} is not in the file"
+        mapped.append(index)
+    return replace(op, lines=(mapped[0], mapped[1]), gap_start=False, gap_end=False)
+
+
+def _trim_to_own_edges(
+    clipped: tuple[int, int], op: DirectorOp, silence_lines: set[int]
+) -> tuple[int, int] | None:
+    """Move a clipped edge off a silence line the op did not address.
+
+    Silence lines inside a span are simply part of it, but a clip must not
+    leave an edge ON one the op did not ask for: that would keep (or cut) the
+    whole wait instead of stopping at the words, as the edge did before
+    silence lines existed.  An overlay point likewise lands on a speech line
+    unless its own start is the silence.
+    """
+    a, b = clipped
+    if op.type == "overlay":
+        for x in range(a, b + 1):
+            if x == op.lines[0] or x not in silence_lines:
+                return (x, x)
+        return None
+    while a <= b and a != op.lines[0] and a in silence_lines:
+        a += 1
+    while b >= a and b != op.lines[1] and b in silence_lines:
+        b -= 1
+    return (a, b) if a <= b else None
+
+
 def place_span_op(
     lines: list[str], op: DirectorOp, occupied: set[int] | None = None
 ) -> SpanPlacement:
@@ -179,6 +231,9 @@ def place_span_op(
     """
     blocked = blocked_lines(lines, op.type) | (occupied or set())
     clipped = clip_range(op.lines[0], op.lines[1], blocked)
+    if clipped is not None:
+        silence_lines = {slot.file_line for slot in parse_edit_lines(lines).silences()}
+        clipped = _trim_to_own_edges(clipped, op, silence_lines)
     if clipped is None:
         return SpanPlacement(None, reason=f"{op.type} op fully overlaps existing span(s)")
     if op.type == "overlay":
@@ -219,6 +274,12 @@ def resolve_span_ops(lines: list[str], ops: list[DirectorOp]) -> dict[int, SpanP
 
 
 UNEXPANDED_TIMELAPSE = "timelapse op reached apply_ops unexpanded"
+
+
+def _edge(op: DirectorOp, side: int) -> str:
+    """One end of *op* as ``_director.json`` writes it (``53`` or ``"53~"``)."""
+    gap = op.gap_start if side == 0 else op.gap_end
+    return f"{op.lines[side]}~" if gap else str(op.lines[side])
 
 
 def _span_tags(op: DirectorOp) -> tuple[str, str]:
@@ -361,14 +422,33 @@ def apply_ops(
     with the last failure reason.
     """
     lines = list(edit_lines)
+    # The silence lines are fixed before any op lands, so one parse maps every
+    # op; ops keep their SOURCE coordinates for the report and "unapplied".
+    parsed = parse_edit_lines(lines)
     unapplied: list[Unapplied] = []
-    occupied: set[int] = set()
     recorder.begin(unit)
     cfg = with_trace_meta(cfg, stage=recorder.stage, unit=unit)
     attempts = retry_attempts(cfg)
     for i in span_op_order(ops):
-        op = ops[i]
-        section = f"op {i}: {op.type} [{op.lines[0]}-{op.lines[1]}]"
+        source_op = ops[i]
+        section = f"op {i}: {source_op.type} [{_edge(source_op, 0)}-{_edge(source_op, 1)}]"
+        mapped = to_physical(parsed, source_op)
+        if isinstance(mapped, str) and source_op.type != "timelapse":
+            recorder.attempt(
+                unit=unit,
+                attempt=0,
+                total=1,
+                messages=[],
+                outcome=VERIFY_FAIL,
+                reason=mapped,
+                cfg=None,
+                deterministic=True,
+                section=section,
+            )
+            logger.warning("guided_edit: op %s dropped: %s", source_op.type, mapped)
+            unapplied.append((source_op, mapped))
+            continue
+        op = source_op if isinstance(mapped, str) else mapped
         if op.type == "timelapse":
             # run_guided_edit desugars these before we see them (see
             # guided_edit.timelapse); reaching here means a caller skipped that
@@ -386,18 +466,13 @@ def apply_ops(
                 section=section,
             )
             logger.warning("guided_edit: op %s dropped: %s", op.type, reason)
-            unapplied.append((op, reason))
-            continue
-        if is_time_resolved(op):
-            # Applied as a time range by the intervals stage, not as a marker;
-            # it still holds its lines so a cut clips around it.
-            occupied.update(range(op.lines[0], op.lines[1] + 1))
+            unapplied.append((source_op, reason))
             continue
         if op.type != "edit":
             # Span ops are a pure line-range wrap — no LLM judgement needed.
             # Clip the range to lines it may touch (see blocked_lines) so the
             # tags stay disjoint where the downstream extractors require it.
-            placed = place_span_op(lines, op, occupied)
+            placed = place_span_op(lines, op)
             clipped = placed.lines
             if clipped is None:
                 reason = placed.reason or ""
@@ -413,7 +488,7 @@ def apply_ops(
                     section=section,
                 )
                 logger.warning("guided_edit: op %s dropped: %s", op.type, reason)
-                unapplied.append((op, reason))
+                unapplied.append((source_op, reason))
                 continue
             if op.type == "overlay":
                 moved = clipped[0] != op.lines[0]
@@ -442,7 +517,7 @@ def apply_ops(
             if placed.applied:
                 lines = placed.candidate
             else:
-                unapplied.append((op, reason))
+                unapplied.append((source_op, reason))
             continue
         last_reason = f"{op.type} op not applied"
         applied = False
@@ -507,7 +582,7 @@ def apply_ops(
                 reason,
             )
         if not applied:
-            unapplied.append((op, last_reason))
+            unapplied.append((source_op, last_reason))
     if unapplied:
         outcome = DROPPED_ITEMS
         reason = f"{len(unapplied)}/{len(ops)} op(s) unapplied"

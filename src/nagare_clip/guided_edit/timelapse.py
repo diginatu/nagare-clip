@@ -15,6 +15,7 @@ length of the timelapse is exactly ``span / factor``.
 from __future__ import annotations
 
 import logging
+from collections.abc import Mapping
 from dataclasses import replace
 
 from nagare_clip.director.director_llm import DirectorOp
@@ -22,12 +23,18 @@ from nagare_clip.director.director_llm import DirectorOp
 logger = logging.getLogger(__name__)
 
 SegTimes = list[tuple[float | None, float | None]]
+#: ``{n: (start, end)}`` of the silence after line ``n`` (edit_lines.gap_spans).
+Silences = Mapping[int, tuple[float, float]]
 
 
-def caption_duration(op: DirectorOp, seg_times: SegTimes) -> float | None:
+def caption_duration(
+    op: DirectorOp, seg_times: SegTimes, silences: Silences | None = None
+) -> float | None:
     """On-screen seconds for *op*'s caption, or ``None`` when undeterminable.
 
-    ``(end of the last line - start of the first line) / factor``.  Nothing
+    ``(end of the last line - start of the first line) / factor``.  A ``"n~"``
+    edge is the silence's own edge instead — where the marker on its silence
+    line resolves to in the intervals stage — from *silences*.  Nothing
     inside the span is cut (the derived keep protects it), so this is the
     timelapse's real length on the edited timeline, not an estimate.  It is
     deliberately unclamped: every overlay shares one Blender channel, so a
@@ -53,14 +60,23 @@ def caption_duration(op: DirectorOp, seg_times: SegTimes) -> float | None:
         return None
     if a < 1 or b > len(seg_times):
         return None
-    start = seg_times[a - 1][0]
-    end = seg_times[b - 1][1]
+    silences = silences or {}
+    if op.gap_start:
+        start = silences[a][0] if a in silences else None
+    else:
+        start = seg_times[a - 1][0]
+    if op.gap_end:
+        end = silences[b][1] if b in silences else None
+    else:
+        end = seg_times[b - 1][1]
     if start is None or end is None or end <= start:
         return None
     return round((end - start) / factor, 2)
 
 
-def expand_timelapse_ops(ops: list[DirectorOp], seg_times: SegTimes) -> list[DirectorOp]:
+def expand_timelapse_ops(
+    ops: list[DirectorOp], seg_times: SegTimes, silences: Silences | None = None
+) -> list[DirectorOp]:
     """Replace every ``timelapse`` op with ``overlay`` + ``speed`` + ``keep``.
 
     Emission order matters: :func:`~nagare_clip.guided_edit.apply.apply_span_op`
@@ -77,7 +93,7 @@ def expand_timelapse_ops(ops: list[DirectorOp], seg_times: SegTimes) -> list[Dir
             out.append(op)
             continue
         a, b = op.lines
-        duration = caption_duration(op, seg_times)
+        duration = caption_duration(op, seg_times, silences)
         if op.text and duration is None:
             logger.warning(
                 "guided_edit: timelapse [%d-%d] caption dropped: no usable segment times",
@@ -85,7 +101,18 @@ def expand_timelapse_ops(ops: list[DirectorOp], seg_times: SegTimes) -> list[Dir
                 b,
             )
         if op.text and duration is not None:
-            out.append(replace(op, type="overlay", lines=(a, a), factor=None, duration=duration))
+            # A point at the span's opening: on the silence line when it opens
+            # on one.
+            out.append(
+                replace(
+                    op,
+                    type="overlay",
+                    lines=(a, a),
+                    gap_end=op.gap_start,
+                    factor=None,
+                    duration=duration,
+                )
+            )
         out.append(replace(op, type="speed", lines=(a, b), text=None, duration=None))
         out.append(replace(op, type="keep", lines=(a, b), factor=None, text=None, duration=None))
     return out

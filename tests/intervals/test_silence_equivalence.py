@@ -64,7 +64,6 @@ def _by_start(overlays: list[dict]) -> list[dict]:
     return sorted(overlays, key=lambda o: (o["start"], o["text"]))
 
 
-@pytest.mark.xfail(strict=True, reason="the marker path lands with the guided_edit step")
 @pytest.mark.parametrize("name", sorted(CASES))
 def test_markers_on_silence_lines_play_what_op_times_played(tmp_path, monkeypatch, name):
     data, edits = _new_path(tmp_path, monkeypatch, CASES[name])
