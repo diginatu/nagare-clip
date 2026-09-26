@@ -251,10 +251,12 @@ def resolve_span_ops(lines: list[str], ops: list[DirectorOp]) -> dict[int, SpanP
     """Every non-``edit`` op's placement, applied in :func:`span_op_order`.
 
     Exactly the span half of :func:`apply_ops`, with no LLM and no recorder:
-    ``edit`` ops only add ``{{old->new}}`` patches, which no clip reads.
+    ``edit`` ops only add ``{{old->new}}`` patches, which no clip reads.  Ops
+    are mapped to physical lines the same way (:func:`to_physical`), so the
+    placements' ``lines`` are PHYSICAL lines of *lines*.
     """
     placements: dict[int, SpanPlacement] = {}
-    occupied: set[int] = set()
+    parsed = parse_edit_lines(lines)
     for i in span_op_order(ops):
         op = ops[i]
         if op.type == "edit":
@@ -262,11 +264,11 @@ def resolve_span_ops(lines: list[str], ops: list[DirectorOp]) -> dict[int, SpanP
         if op.type == "timelapse":
             placements[i] = SpanPlacement(None, reason=UNEXPANDED_TIMELAPSE)
             continue
-        if is_time_resolved(op):
-            occupied.update(range(op.lines[0], op.lines[1] + 1))
-            placements[i] = SpanPlacement(tuple(op.lines), candidate=lines, reason=None)
+        mapped = to_physical(parsed, op)
+        if isinstance(mapped, str):
+            placements[i] = SpanPlacement(None, reason=mapped)
             continue
-        placed = place_span_op(lines, op, occupied)
+        placed = place_span_op(lines, mapped)
         placements[i] = placed
         if placed.applied:
             lines = placed.candidate

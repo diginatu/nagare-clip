@@ -541,9 +541,9 @@ class TestASilenceNobodyCanHear:
         # source lines 49 and 50 touch (segment gap 0.0) while the wait the
         # pipeline actually drops — the silence line's own interval — is
         # 6.6 s.  The preview prices what will be dropped, not the bound.
-        op = DirectorOp(
-            type="timelapse", lines=(49, 50), factor=6.0, text="T", gap_start=True, gap_end=True
-        )
+        # (No "50~" edge: only the silence after 49 has a line here, and an
+        # op on a silence with no line is refused, as guided_edit refuses it.)
+        op = DirectorOp(type="timelapse", lines=(49, 50), factor=6.0, text="T", gap_start=True)
         text = preview_segment(
             WATER_T.edit_lines,
             [op],

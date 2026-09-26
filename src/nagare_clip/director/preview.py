@@ -46,7 +46,7 @@ Markers already in the edit lines steer the clipping but are not played back.
 from __future__ import annotations
 
 from collections.abc import Iterable, Mapping, Sequence
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import TYPE_CHECKING
 
 from nagare_clip.director.director_llm import (
@@ -57,8 +57,9 @@ from nagare_clip.director.director_llm import (
 )
 from nagare_clip.director.display import DisplayView
 from nagare_clip.director.silence_lines import INDENT, SilenceLine, silence_body
+from nagare_clip.edit_lines import insert_silence_lines, parse_edit_lines
 from nagare_clip.gap_context.gaps import Gap
-from nagare_clip.guided_edit.apply import blocking_types, is_time_resolved, resolve_span_ops
+from nagare_clip.guided_edit.apply import blocking_types, resolve_span_ops
 from nagare_clip.guided_edit.timelapse import expand_timelapse_ops
 from nagare_clip.timing import gap_shown, silence_shown
 
@@ -75,6 +76,11 @@ QUOTE_CHARS = 24
 #: model's own record of what it meant an op to do, and the state block is
 #: where it reads it back, so a long one is TRUNCATED rather than dropped.
 NOTE_CHARS = 120
+
+#: Ops with a ``"n~"`` edge whose block states the TIME range they play
+#: (:func:`preview_segment`'s ``resolved_body``); a silence-edged ``cut`` is
+#: priced like any cut, by the lines it removes.
+SILENCE_BODY_TYPES = frozenset({"keep", "speed", "timelapse", "overlay"})
 
 HEADER = "Playback of these ops, computed from line timings (approximate):"
 
@@ -151,36 +157,83 @@ def numbering_for(view: DisplayView, segment: int) -> Numbering:
 
 @dataclass(frozen=True)
 class Placement:
-    """One marker an op turns into, where it lands (``lines=None``: nowhere)."""
+    """One marker an op turns into, where it lands (``lines=None``: nowhere).
+
+    *op* is the op as SENT; *lines* and the two gap flags are where its marker
+    landed, in source coordinates — an edge on a silence line is ``"n~"``,
+    exactly as the op addresses it.
+    """
 
     kind: str
     op: DirectorOp
     lines: tuple[int, int] | None
     reason: str | None = None
+    gap_start: bool = False
+    gap_end: bool = False
+
+    @property
+    def on_silence(self) -> bool:
+        """Does the landed range start or end on a silence line?"""
+        return self.lines is not None and (self.gap_start or self.gap_end)
+
+    @property
+    def placed_op(self) -> DirectorOp:
+        """The op re-addressed to where it landed."""
+        assert self.lines is not None
+        return replace(self.op, lines=self.lines, gap_start=self.gap_start, gap_end=self.gap_end)
 
 
 def resolve_placements(
-    edit_lines: list[str], ops: list[DirectorOp], seg_times: SegTimes
+    edit_lines: list[str],
+    ops: list[DirectorOp],
+    seg_times: SegTimes,
+    *,
+    silence_lines: Sequence[SilenceLine] = (),
 ) -> list[list[Placement]]:
     """Each op's markers as guided_edit will place them, per op in *ops*.
 
     *edit_lines* and *seg_times* are indexed by absolute line number (index 0 =
-    line 1).  A timelapse becomes up to three placements (caption overlay,
-    speed, keep) via the real :func:`expand_timelapse_ops`; an ``edit`` none.
+    line 1).  The *silence_lines* the transcript shows are written in between,
+    as guided_edit writes them, and the ops placed through the very
+    :func:`resolve_span_ops` guided_edit uses — so a ``"n~"`` op lands (or
+    clips, or is refused) on the silence line after ``n`` exactly as it will in
+    ``_edits.txt``.  A timelapse becomes up to three placements (caption
+    overlay, speed, keep) via the real :func:`expand_timelapse_ops`; an
+    ``edit`` none.
     """
+    spans = {s.after_line: (s.start, s.end) for s in silence_lines}
+    physical = insert_silence_lines(
+        list(edit_lines), {s.after_line: s.body() for s in silence_lines}
+    )
+    parsed = parse_edit_lines(physical)
     expanded: list[DirectorOp] = []
     owner: list[int] = []
     for i, op in enumerate(ops):
-        for sub in expand_timelapse_ops([op], list(seg_times)):
+        for sub in expand_timelapse_ops([op], list(seg_times), spans):
             expanded.append(sub)
             owner.append(i)
-    placed = resolve_span_ops(list(edit_lines), expanded)
+    placed = resolve_span_ops(physical, expanded)
     out: list[list[Placement]] = [[] for _ in ops]
     for j, sub in enumerate(expanded):
         p = placed.get(j)
         if p is None:
             continue
-        out[owner[j]].append(Placement(sub.type, sub, p.lines if p.applied else None, p.reason))
+        if not p.applied or p.lines is None:
+            out[owner[j]].append(Placement(sub.type, sub, None, p.reason))
+            continue
+        first = parsed.speech_line_of(p.lines[0])
+        last = parsed.speech_line_of(p.lines[1])
+        assert first is not None and last is not None
+        out[owner[j]].append(
+            Placement(
+                sub.type,
+                sub,
+                (first[0], last[0]),
+                None,
+                gap_start=first[1],
+                gap_end=last[1],
+            )
+        )
     return out
 
 
@@ -309,18 +362,18 @@ class _Playback:
         self.cut_by: dict[int, int] = {}
         self.keep: dict[int, tuple[int, int]] = {}
         self.speed: dict[int, tuple[float, tuple[int, int]]] = {}
-        # A "n~" op is applied as a TIME range, so what it holds is not its
-        # whole line range: with gap_start the first line's speech is outside
-        # it, and the silence after that line — which no line map can express
-        # — is inside.  Those gaps are tracked separately.
+        # A marker on a silence line holds that silence, not the line before
+        # it: with gap_start the first line's speech is outside the span, and
+        # the silence after that line — which no line map can express — is
+        # inside.  Those gaps are tracked separately.
         self.gap_keep: dict[int, tuple[int, int]] = {}
         self.gap_speed: dict[int, tuple[float, tuple[int, int]]] = {}
         for i, per_op in enumerate(placements):
             for j, p in enumerate(per_op):
                 if p.lines is None:
                     continue
-                if is_time_resolved(p.op):
-                    lines, gaps = covered(p.op)
+                if p.on_silence:
+                    lines, gaps = covered(p.placed_op)
                     if p.kind == "keep":
                         self.keep.update({n: (i, j) for n in lines})
                         self.gap_keep.update({n: (i, j) for n in gaps})
@@ -328,6 +381,10 @@ class _Playback:
                         factor = p.op.factor or 1.0
                         self.speed.update({n: (factor, (i, j)) for n in lines})
                         self.gap_speed.update({n: (factor, (i, j)) for n in gaps})
+                    elif p.kind == "cut":
+                        # A cut's silences are dropped anyway; only its words go.
+                        self.cut.update(lines)
+                        self.cut_by.update({n: i for n in lines})
                     continue
                 span = range(p.lines[0], p.lines[1] + 1)
                 if p.kind == "cut":
@@ -420,7 +477,7 @@ class _Playback:
 
 
 def covered(op: DirectorOp) -> tuple[list[int], list[int]]:
-    """A time-resolved op's (speech lines, gaps-after-line) — see :class:`_Playback`.
+    """A silence-edged op's (speech lines, gaps-after-line) — see :class:`_Playback`.
 
     ``["53~","53~"]`` holds no speech at all and one gap; ``[53,"53~"]`` holds
     line 53 and the gap after it; ``["53~",55]`` holds lines 54-55 and the gaps
@@ -533,8 +590,11 @@ def _clip_note(
 
 
 def _range(p: Placement | None) -> list[int]:
+    """The speech lines *p* landed on (a silence edge holds no speech)."""
     if p is None or p.lines is None:
         return []
+    if p.on_silence:
+        return covered(p.placed_op)[0]
     return list(range(p.lines[0], p.lines[1] + 1))
 
 
@@ -684,7 +744,10 @@ def preview_segment(
     clean = clean_for_display(edit_lines)
     pad = first_line - 1
     placements = resolve_placements(
-        [""] * pad + list(edit_lines), ops, [(None, None)] * pad + list(seg_times)
+        [""] * pad + list(edit_lines),
+        ops,
+        [(None, None)] * pad + list(seg_times),
+        silence_lines=silence_lines,
     )
     pb = _Playback(first_line, seg_times, silences, placements)
 
@@ -872,8 +935,12 @@ def preview_segment(
     for i, op in enumerate(ops):
         body: list[str] = []
         per = {p.kind: p for p in placements[i]}
-        if is_time_resolved(op):
-            body.extend(resolved_body(op))
+        if (op.gap_start or op.gap_end) and op.type in SILENCE_BODY_TYPES:
+            landed = per.get("keep") or per.get("speed") or per.get("overlay")
+            if landed is not None and landed.lines is None and resolved_bounds(op) is not None:
+                body.extend(_clip_note(placements, ops, i, landed, "", num))
+            else:
+                body.extend(resolved_body(op))
         elif op.type == "edit":
             body.append("  no runtime change (a text edit within the line)")
         elif op.type == "overlay":
