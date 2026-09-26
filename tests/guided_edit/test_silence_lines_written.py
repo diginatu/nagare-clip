@@ -174,3 +174,19 @@ def test_a_tag_in_a_description_does_not_count_as_the_op_landing():
     lines[1] = "[silent 10.0s: <keep> and </keep>]"
     op = DirectorOp(type="keep", lines=(2, 2))  # physical: the silence line
     assert "opening tag missing" in (verify_op(lines, lines, op) or "")
+
+
+def test_a_clip_picks_the_run_it_picked_before_silence_lines_existed():
+    # keep [1, 5] with line 3 taken: two free runs of two speech lines each,
+    # [1, 2] and [4, 5]; the tie goes to the earliest, as it always did.  The
+    # silence lines inside a run must not make it look longer.
+    legacy = ["あい", "うえ", "<keep>おか</keep>", "きく", "けこ", "さし"]
+    op = DirectorOp(type="keep", lines=(1, 5))
+    before, _ = apply_ops(legacy, [op], {})
+    assert before[:2] == ["<keep>あい", "うえ</keep>"]
+
+    lines = list(SILENCED)
+    lines[3] = "<keep>おか</keep>"
+    out, unapplied = apply_ops(lines, [op], {})
+    assert unapplied == []
+    assert out[:3] == ["<keep>あい", S1, "うえ</keep>"]

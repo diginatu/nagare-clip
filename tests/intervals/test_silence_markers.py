@@ -226,3 +226,21 @@ def test_a_silence_keeps_its_times_when_the_line_before_it_is_cut(tmp_path, monk
     lines = _file(l1="<cut>あい</cut>", l2="<keep>[silent 10.0s]</keep>")
     out = json.loads(_run(tmp_path, monkeypatch, lines))
     assert any(iv["start"] <= 5.0 <= iv["end"] for iv in out["keep_intervals"])
+
+
+def test_a_stretched_final_word_is_where_the_speech_edges_differ():
+    # Spec Q2: a SPEECH edge keeps its word semantics (the raw last word end),
+    # where the deleted op_times used the clamped speech span.  They differ
+    # only for a word stretched past SILENCE_MAX_WORD_SPAN (0.6 s).
+    data = {
+        "segments": [
+            {"text": "あ", "words": [{"word": "あ", "start": 0.5, "end": 1.0}]},
+            {"text": "い", "words": [{"word": "い", "start": 11.0, "end": 19.0}]},
+            {"text": "う", "words": [{"word": "う", "start": 25.0, "end": 26.0}]},
+        ]
+    }
+    silences = gap_spans(data)
+    lines = ["あ", "<keep>[silent 10.0s]", "い</keep>", "[silent 13.4s]", "う"]
+    got = extract_keep_ranges(lines, sync_text_to_json(data, lines), silences=silences)
+    assert got == [(1.0, 19.0)]  # the raw end of the stretched word
+    assert _oracle_span_bounds(1, 2, True, False, data) == (1.0, 11.6)  # the clamped one

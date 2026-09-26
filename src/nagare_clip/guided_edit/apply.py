@@ -108,10 +108,18 @@ def blocking_types(op_type: str) -> tuple[str, ...]:
     return (op_type, "cut")
 
 
-def clip_range(a: int, b: int, occupied: set[int]) -> tuple[int, int] | None:
+def clip_range(
+    a: int, b: int, occupied: set[int], uncounted: set[int] | frozenset[int] = frozenset()
+) -> tuple[int, int] | None:
     """Largest contiguous run of free lines within ``[a, b]`` (ties → earliest),
-    or ``None`` if every line is occupied."""
+    or ``None`` if every line is occupied.
+
+    A run's size counts only lines outside *uncounted* — the silence lines, so
+    a run is as large as the speech it holds and the choice between two runs
+    is the one it was before silence lines were written into the file.
+    """
     best: tuple[int, int] | None = None
+    best_size = -1
     start: int | None = None
     for n in range(a, b + 2):  # +2 so a trailing run is flushed on the last pass
         if n <= b and n not in occupied:
@@ -119,8 +127,9 @@ def clip_range(a: int, b: int, occupied: set[int]) -> tuple[int, int] | None:
                 start = n
         elif start is not None:
             run = (start, n - 1)
-            if best is None or (run[1] - run[0]) > (best[1] - best[0]):
-                best = run
+            size = sum(1 for x in range(run[0], run[1] + 1) if x not in uncounted)
+            if size > best_size:
+                best, best_size = run, size
             start = None
     return best
 
@@ -210,9 +219,9 @@ def place_span_op(lines: list[str], op: DirectorOp) -> SpanPlacement:
     playback preview both call it, so what the preview reports is what lands.
     """
     blocked = blocked_lines(lines, op.type)
-    clipped = clip_range(op.lines[0], op.lines[1], blocked)
+    silence_lines = {slot.file_line for slot in parse_edit_lines(lines).silences()}
+    clipped = clip_range(op.lines[0], op.lines[1], blocked, silence_lines)
     if clipped is not None:
-        silence_lines = {slot.file_line for slot in parse_edit_lines(lines).silences()}
         clipped = _trim_to_own_edges(clipped, op, silence_lines)
     if clipped is None:
         return SpanPlacement(None, reason=f"{op.type} op fully overlaps existing span(s)")
