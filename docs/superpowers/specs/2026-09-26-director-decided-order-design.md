@@ -165,10 +165,12 @@ checked against timelapses: a human who splits one means it.
 
 ## 7. Prompt
 
-`DIRECTOR_PROMPT` has 182 characters of budget (the test ceiling is 6289).
-The mechanics go in `REPLY_SHAPE`, which every turn carries: the `order` key,
-whole replacement, coverage, silence lines travel with their range. The prompt
-gets at most one Rules line, paid for by deletion if it does not fit.
+The meaning of `order` goes in `DIRECTOR_PROMPT`, the cached prefix: the view
+stays in shooting order, ranges in playback order, coverage, a silence line
+travels with its range, a timelapse stays inside one range. `REPLY_SHAPE`,
+which every turn re-sends uncached, only names the key. The prompt ceiling
+(a discipline against bloat, not a technical limit) is raised from 6289 to
+6600 for it, recorded in the test's docstring as the conversation's raise was.
 
 ## 8. Tests
 

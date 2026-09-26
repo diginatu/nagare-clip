@@ -1217,6 +1217,13 @@ def test_revise_prompt_documents_the_ids_and_the_split():
     assert '"message"' in prompt
 
 
+def test_director_prompt_explains_the_order():
+    prompt = get_effective_config(None, {})["director"]["prompt"]
+    assert '"order": [[first, last], ...]' in prompt
+    assert "shooting order" in prompt
+    assert "covering every line exactly once" in prompt
+
+
 def test_director_prompt_did_not_grow_for_the_silence_lines():
     """Improvement 16: every round that grew this prompt cost something, so a
     feature that adds a paragraph has to pay for it by deleting what it makes
@@ -1252,9 +1259,17 @@ def test_director_prompt_did_not_grow_for_the_silence_lines():
     refusal says both), the cut-overlap rule's second statement of itself,
     the overlay's "not how long it shows" (its duration says so), and the
     reasons trailing "buildup", "mishaps" and "note".  No fact left the
-    message; the next addition deletes before it adds."""
+    message; the next addition deletes before it adds.
+
+    6107 -> 6580, and the ceiling raised to 6600 deliberately, the second
+    time: the director now decides the playback order.  Its meaning (the view
+    stays in shooting order, ranges in the order they play, coverage, a
+    silence line travels with its range, a timelapse stays inside one range)
+    belongs in this cached prefix, not in REPLY_SHAPE, which every turn re-sends
+    UNCACHED -- so REPLY_SHAPE was cut to naming the key.  Nothing else to
+    delete paid for it; the next addition deletes before it adds."""
     prompt = get_effective_config(None, {})["director"]["prompt"]
-    assert len(prompt) < 6289
+    assert len(prompt) < 6600
 
 
 def _display_view(n: int = 100):

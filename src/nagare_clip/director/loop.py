@@ -70,10 +70,8 @@ REPLY_SHAPE = (
     "first line falls inside it is REPLACED by the ops below, and nothing "
     "outside it changes — so re-sending a range you already covered is how you "
     "rewrite it. Op line numbers are this transcript's numbers. "
-    'Optionally add "order": [[first, last], ...] — the ranges in the order '
-    "they PLAY, covering every line exactly once — to reorder the video; it "
-    "replaces the order in force whole, a silence line plays with the range it "
-    'is in, and a reply of only {"order": ...} changes nothing else.'
+    'Optionally add "order": [[first, last], ...]; {"order": ...} alone '
+    "changes nothing else."
 )
 
 #: A display range, 1-based inclusive.

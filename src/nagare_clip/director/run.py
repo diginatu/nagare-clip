@@ -215,9 +215,11 @@ def load_segment_transcript(inputs: SegmentInputs) -> SegmentTranscript:
 
 #: Heads the whole-video transcript inside the cached system prefix.  One line:
 #: what follows is data, and the protocol is stated in ``DIRECTOR_PROMPT``.
+#: Shooting order, whatever order is in force: the order is conversation
+#: state, shown in the edit each turn, never the shape of this transcript.
 VIEW_HEADER = (
-    "The whole finished video below, every segment in playback order under one "
-    "numbering. [k] heads each segment; your ops address these numbers."
+    "The whole video below, every source in shooting order under one "
+    "numbering. [k] heads each source; your ops and your order address these numbers."
 )
 
 

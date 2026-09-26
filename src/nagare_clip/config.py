@@ -292,6 +292,19 @@ DIRECTOR_PROMPT = (
     'Reply {"done": true} once every line has been reviewed '
     "and the playback is what you meant.\n"
     "\n"
+    # The order is the conversation's to decide (the plan's is only the
+    # start).  Its meaning lives here, in the cached prefix; REPLY_SHAPE only
+    # names the key.  No worked reorder, for the reason plan.prompt has none:
+    # the editorial call belongs to the brief, and an example anchors harder
+    # than the instruction around it.
+    "Order: the transcript is numbered in shooting order and stays so. To "
+    'change what plays when, add "order": [[first, last], ...] to any reply — '
+    "the ranges in the order they PLAY, covering every line exactly once (cut "
+    "removes footage; order only moves it). It replaces the order in force "
+    "whole. A silence line plays with the range it is in, and a timelapse must "
+    "lie inside one range. The edit you are shown then lists the video as it "
+    "plays, quoting both sides of every seam.\n"
+    "\n"
     # Every bracket shape the renderer can emit is shown, in one place.  The
     # four-part form was 17.0% of a real run's brackets while going
     # undocumented, and the three-part gap form the old legend led with was the

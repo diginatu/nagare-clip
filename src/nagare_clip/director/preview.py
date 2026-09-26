@@ -1138,8 +1138,11 @@ def _reordered(view: DisplayView, order: Sequence[tuple[int, int]], runs: Sequen
     """Every run, range by range in playback order, with every seam quoted."""
 
     def text(n: int) -> str:
+        # The words, not the timing bracket: a seam is judged on what is said.
         line = view.line(n)
-        return _quote(line.text) if line is not None else ""
+        if line is None:
+            return ""
+        return _quote(line.text if line.is_silence else line.text.split("  [", 1)[0])
 
     position = _playback_position(order)
     placed = sorted(

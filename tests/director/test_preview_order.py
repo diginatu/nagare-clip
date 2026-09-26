@@ -34,7 +34,7 @@ class TestReordered:
 
     def test_every_seam_is_quoted(self):
         text = _state(ORDER)
-        assert "seam 6 → 1: 「あ5" in text
+        assert "seam 6 → 1: 「あ5」 → 「あ1」" in text
         assert "seam 3 → 7: 「[silent" in text
 
     def test_a_run_never_crosses_a_break(self):

@@ -683,3 +683,11 @@ class TestTheOrder:
         assert st._timeline_segments(ctx) == [st.Segment("mix"), st.Segment("dev")]
         # ...but never for the director's own seed.
         assert len(st._resolve_order(ctx, director=False)[0]) == 4
+
+
+def test_the_view_header_says_shooting_order(project, monkeypatch):
+    # The plan reorders this project, and the transcript is still shooting
+    # order: a header claiming playback order would be a lie the model reads.
+    system = _run(monkeypatch, _ctx(project, chunk_lines=40))[0][0]["content"]
+    assert "shooting order" in system[system.index(VIEW_HEADER) :][:200]
+    assert "playback order under one numbering" not in system
