@@ -46,6 +46,7 @@ Markers already in the edit lines steer the clipping but are not played back.
 from __future__ import annotations
 
 from collections.abc import Iterable, Mapping, Sequence
+from collections.abc import Set as AbstractSet
 from dataclasses import dataclass, field, replace
 from typing import TYPE_CHECKING
 
@@ -56,6 +57,7 @@ from nagare_clip.director.director_llm import (
     speech_seconds,
 )
 from nagare_clip.director.display import DisplayView
+from nagare_clip.director.loop import order_breaks
 from nagare_clip.director.silence_lines import INDENT, SilenceLine, silence_body
 from nagare_clip.edit_lines import insert_silence_lines, parse_edit_lines
 from nagare_clip.gap_context.gaps import Gap
@@ -96,6 +98,12 @@ STATE_HEADER = (
 )
 
 CAPTIONS_HEADER = "Captions in playback order"
+
+#: Heads the reordered playback, when the order is not the view's order.
+REORDERED_HEADER = (
+    "THE VIDEO AS IT PLAYS, in the order in force (the segments above are in "
+    "the transcript's order, not this one):"
+)
 
 #: Heads the run list of one segment.
 AS_IT_PLAYS = " as it plays:"
@@ -603,8 +611,13 @@ def timeline_runs(
     ops: list[DirectorOp],
     num: Numbering = IDENTITY,
     captions: Sequence[tuple[int, int, float]] = (),
+    breaks: AbstractSet[int] = frozenset(),
 ) -> list[Run]:
     """The segment as it plays: consecutive display lines grouped by their fate.
+
+    *breaks* are the display lines after which the playback order jumps
+    elsewhere (:func:`~.loop.order_breaks`): a run always ends there, so every
+    run lies inside one range of the order and can be listed where it plays.
 
     Derived from the SAME resolved playback as every per-op block above it
     (:class:`_Playback` over :func:`resolve_placements`), so the two views
@@ -641,11 +654,14 @@ def timeline_runs(
         return here if here is not None and here == line_owner(n + 1) else None
 
     runs: list[Run] = []
+    last: list[int | None] = [None]
 
     def add(
         owner: int | None, seconds: float, number: int | None, after: int | None = None
     ) -> None:
-        if not runs or runs[-1].owner != owner:
+        jumped = last[0] is not None and last[0] in breaks
+        last[0] = number
+        if not runs or runs[-1].owner != owner or jumped:
             op = ops[owner] if owner is not None else None
             runs.append(
                 Run(
@@ -711,6 +727,7 @@ def preview_segment(
     label: str = "segment",
     elsewhere_seconds: float | None = None,
     numbering: Numbering = IDENTITY,
+    breaks: AbstractSet[int] = frozenset(),
 ) -> SegmentPreview:
     """The playback facts for one segment's *ops*, as the director holds them.
 
@@ -998,7 +1015,7 @@ def preview_segment(
             f"whole video (estimate): {_s(elsewhere_seconds)} elsewhere + {_s(runtime)} here "
             f"= {_s(elsewhere_seconds + runtime)}"
         )
-    runs = timeline_runs(pb, ops, num, captions)
+    runs = timeline_runs(pb, ops, num, captions, breaks)
     timeline = "\n".join([label + AS_IT_PLAYS] + [_run_line(run) for run in runs])
     parts = (
         [HEADER]
@@ -1014,6 +1031,7 @@ def segment_preview(
     transcripts: Sequence[SegmentTranscript],
     index: int,
     ops: Sequence[DirectorOp],
+    breaks: AbstractSet[int] = frozenset(),
 ) -> SegmentPreview:
     """One segment of the finished video, priced under the display numbering."""
     t = transcripts[index - 1]
@@ -1027,6 +1045,7 @@ def segment_preview(
         first_line=t.first_line,
         label=f"segment [{index}] {view.segments[index - 1].label}",
         numbering=numbering_for(view, index),
+        breaks=breaks,
     )
 
 
@@ -1051,6 +1070,7 @@ def edit_state(
     ops: Mapping[int, Sequence[DirectorOp]],
     *,
     drops: Sequence[str] = (),
+    order: Sequence[tuple[int, int]] = (),
 ) -> str:
     """The complete current edit: what one turn's user message carries.
 
@@ -1064,9 +1084,16 @@ def edit_state(
     Whole-video facts the brief is written in — total runtime, the captions in
     order and how many there are — are otherwise uncheckable: no single
     segment's preview can answer them.
+
+    *order* is the playback order in force, as display ranges
+    (:attr:`~.loop.LoopState.order`).  When it moves anything, the runs are
+    also listed in that order, range by range, with every seam quoted — the
+    transcript is numbered in shooting order, and this is where the model
+    reads the video it actually made.
     """
+    breaks = _order_breaks(order, len(view.lines))
     previews = [
-        segment_preview(view, transcripts, index, ops.get(index, ()))
+        segment_preview(view, transcripts, index, ops.get(index, ()), breaks)
         for index in range(1, len(transcripts) + 1)
     ]
     default = _total(t.default_runtime() for t in transcripts)
@@ -1084,7 +1111,54 @@ def edit_state(
         )
     captions = [row for p in previews for row in p.captions]
     blocks = [p.text for p in previews]
+    if breaks:
+        position = _playback_position(order)
+        captions.sort(key=lambda row: position(row[0]))
+        blocks.append(_reordered(view, order, [run for p in previews for run in p.runs]))
     return "\n\n".join([STATE_HEADER, *blocks, _caption_block(captions), "\n".join(footer)])
+
+
+def _order_breaks(order: Sequence[tuple[int, int]], total: int) -> frozenset[int]:
+    return frozenset(order_breaks(list(order), total))
+
+
+def _playback_position(order: Sequence[tuple[int, int]]):
+    """Sort key for a display line: its range's place in *order*, then itself."""
+
+    def key(line: int) -> tuple[int, int]:
+        for i, (first, last) in enumerate(order):
+            if first <= line <= last:
+                return (i, line)
+        return (len(order), line)
+
+    return key
+
+
+def _reordered(view: DisplayView, order: Sequence[tuple[int, int]], runs: Sequence[Run]) -> str:
+    """Every run, range by range in playback order, with every seam quoted."""
+
+    def text(n: int) -> str:
+        line = view.line(n)
+        return _quote(line.text) if line is not None else ""
+
+    position = _playback_position(order)
+    placed = sorted(
+        runs,
+        key=lambda run: position(run.lines[0] if run.lines else (run.after or 0) + 1),
+    )
+    out = [REORDERED_HEADER, "order: " + ", ".join(f"{a}-{b}" for a, b in order)]
+    for i, (first, last) in enumerate(order):
+        if i > 0:
+            prev = order[i - 1][1]
+            if first != prev + 1:
+                out.append(f"  seam {prev} → {first}: {text(prev)} → {text(first)}")
+        out.append(f"▶ lines {first}-{last}")
+        out.extend(
+            _run_line(run)
+            for run in placed
+            if position(run.lines[0] if run.lines else (run.after or 0) + 1)[0] == i
+        )
+    return "\n".join(out)
 
 
 def _total(values: Iterable[float | None]) -> float | None:

@@ -1,8 +1,9 @@
 # Segment order — the shape of the finished video
 
 The finished video is a sequence of **segments**, not of source files. A segment
-is one stretch of one source, and the `plan` stage chooses both the segments and
-their sequence.
+is one stretch of one source, and the **director** chooses both the segments and
+their sequence, starting from the plan's `order` when there is one
+(`docs/superpowers/specs/2026-09-26-director-decided-order-design.md`).
 
 Before this existed, the finished video was the sources concatenated in name
 order and nothing could change that: a device demonstration filmed in the middle
@@ -18,7 +19,16 @@ the project brief because the pipeline could not carry it out.
 class Segment:
     stem: str
     lines: tuple[int, int] | None      # None = the whole source
+    gap_end: bool = False              # ends on the silence AFTER lines[1]
 ```
+
+`gap_end` is spelled `"83~"` on disk, as `_director.json` spells a silence edge:
+`{"stem": "a", "lines": [31, "83~"]}`. Without it the silence after a segment's
+last line belongs to whatever plays the next line; with it, to this segment. A
+start never needs the flag — the silence before a segment's first line is its
+own unless the segment before it claimed it. `gap_end` on a source's last line
+means nothing and `normalise` drops it (which also lets `[1, "N~"]` collapse to
+the whole source). Coverage is still counted in lines: a gap is not a line.
 
 **`lines=None` means the whole source**, and that is what makes the fallback
 free: shooting order is `identity_segments(project_stems(input_dir))`, which
@@ -58,24 +68,67 @@ runs twice on purpose:
 
 - at **parse time** in `plan`/`plan_revise`, so the artifact never carries a
   contract that has not been checked (with no line counts, no order is written
-  at all);
-- at **resolve time** in `pipeline/stages._resolve_order`, because `plan.json`
-  is hand-editable and `sentence_split`/`summary` can re-run underneath it.
+  at all), and in the director's loop (`loop._read_order`, in display numbers);
+- at **resolve time** in `pipeline/stages._resolve_order`, because both
+  `director/order.json` and `plan.json` are hand-editable and
+  `sentence_split`/`summary` can re-run underneath them.
+
+## The director decides it
+
+The director's view is **always shooting order** — one `[k]` block per source,
+numbered once — whatever order is in force. The order is conversation state
+(`LoopState.order`, display ranges), not the shape of the transcript, so a
+display number names one line for the whole conversation and the cached system
+message never changes.
+
+- **A reply may carry `order`**: display ranges in playback order, replacing the
+  order in force whole, on any turn — alone (`{"order": …}`, which changes
+  nothing else) or beside a range's ops. It must tile `1..N`; a problem refuses
+  the order only (the ops still land) and the previous order stays.
+- **A range may start or end on a silence line.** A silence plays with the range
+  it is in: ending on the silence after `b` becomes `b~`; starting on it starts
+  at `b+1`, which already owns that silence. A range of only a silence line is
+  refused.
+- **A range over a source boundary** is two segments that happen to be adjacent
+  (`loop.order_segments` splits it).
+- **Timelapses**: an order break inside one source would cut a timelapse's
+  speed-up in two with its caption on one side. An order whose break falls
+  inside any timelapse left standing by the reply is refused, and a new
+  timelapse across a break of the order in force is refused. `cut`/`keep` may
+  cross a break — on disk they stay one op and `intervals` computes them once.
+  A break is a range end whose next range does not start on the next line
+  (`loop.order_breaks`).
+- **The seed** is the plan's resolved order (`_resolve_order(ctx, director=False)`),
+  converted by `loop.order_ranges`; it reaches the model as its starting order.
+- **What the model sees**: when the order moves anything, `edit_state` adds the
+  video as it plays — `timeline_runs()` takes the breaks as forced run ends, so
+  every run lies inside one range and is listed there — with both sides of every
+  seam quoted. Captions are listed in playback order. The runtime does not
+  depend on the order.
+
+The stage writes `director/order.json` (`{"order": [...]}`) on every run — the
+seed when the model never sent one, a disabled director included, and before a
+failing conversation raises.
 
 ## Where the authority lives
 
-> **`plan` is the authority on the order up to and including `intervals`.
-> `intervals/timeline.json` is the authority after it. `intervals` is the single
-> conversion point from lines to seconds.**
+> **The director is the authority on the order up to and including
+> `intervals`. `intervals/timeline.json` is the authority after it. `intervals`
+> is the single conversion point from lines to seconds.**
 
-`director`, the manifest builder and the order note read the plan (through
-`pipeline/stages._timeline_segments`). `blender`, `publish` and `cut_report`
-read the manifest and never the plan. Nothing downstream of `intervals`
-re-derives a time from a line number, and nothing upstream reasons in seconds.
+`pipeline/stages._resolve_order` reads `director/order.json`, else the effective
+plan, else shooting order. The manifest builder and the order note read it
+(through `_timeline_segments`); `director_preview` does too, per segment in
+playback order. `blender`, `publish` and `cut_report` read the manifest and
+never an order. Nothing downstream of `intervals` re-derives a time from a line
+number, and nothing upstream reasons in seconds.
+
+A hand-edited `order.json` is checked for coverage but not against timelapses:
+a human who splits one means it.
 
 That rule is also why there is no staleness guard on `timeline.json`:
-hand-editing `plan.json` and re-running `--from-stage blender` gets the old
-order, but `plan` is already an upstream dependency of `blender`, and with
+hand-editing `order.json` and re-running `--from-stage blender` gets the old
+order, but `intervals` is already an upstream dependency of `blender`, and with
 exactly one conversion point the two can lag, never disagree.
 
 `pipeline/sources.py::project_stems()` does **not** go away. It stops being what
@@ -99,6 +152,12 @@ source's `duration_sec`. Ending the previous segment where its last line ends
 gives each segment the silent gap that *precedes* its first line, so
 `keep_pre_margin` stays with the speech it belongs to and a moved segment takes
 its own run-up with it rather than leaving it behind.
+
+A segment ending `b~` keeps the silence after `b` instead: that boundary sits at
+`max(end(b), start(b+1) − intervals.keep_pre_margin)`, so the silence stays with
+the segment it ends and line `b+1` still keeps its own run-up. Both segments of
+the boundary read the same rule (`build_manifest(..., pre_margin=)`), so they
+cannot disagree, and without the flag the output is unchanged.
 
 An unresolvable boundary degrades the **whole** manifest to shooting order: a
 source that cannot be split would otherwise collapse into one entry and silently
@@ -147,7 +206,7 @@ explicitly — that is not a reorder. A stale note is deleted.
 `intervals`, the same idempotent double-write `write_cut_report` uses, so a
 `--to-stage director` review run sees it rather than only a full run.
 
-Relying on the plan to mention a reorder in its `message` is not enough. A
+Relying on a model to mention a reorder is not enough. A
 reorder changes the shape of the finished video more than any other single
 decision, and the failure mode to avoid is a human noticing it only while
 watching the result.

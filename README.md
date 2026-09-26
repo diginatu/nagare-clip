@@ -40,27 +40,36 @@ The optional `summary` + `plan` stages run **once over all source videos** (proj
 #### The order of the finished video
 
 By default the finished video is the source clips concatenated in name order.
-When `plan` is enabled it may instead state an **order**: a list of *segments*
-(one stretch of one source) in playback order, written into `plan.json`:
+The **director** decides the order: in any reply of its conversation it may send
+an `order` — the ranges of its transcript in the order they should play, down to
+a single line — and it can change it again on any later turn. It starts from the
+plan's order when `plan` states one. The order it ends with is written to
+`output/director/order.json` as a list of *segments* (one stretch of one source)
+in playback order:
 
 ```json
-"order": [
+{"order": [
   {"stem": "device_1"},
-  {"stem": "mixed_clip", "lines": [31, 83]},
+  {"stem": "mixed_clip", "lines": [31, "83~"]},
   {"stem": "mixed_clip", "lines": [1, 30]}
-]
+]}
 ```
 
 `lines` is optional (omit it for a whole source), and a source may appear more
-than once. The one rule is that the segments **cover every line of every source
-exactly once** — dropping footage is the director's job, so an order that leaves
-lines out is rejected whole and the pipeline falls back to shooting order. You
-can hand-write or hand-edit `order` yourself; it is validated on every run.
+than once. `"83~"` means the segment ends on the silence *after* line 83, so that
+silence plays at the end of this segment instead of at the start of whatever
+plays line 84. The one rule is that the segments **cover every line of every
+source exactly once** — dropping footage is `cut`'s job, so an order that leaves
+lines out is rejected whole and the pipeline falls back to shooting order. The
+director also refuses an order that would split one of its timelapses in two.
+
+You can hand-edit `director/order.json` and resume with `--from-stage intervals`;
+it is validated on every run. Without one (the director never ran), the plan's
+`order` is used; `plan.json` keeps the same shape without the `~` form.
 
 A reorder is never silent: whenever the finished video is not in shooting order
 (or an order was rejected), `output/llm_report/notes/order.md` says so — which
-segment plays where, and where it was before. Tell `plan_revise` what you want
-moved in the usual way (`./scripts/plan_say.sh "…"`).
+segment plays where, and where it was before.
 
 #### Talking to the plan (`plan_revise`)
 
@@ -140,7 +149,7 @@ made to obey the plan — it is the first stage that reads the actual lines and
 its override is often right; what was missing was any record that they
 disagreed.
 
-The director edits the whole finished video in **one conversation**, not one call per segment. Every segment's transcript is rendered once, in playback order, under a single line numbering that covers speech lines and long silences alike, and that rendering plus the project's context sits inside the cached system prefix — byte-identical on every turn. Each turn asks for an *approximate* range ("around lines 41 to 80"), the reply's ops come back priced by a computed playback preview, and any earlier range may be rewritten at any time; the model ends with `done`. `director.chunk_lines` (default `40`) sets the size of the range asked for, and the turn cap is `ceil(display lines / chunk_lines) * 2` — reaching it fails the stage **after** writing the ops accepted so far, so the conversation is never lost. `--source` no longer narrows the director: one conversation owns the whole video and rewrites every `_director.json`. This replaces the per-segment arrangement and everything that propped it up — the seam lines at each join, the captions and ops already committed earlier, and the `[k]N`-qualified whole-video reference — because the conversation now reads both sides of every join and remembers its own edits. What the seam note SAID is not gone, though: seeing a join is not the same as knowing it is one, and the sign-offs survived the first whole-video cut — so `director.prompt` states, where it explains `[k]`, that each block was recorded as its own video and can therefore open with a greeting or end with a sign-off. Whether to cut one is the model's call.
+The director edits the whole finished video in **one conversation**, not one call per segment. Every source's transcript is rendered once, in shooting order, under a single line numbering that covers speech lines and long silences alike, and that rendering plus the project's context sits inside the cached system prefix — byte-identical on every turn. Each turn asks for an *approximate* range ("around lines 41 to 80"), the reply's ops come back priced by a computed playback preview, and any earlier range may be rewritten at any time; the model ends with `done`. A reply may also reorder the video (see *The order of the finished video*): the transcript keeps its numbering, and the preview then lists the video as it plays, range by range, quoting both sides of every new seam. `director.chunk_lines` (default `40`) sets the size of the range asked for, and the turn cap is `ceil(display lines / chunk_lines) * 2` — reaching it fails the stage **after** writing the ops accepted so far, so the conversation is never lost. `--source` no longer narrows the director: one conversation owns the whole video and rewrites every `_director.json`. This replaces the per-segment arrangement and everything that propped it up — the seam lines at each join, the captions and ops already committed earlier, and the `[k]N`-qualified whole-video reference — because the conversation now reads both sides of every join and remembers its own edits. What the seam note SAID is not gone, though: seeing a join is not the same as knowing it is one, and the sign-offs survived the first whole-video cut — so `director.prompt` states, where it explains `[k]`, that each block was recorded as its own video and can therefore open with a greeting or end with a sign-off. Whether to cut one is the model's call.
 
 The project's **overall summary and the plan's directions** ride in that same cached prefix, once for the whole video, with every plan line range converted into the display numbering the director reads. Immediately above that list sits the sentence that makes it safe: *these are section boundaries, not op boundaries*. Without it a measured 9-segment run copied plan part boundaries into 19 of 56 op starts and into all three timelapses — two of which opened on the line where the speaker announces the work and played that announcement at 8-20x, unintelligible.
 

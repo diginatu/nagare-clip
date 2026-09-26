@@ -5,8 +5,9 @@ here is the assembled conversation — what is cached, what each turn carries,
 what reaches disk when it ends badly — not any one function's return value.
 
 The project is the same shape as ``test_director_whole_video``'s: ``dev``
-whole, then ``mix`` split into three stretches and reordered, so one source
-plays as three segments and a source line number is never a display number.
+whole, then ``mix`` split into three stretches and reordered by the plan.  The
+view is shooting order whatever the plan says — one ``[k]`` block per source —
+and the plan's order is the conversation's starting order, not its shape.
 """
 
 from __future__ import annotations
@@ -126,8 +127,8 @@ def project(tmp_path, monkeypatch):
 
 
 def _view(ctx):
-    """The view the stage will build, for a test that needs its line count."""
-    segments = st._timeline_segments(ctx)
+    """The view the stage will build: every source whole, in shooting order."""
+    segments = st.identity_segments(st.project_stems(ctx.input_videos_dir))
     pairs = []
     for segment in segments:
         stem = segment.stem
@@ -253,7 +254,7 @@ class TestTheMessages:
         ctx = _ctx(project, chunk_lines=4)
         calls = _run(monkeypatch, ctx)
         segments = len(_view(ctx).segments)
-        assert segments == 4
+        assert segments == 2
         for call in calls:
             newest = call[-1]["content"]
             for index in range(1, segments + 1):
@@ -324,11 +325,11 @@ class TestTheOpsThatReachDisk:
 
     def test_source_no_longer_narrows_the_director(self, project, monkeypatch):
         # Only dev is being processed, but one conversation owns the whole
-        # video: mix is REVIEWED (it is in the transcript the model reads, all
-        # three of its segments) and its ops are written, not blanked.
+        # video: mix is REVIEWED (it is in the transcript the model reads) and
+        # its ops are written, not blanked.
         ctx = _ctx(project, stems=("dev",), chunk_lines=4)
         calls = _run(monkeypatch, ctx)
-        assert calls[0][0]["content"].count("] mix") == 3
+        assert calls[0][0]["content"].count("] mix") == 1
         path = ctx.stage_dir("director") / "mix_director.json"
         assert json.loads(path.read_text(encoding="utf-8"))["ops"]
 
@@ -479,7 +480,7 @@ class TestTheProjectContext:
         ctx = _ctx(planned, chunk_lines=4)
         system = _run(monkeypatch, ctx)[0][0]["content"]
         view = _view(ctx)
-        # mix's source lines 4-6 play SECOND, so they are not display 4-6.
+        # mix follows dev in the view, so its lines 4-6 are not display 4-6.
         first = view.from_source(2, 4)
         last = view.from_source(2, 6)
         assert (first, last) != (4, 6)
@@ -627,3 +628,58 @@ class TestRetryWithinATurn:
         with pytest.raises(PipelineError, match="failed after all 3 attempt"):
             _run(monkeypatch, _ctx(project, max_retries=2), reply=boom, calls=calls)
         assert len(calls) == 3
+
+
+class TestTheOrder:
+    """The director decides the order, seeded with the plan's, and writes it to
+    ``director/order.json`` — which every later reader then prefers."""
+
+    def _order_json(self, ctx):
+        return json.loads((ctx.stage_dir("director") / "order.json").read_text(encoding="utf-8"))
+
+    def test_the_plans_order_passes_through_when_the_model_never_sends_one(
+        self, project, monkeypatch
+    ):
+        ctx = _ctx(project, chunk_lines=40)
+        _run(monkeypatch, ctx)
+        assert self._order_json(ctx)["order"] == [
+            {"stem": "dev"},
+            {"stem": "mix", "lines": [4, 6]},
+            {"stem": "mix", "lines": [1, 3]},
+            {"stem": "mix", "lines": [7, 9]},
+        ]
+
+    def test_the_seed_reaches_the_model_as_its_starting_order(self, project, monkeypatch):
+        ctx = _ctx(project, chunk_lines=40)
+        first = _run(monkeypatch, ctx)[0][-1]["content"]
+        assert "THE VIDEO AS IT PLAYS" in first
+
+    def test_the_models_order_wins(self, project, monkeypatch):
+        ctx = _ctx(project, chunk_lines=40)
+        total = len(_view(ctx).lines)
+
+        def script(messages, cfg):
+            if _asked(messages[-1]["content"]) is None:
+                return json.dumps({"done": True})
+            return json.dumps(
+                {"range": [1, total], "reviewed_through": total, "ops": [], "order": [[1, total]]}
+            )
+
+        _run(monkeypatch, ctx, reply=script)
+        assert self._order_json(ctx)["order"] == [{"stem": "dev"}, {"stem": "mix"}]
+        assert st._timeline_segments(ctx) == [st.Segment("dev"), st.Segment("mix")]
+
+    def test_a_disabled_director_still_writes_the_seed(self, project, monkeypatch):
+        ctx = _ctx(project, enabled=False)
+        _run(monkeypatch, ctx)
+        assert len(self._order_json(ctx)["order"]) == 4
+
+    def test_the_directors_order_beats_the_plans(self, project):
+        ctx = _ctx(project)
+        (ctx.stage_dir("director")).mkdir(parents=True, exist_ok=True)
+        (ctx.stage_dir("director") / "order.json").write_text(
+            json.dumps({"order": [{"stem": "mix"}, {"stem": "dev"}]}), encoding="utf-8"
+        )
+        assert st._timeline_segments(ctx) == [st.Segment("mix"), st.Segment("dev")]
+        # ...but never for the director's own seed.
+        assert len(st._resolve_order(ctx, director=False)[0]) == 4

@@ -49,6 +49,7 @@ from nagare_clip.order import (
     identity_segments,
     normalise,
     read_manifest,
+    segments_to_dict,
     validate_segments,
     write_manifest,
 )
@@ -488,10 +489,27 @@ def _line_counts(ctx: PipelineContext) -> dict[str, int]:
     return counts
 
 
-def _resolve_order(ctx: PipelineContext) -> tuple[list[Segment], list[str]]:
-    """The playback order plus the problems that made it fall back (if any)."""
+DIRECTOR_ORDER = "order.json"
+
+
+def _director_order_json(ctx: PipelineContext) -> Path:
+    return ctx.stage_dir("director") / DIRECTOR_ORDER
+
+
+def _resolve_order(
+    ctx: PipelineContext, *, director: bool = True
+) -> tuple[list[Segment], list[str]]:
+    """The playback order plus the problems that made it fall back (if any).
+
+    The director's ``order.json`` is the authority when it exists — the
+    director decides the order, seeded with the plan's — then the effective
+    plan, then shooting order.  *director* False skips the first: that is the
+    seed the director itself starts from.
+    """
     shooting = identity_segments(project_stems(ctx.input_videos_dir) or ctx.stems)
     plan_json = _effective_plan_json(ctx)
+    if director and _director_order_json(ctx).is_file():
+        plan_json = _director_order_json(ctx)
     if not plan_json.is_file():
         return shooting, []
     try:
@@ -590,6 +608,17 @@ def _write_director_ops(ctx: PipelineContext, stem: str, ops: list[DirectorOp]) 
     logging.info("director: wrote %s (%d operation(s))", path, len(ops))
 
 
+def _write_director_order(ctx: PipelineContext, order: list[Segment]) -> None:
+    """The playback order the director ended with — hand-editable, like plan.json's."""
+    path = _director_order_json(ctx)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        json.dumps({"order": segments_to_dict(order)}, ensure_ascii=False, indent=2) + "\n",
+        encoding="utf-8",
+    )
+    logging.info("director: wrote %s (%d segment(s))", path, len(order))
+
+
 def _director_run(ctx: PipelineContext) -> None:
     """ONE conversation over the whole finished video.
 
@@ -607,7 +636,10 @@ def _director_run(ctx: PipelineContext) -> None:
     """
     rec = _recorder(ctx, "director")
     rec.clear()
-    segments = _timeline_segments(ctx)
+    # The view is ALWAYS shooting order: the order is the conversation's to
+    # decide, seeded with the plan's, not the shape of what it reads.
+    segments = identity_segments(project_stems(ctx.input_videos_dir) or ctx.stems)
+    seed = _resolve_order(ctx, director=False)[0]
     director_dir = ctx.stage_dir("director")
     text_filter_dir = ctx.stage_dir("text_filter")
     stems = sorted({segment.stem for segment in segments})
@@ -636,6 +668,8 @@ def _director_run(ctx: PipelineContext) -> None:
         path = director_dir / f"{stem}_director.json"
         if path.is_file():
             path.unlink()
+    if _director_order_json(ctx).is_file():
+        _director_order_json(ctx).unlink()
 
     print(f"[director] Edit operations: {len(segments)} segment(s) in one conversation")
     try:
@@ -644,12 +678,14 @@ def _director_run(ctx: PipelineContext) -> None:
             ctx.cfg,
             summary=ctx.stage_dir("summary") / "summary.json",
             plan=_effective_plan_json(ctx),
+            order=seed,
             recorder=rec,
         )
         # Written BEFORE the failure, never after it: the ops are what the
         # conversation is for, and a cap is not a reason to throw them away.
         for stem in stems:
             _write_director_ops(ctx, stem, result.ops.get(stem, []))
+        _write_director_order(ctx, result.order or seed)
         if not result.ok:
             files = ", ".join(f"{stem}_director.json" for stem in stems)
             raise PipelineError(
@@ -788,7 +824,8 @@ def _write_manifest(ctx: PipelineContext) -> list[TimelineSegment]:
         except (OSError, ValueError):
             logging.warning("order: could not read %s for the segment boundaries", path)
 
-    entries = build_manifest(segments, times, durations)
+    pre_margin = float(ctx.cfg["intervals"].get("keep_pre_margin", 0.0))
+    entries = build_manifest(segments, times, durations, pre_margin=pre_margin)
     if not entries and segments:
         entries = build_manifest(identity_segments(stems), times, durations)
     write_manifest(_manifest_path(ctx), entries)

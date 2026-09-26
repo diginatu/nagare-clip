@@ -39,10 +39,19 @@ MANIFEST_NAME = "timeline.json"
 
 @dataclass(frozen=True)
 class Segment:
-    """One stretch of one source, in line space.  ``lines=None`` = the whole source."""
+    """One stretch of one source, in line space.  ``lines=None`` = the whole source.
+
+    *gap_end* says the segment ends on the silence AFTER ``lines[1]`` rather
+    than on that line — spelled ``"57~"`` on disk, as ``_director.json`` spells
+    a silence edge.  Without it the silence after a segment's last line belongs
+    to whatever plays line ``lines[1] + 1``; with it, to this segment.  A
+    segment never needs a flag at its START: the silence before its first line
+    is already its own unless the segment before it claimed it.
+    """
 
     stem: str
     lines: tuple[int, int] | None = None
+    gap_end: bool = False
 
 
 @dataclass(frozen=True)
@@ -63,7 +72,7 @@ def segment_label(segment: Segment) -> str:
     """
     if segment.lines is None:
         return segment.stem
-    return f"{segment.stem} [{segment.lines[0]}-{segment.lines[1]}]"
+    return f"{segment.stem} [{segment.lines[0]}-{_end(segment)}]"
 
 
 def segment_unit(segment: Segment) -> str:
@@ -74,7 +83,12 @@ def segment_unit(segment: Segment) -> str:
     """
     if segment.lines is None:
         return segment.stem
-    return f"{segment.stem}_{segment.lines[0]}-{segment.lines[1]}"
+    return f"{segment.stem}_{segment.lines[0]}-{_end(segment)}"
+
+
+def _end(segment: Segment) -> str:
+    assert segment.lines is not None
+    return f"{segment.lines[1]}~" if segment.gap_end else str(segment.lines[1])
 
 
 def identity_segments(stems: Sequence[str]) -> list[Segment]:
@@ -85,13 +99,22 @@ def identity_segments(stems: Sequence[str]) -> list[Segment]:
 def normalise(segments: Iterable[Segment], line_counts: Mapping[str, int]) -> list[Segment]:
     """Collapse a full-range segment into the whole-source form.
 
-    A stem with no known line count is left exactly as written.
+    A ``gap_end`` on a source's last line means nothing — no line follows it
+    to take the silence from — so it is dropped, which is also what lets a
+    full range ending ``"N~"`` collapse.  A stem with no known line count is
+    left exactly as written.
     """
     out: list[Segment] = []
     for seg in segments:
         count = line_counts.get(seg.stem)
-        if seg.lines is not None and count is not None and seg.lines == (1, count):
+        if seg.lines is None:
             out.append(Segment(seg.stem, None))
+        elif count is None:
+            out.append(seg)
+        elif seg.lines == (1, count):
+            out.append(Segment(seg.stem, None))
+        elif seg.gap_end and seg.lines[1] >= count:
+            out.append(Segment(seg.stem, seg.lines))
         else:
             out.append(seg)
     return out
@@ -173,9 +196,21 @@ def segments_to_dict(segments: Iterable[Segment]) -> list[dict[str, Any]]:
     for seg in segments:
         entry: dict[str, Any] = {"stem": seg.stem}
         if seg.lines is not None:
-            entry["lines"] = [seg.lines[0], seg.lines[1]]
+            entry["lines"] = [seg.lines[0], _end(seg) if seg.gap_end else seg.lines[1]]
         out.append(entry)
     return out
+
+
+def _segment_lines(value: Any) -> tuple[tuple[int, int], bool] | None:
+    """``[a, b]`` or ``[a, "b~"]`` -> ``((a, b), gap_end)``; anything else ``None``."""
+    if not (isinstance(value, (list, tuple)) and len(value) == 2):
+        return None
+    start, end = value
+    gap_end = False
+    if isinstance(end, str) and end.endswith("~") and end[:-1].isdigit():
+        end, gap_end = int(end[:-1]), True
+    pair = _pair((start, end))
+    return None if pair is None else (pair, gap_end)
 
 
 def segments_from_dict(data: Any) -> list[Segment]:
@@ -197,10 +232,10 @@ def segments_from_dict(data: Any) -> list[Segment]:
         if raw.get("lines") is None:
             out.append(Segment(stem, None))
             continue
-        lines = _pair(raw.get("lines"))
-        if lines is None:
+        parsed = _segment_lines(raw.get("lines"))
+        if parsed is None:
             continue
-        out.append(Segment(stem, lines))
+        out.append(Segment(stem, parsed[0], parsed[1]))
     return out
 
 

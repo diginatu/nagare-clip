@@ -197,11 +197,12 @@ by a writer who cannot see the run.
 ## The segment order
 
 `pipeline/stages.py` owns the one point every stage consults for the finished
-video's playback order: `_timeline_segments(ctx)` (validate + normalise the
-plan's `order`, else shooting order from `project_stems`). `_line_counts`,
-`_write_manifest`, `_ordered_sources` and `write_order_note` sit beside it. The
-`director` loop walks the **global** order and calls only for the segments whose
-stem is in this run's sources, so `--source X` keeps its real position and its
-real neighbours.
+video's playback order: `_timeline_segments(ctx)` (validate + normalise
+`director/order.json`, else the effective plan's `order`, else shooting order
+from `project_stems`). `_line_counts`, `_write_manifest`, `_ordered_sources` and
+`write_order_note` sit beside it. The `director` does **not** read it for its
+view — its view is always shooting order — only for its seed
+(`_resolve_order(ctx, director=False)`, which skips its own `order.json`), and
+writes `director/order.json` itself.
 
 See [`order.md`](order.md).

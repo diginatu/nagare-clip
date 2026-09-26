@@ -6,8 +6,8 @@ human decides whether it was right.
 
 A reorder changes the shape of the finished video more than any other single
 decision, and the failure mode to avoid is a human noticing it only while
-watching the result.  Relying on the plan to mention it in its ``message`` is
-not enough, so this is computed from the resolved order itself.
+watching the result.  Relying on a model to mention it is not enough, so this
+is computed from the resolved order itself.
 """
 
 from __future__ import annotations
@@ -37,10 +37,10 @@ def format_order_note(
                 [
                     HEADING,
                     "",
-                    "The plan asked for an order that does not cover every line of every "
-                    "source exactly once, so it was **rejected whole** and the finished "
-                    "video is in shooting order. Fix `order` in the plan (or say so in "
-                    "`plan_dialogue/`) and re-run.",
+                    "The order in force (`director/order.json`, else the plan's) does not "
+                    "cover every line of every source exactly once, so it was **rejected "
+                    "whole** and the finished video is in shooting order. Fix that `order` "
+                    "and re-run from `intervals`, or re-run the director.",
                     "",
                     *(f"- {problem}" for problem in problems),
                 ]
@@ -55,7 +55,7 @@ def format_order_note(
     lines = [
         HEADING,
         "",
-        f"The finished video plays {len(order)} segment(s) in an order the plan chose, "
+        f"The finished video plays {len(order)} segment(s) in an order the director chose, "
         "not in shooting order. Nothing was added or dropped — the segments still "
         "cover every line of every source exactly once — but the sequence differs:",
         "",

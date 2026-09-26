@@ -88,3 +88,33 @@ class TestDegrading:
         times = {"a": [(0.5, 4.0), (5.0, 4.0), (12.0, 18.0)]}
         segments = [Segment("a", (1, 1)), Segment("a", (2, 2)), Segment("a", (3, 3))]
         assert build_manifest(segments, times, {"a": 20.0}) == []
+
+
+class TestSilenceEnd:
+    """A segment ending ``b~`` keeps the silence after ``b``: the boundary
+    moves to line ``b+1``'s run-up, never before ``b`` ends."""
+
+    def test_the_boundary_sits_at_the_next_lines_run_up(self):
+        # line 2 ends at 9.0, line 3 starts at 12.0; a 1.0 s run-up -> 11.0.
+        segments = [Segment("a", (1, 2), gap_end=True), Segment("a", (3, 5))]
+        out = build_manifest(segments, TIMES, DURATIONS, pre_margin=1.0)
+        assert out == [
+            TimelineSegment("a", 0.0, 11.0, lines=(1, 2)),
+            TimelineSegment("a", 11.0, 44.0, lines=(3, 5)),
+        ]
+
+    def test_both_sides_agree_whatever_order_they_play_in(self):
+        segments = [Segment("a", (3, 5)), Segment("a", (1, 2), gap_end=True)]
+        out = build_manifest(segments, TIMES, DURATIONS, pre_margin=1.0)
+        assert out[0].start == out[1].end == 11.0
+
+    def test_a_run_up_longer_than_the_silence_stops_at_the_line_end(self):
+        segments = [Segment("a", (1, 2), gap_end=True), Segment("a", (3, 5))]
+        out = build_manifest(segments, TIMES, DURATIONS, pre_margin=10.0)
+        assert out[0].end == out[1].start == 9.0
+
+    def test_without_the_flag_nothing_changes(self):
+        segments = [Segment("a", (1, 2)), Segment("a", (3, 5))]
+        assert build_manifest(segments, TIMES, DURATIONS, pre_margin=1.0) == build_manifest(
+            segments, TIMES, DURATIONS
+        )

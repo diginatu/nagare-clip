@@ -41,6 +41,8 @@ from nagare_clip.director.loop import (
     ReplyResult,
     apply_reply,
     next_request,
+    order_ranges,
+    order_segments,
     request_summary,
 )
 from nagare_clip.director.preview import edit_state
@@ -65,7 +67,7 @@ from nagare_clip.llm_report import (
     Recorder,
 )
 from nagare_clip.llm_retry import cfg_for_attempt, retry_attempts
-from nagare_clip.order import Segment
+from nagare_clip.order import Segment, identity_segments, normalise
 from nagare_clip.plan.plan_llm import plan_from_dict
 from nagare_clip.summary.summarize import ProjectSummary, summary_from_dict
 from nagare_clip.timing import segment_silences, segment_times
@@ -230,6 +232,10 @@ class ConversationResult:
     """
 
     ops: dict[str, list[DirectorOp]]
+    #: The playback order the conversation ended with, in source coordinates
+    #: and normalised — the seed when the model never sent one.  Empty only
+    #: when there was nothing to order.
+    order: list[Segment] = field(default_factory=list)
     ok: bool = True
     error: str = ""
     reviewed_through: int = 0
@@ -279,6 +285,28 @@ def system_message(director_cfg: dict, view: DisplayView, context: str = "") -> 
     return {"role": "system", "content": content, CACHEABLE_PREFIX_KEY: content}
 
 
+def _line_counts(
+    inputs: list[SegmentInputs], transcripts: list[SegmentTranscript]
+) -> dict[str, int]:
+    """Lines per source, from the whole-source segments the view is built of."""
+    return {
+        i.segment.stem: len(t.edit_lines)
+        for i, t in zip(inputs, transcripts)
+        if i.segment.lines is None
+    }
+
+
+def _seed_ranges(view: DisplayView, seed: list[Segment], counts: dict[str, int]):
+    """The seed order as display ranges; ``[]`` (shooting order) if it is one."""
+    seed = normalise(seed, counts)
+    if seed == identity_segments([s.stem for s in view.segments]):
+        return []
+    ranges = order_ranges(view, seed)
+    if not ranges:
+        logging.warning("director: the seed order does not map onto the view; shooting order")
+    return ranges
+
+
 def turn_cap(lines: int, chunk_lines: int) -> int:
     """Two turns per chunk: one to review it, one to come back and fix it."""
     return math.ceil(lines / max(chunk_lines, 1)) * 2
@@ -312,7 +340,7 @@ def _ask(
     """
     parts = [previous.refusal] if previous is not None and previous.refusal else []
     drops = previous.drops if previous is not None else ()
-    parts.append(edit_state(view, transcripts, state.ops, drops=drops))
+    parts.append(edit_state(view, transcripts, state.ops, drops=drops, order=state.order))
     parts.append(request)
     return "\n\n".join(parts)
 
@@ -323,6 +351,7 @@ def run_director_conversation(
     *,
     summary: Path | None = None,
     plan: Path | None = None,
+    order: list[Segment] | None = None,
     call_llm: director_llm_mod.CallLLM | None = None,
     recorder: Recorder = NULL_RECORDER,
     unit: str = "director",
@@ -332,8 +361,12 @@ def run_director_conversation(
     *summary*/*plan* are the summary stage's ``summary.json`` and the effective
     plan; they become the project context block inside the cached prefix.
 
-    *inputs* are every segment of the finished video, in playback order.  The
-    transcripts are loaded once, numbered once (:func:`build_display_view`),
+    *inputs* are the segments of the view — one whole source each, in shooting
+    order, as the stage builds them: the view never changes shape, so a display
+    number names one line for the whole conversation.  *order* seeds the
+    playback order (the plan's, in source coordinates); the model may replace
+    it on any turn, and :attr:`ConversationResult.order` is what it ended
+    with.  The transcripts are loaded once, numbered once (:func:`build_display_view`),
     and rendered once into the system message; each turn then asks for an
     approximate range (:func:`~.loop.next_request`), reads the reply into the
     accumulated state (:func:`~.loop.apply_reply`) and answers with what those
@@ -349,12 +382,14 @@ def run_director_conversation(
     # both reach the real client by patching the module attribute.
     call = call_llm or director_llm_mod._call_llm
     ops_by_stem: dict[str, list[DirectorOp]] = {i.segment.stem: [] for i in inputs}
+    seed = list(order) if order else identity_segments([i.segment.stem for i in inputs])
     if not director_cfg.get("enabled", False):
         logging.info("director: disabled, no ops for %d segment(s)", len(inputs))
-        return ConversationResult(ops_by_stem)
+        return ConversationResult(ops_by_stem, order=seed)
 
     transcripts = [load_segment_transcript(i) for i in inputs]
     view = build_display_view([(i.segment, t) for i, t in zip(inputs, transcripts)])
+    counts = _line_counts(inputs, transcripts)
     chunk = chunk_lines(director_cfg)
     cap = turn_cap(len(view.lines), chunk)
     max_keep_lines = _max_keep_lines(director_cfg)
@@ -375,7 +410,7 @@ def run_director_conversation(
     # trimmed because what they carried IS recomputed: a stale state block read
     # as current is the exact failure this design removes.
     history: list[dict[str, str]] = []
-    state = LoopState()
+    state = LoopState(order=_seed_ranges(view, seed, counts))
     previous: ReplyResult | None = None
     error = ""
 
@@ -468,12 +503,15 @@ def run_director_conversation(
 
     for index, ops in state.ops.items():
         ops_by_stem[inputs[index - 1].segment.stem].extend(ops)
+    final = order_segments(view, state.order) if state.order else None
+    final_order = normalise(final, counts) if final else seed
     outcome = LLM_ERROR if error else OK
     recorder.flush_unit(unit, outcome=outcome, reason=error)
     if error:
         logger.error("director: %s", error)
     return ConversationResult(
         ops=ops_by_stem,
+        order=final_order,
         ok=not error,
         error=error,
         reviewed_through=state.reviewed_through,

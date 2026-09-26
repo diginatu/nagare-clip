@@ -150,7 +150,8 @@ Every part degrades independently and nothing here can fail a run:
 ## The playback order
 
 A plan response may carry an `order`: the finished video's segments, in playback
-order. Coverage — every line of every source exactly once — is the contract;
+order. It is the director's **starting** order: the director may replace it, and
+its `director/order.json` wins once written. Coverage — every line of every source exactly once — is the contract;
 sequence is free. An invalid order is dropped **whole** and the pipeline falls
 back to shooting order, never a partial repair.
 

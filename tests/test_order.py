@@ -194,3 +194,33 @@ class TestLabels:
     def test_a_partial_segment_carries_its_range(self):
         assert segment_label(Segment("a", (31, 83))) == "a [31-83]"
         assert segment_unit(Segment("a", (31, 83))) == "a_31-83"
+
+
+class TestGapEnd:
+    """A segment may end on the silence after its last line (``"57~"``)."""
+
+    def test_it_round_trips_in_the_director_json_spelling(self):
+        segments = [Segment("a", (31, 57), gap_end=True), Segment("a", (58, 90))]
+        data = segments_to_dict(segments)
+        assert data[0] == {"stem": "a", "lines": [31, "57~"]}
+        assert segments_from_dict(data) == segments
+
+    def test_a_start_cannot_carry_the_flag(self):
+        assert segments_from_dict([{"stem": "a", "lines": ["31~", 57]}]) == []
+
+    def test_it_is_labelled(self):
+        assert segment_label(Segment("a", (31, 57), gap_end=True)) == "a [31-57~]"
+
+    def test_on_the_last_line_it_means_nothing_and_is_dropped(self):
+        assert normalise([Segment("a", (4, 9), gap_end=True)], {"a": 9}) == [Segment("a", (4, 9))]
+
+    def test_a_full_range_ending_on_it_collapses_to_the_whole_source(self):
+        assert normalise([Segment("a", (1, 9), gap_end=True)], {"a": 9}) == [Segment("a", None)]
+
+    def test_mid_source_it_is_kept(self):
+        seg = Segment("a", (1, 5), gap_end=True)
+        assert normalise([seg], {"a": 9}) == [seg]
+
+    def test_coverage_is_still_counted_in_lines(self):
+        order = [Segment("a", (6, 9)), Segment("a", (1, 5), gap_end=True)]
+        assert validate_segments(order, {"a": 9}) == []
