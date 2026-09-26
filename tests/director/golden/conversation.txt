@@ -1,0 +1,428 @@
+################ SYSTEM (identical on every call, cached) ################
+
+You are a video editor. You are given the WHOLE finished video as numbered lines — speech and silence together, under ONE numbering — and edit it over several turns. Decide high-level edits to tighten AND STAGE the video: cut what drags, but also mark the moments that make it worth watching.
+
+Each turn asks for an approximate range, and after each reply you are shown the COMPLETE edit — every op, caption and the runtime — so check the whole-video requirements every turn. A reply OWNS the range it names: re-send a range and its ops REPLACE the ones you gave for it. Reply {"done": true} once every line has been reviewed and the playback is what you meant.
+
+Order: the transcript is numbered in shooting order and stays so. To change what plays when, add "order": [[first, last], ...] to any reply — the ranges in the order they PLAY, covering every line exactly once (cut removes footage; order only moves it). It replaces the order in force whole. A silence line plays with the range it is in, and a timelapse must lie inside one range. The edit you are shown then lists the video as it plays, quoting both sides of every seam.
+
+Timing: a line may carry a bracket after its text. [4.2s] is the line's duration; [4.2s, gap 0.8s] adds the silent gap before the next line. A line holding long internal silence splits it instead — [13.0s speech, 62.9s silence]: 13.0 s plays and 62.9 s is dropped by default; the two add up to the line's footage — and may carry a gap too: [13.0s speech, 62.9s silence, gap 0.8s]. A negligible gap is omitted. A bracket's gap is a SHORT one — a longer wait is a [silent …] line of its own, below.
+
+Judge pacing from the speech figure, never speech+silence: a long speech duration is a candidate for cutting, not speeding up — a long stretch of manual work is a timelapse candidate. A keep plays the silence too; a timelapse plays speech+silence divided by its factor.
+
+Silence: a line like
+54: [silent 29.9s: a build runs and logs scroll past]
+is the wait between the lines either side of it — 29.9 s in which nobody speaks — followed by what is VISIBLE on screen during it. It is a line like any other: put its number in an op — a timelapse plays that wait fast, a keep restores it. Dead air is the fallback reading, not the only one: if the speech either side announces something happening (an accident, a cleanup, a wait for a result), that silence may be the most watchable moment in the shot. An indented [silent gap: …] with no seconds is silence INSIDE the line above.
+
+Operations (line ranges are inclusive). Prefer a timelapse over a cut where the repetition is VISIBLE WORK building toward a payoff (failed attempts, assembly, waiting for a result) — the buildup is part of the story. Where the repetition is SPEECH, there is no fast option: leave it at 1x, or cut the weakest passes. Reserve cut for spans that leave the throughline entirely (digressions, dead ends, redundant retakes with no payoff):
+- cut: remove a boring/redundant span entirely (deletes audio+video).
+- timelapse: play a long stretch of manual work fast under one on-screen caption; give "factor" (4.0 or more) and "text". Compressing a stretch is a choice between two modes and this is the second one. LISTENING: the speech carries something the viewer needs — play it at 1x, and if it drags cut the weakest parts instead. TIMELAPSE: the speech is inessential — go genuinely fast and accept that the words become unintelligible; that sacrifice is the point of the mode and is why you must be sure first. Pick "factor" so the result runs about a minute on screen: a longer span needs a bigger number, and a span where little is happening can go faster still. One op does the whole arrangement: the work runs continuously and the caption stays on screen for the entire timelapse — do not add a separate "keep" or "overlay" over the same lines. To change the caption partway through, emit consecutive timelapse ops; a new caption means a new phase of work.
+- overlay: show an on-screen caption; give "text" and "duration" (how many seconds it stays on screen). Pick the duration from reading length — a short label needs about 2 seconds, a full sentence 4 to 6; never a fixed value. Its "lines" say WHERE it appears: at the first line of the range. Reach for it at turning points, conclusions, failures, and mishaps — Aim for one overlay per 3-5 minutes of finished video; an editorial brief may set a different rate.
+- keep: protect a span from cutting INCLUDING its silences/non-speech gaps. When a continuous event is playing out across several gaps — an accident and the cleanup after it, a demo running, a result arriving — span the WHOLE event in one keep, so the payoff is not chopped into jump cuts. Never widen a keep to mark talking as important: speech is never dropped by default, so a keep over a talking span only restores its pauses and inflates the runtime for nothing. A direction to "feature", "retain" or "emphasise" something is editorial emphasis, NOT a request for a keep op.
+- edit: request a fine within-line text deletion/fix; describe it in "note".
+
+JSON shape, one object per turn:
+{"range": [40, 78], "reviewed_through": 78, "ops": [
+  {"type": "cut", "lines": [42, 48], "note": "why / where precisely"},
+  {"type": "timelapse", "lines": [60, 72], "factor": 8.0, "text": "配管の取り付け", "note": "..."},
+  {"type": "overlay", "lines": [45, 45], "text": "ポイント", "duration": 2.0, "note": ""},
+  {"type": "keep", "lines": [50, 52], "note": "..."},
+  {"type": "edit", "lines": [47, 47], "note": "delete the redundant restatement"}
+]}
+
+Rules:
+- One op stays inside one [k] block. Each [k] block was recorded as its own video, so it can open with a greeting or end with a sign-off.
+- A "cut" range must not overlap any other op's range (to cut lines 12-18 but keep line 18, emit cut [12, 17]); overlapping ops are clipped and the cut loses the shared lines.
+- Use "note" to say precisely WHERE in the line(s) the edit starts and ends.
+- Playing it back starts from what happens with no op at all: every line's speech plays once, at 1x, in the order given, and the silences inside and after it are dropped. Each op changes that for the lines in its range only — a line you leave outside a range keeps the default.
+- The playback you are shown is the viewer's, not the spec's: a range that reads fine as a spec can still play wrong, and the usual way is a span that opens one line too early — the spec says "timelapse the work", the playback has the viewer hearing that very work announced at 5x, destroyed. Re-send the range with the boundary moved.
+
+A "keep" op may span at most 8 line(s); a wider one is rejected and has no effect — to hold a longer event, emit consecutive keeps that each stay within the cap. A "timelapse" op needs no keep of its own; it protects its whole range by itself.
+
+Project context (all videos):
+Overall: ポンプの修理
+
+These are section boundaries, not op boundaries: a direction says what a stretch is FOR, and you choose where each op actually starts and ends. A direction saying "keep" means emphasis, not a keep op.
+[1] dev:
+- (no directions)
+[2] mix:
+- lines 10-12: 作業は速回しで
+
+The whole video below, every source in shooting order under one numbering. [k] heads each source; your ops and your order address these numbers.
+
+[1] dev
+1: こんにちは、今日はポンプを直します  [2.0s, gap 1.0s]
+2: まず道具を並べます  [4.0s, gap 1.0s]
+3: これがインパクトドライバー  [1.5s, gap 0.5s]
+4: じゃあ始めましょう  [3.0s]
+
+[2] mix
+5: ポンプを外していきます  [4.0s]
+6: [silent 6.0s]
+7: ネジが固いですね  [2.0s, gap 0.5s]
+8: よし外れた  [2.5s, gap 1.0s]
+9: ここにホースをつなぎます  [2.0s, gap 1.0s]
+10: ここからしばらく作業します  [10.0s]
+11: [silent 31.2s: ACTION: 配管を締め直している]
+12: 終わりました  [1.0s, gap 1.0s]
+13: 水を入れてみます  [3.0s, gap 1.0s]
+14: 動いた！  [2.0s, gap 1.0s]
+15: 今日はここまで、ありがとうございました  [2.0s]
+
+################ CALL 1: after the system message ################
+
+===== [user] =====
+
+THE COMPLETE EDIT AS IT STANDS. Every segment of the video, every op accepted so far and what it plays, then every caption in order and the runtime. This block is the whole state of the edit: it is recomputed from scratch each turn, so nothing earlier in this conversation describes the edit as it is now.
+
+Playback of these ops, computed from line timings (approximate):
+
+(no ops: every line plays its default)
+
+segment [1] dev as it plays:
+  1x          10.5 s  lines 1-4
+
+segment [1] dev: default 10.5 s → with these ops 10.5 s
+
+Playback of these ops, computed from line timings (approximate):
+
+(no ops: every line plays its default)
+
+segment [2] mix as it plays:
+  1x          21.5 s  lines 5-12
+  1x           7.0 s  lines 13-15
+
+segment [2] mix: default 28.5 s → with these ops 28.5 s
+
+THE VIDEO AS IT PLAYS, in the order in force (the segments above are in the transcript's order, not this one):
+order: 13-15, 1-4, 5-12
+▶ lines 13-15
+  1x           7.0 s  lines 13-15
+  seam 15 → 1: 「今日はここまで、ありがとうございました」 → 「こんにちは、今日はポンプを直します」
+▶ lines 1-4
+  1x          10.5 s  lines 1-4
+▶ lines 5-12
+  1x          21.5 s  lines 5-12
+
+Captions in playback order (0): none yet.
+
+whole video so far: default 39.0 s (0.7 min) → with the ops accepted so far 39.0 s (0.7 min)
+
+Reviewed through line 0 of 15. Next, review around lines 1 to 8 — approximately: stop where the action ends, a few lines earlier or later, wherever the footage actually breaks. Do not stop at line 8 because it was asked for. Emit the ops for the stretch you really reviewed, and say which line you reviewed through.
+
+Reply with one JSON object and nothing else: {"range": [first, last], "reviewed_through": <the last line you actually reviewed>, "ops": [...]}. "range" is the stretch this reply owns: every op accepted earlier whose first line falls inside it is REPLACED by the ops below, and nothing outside it changes — so re-sending a range you already covered is how you rewrite it. Op line numbers are this transcript's numbers. Optionally add "order": [[first, last], ...]; {"order": ...} alone changes nothing else.
+
+################ CALL 2: after the system message ################
+
+===== [user] =====
+
+Review around lines 1 to 8.
+
+===== [assistant] =====
+
+{"range": [1, 8], "reviewed_through": 8, "ops": [{"type": "cut", "lines": [2, 3], "note": "道具紹介は冗長"}], "order": [[12, 15], [1, 4], [5, 11]]}
+
+===== [user] =====
+
+THE COMPLETE EDIT AS IT STANDS. Every segment of the video, every op accepted so far and what it plays, then every caption in order and the runtime. This block is the whole state of the edit: it is recomputed from scratch each turn, so nothing earlier in this conversation describes the edit as it is now.
+
+Playback of these ops, computed from line timings (approximate):
+
+cut [2,3]
+  note: 道具紹介は冗長
+  removes lines 2-3: 5.5 s
+
+segment [1] dev as it plays:
+  1x           2.0 s  line 1
+  cut              —  lines 2-3
+  1x           3.0 s  line 4
+
+segment [1] dev: default 10.5 s → with these ops 5.0 s
+
+Playback of these ops, computed from line timings (approximate):
+
+(no ops: every line plays its default)
+
+segment [2] mix as it plays:
+  1x          20.5 s  lines 5-11
+  1x           8.0 s  lines 12-15
+
+segment [2] mix: default 28.5 s → with these ops 28.5 s
+
+THE VIDEO AS IT PLAYS, in the order in force (the segments above are in the transcript's order, not this one):
+order: 12-15, 1-4, 5-11
+▶ lines 12-15
+  1x           8.0 s  lines 12-15
+  seam 15 → 1: 「今日はここまで、ありがとうございました」 → 「こんにちは、今日はポンプを直します」
+▶ lines 1-4
+  1x           2.0 s  line 1
+  cut              —  lines 2-3
+  1x           3.0 s  line 4
+▶ lines 5-11
+  1x          20.5 s  lines 5-11
+
+Captions in playback order (0): none yet.
+
+whole video so far: default 39.0 s (0.7 min) → with the ops accepted so far 33.5 s (0.6 min)
+
+Reviewed through line 8 of 15. Next, review around lines 9 to 15 — approximately: stop where the action ends, a few lines earlier or later, wherever the footage actually breaks. Do not stop at line 15 because it was asked for. Emit the ops for the stretch you really reviewed, and say which line you reviewed through.
+
+Reply with one JSON object and nothing else: {"range": [first, last], "reviewed_through": <the last line you actually reviewed>, "ops": [...]}. "range" is the stretch this reply owns: every op accepted earlier whose first line falls inside it is REPLACED by the ops below, and nothing outside it changes — so re-sending a range you already covered is how you rewrite it. Op line numbers are this transcript's numbers. Optionally add "order": [[first, last], ...]; {"order": ...} alone changes nothing else.
+
+################ CALL 3: after the system message ################
+
+===== [user] =====
+
+Review around lines 1 to 8.
+
+===== [assistant] =====
+
+{"range": [1, 8], "reviewed_through": 8, "ops": [{"type": "cut", "lines": [2, 3], "note": "道具紹介は冗長"}], "order": [[12, 15], [1, 4], [5, 11]]}
+
+===== [user] =====
+
+Review around lines 9 to 15.
+
+===== [assistant] =====
+
+{"range": [9, 15], "reviewed_through": 15, "ops": [{"type": "timelapse", "lines": [10, 11], "factor": 8.0, "text": "配管の締め直し", "note": ""}, {"type": "overlay", "lines": [14, 14], "text": "動いた！", "duration": 2.0, "note": ""}]}
+
+===== [user] =====
+
+THE COMPLETE EDIT AS IT STANDS. Every segment of the video, every op accepted so far and what it plays, then every caption in order and the runtime. This block is the whole state of the edit: it is recomputed from scratch each turn, so nothing earlier in this conversation describes the edit as it is now.
+
+Playback of these ops, computed from line timings (approximate):
+
+cut [2,3]
+  note: 道具紹介は冗長
+  removes lines 2-3: 5.5 s
+
+segment [1] dev as it plays:
+  1x           2.0 s  line 1
+  cut              —  lines 2-3
+  1x           3.0 s  line 4
+
+segment [1] dev: default 10.5 s → with these ops 5.0 s
+
+Playback of these ops, computed from line timings (approximate):
+
+timelapse [10,11] x8.0 「配管の締め直し」
+  covers lines 10-11 (19.0-60.0 s)
+  plays 41.0 s of footage in 5.1 s (default for line 10: 10.0 s); caption on screen 5.1 s
+  speech at x8.0 — unintelligible: line 10 10.0 s 「ここからしばらく作業します」 (total 10.0 s)
+    11: [silent 31.2s: ACTION: 配管を締め直している]
+
+overlay [14,14] 「動いた！」
+  no runtime change; caption on screen 2.0 s from line 14
+
+segment [2] mix as it plays:
+  1x          10.5 s  lines 5-9
+  timelapse    5.1 s  lines 10-11  x8.0 「配管の締め直し」
+  1x           8.0 s  lines 12-15  +「動いた！」 2.0 s
+
+segment [2] mix: default 28.5 s → with these ops 23.6 s
+
+THE VIDEO AS IT PLAYS, in the order in force (the segments above are in the transcript's order, not this one):
+order: 12-15, 1-4, 5-11
+▶ lines 12-15
+  1x           8.0 s  lines 12-15  +「動いた！」 2.0 s
+  seam 15 → 1: 「今日はここまで、ありがとうございました」 → 「こんにちは、今日はポンプを直します」
+▶ lines 1-4
+  1x           2.0 s  line 1
+  cut              —  lines 2-3
+  1x           3.0 s  line 4
+▶ lines 5-11
+  1x          10.5 s  lines 5-9
+  timelapse    5.1 s  lines 10-11  x8.0 「配管の締め直し」
+
+Captions in playback order (2):
+  line 14: 「動いた！」 (2.0 s)
+  line 10: 「配管の締め直し」 (5.1 s)
+
+whole video so far: default 39.0 s (0.7 min) → with the ops accepted so far 28.6 s (0.5 min)
+
+Every line (1-15) has been reviewed. Reply {"done": true} to finish, or send one more range to rewrite a stretch you want to change.
+
+Reply with one JSON object and nothing else: {"range": [first, last], "reviewed_through": <the last line you actually reviewed>, "ops": [...]}. "range" is the stretch this reply owns: every op accepted earlier whose first line falls inside it is REPLACED by the ops below, and nothing outside it changes — so re-sending a range you already covered is how you rewrite it. Op line numbers are this transcript's numbers. Optionally add "order": [[first, last], ...]; {"order": ...} alone changes nothing else.
+
+################ CALL 4: after the system message ################
+
+===== [user] =====
+
+Review around lines 1 to 8.
+
+===== [assistant] =====
+
+{"range": [1, 8], "reviewed_through": 8, "ops": [{"type": "cut", "lines": [2, 3], "note": "道具紹介は冗長"}], "order": [[12, 15], [1, 4], [5, 11]]}
+
+===== [user] =====
+
+Review around lines 9 to 15.
+
+===== [assistant] =====
+
+{"range": [9, 15], "reviewed_through": 15, "ops": [{"type": "timelapse", "lines": [10, 11], "factor": 8.0, "text": "配管の締め直し", "note": ""}, {"type": "overlay", "lines": [14, 14], "text": "動いた！", "duration": 2.0, "note": ""}]}
+
+===== [user] =====
+
+Every line has been reviewed.
+
+===== [assistant] =====
+
+{"order": [[11, 15], [1, 10]]}
+
+===== [user] =====
+
+order not applied: its break after line 10 splits timelapse [10,11]. Move the break outside it, or rewrite the timelapse in the same reply. The previous order stays.
+
+THE COMPLETE EDIT AS IT STANDS. Every segment of the video, every op accepted so far and what it plays, then every caption in order and the runtime. This block is the whole state of the edit: it is recomputed from scratch each turn, so nothing earlier in this conversation describes the edit as it is now.
+
+Playback of these ops, computed from line timings (approximate):
+
+cut [2,3]
+  note: 道具紹介は冗長
+  removes lines 2-3: 5.5 s
+
+segment [1] dev as it plays:
+  1x           2.0 s  line 1
+  cut              —  lines 2-3
+  1x           3.0 s  line 4
+
+segment [1] dev: default 10.5 s → with these ops 5.0 s
+
+Playback of these ops, computed from line timings (approximate):
+
+timelapse [10,11] x8.0 「配管の締め直し」
+  covers lines 10-11 (19.0-60.0 s)
+  plays 41.0 s of footage in 5.1 s (default for line 10: 10.0 s); caption on screen 5.1 s
+  speech at x8.0 — unintelligible: line 10 10.0 s 「ここからしばらく作業します」 (total 10.0 s)
+    11: [silent 31.2s: ACTION: 配管を締め直している]
+
+overlay [14,14] 「動いた！」
+  no runtime change; caption on screen 2.0 s from line 14
+
+segment [2] mix as it plays:
+  1x          10.5 s  lines 5-9
+  timelapse    5.1 s  lines 10-11  x8.0 「配管の締め直し」
+  1x           8.0 s  lines 12-15  +「動いた！」 2.0 s
+
+segment [2] mix: default 28.5 s → with these ops 23.6 s
+
+THE VIDEO AS IT PLAYS, in the order in force (the segments above are in the transcript's order, not this one):
+order: 12-15, 1-4, 5-11
+▶ lines 12-15
+  1x           8.0 s  lines 12-15  +「動いた！」 2.0 s
+  seam 15 → 1: 「今日はここまで、ありがとうございました」 → 「こんにちは、今日はポンプを直します」
+▶ lines 1-4
+  1x           2.0 s  line 1
+  cut              —  lines 2-3
+  1x           3.0 s  line 4
+▶ lines 5-11
+  1x          10.5 s  lines 5-9
+  timelapse    5.1 s  lines 10-11  x8.0 「配管の締め直し」
+
+Captions in playback order (2):
+  line 14: 「動いた！」 (2.0 s)
+  line 10: 「配管の締め直し」 (5.1 s)
+
+whole video so far: default 39.0 s (0.7 min) → with the ops accepted so far 28.6 s (0.5 min)
+
+Every line (1-15) has been reviewed. Reply {"done": true} to finish, or send one more range to rewrite a stretch you want to change.
+
+Reply with one JSON object and nothing else: {"range": [first, last], "reviewed_through": <the last line you actually reviewed>, "ops": [...]}. "range" is the stretch this reply owns: every op accepted earlier whose first line falls inside it is REPLACED by the ops below, and nothing outside it changes — so re-sending a range you already covered is how you rewrite it. Op line numbers are this transcript's numbers. Optionally add "order": [[first, last], ...]; {"order": ...} alone changes nothing else.
+
+################ RESULT ################
+
+===== director/dev_director.json =====
+
+{
+  "ops": [
+    {
+      "type": "cut",
+      "lines": [
+        2,
+        3
+      ],
+      "note": "道具紹介は冗長"
+    }
+  ]
+}
+
+===== director/mix_director.json =====
+
+{
+  "ops": [
+    {
+      "type": "timelapse",
+      "lines": [
+        5,
+        "5~"
+      ],
+      "factor": 8.0,
+      "text": "配管の締め直し"
+    },
+    {
+      "type": "overlay",
+      "lines": [
+        8,
+        8
+      ],
+      "text": "動いた！",
+      "duration": 2.0
+    }
+  ]
+}
+
+===== director/order.json =====
+
+{
+  "order": [
+    {
+      "stem": "mix",
+      "lines": [
+        6,
+        9
+      ]
+    },
+    {
+      "stem": "dev"
+    },
+    {
+      "stem": "mix",
+      "lines": [
+        1,
+        "5~"
+      ]
+    }
+  ]
+}
+
+===== intervals/timeline.json (resolved from the above) =====
+
+{
+  "segments": [
+    {
+      "stem": "mix",
+      "start": 59.0,
+      "end": 72.0,
+      "lines": [
+        6,
+        9
+      ]
+    },
+    {
+      "stem": "dev",
+      "start": 0.0,
+      "end": 14.0
+    },
+    {
+      "stem": "mix",
+      "start": 0.0,
+      "end": 59.0,
+      "lines": [
+        1,
+        5
+      ]
+    }
+  ]
+}
