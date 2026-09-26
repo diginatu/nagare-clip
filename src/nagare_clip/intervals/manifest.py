@@ -88,7 +88,7 @@ def build_manifest(
                 last,
             )
             return []
-        out.append(TimelineSegment(seg.stem, start, end, lines=seg.lines))
+        out.append(TimelineSegment(seg.stem, start, end, lines=seg.lines, gap_end=seg.gap_end))
     return out
 
 

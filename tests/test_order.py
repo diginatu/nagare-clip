@@ -224,3 +224,11 @@ class TestGapEnd:
     def test_coverage_is_still_counted_in_lines(self):
         order = [Segment("a", (6, 9)), Segment("a", (1, 5), gap_end=True)]
         assert validate_segments(order, {"a": 9}) == []
+
+
+class TestManifestGapEnd:
+    def test_the_manifest_spells_it_as_order_json_does(self):
+        entry = TimelineSegment("a", 0.0, 59.0, lines=(1, 5), gap_end=True)
+        data = manifest_to_dict([entry])
+        assert data["segments"][0]["lines"] == [1, "5~"]
+        assert manifest_from_dict(data) == [entry]

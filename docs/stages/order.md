@@ -158,6 +158,7 @@ A segment ending `b~` keeps the silence after `b` instead: that boundary sits at
 the segment it ends and line `b+1` still keeps its own run-up. Both segments of
 the boundary read the same rule (`build_manifest(..., pre_margin=)`), so they
 cannot disagree, and without the flag the output is unchanged.
+The manifest entry keeps the spelling (`"lines": [31, "83~"]`, `TimelineSegment.gap_end`) so it reads like `order.json`; the seconds already account for it, and nothing downstream reads `lines`.
 
 An unresolvable boundary degrades the **whole** manifest to shooting order: a
 source that cannot be split would otherwise collapse into one entry and silently

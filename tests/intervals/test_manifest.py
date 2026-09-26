@@ -99,7 +99,7 @@ class TestSilenceEnd:
         segments = [Segment("a", (1, 2), gap_end=True), Segment("a", (3, 5))]
         out = build_manifest(segments, TIMES, DURATIONS, pre_margin=1.0)
         assert out == [
-            TimelineSegment("a", 0.0, 11.0, lines=(1, 2)),
+            TimelineSegment("a", 0.0, 11.0, lines=(1, 2), gap_end=True),
             TimelineSegment("a", 11.0, 44.0, lines=(3, 5)),
         ]
 

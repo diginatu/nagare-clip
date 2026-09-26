@@ -421,7 +421,7 @@ Reply with one JSON object and nothing else: {"range": [first, last], "reviewed_
       "end": 59.0,
       "lines": [
         1,
-        5
+        "5~"
       ]
     }
   ]

@@ -62,6 +62,9 @@ class TimelineSegment:
     start: float
     end: float
     lines: tuple[int, int] | None = None
+    #: Carried from :attr:`Segment.gap_end` so the manifest spells the range
+    #: the way ``order.json`` does (``"5~"``); the seconds already account for it.
+    gap_end: bool = False
 
 
 def segment_label(segment: Segment) -> str:
@@ -86,7 +89,7 @@ def segment_unit(segment: Segment) -> str:
     return f"{segment.stem}_{segment.lines[0]}-{_end(segment)}"
 
 
-def _end(segment: Segment) -> str:
+def _end(segment: Segment | TimelineSegment) -> str:
     assert segment.lines is not None
     return f"{segment.lines[1]}~" if segment.gap_end else str(segment.lines[1])
 
@@ -249,7 +252,7 @@ def manifest_to_dict(entries: Iterable[TimelineSegment]) -> dict[str, Any]:
             "end": round(entry.end, 3),
         }
         if entry.lines is not None:
-            item["lines"] = [entry.lines[0], entry.lines[1]]
+            item["lines"] = [entry.lines[0], _end(entry) if entry.gap_end else entry.lines[1]]
         out.append(item)
     return {"segments": out}
 
@@ -267,8 +270,9 @@ def manifest_from_dict(data: Any) -> list[TimelineSegment]:
         end = _number(raw.get("end"))
         if not isinstance(stem, str) or not stem or start is None or end is None:
             continue
-        lines = _pair(raw.get("lines")) if raw.get("lines") is not None else None
-        out.append(TimelineSegment(stem=stem, start=start, end=end, lines=lines))
+        parsed = _segment_lines(raw.get("lines")) if raw.get("lines") is not None else None
+        lines, gap_end = parsed if parsed is not None else (None, False)
+        out.append(TimelineSegment(stem=stem, start=start, end=end, lines=lines, gap_end=gap_end))
     return out
 
 
