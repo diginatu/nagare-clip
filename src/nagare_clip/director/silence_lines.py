@@ -32,22 +32,29 @@ from collections.abc import Sequence
 from dataclasses import dataclass, field
 from typing import Any
 
+from nagare_clip.edit_lines import (
+    DEFAULT_SILENCE_LINE_MIN,
+    JOIN,
+    expected_silences,
+    gap_spans,
+    silence_body,
+)
 from nagare_clip.gap_context.gaps import Gap
-from nagare_clip.intervals.speech import line_speech_spans
 
-#: Default for ``director.silence_line_min``: the shortest wait shown as its
-#: own line.  Matches ``gap_context.min_gap``, so every described gap has a
-#: silence line to land in.
-DEFAULT_SILENCE_LINE_MIN = 5.0
+__all__ = [
+    "DEFAULT_SILENCE_LINE_MIN",
+    "INDENT",
+    "JOIN",
+    "SilenceLine",
+    "build_silence_lines",
+    "gap_spans",
+    "silence_body",
+]
 
 #: Silence lines and gap annotations are indented by this much, the same as
 #: :mod:`nagare_clip.gap_context.context`'s annotations, so neither can be
 #: mistaken for a numbered line.
 INDENT = "    "
-
-#: Joins several descriptions anchored in one silence (11 of the real
-#: project's 30 described silences carry more than one).
-JOIN = " / "
 
 
 @dataclass(frozen=True)
@@ -67,6 +74,16 @@ class SilenceLine:
     def duration(self) -> float:
         return self.end - self.start
 
+    def body(self) -> str:
+        """``[silent 29.9s: …]`` — this silence as a line with a place of its own.
+
+        The one text for it wherever it has one: the director's whole-video view
+        numbers it (:func:`~nagare_clip.director.display.build_display_view`)
+        and guided_edit writes it into ``_edits.txt`` verbatim, so an op placed
+        on the line the director read lands on a line that reads the same.
+        """
+        return silence_body(self.duration, self.descriptions)
+
     def render(self, after_line: int | None = None) -> str:
         """The transcript line, indented and un-numbered.
 
@@ -81,44 +98,6 @@ class SilenceLine:
         """
         anchor = self.after_line if after_line is None else after_line
         return f"{INDENT}{silence_body(self.duration, self.descriptions, after_line=anchor)}"
-
-
-def silence_body(
-    seconds: float, descriptions: Sequence[str] = (), after_line: int | None = None
-) -> str:
-    """``[silent 29.9s: …]`` — the bracket every view of a silence prints.
-
-    The one formatter: the un-numbered transcript line (:meth:`SilenceLine.
-    render`), the numbered display line
-    (:func:`~nagare_clip.director.display.build_display_view`) and the playback
-    preview all render a silence through it, so its seconds and its
-    descriptions cannot drift between the three.  *after_line* is included only
-    where the silence has no number of its own to be addressed by.
-    """
-    body = f"silent {seconds:.1f}s"
-    if after_line is not None:
-        body += f" after line {after_line}"
-    if descriptions:
-        body += ": " + JOIN.join(descriptions)
-    return f"[{body}]"
-
-
-def gap_spans(whisperx_data: dict[str, Any]) -> dict[int, tuple[float, float]]:
-    """``{line: (start, end)}`` for the silence after every line that has one.
-
-    Every between-line gap, at any length — the threshold is a display
-    decision, made in :func:`build_silence_lines`, while a hand-written op may
-    address a shorter one and the playback preview still has to price it.
-    """
-    spans = line_speech_spans(whisperx_data)
-    out: dict[int, tuple[float, float]] = {}
-    for i in range(len(spans) - 1):
-        if not spans[i] or not spans[i + 1]:
-            continue
-        start, end = spans[i][-1][1], spans[i + 1][0][0]
-        if end > start:
-            out[i + 1] = (start, end)
-    return out
 
 
 def build_silence_lines(
@@ -146,15 +125,16 @@ def build_silence_lines(
     left out.
     """
     spans = gap_spans(whisperx_data)
+    shown = expected_silences(whisperx_data, min_seconds)
     first, last = lines if lines is not None else (1, max(spans, default=0) + 1)
     claimed: set[int] = set()
     out: list[SilenceLine] = []
     for after_line in sorted(spans):
         if not (first <= after_line < last):
             continue
-        start, end = spans[after_line]
-        if end - start < min_seconds:
+        if after_line not in shown:
             continue
+        start, end = spans[after_line]
         held = [
             (i, gap)
             for i, (_anchor, gap) in enumerate(anchored_gaps)

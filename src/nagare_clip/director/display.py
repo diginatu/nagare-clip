@@ -49,7 +49,6 @@ from nagare_clip.director.director_llm import (
     format_numbered_transcript,
     format_numbered_transcript_timed,
 )
-from nagare_clip.director.silence_lines import silence_body
 from nagare_clip.order import Segment, segment_label
 
 if TYPE_CHECKING:  # pragma: no cover - typing only, and run.py may import us
@@ -214,8 +213,9 @@ def build_display_view(
                         source_line=source_line,
                         is_silence=True,
                         # No "after line n" here: the line above it is that
-                        # line, and this one has a number of its own.
-                        text=silence_body(silence.duration, silence.descriptions),
+                        # line, and this one has a number of its own.  The same
+                        # text guided_edit writes into _edits.txt.
+                        text=silence.body(),
                     )
                 )
         blocks.append(

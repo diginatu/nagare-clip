@@ -49,6 +49,7 @@ from nagare_clip.director.silence_lines import (
     SilenceLine,
     build_silence_lines,
 )
+from nagare_clip.edit_lines import silence_line_min as silence_line_min  # re-export
 from nagare_clip.gap_context.context import anchor_gaps
 from nagare_clip.gap_context.gaps import Gap, load_gaps
 from nagare_clip.intervals.keep import dropped_ranges
@@ -78,18 +79,6 @@ DEFAULT_CHUNK_LINES = 40
 
 def _slice(values: list | None, first: int, last: int) -> list | None:
     return None if values is None else values[first - 1 : last]
-
-
-def silence_line_min(director_cfg: dict) -> float:
-    """Read ``director.silence_line_min`` defensively (invalid = the default).
-
-    ``0`` is honoured as "every between-line silence gets a line"; a negative
-    or non-numeric value is a broken config, not an instruction.
-    """
-    raw = director_cfg.get("silence_line_min", DEFAULT_SILENCE_LINE_MIN)
-    if isinstance(raw, bool) or not isinstance(raw, (int, float)) or raw < 0:
-        return DEFAULT_SILENCE_LINE_MIN
-    return float(raw)
 
 
 @dataclass(frozen=True)
