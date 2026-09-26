@@ -120,7 +120,7 @@ class TestWhatCannotBeApplied:
     def test_a_silence_after_the_segments_last_line_is_refused(self):
         # Line 55 is the last this segment plays; the wait after it belongs to
         # whatever plays next, and there is no next line here to end at — the
-        # same refusal intervals.op_times makes when it resolves the op.
+        # same refusal guided_edit makes: there is no silence line to hold it.
         op = DirectorOp(type="keep", lines=(55, 55), gap_start=True, gap_end=True)
         block = _block(_preview([op]).text, "keep [55,55]")
         assert "  this op's silence is outside the segment — it cannot be applied" in block

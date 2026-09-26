@@ -47,7 +47,8 @@ def line_speech_spans(whisperx_data: dict) -> list[list[tuple[float, float]]]:
     so running it per segment yields exactly the spans the whole-file call
     produces for that segment.  The space between line ``n``'s last span and
     line ``n+1``'s first is therefore the silence the pipeline drops — the one
-    definition :mod:`nagare_clip.intervals.op_times` resolves ``"n~"`` to and
+    definition a marker on a silence line resolves to
+    (:func:`nagare_clip.edit_lines.gap_spans`) and
     :mod:`nagare_clip.director.silence_lines` shows the director.
     """
     return [

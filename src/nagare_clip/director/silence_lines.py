@@ -19,9 +19,10 @@ existing line number — the plan's directions, ``_director.json``,
 silences would shift all of them; increment 3 renumbers globally instead.
 
 The interval is :func:`nagare_clip.intervals.speech.line_speech_spans`'s, i.e.
-the very silence ``run_intervals`` drops and :mod:`nagare_clip.intervals.
-op_times` resolves ``"n~"`` to — so what the director reads and what it edits
-cannot be two different stretches of footage.
+the very silence ``run_intervals`` drops and a marker on the silence line
+after ``n`` in ``_edits.txt`` resolves to (guided_edit writes ``"n~"`` there,
+through :meth:`SilenceLine.body`) — so what the director reads and what it
+edits cannot be two different stretches of footage.
 
 Pure: no I/O, no LLM.
 """

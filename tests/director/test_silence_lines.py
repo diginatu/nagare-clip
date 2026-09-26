@@ -7,10 +7,9 @@ interval the director reads is byte-for-byte the interval ``"n~"`` resolves to.
 
 from __future__ import annotations
 
-from nagare_clip.director.director_llm import DirectorOp
 from nagare_clip.director.silence_lines import SilenceLine, build_silence_lines
 from nagare_clip.gap_context.gaps import Gap
-from nagare_clip.intervals.op_times import resolve_op_times
+from nagare_clip.intervals.sync_json import extract_keep_ranges
 
 # Three lines: a 10.0 s wait after line 1, 0.5 s after line 2.
 WHISPERX = {
@@ -45,9 +44,10 @@ def test_the_threshold_is_configurable():
 def test_the_interval_is_the_one_a_silence_reference_resolves_to():
     # The whole point: what the director reads and what "1~" edits are the
     # same seconds, not two independent derivations of "the silence".
+    # "1~" is a marker on the silence line guided_edit writes after line 1.
     (line,) = _lines()
-    op = DirectorOp(type="keep", lines=(1, 1), gap_start=True, gap_end=True)
-    assert resolve_op_times([op], WHISPERX).keeps == [(line.start, line.end)]
+    edits = ["あ", f"<keep>{line.body()}</keep>", "い", "う"]
+    assert extract_keep_ranges(edits, WHISPERX) == [(line.start, line.end)]
 
 
 def test_a_stretched_final_word_does_not_shorten_the_silence():

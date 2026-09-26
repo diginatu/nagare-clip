@@ -22,7 +22,6 @@ from typing import Any
 from nagare_clip.director.director_llm import DirectorOp
 from nagare_clip.edit_lines import EditFile, parse_edit_lines
 from nagare_clip.guided_edit.reconcile import verify_op
-from nagare_clip.intervals.op_times import RESOLVED_TYPES
 from nagare_clip.intervals.sync_json import (
     _SPEED_OPEN_RE,
     OVERLAY_TAG_RE,
@@ -154,20 +153,6 @@ class SpanPlacement:
         return self.reason is None
 
 
-def is_time_resolved(op: DirectorOp) -> bool:
-    """Is this op applied as a TIME range instead of a text marker?
-
-    An op with a ``"n~"`` edge addresses the silence between two lines, where
-    there are no words to wrap and a tag at a line's edge falls the wrong way.
-    :mod:`nagare_clip.intervals.op_times` resolves those to times and hands
-    them to ``run_intervals`` directly, so guided_edit must not also write a
-    marker for them — but they still occupy their lines (see
-    :func:`place_span_op`'s *occupied*), or a cut would delete the audio of a
-    span they are keeping.
-    """
-    return (op.gap_start or op.gap_end) and op.type in RESOLVED_TYPES
-
-
 def to_physical(parsed: EditFile, op: DirectorOp) -> DirectorOp | str:
     """*op* re-addressed to physical ``_edits.txt`` lines, or why it cannot be.
 
@@ -218,18 +203,13 @@ def _trim_to_own_edges(
     return (a, b) if a <= b else None
 
 
-def place_span_op(
-    lines: list[str], op: DirectorOp, occupied: set[int] | None = None
-) -> SpanPlacement:
+def place_span_op(lines: list[str], op: DirectorOp) -> SpanPlacement:
     """Clip one ``cut``/``keep``/``speed``/``overlay`` op and apply it.
 
     The one deterministic clip decision: :func:`apply_ops` and the director's
     playback preview both call it, so what the preview reports is what lands.
-
-    *occupied* are lines held by ops that leave no marker behind
-    (:func:`is_time_resolved`); they block exactly as a marker would.
     """
-    blocked = blocked_lines(lines, op.type) | (occupied or set())
+    blocked = blocked_lines(lines, op.type)
     clipped = clip_range(op.lines[0], op.lines[1], blocked)
     if clipped is not None:
         silence_lines = {slot.file_line for slot in parse_edit_lines(lines).silences()}

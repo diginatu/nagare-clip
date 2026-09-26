@@ -20,7 +20,6 @@ from nagare_clip.intervals.bunsetu import build_bunsetu_times, bunsetu_join_text
 from nagare_clip.intervals.intervals import snap_overlay_starts
 from nagare_clip.intervals.io import infer_source_file
 from nagare_clip.intervals.keep import compute_keep_intervals
-from nagare_clip.intervals.op_times import OpTimes
 from nagare_clip.intervals.sync_json import (
     extract_cut_silences,
     extract_keep_ranges,
@@ -38,12 +37,13 @@ def run_intervals(
     cfg: dict,
     *,
     cuts_txt: Path | None = None,
-    extra: OpTimes | None = None,
 ) -> None:
-    """*extra* carries the ranges resolved from director ops that address a
-    silence (``"n~"``).  Those have no words to wrap, so they can never arrive
-    as text markers; they are unioned with the marker-derived ranges here so
-    one code path follows.  ``None`` is exactly today's behaviour."""
+    """Apply *edits_txt* to *json_path* and write the keep intervals.
+
+    ``_edits.txt`` is the single record of every edit: everything applied here
+    is in it (a ``"n~"`` op is a marker on its silence line), plus the
+    audio_silence cut list *cuts_txt*.  No other input carries an edit.
+    """
     ivl = cfg["intervals"]
     cap = ivl["caption"]
     bun = ivl["bunsetu"]
@@ -74,16 +74,6 @@ def run_intervals(
     speed_ranges = extract_speed_ranges(edit_lines, whisperx_data, silences=silences)
     overlay_marks = extract_overlay_marks(edit_lines, whisperx_data, silences=silences)
     cut_silences = extract_cut_silences(edit_lines, silences)
-    if extra is not None:
-        force_keep_ranges = force_keep_ranges + extra.keeps
-        speed_ranges = speed_ranges + extra.speeds
-        overlay_marks = overlay_marks + extra.overlays
-        logging.info(
-            "Resolved from director silence refs: %d keep(s), %d speed(s), %d overlay(s)",
-            len(extra.keeps),
-            len(extra.speeds),
-            len(extra.overlays),
-        )
     if force_keep_ranges:
         logging.info("Force-keep ranges from <keep>: %d", len(force_keep_ranges))
     if speed_ranges:
