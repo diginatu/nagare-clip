@@ -14,7 +14,7 @@ import sys
 from datetime import datetime
 from pathlib import Path
 
-from nagare_clip.config import get_effective_config
+from nagare_clip.config import get_effective_config, write_effective_config
 from nagare_clip.index_page import write_index
 from nagare_clip.logging_setup import setup_logging
 from nagare_clip.pipeline.errors import PipelineError, PipelineStop
@@ -40,7 +40,12 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         default=None,
         help="Source video file (repeatable; default: all videos in the input dir)",
     )
-    parser.add_argument("--config", default=None, help="Path to YAML config file")
+    parser.add_argument(
+        "--config",
+        action="append",
+        default=None,
+        help="Path to YAML config file (repeatable; merged left to right, later files win)",
+    )
     parser.add_argument("--language", default=None, help="WhisperX language code")
     parser.add_argument("--input-videos-dir", default=None, dest="input_videos_dir")
     parser.add_argument("--output-dir", default=None, dest="output_dir")
@@ -83,12 +88,13 @@ def build_cli_overrides(args: argparse.Namespace) -> dict:
 def main(argv: list[str] | None = None) -> int:
     args = parse_args(argv)
     try:
-        config_path = None
-        if args.config:
-            config_path = Path(args.config).resolve()
-            if not config_path.is_file():
-                raise PipelineError(f"Config file not found: {args.config}")
-        cfg = get_effective_config(config_path, build_cli_overrides(args))
+        config_paths = []
+        for given in args.config or []:
+            path = Path(given).resolve()
+            if not path.is_file():
+                raise PipelineError(f"Config file not found: {given}")
+            config_paths.append(path)
+        cfg = get_effective_config(config_paths, build_cli_overrides(args))
 
         # One session id per pipeline run; Langfuse groups all LLM calls under it.
         os.environ.setdefault("NAGARE_RUN_ID", datetime.now().strftime("%Y%m%d-%H%M%S"))
@@ -104,6 +110,8 @@ def main(argv: list[str] | None = None) -> int:
         (PROJECT_ROOT / "cache").mkdir(exist_ok=True)
 
         setup_logging(cfg["general"]["log_level"], str(output_dir / "pipeline.log"))
+        # The one file a subprocess (Blender) reads: this run's merged config.
+        config_snapshot = write_effective_config(cfg, output_dir.resolve(), config_paths)
 
         if args.source:
             paths = resolve_cli_sources(args.source, input_dir)
@@ -115,7 +123,7 @@ def main(argv: list[str] | None = None) -> int:
         ctx = PipelineContext(
             cfg=cfg,
             project_root=PROJECT_ROOT,
-            config_path=config_path,
+            config_path=config_snapshot,
             input_videos_dir=input_dir.resolve(),
             output_dir=output_dir.resolve(),
             sources=sources,

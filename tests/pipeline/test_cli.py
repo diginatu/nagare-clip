@@ -245,3 +245,72 @@ def test_the_page_needed_no_new_stage_machinery():
 
     assert [f.name for f in fields(Stage)] == ["name", "run", "required_outputs"]
     assert [s.name for s in cli.STAGES] == list(cli.STAGE_NAMES)
+
+
+# --- several --config files ----------------------------------------------------
+
+
+def _project(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "src_video").mkdir()
+    (tmp_path / "src_video" / "a.mp4").write_bytes(b"x")
+    seen = {}
+    monkeypatch.setattr(cli, "run_stages", lambda stages, ctx: seen.setdefault("ctx", ctx))
+    return seen
+
+
+def test_config_is_repeatable_and_later_files_win(tmp_path, monkeypatch):
+    seen = _project(tmp_path, monkeypatch)
+    base = tmp_path / "base.yml"
+    base.write_text(
+        yaml.safe_dump({"intervals": {"silence_threshold": 2.5, "min_keep": 0.5}}),
+    )
+    video = tmp_path / "video.yml"
+    video.write_text(yaml.safe_dump({"intervals": {"silence_threshold": 3.0}}))
+    assert cli.main(["--config", str(base), "--config", str(video)]) == 0
+    cfg = seen["ctx"].cfg
+    assert cfg["intervals"]["silence_threshold"] == 3.0
+    assert cfg["intervals"]["min_keep"] == 0.5
+
+
+def test_cli_flags_beat_every_config_file(tmp_path, monkeypatch):
+    seen = _project(tmp_path, monkeypatch)
+    base = tmp_path / "base.yml"
+    base.write_text(yaml.safe_dump({"intervals": {"keep_pre_margin": 0.1}}))
+    video = tmp_path / "video.yml"
+    video.write_text(yaml.safe_dump({"intervals": {"keep_pre_margin": 0.2}}))
+    argv = ["--config", str(base), "--config", str(video), "--keep-pre-margin", "0.7"]
+    assert cli.main(argv) == 0
+    assert seen["ctx"].cfg["intervals"]["keep_pre_margin"] == 0.7
+
+
+def test_a_missing_second_config_is_named(tmp_path, monkeypatch, capsys):
+    _project(tmp_path, monkeypatch)
+    base = tmp_path / "base.yml"
+    base.write_text("{}\n")
+    rc = cli.main(["--config", str(base), "--config", str(tmp_path / "nope.yml")])
+    assert rc == 1
+    err = capsys.readouterr().err
+    assert "Config file not found" in err and "nope.yml" in err
+
+
+def test_the_context_carries_a_snapshot_of_the_effective_config(tmp_path, monkeypatch):
+    """The blender subprocess reads one file: the config this run validated,
+    CLI overrides included, however many --config files built it."""
+    seen = _project(tmp_path, monkeypatch)
+    base = tmp_path / "base.yml"
+    base.write_text(yaml.safe_dump({"intervals": {"min_keep": 0.5}}))
+    video = tmp_path / "video.yml"
+    video.write_text(yaml.safe_dump({"blender": {"proxy_size": 50}}))
+    argv = ["--config", str(base), "--config", str(video), "--keep-pre-margin", "0.7"]
+    assert cli.main(argv) == 0
+    ctx = seen["ctx"]
+    assert ctx.config_path == ctx.output_dir / "effective_config.yml"
+    assert cli.get_effective_config(ctx.config_path) == ctx.cfg
+
+
+def test_the_snapshot_is_written_without_any_config_file(tmp_path, monkeypatch):
+    seen = _project(tmp_path, monkeypatch)
+    assert cli.main([]) == 0
+    ctx = seen["ctx"]
+    assert ctx.config_path is not None and ctx.config_path.is_file()

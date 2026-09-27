@@ -405,8 +405,52 @@ cp config.example.yml my_project.yml
 Parameters resolve in this priority order (highest wins):
 
 1. CLI flags (e.g. `--pre-margin 2.0`)
-2. Config file values
+2. Config file values (with several `--config` files, the later file wins)
 3. Built-in defaults
+
+### Layering several config files
+
+`--config` may be given more than once. The files are deep-merged left to
+right, so a series of videos can share one base file and keep only what
+differs — usually the `project:` brief — in a small per-video file:
+
+```bash
+cd /mnt/work/YouTube/my_video
+/path/to/nagare-clip/scripts/run_pipeline.sh \
+  --config ../nagare_base.yml --config ./nagare_config.yml
+```
+
+```yaml
+# ../nagare_base.yml — shared by every video
+director:
+  enabled: true
+  max_keep_lines: 8
+text_filter:
+  keywords: [サイフォン, オーバーフロー]
+
+# ./nagare_config.yml — this video only
+project:
+  audience: "DIY hobbyists on YouTube"
+  target_duration: "about 12 minutes"
+director:
+  max_keep_lines: 4        # overrides this one key; director.enabled stays true
+text_filter:
+  keywords: [ポンプ]        # replaces the base list; lists are not concatenated
+```
+
+Merge rules: mappings merge key by key at every depth; a list or a scalar in a
+later file replaces the earlier value whole (to empty a list, write `[]`). CLI
+flags still beat every file. The removed-key check and validation run once, on
+the merged result, so a typo or a removed key in any file fails the run and
+names its dotted path. A missing file fails with its path. Relative paths
+*inside* the files (`input_videos_dir`, `output_dir`, `previous_summary`, …)
+resolve against the current working directory, not against the file that
+holds them — run from the video's directory.
+
+Each run writes the merged result to `output/effective_config.yml` (with
+`api_key` values blanked, and a header listing the files it came from). It is
+what the Blender subprocess reads, and a record of what the run actually used;
+edit your own files, not this one.
 
 ### project: the editorial brief
 
@@ -580,7 +624,7 @@ without the extra context.
 
 Options:
 - `--source FILE` — source video file (may be repeated for multiple sources); when omitted, all videos in `--input-videos-dir` are processed alphabetically.
-- `--config FILE` — path to a YAML config file; config values fill in between CLI overrides and built-in defaults.
+- `--config FILE` — path to a YAML config file; config values fill in between CLI overrides and built-in defaults. Repeatable: files are deep-merged left to right, later files win (see [Layering several config files](#layering-several-config-files)).
 - `--language LANG` — ISO 639-1 language code passed to WhisperX (default: `ja`). Also settable via `transcription.language` in config.
 - `--from-stage NAME` — start from stage `NAME`, reusing earlier stage outputs. `NAME` is a stage name: `transcription`, `audio_silence`, `sentence_split`, `gap_context`, `summary`, `text_filter`, `director`, `guided_edit`, `intervals`, `blender`, `publish`, `render`. Also settable via `pipeline.from_stage` in config.
 - `--to-stage NAME` — stop **after** stage `NAME` (inclusive); later stages are skipped. Same stage names as `--from-stage`, and must not precede it. Defaults to `publish` (run to the end). Also settable via `pipeline.to_stage` in config. Combine with `--from-stage` to run a window of stages, e.g. `--from-stage summary --to-stage director`.

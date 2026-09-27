@@ -78,15 +78,21 @@ runtime behavior.
   subdir is cleared exactly once per run, not once per source), then
   `rec.rebuild_index()` in a `finally` after the loop.
 - `cli.py` — `argparse` flags mirror the historical bash script
-  (`--source` repeatable, `--config`, `--language`, `--input-videos-dir`,
+  (`--source` repeatable, `--config` repeatable, `--language`, `--input-videos-dir`,
   `--output-dir`, `--keep-pre-margin`, `--keep-post-margin`, `--from-stage`,
   `--to-stage`, `--align-model`). Explicit CLI values are folded into a
   `cli_overrides` dict (`build_cli_overrides`) and passed to
-  `get_effective_config(config_path, cli_overrides)`, so precedence is
-  **CLI > YAML > model defaults**, validated the same way as every other
-  config consumer. `main()` then: creates the input/output/per-stage/cache
-  directories, calls `setup_logging()` once, discovers or resolves sources and
-  stages them, resolves the stage window, builds the `PipelineContext`, and
+  `get_effective_config(config_paths, cli_overrides)`, so precedence is
+  **CLI > later YAML > earlier YAML > model defaults**, validated once on the
+  merged result, the same way as every other config consumer. Every `--config`
+  path is checked up front and a missing one raises `PipelineError` naming it.
+  `main()` then: creates the input/output/per-stage/cache directories, calls
+  `setup_logging()` once, writes `output/effective_config.yml`
+  (`config.write_effective_config()`: the merged, validated cfg with `api_key`
+  values blanked and a header listing the source files) and stores its path as
+  `PipelineContext.config_path` — the one config file the Blender subprocess is
+  handed, so it sees exactly what this run validated, CLI overrides included;
+  then discovers or resolves sources and stages them, resolves the stage window, builds the `PipelineContext`, and
   runs `run_stages`. Source-staging cleanup (`stage_sources`'s copied-in files)
   happens in a `finally` regardless of success. `PipelineError` is the only
   exception type caught at this level.

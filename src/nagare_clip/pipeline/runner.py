@@ -23,6 +23,9 @@ class PipelineContext:
 
     cfg: dict
     project_root: Path
+    # The effective-config snapshot this run wrote (output/effective_config.yml),
+    # not a user file: however many --config files built cfg, a subprocess
+    # reads this one.
     config_path: Path | None
     input_videos_dir: Path
     output_dir: Path

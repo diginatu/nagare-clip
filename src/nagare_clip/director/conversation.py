@@ -166,7 +166,12 @@ def main(argv: list[str] | None = None) -> int:
         "then re-run the director stage to have it answered.",
     )
     parser.add_argument("text", nargs="*", help="What to tell the director (default: stdin)")
-    parser.add_argument("--config", default=None, help="Path to YAML config file")
+    parser.add_argument(
+        "--config",
+        action="append",
+        default=None,
+        help="Path to YAML config file (repeatable; merged left to right, later files win)",
+    )
     parser.add_argument("--output-dir", default=None, dest="output_dir")
     args = parser.parse_args(argv)
 
@@ -179,8 +184,8 @@ def main(argv: list[str] | None = None) -> int:
     if output_dir is None:
         from nagare_clip.config import get_effective_config
 
-        config_path = Path(args.config).resolve() if args.config else None
-        output_dir = get_effective_config(config_path, {})["pipeline"]["output_dir"]
+        paths = [Path(c).resolve() for c in args.config or []]
+        output_dir = get_effective_config(paths, {})["pipeline"]["output_dir"]
 
     path = Path(output_dir) / "director" / FILE_NAME
     say(path, text)

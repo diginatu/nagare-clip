@@ -24,7 +24,7 @@ import copy
 import logging
 import re
 import sys
-from collections.abc import Iterator
+from collections.abc import Iterator, Sequence
 from pathlib import Path
 from typing import Any, ClassVar, Literal
 
@@ -1348,21 +1348,86 @@ def deep_merge(base: dict, override: dict) -> dict:
     return result
 
 
+ConfigPaths = Path | str | Sequence[Path | str] | None
+
+
+def config_paths(paths: ConfigPaths) -> list[Path]:
+    """Normalise ``None`` / one path / a sequence of paths into a list."""
+    if paths is None:
+        return []
+    if isinstance(paths, (str, Path)):
+        return [Path(paths)]
+    return [Path(p) for p in paths]
+
+
+def load_configs(paths: ConfigPaths) -> dict:
+    """Load every YAML file in *paths* and deep-merge them left to right.
+
+    Later files win. Dicts merge recursively; lists and scalars are replaced
+    whole (see :func:`deep_merge`). A missing file raises ``FileNotFoundError``
+    naming its path.
+    """
+    merged: dict = {}
+    for path in config_paths(paths):
+        merged = deep_merge(merged, load_config(path))
+    return merged
+
+
 def get_effective_config(
-    config_path: Path | None,
+    config_path: ConfigPaths,
     cli_overrides: dict | None = None,
 ) -> dict:
     """Return the fully resolved, validated config as a plain dict.
 
-    Precedence (highest wins): CLI overrides > YAML file > model defaults.
-    Unknown or wrongly-typed keys raise ``pydantic.ValidationError`` (except in
-    the open-ended Blender style blocks, which accept arbitrary extra keys).
+    *config_path* is ``None``, one path, or a sequence of paths merged left to
+    right (a shared base first, a per-video file after it).
+    Precedence (highest wins): CLI overrides > later YAML file > earlier YAML
+    file > model defaults. The removed-key check and validation run once, on
+    the merged result. Unknown or wrongly-typed keys raise
+    ``pydantic.ValidationError`` (except in the open-ended Blender style
+    blocks, which accept arbitrary extra keys).
     """
-    merged = deep_merge(load_config(config_path), cli_overrides or {})
-    if config_path is not None:
-        logging.info("Config loaded from %s", config_path)
+    paths = config_paths(config_path)
+    merged = deep_merge(load_configs(paths), cli_overrides or {})
+    if paths:
+        logging.info("Config loaded from %s", ", ".join(str(p) for p in paths))
     _reject_removed_keys(merged)
     return NagareClipConfig.model_validate(merged).model_dump()
+
+
+EFFECTIVE_CONFIG_NAME = "effective_config.yml"
+REDACTED_KEYS = frozenset({"api_key"})
+
+
+def _redact(d: dict) -> dict:
+    return {
+        k: ("" if k in REDACTED_KEYS and v else _redact(v) if isinstance(v, dict) else v)
+        for k, v in d.items()
+    }
+
+
+def write_effective_config(cfg: dict, output_dir: Path, sources: ConfigPaths) -> Path:
+    """Write *cfg* (already merged and validated) to ``<output_dir>/effective_config.yml``.
+
+    The one config file a subprocess (Blender) reads, so it sees exactly what
+    this run validated -- CLI overrides included, however many ``--config``
+    files built it, and unaffected by an edit to those files mid-run. Secrets
+    (``api_key``) are blanked: nothing downstream of the pipeline process calls
+    an LLM, and the output directory is not the place to keep them.
+    """
+    output_dir = Path(output_dir)
+    output_dir.mkdir(parents=True, exist_ok=True)
+    path = output_dir / EFFECTIVE_CONFIG_NAME
+    listed = "\n".join(f"#   {p}" for p in config_paths(sources)) or "#   (none: defaults only)"
+    header = (
+        "# The effective config of the last pipeline run, written by the pipeline.\n"
+        "# Merged from (left to right, later wins; CLI flags on top):\n"
+        f"{listed}\n"
+        "# api_key values are blanked. Edit the files above, not this one.\n"
+    )
+    body = yaml.safe_dump(_redact(cfg), allow_unicode=True, sort_keys=False)
+    path.write_text(header + body, encoding="utf-8")
+    return path
 
 
 def _key_paths(d: dict, key: str, prefix: str = "") -> Iterator[str]:
@@ -1423,6 +1488,8 @@ def _reject_removed_keys(merged: dict) -> None:
 PREAMBLE = """\
 # Example configuration for nagare-clip pipeline.
 # Copy to your project and pass via --config flag.
+# --config is repeatable: files deep-merge left to right (later wins; lists are
+# replaced whole), e.g. --config ../nagare_base.yml --config ./nagare_config.yml
 # All values shown are the defaults; remove or comment out any you don't want.
 #
 # LLM provider selection (applies to every LLM stage below):

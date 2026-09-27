@@ -103,3 +103,14 @@ class TestSay:
 
         monkeypatch.setattr("sys.stdin", io.StringIO(""))
         assert main(["--output-dir", str(tmp_path)]) == 1
+
+    def test_the_cli_config_is_repeatable_and_later_files_win(self, tmp_path):
+        import yaml
+
+        base = tmp_path / "base.yml"
+        base.write_text(yaml.safe_dump({"pipeline": {"output_dir": str(tmp_path / "base_out")}}))
+        video = tmp_path / "video.yml"
+        video.write_text(yaml.safe_dump({"pipeline": {"output_dir": str(tmp_path / "out")}}))
+        assert main(["--config", str(base), "--config", str(video), "残して"]) == 0
+        assert load(tmp_path / "out" / "director" / "conversation.md") == [Entry(EDITOR, "残して")]
+        assert not (tmp_path / "base_out").exists()
