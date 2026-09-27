@@ -204,7 +204,7 @@ def dropped_ranges(
     the stage feeds it: *edit_lines* are synced into the JSON first (patches
     and ``<cut>`` deletions change the word timings) and their ``<keep>`` spans
     are honoured — on silence lines too, and a silence under ``<cut>`` is
-    dropped; ``None`` means no edits exist yet (the summary stage).
+    dropped; ``None`` prices the transcript with no edits at all.
     *nlp* defaults to :func:`load_nlp`.
     """
     data = whisperx_data
