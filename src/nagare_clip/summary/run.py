@@ -13,12 +13,9 @@ import json
 import logging
 from pathlib import Path
 
-from nagare_clip.audio_silence.cuts_file import read_cuts
 from nagare_clip.brief import apply_brief
-from nagare_clip.config import DEFAULTS
 from nagare_clip.gap_context.context import anchor_gaps, format_gap_block
 from nagare_clip.gap_context.gaps import load_gaps
-from nagare_clip.intervals.keep import dropped_ranges
 from nagare_clip.llm_report import NULL_RECORDER, Recorder
 from nagare_clip.summary import summarize as summarize_mod
 from nagare_clip.summary.summarize import (
@@ -36,7 +33,6 @@ def run_summary(
     *,
     json_paths: list[Path] | None = None,
     gaps_paths: list[Path] | None = None,
-    cuts_paths: list[Path] | None = None,
     recorder: Recorder = NULL_RECORDER,
 ) -> None:
     summary_cfg = cfg["summary"]
@@ -67,18 +63,6 @@ def run_summary(
             block = format_gap_block(anchor_gaps(gaps, seg_times_by_stem.get(stem, [])))
             if block:
                 gap_blocks_by_stem[stem] = block
-        cuts_by_stem: dict[str, list[tuple[float, float]]] = {}
-        for cpath in cuts_paths or []:
-            if cpath.is_file():
-                stem = cpath.stem.removesuffix("_cuts")
-                cuts_by_stem[stem] = read_cuts(cpath)
-        # A part's silence is what intervals drops from it (no edits exist
-        # yet), priced the way the director's line brackets are.
-        ivl = {**DEFAULTS["intervals"], **cfg.get("intervals", {})}
-        dropped_by_stem = {
-            stem: dropped_ranges(data, ivl, cut_ranges=cuts_by_stem.get(stem, []))
-            for stem, data in data_by_stem.items()
-        }
         logging.info("summary: analysing %d video(s) with LLM", len(parts_input))
         project = build_summary(
             parts_input,
@@ -87,7 +71,6 @@ def run_summary(
             recorder=recorder,
             seg_times_by_stem=seg_times_by_stem or None,
             gap_blocks_by_stem=gap_blocks_by_stem or None,
-            dropped_by_stem=dropped_by_stem or None,
         )
         logging.info(
             "summary: %d part(s) across %d video(s)",

@@ -35,7 +35,6 @@ from nagare_clip.llm_report import (
 )
 from nagare_clip.llm_retry import cfg_for_attempt, retry_attempts
 from nagare_clip.text_filter.llm_filter import _call_llm
-from nagare_clip.timing import span_silence
 
 logger = logging.getLogger(__name__)
 
@@ -49,7 +48,6 @@ class PartSummary:
     summary: str
     start: float | None = None  # part start time (s), from WhisperX segments
     end: float | None = None  # part end time (s)
-    silence: float | None = None  # audio_silence-cut seconds inside [start, end]
 
 
 @dataclass
@@ -336,7 +334,6 @@ def build_summary(
     recorder: Recorder = NULL_RECORDER,
     seg_times_by_stem: dict[str, list[tuple[float | None, float | None]]] | None = None,
     gap_blocks_by_stem: dict[str, str] | None = None,
-    dropped_by_stem: dict[str, list[tuple[float, float]]] | None = None,
 ) -> ProjectSummary:
     """Map (``segment_video`` per video) then reduce (``generate_project_summary``)."""
     parts: list[PartSummary] = []
@@ -359,13 +356,6 @@ def build_summary(
     if seg_times_by_stem:
         for p in parts:
             _attach_part_times(p, seg_times_by_stem.get(p.stem))
-    if dropped_by_stem:
-        for p in parts:
-            dropped = dropped_by_stem.get(p.stem)
-            if dropped and p.start is not None and p.end is not None:
-                sil = span_silence(p.start, p.end, dropped)
-                if sil > 0.0:
-                    p.silence = sil
     summary = generate_project_summary(
         parts, cfg, call_llm=call_llm, recorder=recorder, video_summaries=video_summaries
     )
@@ -386,8 +376,6 @@ def summary_to_dict(ps: ProjectSummary) -> dict[str, Any]:
             entry["start"] = p.start
         if p.end is not None:
             entry["end"] = p.end
-        if p.silence is not None:
-            entry["silence"] = p.silence
         parts.append(entry)
     return {
         "summary": ps.summary,
@@ -428,13 +416,7 @@ def summary_from_dict(data: Any) -> ProjectSummary:
             end = raw.get("end")
             start = float(start) if isinstance(start, (int, float)) else None
             end = float(end) if isinstance(end, (int, float)) else None
-            silence = raw.get("silence")
-            silence = float(silence) if isinstance(silence, (int, float)) else None
-            parts.append(
-                PartSummary(
-                    stem=stem, lines=lines, summary=s, start=start, end=end, silence=silence
-                )
-            )
+            parts.append(PartSummary(stem=stem, lines=lines, summary=s, start=start, end=end))
     keywords: dict[str, list[str]] = {}
     raw_kw = data.get("keywords")
     if isinstance(raw_kw, dict):

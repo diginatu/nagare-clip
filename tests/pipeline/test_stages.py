@@ -136,14 +136,11 @@ def test_summary_adapter_reads_sentence_split_txts(tmp_path, monkeypatch):
     monkeypatch.setattr(
         st,
         "run_summary",
-        lambda txts, out, cfg, *, json_paths=None, gaps_paths=None, cuts_paths=None, recorder=None: (
-            seen.update(
-                txts=txts,
-                out=out,
-                json_paths=json_paths,
-                gaps_paths=gaps_paths,
-                cuts_paths=cuts_paths,
-            )
+        lambda txts, out, cfg, *, json_paths=None, gaps_paths=None, recorder=None: seen.update(
+            txts=txts,
+            out=out,
+            json_paths=json_paths,
+            gaps_paths=gaps_paths,
         ),
     )
     by_name = {s.name: s for s in st.STAGES}
@@ -152,7 +149,6 @@ def test_summary_adapter_reads_sentence_split_txts(tmp_path, monkeypatch):
     assert seen["txts"] == [out / "sentence_split" / "a.txt"]
     assert seen["json_paths"] == [out / "sentence_split" / "a.json"]
     assert seen["gaps_paths"] == [out / "gap_context" / "a_gaps.json"]
-    assert seen["cuts_paths"] == [out / "audio_silence" / "a_cuts.txt"]
     assert seen["out"] == out / "summary" / "summary.json"
 
 
