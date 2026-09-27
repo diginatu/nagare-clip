@@ -160,7 +160,12 @@ def main(argv: list[str] | None = None) -> int:
         prog="director-preview",
         description="Print what existing director ops will play (read-only, no LLM).",
     )
-    parser.add_argument("--config", default=None, help="Path to YAML config file")
+    parser.add_argument(
+        "--config",
+        action="append",
+        default=None,
+        help="Path to YAML config file (repeatable; merged left to right, later files win)",
+    )
     parser.add_argument(
         "--source",
         action="append",
@@ -183,7 +188,7 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
     logging.basicConfig(level=logging.ERROR)
 
-    cfg = get_effective_config(Path(args.config).resolve() if args.config else None, {})
+    cfg = get_effective_config([Path(c).resolve() for c in args.config or []], {})
     output_dir = Path(cfg["pipeline"]["output_dir"]).resolve()
     director_dir = Path(args.director_dir) if args.director_dir else output_dir / "director"
     if args.report_dir:

@@ -1,5 +1,7 @@
 # Example configuration for nagare-clip pipeline.
 # Copy to your project and pass via --config flag.
+# --config is repeatable: files deep-merge left to right (later wins; lists are
+# replaced whole), e.g. --config ../nagare_base.yml --config ./nagare_config.yml
 # All values shown are the defaults; remove or comment out any you don't want.
 #
 # LLM provider selection (applies to every LLM stage below):

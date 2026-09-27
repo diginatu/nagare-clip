@@ -293,7 +293,12 @@ def main(argv: list[str] | None = None) -> int:
         "plan_revise stage to have it applied.",
     )
     parser.add_argument("text", nargs="*", help="What to tell plan_revise (default: read stdin)")
-    parser.add_argument("--config", default=None, help="Path to YAML config file")
+    parser.add_argument(
+        "--config",
+        action="append",
+        default=None,
+        help="Path to YAML config file (repeatable; merged left to right, later files win)",
+    )
     parser.add_argument("--output-dir", default=None, dest="output_dir")
     parser.add_argument(
         "--role",
@@ -312,8 +317,8 @@ def main(argv: list[str] | None = None) -> int:
     if output_dir is None:
         from nagare_clip.config import get_effective_config
 
-        config_path = Path(args.config).resolve() if args.config else None
-        output_dir = get_effective_config(config_path, {})["pipeline"]["output_dir"]
+        paths = [Path(c).resolve() for c in args.config or []]
+        output_dir = get_effective_config(paths, {})["pipeline"]["output_dir"]
 
     path = history_path(output_dir)
     append_turn(path, args.role, text)

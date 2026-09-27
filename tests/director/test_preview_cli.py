@@ -133,3 +133,21 @@ def test_brackets_are_priced_with_the_projects_intervals_settings(project, capsy
     _run(capsys, "--config", str(config))
     assert seen
     assert all(i.intervals_cfg["keep_pre_margin"] == 0.123 for i in seen)
+
+
+def test_config_is_repeatable_and_later_files_win(project, capsys, monkeypatch):
+    from nagare_clip.director import preview_cli as cli
+
+    override = project / "video.yml"
+    override.write_text(yaml.safe_dump({"intervals": {"keep_pre_margin": 0.456}}))
+    seen = []
+    real = cli.load_segment_transcript
+
+    def spy(inputs):
+        seen.append(inputs)
+        return real(inputs)
+
+    monkeypatch.setattr(cli, "load_segment_transcript", spy)
+    _run(capsys, "--config", str(project / "nagare_config.yml"), "--config", str(override))
+    assert seen
+    assert all(i.intervals_cfg["keep_pre_margin"] == 0.456 for i in seen)

@@ -383,8 +383,13 @@ All tunable parameters are defined as typed **pydantic-settings models** in
 
 - The models are the single source of truth for defaults, types, and docs.
   `DEFAULTS` is **derived** (`NagareClipConfig.model_validate({}).model_dump()`).
-- `get_effective_config(config_path, cli_overrides)` merges defaults ← file ←
-  CLI, then **validates**: unknown or wrongly-typed keys raise `ValidationError`
+- `get_effective_config(config_path, cli_overrides)` merges defaults ← files ←
+  CLI, then **validates**. `config_path` is `None`, one path, or a sequence
+  (`--config` is repeatable): files are deep-merged left to right with
+  `deep_merge` — mappings recurse, lists and scalars are replaced whole, never
+  concatenated — and `_reject_removed_keys` plus validation run **once, on the
+  merged result**. Relative paths inside a file resolve against the CWD, not
+  the file's directory. Validation: unknown or wrongly-typed keys raise `ValidationError`
   (so a typo no longer vanishes silently). Exception: `blender.caption_style`,
   `overlay_style`, and `speed_mark` use `extra="allow"` — they are open-ended
   Blender TextStrip pass-throughs (any RNA attribute incl. `font`) — and so does
@@ -399,7 +404,7 @@ All tunable parameters are defined as typed **pydantic-settings models** in
   `make config-example`. A test (`tests/test_config.py::test_example_file_matches_generator`)
   fails if the committed file drifts from the generator output.
 
-**Priority order (highest first):** CLI flags > YAML config file > model defaults.
+**Priority order (highest first):** CLI flags > later `--config` file > earlier `--config` file > model defaults.
 
 The `project:` section is the project-wide **editorial brief** (audience,
 purpose, target_duration, tone, story_so_far, previous_summary — all free text,
@@ -415,7 +420,7 @@ per stage. `gap_context`/`sentence_split`/`guided_edit` are deliberately not bri
 
 All LLM stages (`sentence_split`, `gap_context`, `summary`, `text_filter`, `plan`, `plan_revise`, `director`, `guided_edit`, `publish`) route through `nagare_clip.llm_client.call_llm` (LiteLLM). Each block selects its backend with a `provider` key (default `ollama_chat`); the model id sent to LiteLLM is `"<provider>/<model>"`. An empty `api_base` falls back to `http://localhost:11434` for an ollama provider, or is omitted for a cloud provider. `api_key` is forwarded when set (or use the provider's env var). `response_format: "json"` maps to a JSON-object request; `reasoning_effort` is passed to LiteLLM as `reasoning_effort` **unchanged** — the user reads the config key as "this goes straight to LiteLLM", so there is no translation and no per-provider special case (what a value means for a model is LiteLLM's contract; working around its behaviour is not this pipeline's job). Unset (`null`, the default) sends nothing, so the model runs at its own default. The old `thinking` key (which *was* translated: `false` → off, `true` → `"high"`) is **removed, not aliased**: `config._reject_removed_keys()` fails `get_effective_config` on a `thinking` key anywhere in the merged config, before validation, with a message naming every such path and saying to use `reasoning_effort` — a silent alias would hand the old values a different meaning.
 
-Only `blender/blender_cli.py` still takes a `--config <path>` flag on its command line — it runs as a separate Blender subprocess, so the pipeline CLI (`nagare_clip.pipeline.cli`) passes its resolved `config_path` through explicitly. Every other stage receives the already-merged `cfg` dict in-process (no subprocess, no re-parsing of `--config`).
+Only `blender/blender_cli.py` still takes a `--config <path>` flag on its command line — it runs as a separate Blender subprocess. It is given exactly **one** file: `output/effective_config.yml`, the snapshot `pipeline.cli` writes after merging (`config.write_effective_config()`: the validated cfg, CLI overrides included, `api_key` values blanked, a header listing the source files). `PipelineContext.config_path` holds that snapshot's path, never a user file, so Blender sees what the pipeline validated however many `--config` files built it. The other `--config` readers (`plan_say.sh` via `plan/dialogue.py`, `director_preview.sh` via `director/preview_cli.py`) accept `--config` repeatedly with the same merge. Every other stage receives the already-merged `cfg` dict in-process (no subprocess, no re-parsing of `--config`).
 
 ## Current Runtime Quirks
 

@@ -121,6 +121,21 @@ class TestCli:
         assert main(["--output-dir", str(tmp_path)]) == 1
         assert not (tmp_path / "plan_dialogue" / "history.md").exists()
 
+    def test_config_is_repeatable_and_later_files_win(self, tmp_path):
+        import yaml
+
+        from nagare_clip.plan.dialogue import main
+
+        base = tmp_path / "base.yml"
+        base.write_text(yaml.safe_dump({"pipeline": {"output_dir": str(tmp_path / "base_out")}}))
+        video = tmp_path / "video.yml"
+        video.write_text(yaml.safe_dump({"pipeline": {"output_dir": str(tmp_path / "out")}}))
+        assert main(["--config", str(base), "--config", str(video), "hello"]) == 0
+        assert read_history(tmp_path / "out" / "plan_dialogue" / "history.md") == [
+            DialogueTurn("human", "hello")
+        ]
+        assert not (tmp_path / "base_out").exists()
+
 
 class TestDivider:
     """A `plan` re-run divides the conversation instead of clearing it."""
