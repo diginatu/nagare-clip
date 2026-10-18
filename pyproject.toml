@@ -10,11 +10,11 @@ dependencies = [
     "PyYAML",
     "ginza",
     "ja_ginza",
-    "litellm>=1.102.1",
+    "litellm>=1.105.1",
     "opentelemetry-api",
     "opentelemetry-sdk",
     "opentelemetry-exporter-otlp",
-    "pydantic-settings>=2.15.0",
+    "pydantic-settings>=2.16.0",
 ]
 
 [dependency-groups]
