@@ -59,9 +59,23 @@ that for the lines in its range only.
   something is editorial emphasis, NOT a keep. The tools refuse a keep wider
   than `director.max_keep_lines`, and count keeps that touch or overlap as
   one keep: the cap exists to stop keeps widening over talking, and chaining
-  keeps would defeat it. An event longer than the cap is most likely a
-  timelapse (manual work worth seeing fast); otherwise raise it with the user
-  instead of working around the cap.
+  keeps would defeat it.
+
+  **A long on-screen event** (longer than the cap):
+
+  1. Default: **one keep per silence line** — `[n, n]` on each silence line's
+     own number. The speech lines between them play anyway, so those keeps
+     do not touch and the cap does not apply.
+  2. That still drops the short pauses between lines (below
+     `director.silence_line_min`, so they have no silence line) and the
+     silence inside a speech line, so the event plays with small jump cuts.
+     Only when the user wants those to survive too: **ask the user first**;
+     with their OK, they raise `director.max_keep_lines` in the project
+     config, and you cover the event with ONE keep.
+  3. If the event is manual work worth seeing fast, a timelapse may be the
+     better op.
+
+  Never work around the cap without the user's OK.
 - **edit** — a fine within-line text deletion or fix; describe it precisely in
   `note` (where it starts and ends). Speech lines only.
 - **speed** does not exist for you (the tools refuse it). Repeated prompt

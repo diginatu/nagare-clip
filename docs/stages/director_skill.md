@@ -105,7 +105,13 @@ decision):
   span the cap exists to keep dropped (it guards against keeps widening over
   talking, with no exemption). A source boundary ends a chain (different
   recordings, not one event); the problem is reported on the chain's first op
-  and suggests a timelapse or asking the user.
+  and names the route: one keep per silence line (`[n, n]` — speech lines
+  between them keep those keeps apart, so the cap does not apply), a timelapse
+  for manual work, or — to keep the sub-`silence_line_min` pauses and the
+  silence inside lines too — asking the user to raise `max_keep_lines` and
+  using ONE keep. The skill never works around the cap without the user's OK.
+  The LLM director's `keep_limit_note()` is deliberately unchanged (it goes
+  with the LLM director in a later phase).
 - **a `cut` range may not overlap any other op's range** — the prompt asks for
   it; guided_edit otherwise clips the cut. Two overlapping cuts are reported
   once, on the earlier.
@@ -171,3 +177,8 @@ types*, *Targets matrix*, *apm compile*):
 
 After editing the skill, edit `.apm/skills/nagare-director/` (never the
 deployed copies) and run `make apm`.
+
+## Follow-ups
+
+- Consider a **time-based keep cap** (seconds of restored silence) instead of
+  a line count: a line-count cap treats a 2 s pause and a 60 s wait alike.
