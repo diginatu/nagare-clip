@@ -208,6 +208,20 @@ def cmd_write(project: Project, args: argparse.Namespace) -> int:
         "Next: ./scripts/run_pipeline.sh --from-stage guided_edit "
         "(with the same --config) to apply the ops and build the .blend."
     )
+    cfg = project.ctx.cfg
+    if not cfg["guided_edit"].get("enabled", False):
+        print(
+            "warning: guided_edit.enabled is false in this config, so guided_edit will copy "
+            "_edits.txt through WITHOUT applying these ops. Set guided_edit.enabled: true "
+            "(cut/timelapse/overlay/keep need no LLM; an edit op uses guided_edit's model).",
+            file=sys.stderr,
+        )
+    if cfg["director"].get("enabled", False):
+        print(
+            "warning: director.enabled is true, so running the director stage would let the "
+            "LLM director continue from these files. Resume from guided_edit, or disable it.",
+            file=sys.stderr,
+        )
     return 0
 
 

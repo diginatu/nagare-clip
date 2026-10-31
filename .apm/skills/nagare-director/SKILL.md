@@ -81,6 +81,11 @@ reply alone.
 8. **Write** with `write --edit <file>` once the user is happy, then tell them
    to resume the pipeline:
    `./scripts/run_pipeline.sh --config <cfg.yml> --from-stage guided_edit`.
+   The ops only land if the config has `guided_edit.enabled: true` (a
+   disabled guided_edit copies the transcript through untouched); `write`
+   warns when it is off. cut/timelapse/overlay/keep need no LLM; an `edit`
+   op uses guided_edit's model. Keep `director.enabled` off (or resume from
+   guided_edit), or the old LLM director would continue from these files.
    Hand edits of the written files are fine; `preview` (no `--edit`) shows
    what is on disk.
 
