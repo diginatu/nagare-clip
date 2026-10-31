@@ -141,12 +141,20 @@ round-trips whole edits.
   confirm the plan with the user** → draft ops → `preview --edit` → report the
   meaningful numbers → iterate → `write` → tell the user to run
   `./scripts/run_pipeline.sh --from-stage guided_edit`. The user always wins.
-- `references/editorial-rules.md` — the rules from `DIRECTOR_PROMPT` (the
-  two-mode tighten-and-stage goal, each op's when-to-use, why no `speed`,
-  keep width, silence as content, joins, order, pacing from the speech
-  figure, "the playback is the viewer's") and the editorial brief.
-- `references/reading-the-view.md` — brackets, silence lines, annotations,
-  and how to read `preview`.
+- `references/editorial-rules.md` — **the reasoning behind every op and
+  rule** (SKILL.md only lists them), migrated from `DIRECTOR_PROMPT` and the
+  brief: the two-mode tighten-and-stage goal; what a keep is FOR (an
+  on-screen event must not play chopped into fragments when small noises are
+  transcribed as speech — one keep over the whole event, never over ordinary
+  talking, the user decides on raising the cap); why `speed` is off the menu;
+  why a timelapse is 4.0x+ and how to size it; cut vs timelapse; overlay
+  timing/density; silence as content; joins; the order; pacing from the
+  speech figure; "the playback is the viewer's"; the editorial brief.
+  SKILL.md points to it in the workflow before planning and drafting.
+- `references/reading-the-view.md` — **how to read what the tools print**:
+  timing brackets (speech vs dropped silence), numbered silence lines vs
+  un-numbered `[silent gap: …]` notes, and each part of `preview`'s output.
+  SKILL.md points to it at the step that runs `view`.
 
 The project's own brief is not copied into the skill: `view` prints it.
 

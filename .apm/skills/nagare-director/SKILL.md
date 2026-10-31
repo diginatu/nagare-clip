@@ -61,24 +61,41 @@ reply alone.
    them (`dump`) or start over.
 2. **Read everything.** Run `view` and read the whole video, every page,
    before you decide anything. Read the brief and summaries at the top.
-3. **Write the plan, in prose**: the throughline (what this video is about
+   [references/reading-the-view.md](references/reading-the-view.md) explains what the view shows: the
+   timing brackets (`[4.2s, gap 0.8s]`, `[13.0s speech, 62.9s silence]` —
+   what plays vs what is dropped by default), the numbered `[silent …]`
+   lines you can put in an op, the un-numbered `[silent gap: …]` notes you
+   cannot, and how to read `preview`'s output. Open it before your first
+   `view` if any of that is unfamiliar.
+3. **Before you plan, read [references/editorial-rules.md](references/editorial-rules.md).**
+   It holds the reasoning behind every op and rule, which this file only
+   lists: what a `keep` is FOR (an on-screen event must not play chopped into
+   fragments when small noises are transcribed as speech — one keep over the
+   whole event, never a keep over ordinary talking), why `speed` is off the
+   menu, why a timelapse is 4.0x or more and how to pick its factor, when to
+   cut vs timelapse, caption timing and density, silences worth keeping,
+   the order and seams, pacing from the speech figure, and how to follow the
+   editorial brief. The plan and every op you draft should follow it.
+4. **Write the plan, in prose**: the throughline (what this video is about
    and what the viewer should come away with); what to cut and what to
    compress, roughly where (approximate line numbers mark sections, not op
    boundaries); the moments worth a caption; the order and why, if it should
    not be shooting order; the runtime you expect against the brief's target.
-4. **Stop and confirm the plan with the user.** Do not draft ops before they
+5. **Stop and confirm the plan with the user.** Do not draft ops before they
    agree. Revise the plan as they ask.
-5. **Draft the ops** in an edit file (format below) and run `preview --edit`.
+6. **Draft the ops** in an edit file (format below), choosing each op by
+   [references/editorial-rules.md](references/editorial-rules.md) (re-read the op's entry when
+   unsure), and run `preview --edit`.
    Fix every problem it lists. Read the playback, not just the spec: the
    usual mistake is a span that opens one line too early.
-6. **Show the user the numbers that matter**: default runtime -> runtime with
+7. **Show the user the numbers that matter**: default runtime -> runtime with
    the edit (against the target), each timelapse's footage -> on-screen
    seconds and factor, what each cut removes, the captions in playback
    order, and every seam if the order moved anything. Summarise; do not paste
    the whole preview unless asked.
-7. **Iterate** on their feedback: edit the file, `preview --edit` again,
+8. **Iterate** on their feedback: edit the file, `preview --edit` again,
    report again. Update the plan when the footage proves it wrong.
-8. **Write** with `write --edit <file>` once the user is happy, then tell them
+9. **Write** with `write --edit <file>` once the user is happy, then tell them
    to resume the pipeline:
    `./scripts/run_pipeline.sh --config <cfg.yml> --from-stage guided_edit`.
    The ops only land if the config has `guided_edit.enabled: true` (a
@@ -116,10 +133,21 @@ reply alone.
 - `plan` is optional: absent, `plan.md` stays. It is required the first time
   (there is none on disk yet).
 
-See [references/editorial-rules.md](references/editorial-rules.md) for what
-each op means and when to use it, and
-[references/reading-the-view.md](references/reading-the-view.md) for the
-timing brackets, silence lines and gap descriptions.
+## References — what is in them and why to open them
+
+- [references/editorial-rules.md](references/editorial-rules.md) — **the reasoning behind
+  every op and rule**; the list below only states them. What a keep is for
+  (an on-screen event not chopped into fragments by transcribed noises; one
+  keep over the whole event; never over ordinary talking; asking the user
+  before raising the cap), why `speed` is off the menu, why a timelapse is
+  4.0x+ and how to size its factor, cut vs timelapse, overlay timing and
+  density, silences as content, source joins, the order, pacing, "the
+  playback is the viewer's", and the editorial brief. Read it before
+  planning.
+- [references/reading-the-view.md](references/reading-the-view.md) — **how to read what the
+  tools print**: timing brackets (speech vs dropped silence), silence lines
+  vs un-numbered gap notes, the source index and default runtime, and each
+  part of `preview`'s output. Read it before your first `view`.
 
 ## Rules the tools enforce
 
