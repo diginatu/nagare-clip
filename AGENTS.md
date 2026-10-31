@@ -12,7 +12,7 @@ Maintain and improve a multi-stage rough-cut pipeline:
 4. gap_context — a vision LLM snapshots+describes long silent gaps (audio_silence spans) so summary/director can see what the transcript can't (disabled by default)
 5. summary — a larger LLM segments every video into line-range parts + summaries (and lists per-video misspelling-prone keywords) and writes one all-videos summary (project-wide)
 6. Text editing checkpoint — copies `.txt` or runs LLM filter with `{{old->new}}` markers, optionally primed with the summary stage's summaries/keywords
-7. director — a larger LLM writes its own plan in its first turn, then proposes high-level edits (cut/timelapse/overlay/keep/edit) as a reviewable JSON op list and decides the playback order (fed the summaries); a step over its own directory, where a person joins by writing an editor note
+7. director — a larger LLM writes its own plan in its first turn, then proposes high-level edits (cut/timelapse/overlay/keep/edit) as a reviewable JSON op list and decides the playback order (fed the summaries); a step over its own directory, where a person joins by writing an editor note. **Being replaced** by the `nagare-director` agent skill (a coding agent directs with the user through deterministic tools and writes the same files); phase 1 added the skill alongside, the LLM director still runs and is scheduled for removal — see [`docs/stages/director_skill.md`](docs/stages/director_skill.md)
 8. guided_edit — a small LLM applies the director's ops into `_edits.txt`, deterministically verified
 9. Patch application + keep-interval computation in Python (audio cuts unioned in)
 10. Blender VSE auto-layout in headless mode
@@ -126,6 +126,18 @@ Validate a hand-edited `_edits.txt` before resuming with `python -m nagare_clip.
 
 - **Inputs:** every source's `{stem}_edits.txt` (from text_filter), whole, in shooting order; optionally the sentence_split `{stem}.json`, passed as `json_path` (for per-line timing), the gap_context `{stem}_gaps.json`, passed as `gaps`, the audio_silence `{stem}_cuts.txt`, passed as `cuts_txt` (for the speech/silence split), `output/summary/summary.json`; its own directory (below) is its state, and the playback order starts from shooting order
 - **Outputs (and state):** `{stem}_director.json`; `director/order.json` (the playback order); `director/plan.md` (the director's own plan); `director/conversation.md` (the conversation and its done mark) — all hand-editable, all read back on the next run
+
+### director skill — Directing With a Coding Agent (replaces the LLM director; phase 1)
+
+**Additive so far: the LLM director above still exists, still runs, and is scheduled for removal** (later phases make `guided_edit` deterministic and split the pipeline at the director). A general coding agent plays the director with the user via the APM-packaged skill `.apm/skills/nagare-director/` (`SKILL.md` + `references/` migrated from `DIRECTOR_PROMPT` and the brief), calling deterministic tools — `./scripts/director_tools.sh {view,dump,preview,write} --config <yml>` (`python -m nagare_clip.director.tools`, `src/nagare_clip/director/tools/`, no LLM call):
+
+- `view [--lines A-B] [--no-context]` — `system_message()` minus the prompt: brief, `keep_limit_note`, `project_context_block`, a source index + default runtime, `VIEW_HEADER`, `DisplayView.render(first, last)`. `dump` — `director/` as an edit in display numbering. `preview [--edit F|-]` — `edit_state()` over the files or a candidate, writes nothing, a candidate's problems → exit 1. `write --edit F|-` — all problems at once and nothing written, else every `{stem}_director.json` plus `order.json`/`plan.md` when given.
+- Edit file: `{"plan"?, "order"?, "ops"}` in **display numbering**; `ops` replaces every op; absent `plan`/`order` keep the files on disk (a plan is required when `plan.md` has none).
+- **Validation is the LLM director's own**, extracted into shared pure functions: `director_llm.parse_op` (was `_parse_op`), `off_menu_problem`, `keep_cap_problem`; `loop.read_order` (was `_read_order`), `order_problems`, `join_problem` (the tools pass `splittable=frozenset()` — every join crossing refused, never split), `break_problem`, `silence_ref_problem`. The tools add two checks the LLM path deliberately does not: a `cut` may not overlap any other op, and an `edit` op names speech lines only. A test asserts the parser's drop messages equal the tools' reasons.
+- Loading goes through `pipeline.stages.director_inputs()` (factored out of `_director_run`, which calls it too) and `load_segment_transcript()`, so the view is the stage's.
+- APM: `apm.yml` (targets claude/copilot/codex, `includes: [.apm/]`); `apm install` deploys to `.claude/skills/` and `.agents/skills/` — both committed with `apm.lock.yaml`; never edit the deployed copies. `apm compile` only compiles instructions and never touches the hand-written AGENTS.md/CLAUDE.md, so it writes nothing here and `--validate` exits 1 for lack of instructions; `make apm` (`apm install && apm audit --ci`) is the check, and `tests/test_apm_skill.py` guards the drift in CI.
+
+See [`docs/stages/director_skill.md`](docs/stages/director_skill.md).
 
 ### guided_edit — Apply Director Ops (Pass B2)
 
@@ -272,6 +284,10 @@ src/nagare_clip/          # Main Python package (src layout)
     run.py                    # run_director_conversation(): load, render, run the loop, ops per source
     preview.py                # preview_segment(): what a segment's ops will play (pure, no LLM)
     preview_cli.py            # director-preview CLI over existing _director.json files (read-only)
+    tools/                    # agent-skill tools (no LLM): view/dump/preview/write in display numbering
+      project.py              # load_project(): the director's view off disk; current_state() of director/
+      validate.py             # validate_edit(): every problem at once, via the shared director checks
+      cli.py                  # python -m nagare_clip.director.tools {view,dump,preview,write}
   guided_edit/                # guided_edit stage (Pass B2): apply director ops
     apply.py                  # per-op LLM call + splice + revert-on-failure; place_span_op()/resolve_span_ops() (shared with the director preview)
     reconcile.py              # verify_op(): verbatim-safety + op-reflection checks
@@ -315,6 +331,10 @@ scripts/
   run_pipeline.sh             # Shim: exec uv run python -m nagare_clip.pipeline "$@"
   director_preview.sh         # Shim: print the director playback preview (python -m nagare_clip.director.preview_cli)
   director_say.sh             # Shim: remove the director's done mark and append an editor entry
+  director_tools.sh           # Shim: the agent-skill director tools (python -m nagare_clip.director.tools)
+apm.yml                       # APM package: the nagare-director agent skill (source in .apm/skills/)
+.apm/skills/nagare-director/  # Skill source (SKILL.md + references/); deployed by `apm install` to
+                              #   .claude/skills/ and .agents/skills/ (committed; never edit those copies)
 docs/
   stages/                     # Deep per-stage runtime notes (loaded on demand)
 Makefile                      # Canonical dev commands (make help / check / validate / test)
@@ -403,6 +423,7 @@ the [Documentation Policy](#documentation-policy)):
 - render (style validation, layout/escaping, the zero-call loop) → [`docs/stages/render.md`](docs/stages/render.md)
 - cut_report (finished-cut metrics + checks, Blender-warning capture) → [`docs/stages/cut_report.md`](docs/stages/cut_report.md)
 - segment order (the director's `order`; the `intervals/timeline.json` manifest; the order note) → [`docs/stages/order.md`](docs/stages/order.md)
+- director skill (agent-run director, its tools and the APM package) → [`docs/stages/director_skill.md`](docs/stages/director_skill.md)
 - pipeline orchestration (`nagare_clip.pipeline`) → [`docs/stages/pipeline.md`](docs/stages/pipeline.md)
 - observability (LLM report + Langfuse tracing) → [`docs/stages/observability.md`](docs/stages/observability.md)
 
@@ -422,6 +443,7 @@ Canonical developer commands live in the `Makefile` (run `make help`):
 - `make check` — everything CI runs: `lint` + `format-check` + `validate` + `test`.
 - `make validate` — fast structural checks: `docker compose config`, `python -m py_compile` on every module under `src/nagare_clip/`, and `bash -n scripts/run_pipeline.sh`.
 - `make lint` / `make format` — ruff lint / auto-format.
+- `make apm` — redeploy the agent skill from `.apm/` and run `apm audit --ci` (needs the apm CLI; not part of CI).
 - `make test` — the pytest suite.
 
 The same steps run in CI (`.github/workflows/ci.yml`) on every push and PR.

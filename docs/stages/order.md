@@ -66,8 +66,10 @@ same order a full run would.
 a partial repair, which would be a video with a scene silently moved. Validation
 runs twice on purpose:
 
-- at **parse time** in the director's loop (`loop._read_order`, in display
-  numbers), so a model's order is refused before it is ever written;
+- at **parse time** in the director's loop (`loop.read_order` via
+  `loop.order_problems`, in display numbers), so a model's order is refused
+  before it is ever written — and the agent skill's `write` tool runs the same
+  `order_problems` (see [`director_skill.md`](director_skill.md));
 - at **resolve time** in `pipeline/stages._resolve_order`, because
   `director/order.json` is hand-editable and `sentence_split`/`summary` can
   re-run underneath it.

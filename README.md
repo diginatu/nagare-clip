@@ -82,6 +82,25 @@ The director's **first turn is its plan**: before any op it reads the whole vide
 
 The director reads your note as `Editor:` (its own routine guidance is labelled `Guide:`), is told the editor wins, and answers before finishing again. You can also edit `plan.md`, `order.json` or a `_director.json` directly between runs — the next run starts from what the files say. To start over, delete `output/director/`. With `director.pause_after_plan: true` the pipeline stops (exit 0) right after the plan is written, so you can read `plan.md` and steer before any op is made.
 
+#### Directing with a coding agent (the `nagare-director` skill)
+
+The LLM director above is being replaced by an **agent skill**: you direct the cut together with a coding agent (Claude Code, GitHub Copilot, Codex, Cursor, Gemini, …) in its own chat, and it writes the same `output/director/` files. For now both exist — the LLM director still works and is scheduled for removal.
+
+1. Run the pipeline up to the text checkpoint: `./scripts/run_pipeline.sh --config <yml> --to-stage text_filter`.
+2. Ask your agent to direct the video (for example "nagare-director で編集して"). The skill ships in this repo: `.claude/skills/nagare-director/` for Claude Code, `.agents/skills/nagare-director/` for the others. The agent reads the whole video, writes a plan, **asks you to confirm it**, drafts the edits, shows you the runtime/timelapse/caption numbers from a preview, and changes them as you ask. You can redirect it at any time.
+3. When you are happy, it writes the files and you resume: `./scripts/run_pipeline.sh --config <yml> --from-stage guided_edit` (keep `director.enabled` off, or the LLM director will continue from those files).
+
+The agent uses deterministic tools you can also run yourself (no LLM call):
+
+```bash
+./scripts/director_tools.sh view    --config <yml> [--lines 1-200] [--no-context]  # the numbered video + brief + summaries
+./scripts/director_tools.sh dump    --config <yml> > edit.json   # the current director files, as an edit
+./scripts/director_tools.sh preview --config <yml> [--edit edit.json]  # what it will play; writes nothing
+./scripts/director_tools.sh write   --config <yml> --edit edit.json    # validate, then write — all or nothing
+```
+
+An edit is `{"plan": "...", "order": [[a, b], ...], "ops": [...]}` in the line numbers `view` prints. `write` checks everything the LLM director checks (no `speed` op, timelapse factor ≥ 4.0, overlay text + duration, the keep-width cap, one source per op, the order covers every line once and never splits a timelapse) plus that a `cut` does not overlap another op, and lists **every** problem at once without writing anything. Maintainers: the skill's source is `.apm/skills/nagare-director/`, packaged with [APM](https://github.com/microsoft/apm); after editing it, run `make apm`. Details: [`docs/stages/director_skill.md`](docs/stages/director_skill.md).
+
 To help the LLM reason about pacing, the `director` also sees **calculated durations and in-between gaps**: its numbered transcript annotates each line with `[4.2s, gap 0.8s]` (per-sentence duration + gap to the next line). Its default prompt explains the bracket notation (what the duration is, that the gap is the silence before the next line, and that a negligible gap — or the last line — shows no gap at all), so the LLM can act on it. These times come from the WhisperX `{stem}.json`; the orchestrator feeds the stage the sentence_split `{stem}.json` automatically, so there's nothing to wire up yourself. `director` splits that duration into what plays vs. what the `intervals` stage will drop, e.g. `[12.9s speech, 62.9s silence]` — computed live with the same keep-interval code the `intervals` stage runs (word gaps over `intervals.silence_threshold`, the audio_silence `{stem}_cuts.txt`, keep margins, captions, `min_cut`), so the two figures add up to the line's footage and the speech figure is exactly what plays with no op. It falls back to the plain `[Ns, gap Ns]` form when nothing inside the span is dropped. To run a single stage on its own (reusing its inputs from a previous pipeline run), use `./scripts/run_pipeline.sh --from-stage X --to-stage X`.
 
 Before resuming, you can validate your edits in one pass (reports **every** problem at once, with line numbers, instead of failing on the first like the intervals stage does):
