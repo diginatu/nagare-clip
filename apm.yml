@@ -1,0 +1,14 @@
+name: nagare-clip
+version: 0.1.0
+description: Agent skills for the nagare-clip rough-cut pipeline
+license: MIT
+# Pinned so `apm install` deploys the same files for every contributor:
+# Claude reads .claude/skills/, Copilot/Codex/Cursor/Gemini read .agents/skills/.
+targets:
+  - claude
+  - copilot
+  - codex
+# Local primitives under .apm/ (the nagare-director skill) are this package's
+# content; nothing else in the repository is.
+includes:
+  - .apm/

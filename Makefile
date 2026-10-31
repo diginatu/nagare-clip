@@ -2,7 +2,7 @@
 # All Python tooling goes through `uv run` per the project convention.
 
 .DEFAULT_GOAL := help
-.PHONY: help install test lint format format-check validate check config-example
+.PHONY: help install test lint format format-check validate check config-example apm
 
 help: ## Show this help
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) \
@@ -32,3 +32,7 @@ check: lint format-check validate test ## Everything CI runs
 
 config-example: ## Regenerate config.example.yml from the config models
 	uv run python -m nagare_clip.config --write-example
+
+apm: ## Redeploy the agent skill from .apm/ and audit it (needs the apm CLI; not in CI)
+	apm install
+	apm audit --ci
