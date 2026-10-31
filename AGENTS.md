@@ -471,7 +471,6 @@ or Blender-bug workaround.
 When behavior changes, update all of:
 
 - `README.md` (user-facing usage)
-- `plan.md` (implementation/status)
 - this `AGENTS.md` (agent guardrails)
 - the stage's [`docs/stages/<stage>.md`](docs/stages/) deep-dive — keep it in
   sync with the code; the concise overview lives here in `AGENTS.md`, the
