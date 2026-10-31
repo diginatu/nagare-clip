@@ -582,6 +582,28 @@ def _write_missing_director_outputs(ctx: PipelineContext, stems: list[str], seed
         _write_director_order(ctx, seed)
 
 
+def director_inputs(ctx: PipelineContext, segments: list[Segment]) -> list[SegmentInputs]:
+    """Where each of *segments*' transcript and annotations live.
+
+    The one place the director's inputs are named: the LLM director stage and
+    the agent skill's tools (:mod:`nagare_clip.director.tools`) both read them
+    through here, so the two see the same view.
+    """
+    text_filter_dir = ctx.stage_dir("text_filter")
+    return [
+        SegmentInputs(
+            segment,
+            text_filter_dir / f"{segment.stem}_edits.txt",
+            json_path=ctx.stage_dir("sentence_split") / f"{segment.stem}.json",
+            gaps=ctx.stage_dir("gap_context") / f"{segment.stem}_gaps.json",
+            cuts_txt=ctx.stage_dir("audio_silence") / f"{segment.stem}_cuts.txt",
+            silence_line_min=silence_line_min(ctx.cfg["director"]),
+            intervals_cfg=ctx.cfg["intervals"],
+        )
+        for segment in segments
+    ]
+
+
 def _director_run(ctx: PipelineContext) -> None:
     """One step over the director's directory: resume, take turns, write back.
 
@@ -602,25 +624,13 @@ def _director_run(ctx: PipelineContext) -> None:
     segments = identity_segments(project_stems(ctx.input_videos_dir) or ctx.stems)
     seed = list(segments)
     director_dir = ctx.stage_dir("director")
-    text_filter_dir = ctx.stage_dir("text_filter")
     stems = [segment.stem for segment in segments]
     if set(ctx.stems) != set(stems):
         logging.info(
             "director: --source does not narrow the director; one conversation owns the whole video"
         )
 
-    inputs = [
-        SegmentInputs(
-            segment,
-            text_filter_dir / f"{segment.stem}_edits.txt",
-            json_path=ctx.stage_dir("sentence_split") / f"{segment.stem}.json",
-            gaps=ctx.stage_dir("gap_context") / f"{segment.stem}_gaps.json",
-            cuts_txt=ctx.stage_dir("audio_silence") / f"{segment.stem}_cuts.txt",
-            silence_line_min=silence_line_min(ctx.cfg["director"]),
-            intervals_cfg=ctx.cfg["intervals"],
-        )
-        for segment in segments
-    ]
+    inputs = director_inputs(ctx, segments)
     resume = Resume(
         plan=_read_director_plan(ctx),
         order=_read_director_order(ctx),

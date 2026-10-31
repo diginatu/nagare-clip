@@ -240,8 +240,11 @@ def _sort_key(op: DirectorOp) -> tuple[int, bool, int, bool]:
     return (op.lines[0], op.gap_start, op.lines[1], op.gap_end)
 
 
-def _read_order(value: Any, total: int) -> tuple[list[Range] | None, str]:
-    """The reply's ``order`` as ranges, or ``(None, why)``."""
+def read_order(value: Any, total: int) -> tuple[list[Range] | None, str]:
+    """An ``order`` value as ranges tiling ``1..total``, or ``(None, why)``.
+
+    Shared by the LLM director and the agent skill's ``write`` tool.
+    """
     if not isinstance(value, list) or not value:
         return None, f'"order" must be a non-empty list of [first, last] ranges of 1-{total}.'
     ranges: list[Range] = []
@@ -342,8 +345,91 @@ def order_ranges(view: DisplayView, segments: list[Segment]) -> list[Range]:
         if x is None or y is None or x > y:
             return []
         out.append((x, y))
-    ranges, _why = _read_order(out, len(view.lines))
+    ranges, _why = read_order(out, len(view.lines))
     return ranges or []
+
+
+def segment_joins(view: DisplayView, first: int, last: int) -> list[int]:
+    """The display lines inside ``[first, last)`` a segment join follows."""
+    return _joins(view, first, last)
+
+
+def join_problem(
+    view: DisplayView,
+    op_type: str,
+    first: int,
+    last: int,
+    splittable: frozenset[str] = SPLITTABLE,
+) -> str | None:
+    """Why an op over ``[first, last]`` may not cross a segment join, or ``None``.
+
+    The LLM director splits a *splittable* op (``cut``/``keep``) at the join
+    instead; the agent skill's tools pass ``frozenset()`` and refuse every
+    crossing, so the agent sees where the join is.
+    """
+    joins = _joins(view, first, last)
+    if not joins or op_type in splittable:
+        return None
+    return (
+        f"{op_type} [{first},{last}] crosses the segment join after line "
+        f"{joins[0]}: the two sides are different footage. Send it as "
+        "separate ops, one per side."
+    )
+
+
+def silence_ref_problem(op: DirectorOp) -> str | None:
+    """Why *op* may not use the ``"n~"`` form in display numbering, or ``None``."""
+    if not (op.gap_start or op.gap_end):
+        return None
+    return (
+        f'{op.type} op lines {list(op.lines)} use the "n~" form; a silence '
+        "is a numbered line of its own here — give its number."
+    )
+
+
+def break_problem(op_type: str, span: Range, breaks: set[int]) -> str | None:
+    """Why a timelapse over display *span* may not stand under *breaks*, or ``None``."""
+    if op_type != "timelapse":
+        return None
+    split = _split_by(span, breaks)
+    if split is None:
+        return None
+    return (
+        f"timelapse [{span[0]},{span[1]}] crosses the order's break after line "
+        f"{split}: its two sides play apart. Move the break, or send one "
+        "timelapse per side."
+    )
+
+
+def order_problems(
+    view: DisplayView, value: Any, timelapses: list[Range]
+) -> tuple[list[Range] | None, list[str]]:
+    """An ``order`` value checked in full: ``(ranges, [])`` or ``(None, problems)``.
+
+    It must tile the view (:func:`read_order`), no range may hold only a silence
+    line, and no break may fall inside one of *timelapses* (display ranges).
+    Every problem is listed, in that order; the LLM director reports the first.
+    """
+    total = len(view.lines)
+    order, why = read_order(value, total)
+    if order is None:
+        return None, [why]
+    if order_segments(view, order) is None:
+        return None, [
+            "a range holds only a silence line. A silence plays "
+            "with the range that holds a line beside it."
+        ]
+    breaks = order_breaks(order, total)
+    problems: list[str] = []
+    for shown in timelapses:
+        split = _split_by(shown, breaks)
+        if split is not None:
+            problems.append(
+                f"its break after line {split} splits timelapse "
+                f"[{shown[0]},{shown[1]}]. Move the break outside it, or rewrite the "
+                "timelapse in the same reply."
+            )
+    return (None, problems) if problems else (order, [])
 
 
 def _display_range(view: DisplayView, segment: int, op: DirectorOp) -> Range | None:
@@ -446,20 +532,15 @@ def apply_reply(
     refusals: list[str] = []
     for op in parsed:
         first, last = op.lines
-        if op.gap_start or op.gap_end:
-            drops.append(
-                f'{op.type} op lines {list(op.lines)} use the "n~" form; a silence '
-                "is a numbered line of its own here — give its number."
-            )
+        silence_ref = silence_ref_problem(op)
+        if silence_ref:
+            drops.append(silence_ref)
+            continue
+        crossing = join_problem(view, op.type, first, last)
+        if crossing:
+            refusals.append(crossing)
             continue
         pieces = _pieces(view, first, last)
-        if len(pieces) > 1 and op.type not in SPLITTABLE:
-            refusals.append(
-                f"{op.type} [{first},{last}] crosses the segment join after line "
-                f"{pieces[0][1]}: the two sides are different footage. Send it as "
-                "separate ops, one per side."
-            )
-            continue
         for piece in pieces:
             mapped = view.to_source(*piece)
             line = view.line(piece[0])
@@ -498,13 +579,9 @@ def apply_reply(
     breaks = order_breaks(state.order, total)
     landed: list[tuple[int, DirectorOp]] = []
     for index, op, piece in accepted:
-        split = _split_by(piece, breaks) if op.type == "timelapse" else None
-        if split is not None:
-            refusals.append(
-                f"timelapse [{piece[0]},{piece[1]}] crosses the order's break after line "
-                f"{split}: its two sides play apart. Move the break, or send one "
-                "timelapse per side."
-            )
+        crossing_break = break_problem(op.type, piece, breaks)
+        if crossing_break:
+            refusals.append(crossing_break)
             continue
         landed.append((index, op))
 
@@ -533,27 +610,14 @@ def _apply_order(
     ops: dict[int, list[DirectorOp]],
 ) -> str | None:
     """Replace ``state.order`` with *value*, or say why not (and keep it)."""
-    total = len(view.lines)
-    order, why = _read_order(value, total)
+    timelapses = [
+        shown
+        for index in sorted(ops)
+        for op in ops[index]
+        if op.type == "timelapse" and (shown := _display_range(view, index, op)) is not None
+    ]
+    order, problems = order_problems(view, value, timelapses)
     if order is None:
-        return f"order not applied: {why} The previous order stays."
-    if order_segments(view, order) is None:
-        return (
-            "order not applied: a range holds only a silence line. A silence plays "
-            "with the range that holds a line beside it. The previous order stays."
-        )
-    breaks = order_breaks(order, total)
-    for index in sorted(ops):
-        for op in ops[index]:
-            if op.type != "timelapse":
-                continue
-            shown = _display_range(view, index, op)
-            split = _split_by(shown, breaks) if shown is not None else None
-            if split is not None:
-                return (
-                    f"order not applied: its break after line {split} splits timelapse "
-                    f"[{shown[0]},{shown[1]}]. Move the break outside it, or rewrite the "
-                    "timelapse in the same reply. The previous order stays."
-                )
+        return f"order not applied: {problems[0]} The previous order stays."
     state.order = order
     return None
