@@ -107,10 +107,14 @@ reply alone.
 
 - `ops` is required and **replaces every op** in the director files; send
   `[]` for none. Lines are `[first, last]`, inclusive, display numbers.
-- `plan` and `order` are optional: absent, the ones on disk stay in force. A
-  plan is required the first time (there is none on disk yet).
+- The edit is the **complete state**: `write` always writes `order.json`, and
+  an edit without `order` means **shooting order** — even if a reorder is on
+  disk. Revise from `dump`, which carries the order in force, so a reorder
+  survives.
 - `order` lists display ranges in the order they PLAY, covering every line
   exactly once. Leave it out for shooting order.
+- `plan` is optional: absent, `plan.md` stays. It is required the first time
+  (there is none on disk yet).
 
 See [references/editorial-rules.md](references/editorial-rules.md) for what
 each op means and when to use it, and
@@ -126,7 +130,9 @@ way; the reasons are in the editorial rules):
 - a `timelapse` needs `factor` >= 4.0; an `overlay` needs non-blank `text` and
   a positive `duration`;
 - a `keep` spans at most `director.max_keep_lines` lines (`view` states the
-  number) — hold a longer event with consecutive keeps;
+  number), and keeps that touch or overlap count as ONE keep against it —
+  never chain keeps to get past the cap. An event longer than the cap is
+  most likely a `timelapse`; otherwise raise it with the user;
 - a `cut` range may not overlap any other op's range;
 - one op stays inside one `[k]` source block — split it yourself at the join;
 - a silence line is a numbered line: use its number, never the `"n~"` form;

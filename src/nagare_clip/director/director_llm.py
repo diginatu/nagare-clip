@@ -188,11 +188,6 @@ def parse_op(
     drops: list[str] | None = None,
     first_line: int = 1,
 ) -> DirectorOp | None:
-    def _drop(msg: str) -> None:
-        logger.warning("Director op dropped: %s", msg)
-        if drops is not None:
-            drops.append(msg)
-
     """One op as the director wrote it, validated; ``None`` (with the reason
     appended to *drops*) when it is malformed.
 
@@ -200,6 +195,12 @@ def parse_op(
     timelapse factor floor, the overlay text/duration rules and the range
     checks are one implementation.
     """
+
+    def _drop(msg: str) -> None:
+        logger.warning("Director op dropped: %s", msg)
+        if drops is not None:
+            drops.append(msg)
+
     if not isinstance(raw, dict):
         return None
     op_type = raw.get("type")

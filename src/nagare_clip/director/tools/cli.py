@@ -18,7 +18,7 @@ from typing import Any
 
 from nagare_clip.brief import format_brief
 from nagare_clip.config import get_effective_config
-from nagare_clip.director.director_llm import _max_keep_lines, keep_limit_note
+from nagare_clip.director.director_llm import _max_keep_lines
 from nagare_clip.director.loop import order_segments
 from nagare_clip.director.preview import edit_state
 from nagare_clip.director.run import VIEW_HEADER, project_context
@@ -26,11 +26,12 @@ from nagare_clip.director.tools.project import Project, current_state, load_proj
 from nagare_clip.director.tools.validate import (
     Edit,
     Problem,
+    skill_keep_limit_note,
     to_display,
     to_source,
     validate_edit,
 )
-from nagare_clip.order import normalise
+from nagare_clip.order import identity_segments, normalise
 from nagare_clip.pipeline.errors import PipelineError
 from nagare_clip.pipeline.stages import (
     _write_director_ops,
@@ -41,8 +42,9 @@ from nagare_clip.pipeline.stages import (
 EDIT_HELP = (
     'An edit is one JSON object in DISPLAY numbering: {"plan": "<prose>", '
     '"order": [[first, last], ...], "ops": [{"type": ..., "lines": [a, b], ...}]}. '
-    '"ops" is required and replaces every op; "plan"/"order" are optional and, '
-    "when absent, the ones on disk stay in force."
+    'It is the complete state: "ops" replaces every op, and an absent "order" '
+    'means shooting order (order.json is always written). "plan" is optional; '
+    "absent, plan.md stays (required while there is none)."
 )
 
 
@@ -89,7 +91,7 @@ def cmd_view(project: Project, args: argparse.Namespace) -> int:
             parts.append(brief)
         max_keep = _max_keep_lines(cfg["director"])
         if max_keep > 0:
-            parts.append(keep_limit_note(max_keep))
+            parts.append(skill_keep_limit_note(max_keep))
         context = project_context(project.ctx.stage_dir("summary") / "summary.json", view)
         if context:
             parts.append(context)
@@ -146,7 +148,6 @@ def _validate(project: Project, data: Any) -> tuple[Edit, list[Problem]]:
     return validate_edit(
         project.view,
         data,
-        current_order=state.order,
         has_plan=bool(state.plan),
         max_keep_lines=_max_keep_lines(project.ctx.cfg["director"]),
     )
@@ -162,7 +163,7 @@ def cmd_preview(project: Project, args: argparse.Namespace) -> int:
     else:
         edit, problems = _validate(project, _read_edit(args.edit))
         ops = to_source(project.view, edit)
-        order = edit.order if edit.order is not None else state.order
+        order = edit.order or []
         plan = edit.plan if edit.plan is not None else state.plan
     text = edit_state(project.view, project.transcripts, ops, order=order, plan=plan)
     print(text)
@@ -177,20 +178,24 @@ def cmd_preview(project: Project, args: argparse.Namespace) -> int:
 
 
 def write_edit(project: Project, edit: Edit) -> list[Path]:
-    """Write a validated *edit*: every ``{stem}_director.json``, and
-    ``order.json``/``plan.md`` when the edit carries them.  Returns the paths."""
+    """Write a validated *edit*: every ``{stem}_director.json`` and
+    ``order.json`` (shooting order when the edit has no ``order``) always, and
+    ``plan.md`` when the edit carries a plan.  Returns the paths."""
     ctx = project.ctx
     by_index = to_source(project.view, edit)
     written: list[Path] = []
     for seg in project.view.segments:
         _write_director_ops(ctx, seg.stem, by_index.get(seg.index, []))
         written.append(project.director_dir / f"{seg.stem}_director.json")
-    if edit.order is not None:
-        segments = order_segments(project.view, edit.order)
-        if segments is None:  # pragma: no cover - validated
-            raise PipelineError("order does not map onto the sources")
-        _write_director_order(ctx, normalise(segments, project.line_counts))
-        written.append(project.director_dir / "order.json")
+    # Always, like the LLM director: the edit is the whole state, so writing
+    # the same edit twice gives the same files.
+    segments = (
+        order_segments(project.view, edit.order) if edit.order else identity_segments(project.stems)
+    )
+    if segments is None:  # pragma: no cover - validated
+        raise PipelineError("order does not map onto the sources")
+    _write_director_order(ctx, normalise(segments, project.line_counts))
+    written.append(project.director_dir / "order.json")
     if edit.plan is not None:
         _write_director_plan(ctx, edit.plan)
         written.append(project.director_dir / "plan.md")
@@ -295,7 +300,8 @@ def build_parser() -> argparse.ArgumentParser:
         description=(
             "Validate the edit; on any problem print them all and write nothing "
             "(exit 1). Otherwise write {stem}_director.json for every source, and "
-            "director/order.json and director/plan.md when the edit carries them."
+            "director/order.json (shooting order when the edit has none), and "
+            "director/plan.md when the edit carries a plan."
         ),
         epilog=EDIT_HELP,
     )

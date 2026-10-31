@@ -215,16 +215,66 @@ def test_order_with_only_a_silence_line_range_is_refused(project, capsys):
     assert "a range holds only a silence line" in err
 
 
-def test_timelapse_across_a_break_of_the_order_on_disk_is_refused(project, capsys):
-    # First write an order that breaks after line 3 (a plays 4, then 1-3).
-    first = {"plan": PLAN, "order": [[4, 4], [1, 3], [5, 6]], "ops": []}
-    _run(capsys, "write", "--config", _cfg(project), "--edit", _edit_file(project, first))
-    # Then, with no "order", a timelapse over the break uses the order in force.
-    second = {"ops": [{"type": "timelapse", "lines": [2, 4], "factor": 5.0}]}
+def test_timelapse_breaks_are_checked_against_the_edits_own_order(project, capsys):
+    # The order breaks after line 3 (a plays 4, then 1-3): a timelapse over it is refused.
+    edit = {
+        "plan": PLAN,
+        "order": [[4, 4], [1, 3], [5, 6]],
+        "ops": [{"type": "timelapse", "lines": [2, 4], "factor": 5.0}],
+    }
     err = _run(
-        capsys, "write", "--config", _cfg(project), "--edit", _edit_file(project, second), code=1
+        capsys, "write", "--config", _cfg(project), "--edit", _edit_file(project, edit), code=1
     ).err
     assert "timelapse [2,4] crosses the order's break after line 3" in err
+
+
+def test_the_order_on_disk_does_not_feed_validation(project, capsys):
+    # A reorder on disk, then an edit without "order": that edit is shooting
+    # order, so the same timelapse is fine — and order.json is reset.
+    first = {"plan": PLAN, "order": [[4, 4], [1, 3], [5, 6]], "ops": []}
+    _run(capsys, "write", "--config", _cfg(project), "--edit", _edit_file(project, first))
+    second = {"ops": [{"type": "timelapse", "lines": [2, 4], "factor": 5.0}]}
+    _run(capsys, "write", "--config", _cfg(project), "--edit", _edit_file(project, second))
+    order = json.loads((_director(project) / "order.json").read_text(encoding="utf-8"))
+    assert order == {"order": [{"stem": "a"}, {"stem": "b"}]}
+
+
+def test_touching_keeps_count_as_one_against_the_cap(project):
+    view = load_project(_load(project)).view
+    ops = [
+        {"type": "keep", "lines": [1, 2]},
+        {"type": "keep", "lines": [3, 4]},
+        {"type": "keep", "lines": [5, 6]},
+    ]
+    _edit, problems = validate_edit(
+        view, {"plan": PLAN, "ops": ops}, has_plan=False, max_keep_lines=2
+    )
+    # a's chain (1-4) is too wide; b's keep (5-6) is another source, so the
+    # source boundary ends the chain even though the numbers touch.
+    assert [str(p) for p in problems] == [
+        "op #1 (keep chain [1, 4]): keeps #1, #2 touch and together span 4 lines > "
+        "max_keep_lines=2; consecutive keeps count as one. An event this long is most "
+        "likely a timelapse; otherwise raise it with the user"
+    ]
+
+
+def test_separated_keeps_and_a_chain_within_the_cap_are_fine(project):
+    view = load_project(_load(project)).view
+    for ops, cap in (
+        ([{"type": "keep", "lines": [1, 1]}, {"type": "keep", "lines": [3, 3]}], 2),
+        ([{"type": "keep", "lines": [1, 1]}, {"type": "keep", "lines": [2, 3]}], 3),
+        ([{"type": "keep", "lines": [1, 2]}, {"type": "keep", "lines": [3, 4]}], 0),
+    ):
+        _edit, problems = validate_edit(
+            view, {"plan": PLAN, "ops": ops}, has_plan=False, max_keep_lines=cap
+        )
+        assert problems == [], (ops, cap)
+
+
+def test_view_states_the_skill_keep_rule(project, capsys):
+    out = _run(capsys, "view", "--config", _cfg(project)).out
+    assert "keeps that touch or overlap count as one keep" in out
+    assert "consecutive keeps that each stay within the cap" not in out
 
 
 def test_two_overlapping_cuts_are_reported_once(project):
@@ -232,7 +282,6 @@ def test_two_overlapping_cuts_are_reported_once(project):
     _edit, problems = validate_edit(
         view,
         {"plan": PLAN, "ops": [{"type": "cut", "lines": [1, 3]}, {"type": "cut", "lines": [3, 4]}]},
-        current_order=[],
         has_plan=False,
     )
     assert [str(p) for p in problems] == [
@@ -249,7 +298,6 @@ def test_adjacent_cut_and_keep_are_fine(project):
             "plan": PLAN,
             "ops": [{"type": "cut", "lines": [1, 1]}, {"type": "keep", "lines": [2, 3]}],
         },
-        current_order=[],
         has_plan=False,
     )
     assert problems == []
@@ -339,14 +387,34 @@ def test_display_source_round_trip_every_range(project):
             assert to_display(view, index, src)["lines"] == [a, b]
 
 
-def test_write_without_plan_or_order_keeps_them(project, capsys):
+def test_write_without_plan_keeps_it_and_without_order_resets_it(project, capsys):
     _run(capsys, "write", "--config", _cfg(project), "--edit", _edit_file(project, GOOD))
     d = _director(project)
-    plan, order = (d / "plan.md").read_bytes(), (d / "order.json").read_bytes()
+    plan = (d / "plan.md").read_bytes()
     _run(capsys, "write", "--config", _cfg(project), "--edit", _edit_file(project, {"ops": []}))
     assert (d / "plan.md").read_bytes() == plan
-    assert (d / "order.json").read_bytes() == order
+    order = json.loads((d / "order.json").read_text(encoding="utf-8"))
+    assert order == {"order": [{"stem": "a"}, {"stem": "b"}]}
     assert json.loads((d / "a_director.json").read_text(encoding="utf-8")) == {"ops": []}
+
+
+def test_write_is_idempotent(project, capsys):
+    path = _edit_file(project, GOOD)
+    _run(capsys, "write", "--config", _cfg(project), "--edit", path)
+    d = _director(project)
+    first = {p.name: p.read_bytes() for p in d.iterdir()}
+    _run(capsys, "write", "--config", _cfg(project), "--edit", path)
+    assert {p.name: p.read_bytes() for p in d.iterdir()} == first
+
+
+def test_dump_keeps_a_reorder_so_revising_from_it_preserves_it(project, capsys):
+    _run(capsys, "write", "--config", _cfg(project), "--edit", _edit_file(project, GOOD))
+    dumped = _run(capsys, "dump", "--config", _cfg(project)).out
+    before = (_director(project) / "order.json").read_bytes()
+    path = project / "dumped.json"
+    path.write_text(dumped, encoding="utf-8")
+    _run(capsys, "write", "--config", _cfg(project), "--edit", str(path))
+    assert (_director(project) / "order.json").read_bytes() == before
 
 
 def test_write_reads_stdin(project, capsys, monkeypatch):
@@ -403,7 +471,7 @@ def test_the_llm_director_drops_what_write_refuses_with_the_same_reason(project)
     drops: list[str] = []
     director_llm.try_parse_director_response(json.dumps({"ops": ops}), len(view.lines), drops, 2)
     _edit, problems = validate_edit(
-        view, {"plan": PLAN, "ops": ops}, current_order=[], has_plan=False, max_keep_lines=2
+        view, {"plan": PLAN, "ops": ops}, has_plan=False, max_keep_lines=2
     )
     assert sorted(drops) == sorted(p.reason for p in problems)
 

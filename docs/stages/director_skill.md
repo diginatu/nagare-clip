@@ -31,8 +31,8 @@ the same view the LLM director reads.
 
 | command | does | writes |
 | --- | --- | --- |
-| `view [--lines A-B] [--no-context]` | brief (`brief.format_brief`), `keep_limit_note`, `project_context_block`, a source index with line ranges and the default runtime, `VIEW_HEADER`, `DisplayView.render(first, last)` | nothing |
-| `dump` | `director/` as one edit file in display numbering (`plan`, `order` when not shooting order, `ops`) | nothing |
+| `view [--lines A-B] [--no-context]` | brief (`brief.format_brief`), `validate.skill_keep_limit_note` (the cap, and that touching keeps count as one — the LLM director's own `keep_limit_note` advises chaining keeps and is left unchanged), `project_context_block`, a source index with line ranges and the default runtime, `VIEW_HEADER`, `DisplayView.render(first, last)` | nothing |
+| `dump` | `director/` as one edit file in display numbering (`plan`, `order` when not shooting order, `ops`) — revising from it preserves a reorder | nothing |
 | `preview [--edit FILE\|-]` | `preview.edit_state()` over the files on disk or a candidate edit: plan, per-op playback, segment runs, the video as it plays with seams, captions in playback order, whole-video runtime. A candidate's problems go to stderr and exit 1; only the ops that passed their own checks are previewed | nothing |
 | `write --edit FILE\|-` | validates; on any problem prints them **all** (stderr, exit 1) and writes nothing; else writes every `{stem}_director.json` (empty list included), and `order.json`/`plan.md` when the edit carries them | director files |
 
@@ -70,10 +70,16 @@ and left out.
 {"plan": "<prose>", "order": [[first, last], ...], "ops": [{"type": ..., "lines": [a, b], ...}]}
 ```
 
+The edit is the **complete state**, so writing it twice gives the same files:
+
 - `ops` is required and **replaces every op** in the director files.
-- `plan`/`order` are optional; absent, the files on disk stay in force (and
-  the timelapse checks run against the order on disk). A plan is required
-  when `plan.md` holds none.
+- `order` absent means **shooting order**: `write` always writes
+  `director/order.json` (the identity order when absent), as the LLM director
+  writes it on every run. The timelapse/break checks use the edit's own order,
+  never the one on disk. `dump` emits the order in force, so an edit revised
+  from `dump` keeps a reorder.
+- `plan` is optional; absent, `plan.md` stays. It is required while `plan.md`
+  holds none.
 - Unknown top-level keys are a problem.
 
 ## Validation (`tools/validate.py::validate_edit`, pure)
@@ -89,11 +95,17 @@ in this phase so the two cannot drift:
 | no `"n~"` in display numbering | `loop.silence_ref_problem` | drops |
 | op inside one `[k]` block | `loop.join_problem(splittable=frozenset())` | splits cut/keep, refuses the rest |
 | order tiles 1..N; no silence-only range; no break inside a timelapse | `loop.order_problems` (uses `loop.read_order`, was `_read_order`) | refuses the order (`_apply_order` reports the first problem) |
-| no timelapse across a break of the order in force | `loop.break_problem` | refuses the op |
+| no timelapse across a break of the edit's order | `loop.break_problem` | refuses the op |
 
-Two checks only the tools enforce (the LLM path's behaviour is unchanged, by
+Three checks only the tools enforce (the LLM path's behaviour is unchanged, by
 decision):
 
+- **keeps that touch or overlap count as one keep** against
+  `director.max_keep_lines` — chaining keeps that each fit would restore the
+  span the cap exists to keep dropped (it guards against keeps widening over
+  talking, with no exemption). A source boundary ends a chain (different
+  recordings, not one event); the problem is reported on the chain's first op
+  and suggests a timelapse or asking the user.
 - **a `cut` range may not overlap any other op's range** — the prompt asks for
   it; guided_edit otherwise clips the cut. Two overlapping cuts are reported
   once, on the earlier.
