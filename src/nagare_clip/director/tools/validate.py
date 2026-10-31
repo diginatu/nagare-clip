@@ -233,11 +233,9 @@ def _keep_chain_problems(
                 f"op #{i} (keep chain [{first}, {last}])",
                 f"keeps {ops} touch and together span {width} lines > "
                 f"max_keep_lines={max_keep_lines}; consecutive keeps count as one. "
-                "To keep the silences of a long on-screen event, put one keep on each "
-                "silence line ([n, n]) — the speech lines between them play anyway, so "
-                "those keeps do not touch. If the event is manual work, a timelapse may "
-                "fit better. To keep the short pauses too, ask the user to raise "
-                "director.max_keep_lines and use ONE keep",
+                "Cover an on-screen event with ONE keep; for one wider than the cap, "
+                "ask the user to raise director.max_keep_lines (or, for manual work, "
+                "consider a timelapse) — never chain keeps around it",
                 i,
             )
         )
@@ -249,10 +247,10 @@ def skill_keep_limit_note(max_keep_lines: int) -> str:
     :func:`~..director_llm.keep_limit_note`, unchanged)."""
     return (
         f'A "keep" op may span at most {max_keep_lines} line(s), and keeps that touch '
-        "or overlap count as one keep against that limit; write refuses either. To "
-        "keep the silences of a long on-screen event, put one keep on each silence "
-        "line ([n, n]): the speech between them plays anyway, so they do not touch. "
-        "Wider than that only with the user's OK to raise director.max_keep_lines. "
+        "or overlap count as one keep against that limit; write refuses either. Cover "
+        "an on-screen event with ONE keep over its whole range, short noise/utterance "
+        "lines included; for one wider than that, ask the user to raise "
+        "director.max_keep_lines (or consider a timelapse for manual work). "
         'A "timelapse" op needs no keep of its own; it protects its whole range by '
         "itself."
     )

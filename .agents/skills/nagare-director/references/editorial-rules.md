@@ -48,34 +48,27 @@ that for the lines in its range only.
   about one per 3-5 minutes of finished video unless the brief sets a rate.
   All captions share one track, so two on screen at once collide;
   `preview` lists them in playback order.
-- **keep** — protects a span INCLUDING its silences. Width follows what is on
-  screen: the narrowest range covering one silent gap (normally the silence
-  line alone, or `[N, N+1]`), or the WHOLE event in one keep when a
-  continuous action plays out across several gaps (an accident and the
-  cleanup, a demo running, a result arriving) — rescuing each gap separately
-  chops the payoff into jump cuts. Never widen a keep over talking: speech is
-  never dropped by default, so such a keep only restores its pauses and
-  inflates the runtime. A request to "feature", "retain" or "emphasise"
-  something is editorial emphasis, NOT a keep. The tools refuse a keep wider
-  than `director.max_keep_lines`, and count keeps that touch or overlap as
-  one keep: the cap exists to stop keeps widening over talking, and chaining
-  keeps would defeat it.
-
-  **A long on-screen event** (longer than the cap):
-
-  1. Default: **one keep per silence line** — `[n, n]` on each silence line's
-     own number. The speech lines between them play anyway, so those keeps
-     do not touch and the cap does not apply.
-  2. That still drops the short pauses between lines (below
-     `director.silence_line_min`, so they have no silence line) and the
-     silence inside a speech line, so the event plays with small jump cuts.
-     Only when the user wants those to survive too: **ask the user first**;
-     with their OK, they raise `director.max_keep_lines` in the project
-     config, and you cover the event with ONE keep.
-  3. If the event is manual work worth seeing fast, a timelapse may be the
-     better op.
-
-  Never work around the cap without the user's OK.
+- **keep** — protects a span INCLUDING its silences, so an on-screen event
+  plays as one continuous piece. That is what it is for: during an event
+  (an accident and the cleanup, a demo running, a result arriving), small
+  noises and short utterances get transcribed as speech lines, and by
+  default the pauses around them are dropped — the event plays chopped into
+  fragments. Cover the event with **ONE keep over its whole range**, those
+  short noise/utterance lines included, so it plays uncut. For a single
+  silent gap, the narrowest range covering it (the silence line alone, or
+  `[N, N+1]`) is enough.
+- A keep is **not** for emphasising ordinary talking: a span that is just
+  someone talking is not an event. Speech is never dropped by default, so a
+  keep there only restores its pauses and inflates the runtime. A request to
+  "feature", "retain" or "emphasise" something is editorial emphasis, NOT a
+  keep.
+- A keep spans at most `director.max_keep_lines` lines (`view` states the
+  number), and the tools count keeps that touch or overlap as one keep —
+  **never chain keeps to get around the cap**. For an event wider than the
+  cap, **ask the user**: with their OK they raise `director.max_keep_lines`
+  in the project config and you use ONE keep; or, if it is manual work worth
+  seeing fast, consider a timelapse. Never work around the cap without the
+  user's OK.
 - **edit** — a fine within-line text deletion or fix; describe it precisely in
   `note` (where it starts and ends). Speech lines only.
 - **speed** does not exist for you (the tools refuse it). Repeated prompt

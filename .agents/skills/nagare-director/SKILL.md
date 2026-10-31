@@ -131,9 +131,9 @@ way; the reasons are in the editorial rules):
   a positive `duration`;
 - a `keep` spans at most `director.max_keep_lines` lines (`view` states the
   number), and keeps that touch or overlap count as ONE keep against it —
-  never chain keeps to get past the cap. For a long on-screen event, put one
-  keep on each silence line (`[n, n]`); keeping the short pauses too needs
-  the user's OK to raise `director.max_keep_lines` (see the editorial rules);
+  never chain keeps to get past the cap. An event is covered by ONE keep over
+  its whole range; one wider than the cap needs the user's OK to raise
+  `director.max_keep_lines` (or is a timelapse — see the editorial rules);
 - a `cut` range may not overlap any other op's range;
 - one op stays inside one `[k]` source block — split it yourself at the join;
 - a silence line is a numbered line: use its number, never the `"n~"` form;
