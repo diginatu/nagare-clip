@@ -57,7 +57,11 @@ that for the lines in its range only.
   never dropped by default, so such a keep only restores its pauses and
   inflates the runtime. A request to "feature", "retain" or "emphasise"
   something is editorial emphasis, NOT a keep. The tools refuse a keep wider
-  than `director.max_keep_lines`; hold a longer event with consecutive keeps.
+  than `director.max_keep_lines`, and count keeps that touch or overlap as
+  one keep: the cap exists to stop keeps widening over talking, and chaining
+  keeps would defeat it. An event longer than the cap is most likely a
+  timelapse (manual work worth seeing fast); otherwise raise it with the user
+  instead of working around the cap.
 - **edit** — a fine within-line text deletion or fix; describe it precisely in
   `note` (where it starts and ends). Speech lines only.
 - **speed** does not exist for you (the tools refuse it). Repeated prompt

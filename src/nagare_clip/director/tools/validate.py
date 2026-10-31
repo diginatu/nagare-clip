@@ -4,9 +4,11 @@ An edit is one JSON object::
 
     {"plan": "<prose>", "order": [[first, last], ...], "ops": [{...}, ...]}
 
-``ops`` is required and replaces every op the director files hold.  ``plan``
-and ``order`` are optional: absent, the ones already on disk stay in force
-(and the timelapse checks run against that order).
+The edit is the complete state, like the files it writes: ``ops`` is required
+and replaces every op, and an absent ``order`` means shooting order — ``write``
+always writes ``order.json``, the identity order when ``order`` is absent, so
+writing the same edit twice gives the same files.  ``plan`` is optional (the
+plan on disk stays), but required while ``plan.md`` holds none.
 
 Every check is the LLM director's own — :func:`~..director_llm.parse_op`
 (types, factor floor, overlay text/duration, range bounds),
@@ -15,8 +17,10 @@ Every check is the LLM director's own — :func:`~..director_llm.parse_op`
 :func:`~..loop.silence_ref_problem`, :func:`~..loop.order_problems` and
 :func:`~..loop.break_problem` — plus two that only the tools enforce: a ``cut``
 range may not overlap any other op's range (the LLM prompt asks for it and
-``guided_edit`` clips instead), and an ``edit`` op may not sit on a silence line
-(``guided_edit`` could not apply it).  Unlike the LLM path, nothing is dropped
+``guided_edit`` clips instead), an ``edit`` op may not sit on a silence line
+(``guided_edit`` could not apply it), and keeps that touch or overlap count as
+ONE keep against ``director.max_keep_lines`` — chaining them would restore the
+very span the cap exists to keep dropped.  Unlike the LLM path, nothing is dropped
 or split silently: a problem refuses the whole edit, with its reason.
 
 Pure: no I/O, no LLM.
@@ -64,8 +68,8 @@ class Edit:
     """A validated edit.
 
     *ops* are ``(display range, op in DISPLAY numbering)`` in the order given;
-    *order* is ``None`` when the edit left the order in force alone, *plan*
-    likewise.  :func:`to_source` converts the ops.
+    *order* is ``None`` for shooting order (no ``order`` in the edit); *plan*
+    is ``None`` when the edit left the plan on disk alone.  :func:`to_source` converts the ops.
     """
 
     ops: list[tuple[Range, DirectorOp]] = field(default_factory=list)
@@ -87,7 +91,6 @@ def validate_edit(
     view: DisplayView,
     data: Any,
     *,
-    current_order: list[Range],
     has_plan: bool,
     max_keep_lines: int = 0,
 ) -> tuple[Edit, list[Problem]]:
@@ -95,8 +98,9 @@ def validate_edit(
 
     The partial edit holds the ops that passed their own checks, so a preview
     can still show them; only an edit with no problems may be written.
-    *current_order* is the order on disk (display ranges, ``[]`` = shooting
-    order); *has_plan* says whether ``plan.md`` already holds a plan.
+    The timelapse/break checks use the edit's own order (shooting order when it
+    has none), never the order on disk.  *has_plan* says whether ``plan.md``
+    already holds a plan.
     """
     total = len(view.lines)
     problems: list[Problem] = []
@@ -119,7 +123,7 @@ def validate_edit(
     if "order" in data:
         order, why = order_problems(view, data["order"], [])
         problems.extend(Problem("order", reason) for reason in why)
-    in_force = order if order is not None else current_order
+    in_force = order or []
 
     raw_ops = data.get("ops")
     if not isinstance(raw_ops, list):
@@ -185,8 +189,68 @@ def validate_edit(
                 )
             )
 
+    problems.extend(_keep_chain_problems(view, accepted, max_keep_lines))
     problems.sort(key=lambda p: p.op)  # stable: edit/plan/order first, then by op
     return Edit(ops=[(span, op) for _i, span, op in accepted], order=order, plan=plan), problems
+
+
+def _keep_chain_problems(
+    view: DisplayView, accepted: list[tuple[int, Range, DirectorOp]], max_keep_lines: int
+) -> list[Problem]:
+    """Keeps that touch or overlap, together wider than the cap.
+
+    A single over-wide keep is :func:`keep_cap_problem`'s; this catches the
+    same span split into pieces that each fit.  A source boundary ends a chain:
+    the two sides are different recordings, not one event.  Reported on the
+    chain's first op.
+    """
+    if max_keep_lines <= 0:
+        return []
+    keeps = sorted((span, i) for i, span, op in accepted if op.type == "keep")
+    chains: list[list[tuple[Range, int]]] = []
+    for span, i in keeps:
+        if (
+            chains
+            and span[0] <= max(s[1] for s, _ in chains[-1]) + 1
+            and view.line(span[0]).segment == view.line(chains[-1][0][0][0]).segment
+        ):
+            chains[-1].append((span, i))
+        else:
+            chains.append([(span, i)])
+    out: list[Problem] = []
+    for chain in chains:
+        if len(chain) < 2:
+            continue
+        first = chain[0][0][0]
+        last = max(s[1] for s, _ in chain)
+        width = last - first + 1
+        if width <= max_keep_lines:
+            continue
+        i = min(n for _, n in chain)
+        ops = ", ".join(f"#{n}" for _, n in sorted(chain, key=lambda c: c[1]))
+        out.append(
+            Problem(
+                f"op #{i} (keep chain [{first}, {last}])",
+                f"keeps {ops} touch and together span {width} lines > "
+                f"max_keep_lines={max_keep_lines}; consecutive keeps count as one. "
+                "An event this long is most likely a timelapse; otherwise raise it "
+                "with the user",
+                i,
+            )
+        )
+    return out
+
+
+def skill_keep_limit_note(max_keep_lines: int) -> str:
+    """The keep cap as the agent skill states it (the LLM director keeps its own
+    :func:`~..director_llm.keep_limit_note`, unchanged)."""
+    return (
+        f'A "keep" op may span at most {max_keep_lines} line(s), and keeps that touch '
+        "or overlap count as one keep against that limit; write refuses either. An "
+        "event longer than that is most likely a timelapse — otherwise raise it with "
+        'the user. A "timelapse" op needs no keep of its own; it protects its whole '
+        "range by itself."
+    )
 
 
 def to_source(view: DisplayView, edit: Edit) -> dict[int, list[DirectorOp]]:
