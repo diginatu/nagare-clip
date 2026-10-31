@@ -253,8 +253,11 @@ def test_touching_keeps_count_as_one_against_the_cap(project):
     # source boundary ends the chain even though the numbers touch.
     assert [str(p) for p in problems] == [
         "op #1 (keep chain [1, 4]): keeps #1, #2 touch and together span 4 lines > "
-        "max_keep_lines=2; consecutive keeps count as one. An event this long is most "
-        "likely a timelapse; otherwise raise it with the user"
+        "max_keep_lines=2; consecutive keeps count as one. To keep the silences of a "
+        "long on-screen event, put one keep on each silence line ([n, n]) — the speech "
+        "lines between them play anyway, so those keeps do not touch. If the event is "
+        "manual work, a timelapse may fit better. To keep the short pauses too, ask the "
+        "user to raise director.max_keep_lines and use ONE keep"
     ]
 
 
@@ -492,3 +495,42 @@ def test_write_warns_when_guided_edit_would_not_apply_the_ops(project, capsys):
         _edit_file(project, GOOD),
     ).err
     assert "guided_edit.enabled" not in err
+
+
+def test_one_keep_per_silence_line_is_the_route_past_the_cap(project):
+    # A second silence line in b: a 10 s wait between its two lines.
+    root = project
+    data = {
+        "segments": [
+            {
+                "start": 0.0,
+                "end": 3.0,
+                "text": "bの1行目",
+                "words": [{"word": "w", "start": 0.0, "end": 3.0}],
+            },
+            {
+                "start": 13.0,
+                "end": 15.0,
+                "text": "bの2行目",
+                "words": [{"word": "w", "start": 13.0, "end": 15.0}],
+            },
+            {
+                "start": 40.0,
+                "end": 41.0,
+                "text": "bの3行目",
+                "words": [{"word": "w", "start": 40.0, "end": 41.0}],
+            },
+        ]
+    }
+    (root / "out" / "sentence_split" / "b.json").write_text(json.dumps(data), encoding="utf-8")
+    (root / "out" / "text_filter" / "b_edits.txt").write_text(
+        "bの1行目\nbの2行目\nbの3行目\n", encoding="utf-8"
+    )
+    view = load_project(_load(root)).view
+    silence = [line.number for line in view.lines if line.is_silence and line.stem == "b"]
+    assert len(silence) == 2 and silence[1] - silence[0] == 2  # a speech line between
+    ops = [{"type": "keep", "lines": [n, n]} for n in silence]
+    _edit, problems = validate_edit(
+        view, {"plan": PLAN, "ops": ops}, has_plan=False, max_keep_lines=1
+    )
+    assert problems == []
