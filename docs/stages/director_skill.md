@@ -105,11 +105,13 @@ decision):
   span the cap exists to keep dropped (it guards against keeps widening over
   talking, with no exemption). A source boundary ends a chain (different
   recordings, not one event); the problem is reported on the chain's first op
-  and names the route: one keep per silence line (`[n, n]` — speech lines
-  between them keep those keeps apart, so the cap does not apply), a timelapse
-  for manual work, or — to keep the sub-`silence_line_min` pauses and the
-  silence inside lines too — asking the user to raise `max_keep_lines` and
-  using ONE keep. The skill never works around the cap without the user's OK.
+  and names the route: cover the event with ONE keep; for one wider than the
+  cap, ask the user to raise `max_keep_lines` (or consider a timelapse for
+  manual work). The skill's keep rule: a keep exists so an on-screen event is
+  not chopped into fragments when small noises are transcribed as speech —
+  ONE keep over the whole event, those short lines included, up to the cap;
+  never a keep to emphasise ordinary talking; never chained keeps; never past
+  the cap without the user's OK.
   The LLM director's `keep_limit_note()` is deliberately unchanged (it goes
   with the LLM director in a later phase).
 - **a `cut` range may not overlap any other op's range** — the prompt asks for

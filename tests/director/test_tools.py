@@ -253,11 +253,10 @@ def test_touching_keeps_count_as_one_against_the_cap(project):
     # source boundary ends the chain even though the numbers touch.
     assert [str(p) for p in problems] == [
         "op #1 (keep chain [1, 4]): keeps #1, #2 touch and together span 4 lines > "
-        "max_keep_lines=2; consecutive keeps count as one. To keep the silences of a "
-        "long on-screen event, put one keep on each silence line ([n, n]) — the speech "
-        "lines between them play anyway, so those keeps do not touch. If the event is "
-        "manual work, a timelapse may fit better. To keep the short pauses too, ask the "
-        "user to raise director.max_keep_lines and use ONE keep"
+        "max_keep_lines=2; consecutive keeps count as one. Cover an on-screen event "
+        "with ONE keep; for one wider than the cap, ask the user to raise "
+        "director.max_keep_lines (or, for manual work, consider a timelapse) — never "
+        "chain keeps around it"
     ]
 
 
@@ -497,7 +496,9 @@ def test_write_warns_when_guided_edit_would_not_apply_the_ops(project, capsys):
     assert "guided_edit.enabled" not in err
 
 
-def test_one_keep_per_silence_line_is_the_route_past_the_cap(project):
+def test_keeps_separated_by_a_speech_line_do_not_chain(project):
+    """A checker property, not a recommended route: the skill covers an event
+    with ONE keep, and asks the user to raise the cap for a wider one."""
     # A second silence line in b: a 10 s wait between its two lines.
     root = project
     data = {
