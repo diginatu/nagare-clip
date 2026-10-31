@@ -98,13 +98,25 @@ class DisplayView:
     lines: list[DisplayLine] = field(default_factory=list)
     segments: list[DisplaySegment] = field(default_factory=list)
 
-    def render(self) -> str:
-        """The transcript the director reads: every segment, every line, once."""
+    def render(self, first: int | None = None, last: int | None = None) -> str:
+        """The transcript the director reads: every segment, every line, once.
+
+        *first*/*last* narrow it to display lines ``[first, last]`` (for paging
+        through a long video); a ``[k]`` heading is kept for every block that
+        has a line in range, and a block's leading gap descriptions only when
+        its first line is in range.  Both ``None`` is the whole video.
+        """
+        lo = 1 if first is None else first
+        hi = len(self.lines) if last is None else last
         blocks: list[str] = []
         for seg in self.segments:
+            a, b = max(seg.first, lo), min(seg.last, hi)
+            if a > b:
+                continue
             out = [f"[{seg.index}] {seg.label}"]
-            out.extend(f"{INDENT}[silent gap: {text}]" for text in seg.leading)
-            for line in self.lines[seg.first - 1 : seg.last]:
+            if a == seg.first:
+                out.extend(f"{INDENT}[silent gap: {text}]" for text in seg.leading)
+            for line in self.lines[a - 1 : b]:
                 out.append(f"{line.number}: {line.text}".rstrip())
                 out.extend(f"{INDENT}[silent gap: {text}]" for text in line.annotations)
             blocks.append("\n".join(out))
