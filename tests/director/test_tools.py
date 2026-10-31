@@ -406,3 +406,21 @@ def test_the_llm_director_drops_what_write_refuses_with_the_same_reason(project)
         view, {"plan": PLAN, "ops": ops}, current_order=[], has_plan=False, max_keep_lines=2
     )
     assert sorted(drops) == sorted(p.reason for p in problems)
+
+
+def test_write_warns_when_guided_edit_would_not_apply_the_ops(project, capsys):
+    err = _run(capsys, "write", "--config", _cfg(project), "--edit", _edit_file(project, GOOD)).err
+    assert "guided_edit.enabled is false" in err
+    on = project / "on.yml"
+    on.write_text("guided_edit:\n  enabled: true\n", encoding="utf-8")
+    err = _run(
+        capsys,
+        "write",
+        "--config",
+        _cfg(project),
+        "--config",
+        str(on),
+        "--edit",
+        _edit_file(project, GOOD),
+    ).err
+    assert "guided_edit.enabled" not in err

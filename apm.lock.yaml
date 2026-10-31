@@ -18,7 +18,7 @@ deployments:
   owners:
   - .
   active_owner: .
-  content_hash: sha256:c7d5d5490632895bb7abcaffb93ef137444a8006738ecdf6b2c6de32d6430590
+  content_hash: sha256:339bafcfc50653910d60b3a6bc13988e4ada342ea63006f87565af169c53c5d3
 - kind: project-relative
   target: claude
   value: .claude/skills/nagare-director/references/editorial-rules.md
@@ -54,7 +54,7 @@ deployments:
   owners:
   - .
   active_owner: .
-  content_hash: sha256:c7d5d5490632895bb7abcaffb93ef137444a8006738ecdf6b2c6de32d6430590
+  content_hash: sha256:339bafcfc50653910d60b3a6bc13988e4ada342ea63006f87565af169c53c5d3
 - kind: project-relative
   target: codex
   value: .agents/skills/nagare-director/references/editorial-rules.md
@@ -83,9 +83,9 @@ local_deployed_files:
 - .claude/skills/nagare-director/references/editorial-rules.md
 - .claude/skills/nagare-director/references/reading-the-view.md
 local_deployed_file_hashes:
-  .agents/skills/nagare-director/SKILL.md: sha256:c7d5d5490632895bb7abcaffb93ef137444a8006738ecdf6b2c6de32d6430590
+  .agents/skills/nagare-director/SKILL.md: sha256:339bafcfc50653910d60b3a6bc13988e4ada342ea63006f87565af169c53c5d3
   .agents/skills/nagare-director/references/editorial-rules.md: sha256:3ec5b07dabfb1be12c231b91caf5eb47a0d68309ee1f970227f3a2241b78e7e3
   .agents/skills/nagare-director/references/reading-the-view.md: sha256:e55fc1313bbdc8a429a46a55a8887fd90659ce980f748bc170a552dc1cd61857
-  .claude/skills/nagare-director/SKILL.md: sha256:c7d5d5490632895bb7abcaffb93ef137444a8006738ecdf6b2c6de32d6430590
+  .claude/skills/nagare-director/SKILL.md: sha256:339bafcfc50653910d60b3a6bc13988e4ada342ea63006f87565af169c53c5d3
   .claude/skills/nagare-director/references/editorial-rules.md: sha256:3ec5b07dabfb1be12c231b91caf5eb47a0d68309ee1f970227f3a2241b78e7e3
   .claude/skills/nagare-director/references/reading-the-view.md: sha256:e55fc1313bbdc8a429a46a55a8887fd90659ce980f748bc170a552dc1cd61857

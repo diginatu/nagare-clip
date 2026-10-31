@@ -50,6 +50,15 @@ brackets, silence lines and gap annotations are the stage's. Stems come from
 missing `_edits.txt` is exit 2 naming `--to-stage text_filter`. Writing reuses
 `stages._write_director_ops/_order/_plan`.
 
+After writing, `write` warns (stderr) when `guided_edit.enabled` is false —
+a disabled guided_edit copies `_edits.txt` through and the ops never land
+(span ops need no LLM; only an `edit` op uses guided_edit's model) — and when
+`director.enabled` is true (the LLM director would resume from these files if
+the director stage ran). Verified end to end on a fixture project:
+`write` → `run_pipeline.sh --from-stage guided_edit --to-stage intervals`
+with `guided_edit.enabled: true` produced the expected markers and a reordered
+`timeline.json`.
+
 `current_state()` maps the files on disk back onto the view
 (`view.from_source`, `loop.order_ranges`); an op or order that no longer maps
 (a transcript or `director.silence_line_min` changed) is listed as a warning

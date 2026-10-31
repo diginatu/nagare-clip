@@ -88,7 +88,7 @@ The LLM director above is being replaced by an **agent skill**: you direct the c
 
 1. Run the pipeline up to the text checkpoint: `./scripts/run_pipeline.sh --config <yml> --to-stage text_filter`.
 2. Ask your agent to direct the video (for example "nagare-director で編集して"). The skill ships in this repo: `.claude/skills/nagare-director/` for Claude Code, `.agents/skills/nagare-director/` for the others. The agent reads the whole video, writes a plan, **asks you to confirm it**, drafts the edits, shows you the runtime/timelapse/caption numbers from a preview, and changes them as you ask. You can redirect it at any time.
-3. When you are happy, it writes the files and you resume: `./scripts/run_pipeline.sh --config <yml> --from-stage guided_edit` (keep `director.enabled` off, or the LLM director will continue from those files).
+3. When you are happy, it writes the files and you resume: `./scripts/run_pipeline.sh --config <yml> --from-stage guided_edit`. Set `guided_edit.enabled: true` in the config — a disabled guided_edit copies the transcript through without applying the ops (cut/timelapse/overlay/keep need no LLM; only an `edit` op uses guided_edit's model). Keep `director.enabled` off, or the LLM director will continue from those files. `write` warns about both.
 
 The agent uses deterministic tools you can also run yourself (no LLM call):
 
