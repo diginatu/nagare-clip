@@ -45,7 +45,7 @@ VALID_TYPES = {"cut", "speed", "overlay", "keep", "edit", "timelapse"}
 MENU_TYPES = VALID_TYPES - {"speed"}
 
 # The factor DIRECTOR_PROMPT calls a real timelapse; the parse-time floor for
-# a "timelapse" op (see _parse_op) below which it is a mild speed-up instead.
+# a "timelapse" op (see parse_op) below which it is a mild speed-up instead.
 TIMELAPSE_MIN_FACTOR = 4.0
 
 _FENCE_RE = re.compile(r"^\s*```(?:json)?\s*(.*?)\s*```\s*$", re.DOTALL)
@@ -182,7 +182,7 @@ def _coerce_line_range(
     return ((start[0], end[0]), start[1], end[1])
 
 
-def _parse_op(
+def parse_op(
     raw: Any,
     num_lines: int | None,
     drops: list[str] | None = None,
@@ -193,6 +193,13 @@ def _parse_op(
         if drops is not None:
             drops.append(msg)
 
+    """One op as the director wrote it, validated; ``None`` (with the reason
+    appended to *drops*) when it is malformed.
+
+    Shared by the LLM director's parser and the agent skill's tools, so the
+    timelapse factor floor, the overlay text/duration rules and the range
+    checks are one implementation.
+    """
     if not isinstance(raw, dict):
         return None
     op_type = raw.get("type")
@@ -276,6 +283,40 @@ def _parse_op(
     )
 
 
+def keep_cap_problem(op: DirectorOp, max_keep_lines: int) -> str | None:
+    """Why *op* breaks the ``keep`` width cap, or ``None``.
+
+    Shared by the LLM director (:func:`_apply_keep_cap`, which drops the op)
+    and the agent skill's ``write`` tool (which refuses the whole edit), so the
+    two cannot disagree about what is too wide.  ``0`` = no limit.
+    """
+    if max_keep_lines <= 0 or op.type != "keep":
+        return None
+    span = op.lines[1] - op.lines[0] + 1
+    if span <= max_keep_lines:
+        return None
+    return (
+        f"keep op spans {span} lines {list(op.lines)} > "
+        f"max_keep_lines={max_keep_lines}; a keep may span a "
+        "continuous on-screen event, not a talking span"
+    )
+
+
+def off_menu_problem(op: DirectorOp) -> str | None:
+    """Why *op* is not an operation the director may emit, or ``None``.
+
+    Currently that is ``speed`` only (see :data:`MENU_TYPES`).  Shared by the
+    LLM director and the agent skill's tools.
+    """
+    if op.type in MENU_TYPES:
+        return None
+    return (
+        f"{op.type!r} op {list(op.lines)} is not an operation the "
+        'director may emit; a stretch worth going fast over is a "timelapse", '
+        'anything else plays at 1x or is a "cut"'
+    )
+
+
 def _apply_keep_cap(
     ops: list[DirectorOp],
     max_keep_lines: int,
@@ -283,25 +324,17 @@ def _apply_keep_cap(
 ) -> list[DirectorOp]:
     """Post-pass: drop a ``keep`` op wider than ``max_keep_lines``.  Kept as a
     pass over the whole parsed list (rather than a check inside
-    :func:`_parse_op`) so the drop message/logging stays in one place; tests
-    assert on it.
+    :func:`parse_op`) so the drop message/logging stays in one place; tests
+    assert on it.  The check itself is :func:`keep_cap_problem`.
     """
-    if max_keep_lines <= 0:
-        return ops
     kept: list[DirectorOp] = []
     for op in ops:
-        if op.type == "keep":
-            span = op.lines[1] - op.lines[0] + 1
-            if span > max_keep_lines:
-                msg = (
-                    f"keep op spans {span} lines {list(op.lines)} > "
-                    f"max_keep_lines={max_keep_lines}; a keep may span a "
-                    "continuous on-screen event, not a talking span"
-                )
-                logger.warning("Director op dropped: %s", msg)
-                if drops is not None:
-                    drops.append(msg)
-                continue
+        msg = keep_cap_problem(op, max_keep_lines)
+        if msg:
+            logger.warning("Director op dropped: %s", msg)
+            if drops is not None:
+                drops.append(msg)
+            continue
         kept.append(op)
     return kept
 
@@ -312,19 +345,15 @@ def _drop_off_menu_ops(
 ) -> list[DirectorOp]:
     """Post-pass: drop an op whose type is not on the director's menu.
 
-    Currently that is ``speed`` only (see :data:`MENU_TYPES`).  A post-pass
-    rather than a check inside :func:`_parse_op` — like :func:`_apply_keep_cap`
-    — so the drop message/logging stays in one place and
-    :func:`ops_from_dict` (the hand-edit path) is left uncapped.
+    A post-pass rather than a check inside :func:`parse_op` — like
+    :func:`_apply_keep_cap` — so the drop message/logging stays in one place and
+    :func:`ops_from_dict` (the hand-edit path) is left uncapped.  The check
+    itself is :func:`off_menu_problem`.
     """
     kept: list[DirectorOp] = []
     for op in ops:
-        if op.type not in MENU_TYPES:
-            msg = (
-                f"{op.type!r} op {list(op.lines)} is not an operation the "
-                'director may emit; a stretch worth going fast over is a "timelapse", '
-                'anything else plays at 1x or is a "cut"'
-            )
+        msg = off_menu_problem(op)
+        if msg:
             logger.warning("Director op dropped: %s", msg)
             if drops is not None:
                 drops.append(msg)
@@ -377,7 +406,7 @@ def try_parse_director_response(
 
     ops: list[DirectorOp] = []
     for raw in data["ops"]:
-        op = _parse_op(raw, num_lines, drops, first_line)
+        op = parse_op(raw, num_lines, drops, first_line)
         if op is not None:
             ops.append(op)
     return _apply_keep_cap(_drop_off_menu_ops(ops, drops), max_keep_lines, drops)
@@ -408,7 +437,7 @@ def ops_from_dict(data: Any, num_lines: int | None) -> list[DirectorOp]:
         return []
     ops: list[DirectorOp] = []
     for raw in data["ops"]:
-        op = _parse_op(raw, num_lines)
+        op = parse_op(raw, num_lines)
         if op is not None:
             ops.append(op)
     return ops
