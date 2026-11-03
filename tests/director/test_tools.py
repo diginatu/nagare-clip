@@ -571,3 +571,116 @@ def test_view_says_why_a_runtime_is_unknown_untimed_segment(project, capsys):
     path.write_text(json.dumps(data), encoding="utf-8")
     out = _run(capsys, "view", "--config", _cfg(project), "--no-context").out
     assert "default unknown — source line 2 has no start/end time" in out
+
+
+# --- preview: compact and narrowed forms ---------------------------------------
+
+
+def test_preview_summary_is_compact_and_whole_video(project, capsys):
+    out = _run(
+        capsys,
+        "preview",
+        "--config",
+        _cfg(project),
+        "--summary",
+        "--edit",
+        _edit_file(project, GOOD),
+    ).out
+    assert "[1] a: default 3.0 s → 5.7 s" in out
+    assert "[2] b: default 3.5 s → 3.5 s" in out
+    assert "whole video: default 6.5 s (0.1 min) → 9.2 s (0.2 min)" in out
+    # Runs in playback order (b plays first), cuts listed, captions in order.
+    assert out.index("lines 5-6") < out.index("lines 1-3")
+    assert "cut" in out and "line 4" in out
+    assert "Captions in playback order (2):" in out
+    assert out.index("「結果」") < out.index("「作業中」", out.index("Captions"))
+    # No per-op detail.
+    assert "footage inside" not in out and "unintelligible" not in out
+
+
+def test_preview_summary_min_run_hides_short_runs_but_keeps_cuts(project, capsys):
+    out = _run(
+        capsys,
+        "preview",
+        "--config",
+        _cfg(project),
+        "--summary",
+        "--min-run",
+        "4",
+        "--edit",
+        _edit_file(project, GOOD),
+    ).out
+    assert "timelapse" in out  # 5.7 s
+    assert "lines 5-6" not in out.split("Captions")[0]  # 3.5 s run hidden
+    assert "line 4" in out  # the cut stays
+    assert "1 shorter run(s) hidden" in out
+
+
+def test_preview_summary_reports_problems(project, capsys):
+    edit = dict(GOOD, ops=[*GOOD["ops"], {"type": "speed", "lines": [6, 6], "factor": 2}])
+    res = _run(
+        capsys,
+        "preview",
+        "--config",
+        _cfg(project),
+        "--summary",
+        "--edit",
+        _edit_file(project, edit),
+        code=1,
+    )
+    assert "whole video:" in res.out
+    assert "'speed' op [6, 6] is not an operation" in res.err
+
+
+def test_preview_source_narrows_the_detail_but_keeps_totals(project, capsys):
+    out = _run(
+        capsys,
+        "preview",
+        "--config",
+        _cfg(project),
+        "--source",
+        "2",
+        "--edit",
+        _edit_file(project, GOOD),
+    ).out
+    assert "overlay [5,5]" in out
+    assert "timelapse [1,3]" not in out.split("Captions")[0]
+    assert "whole video so far: default 6.5 s" in out
+    assert "Captions in playback order (2):" in out
+
+
+def test_preview_source_accepts_a_stem(project, capsys):
+    out = _run(
+        capsys,
+        "preview",
+        "--config",
+        _cfg(project),
+        "--source",
+        "a",
+        "--edit",
+        _edit_file(project, GOOD),
+    ).out
+    assert "timelapse [1,3]" in out and "overlay [5,5]" not in out.split("Captions")[0]
+
+
+def test_preview_lines_narrows_to_ops_in_range(project, capsys):
+    out = _run(
+        capsys,
+        "preview",
+        "--config",
+        _cfg(project),
+        "--lines",
+        "4-4",
+        "--edit",
+        _edit_file(project, GOOD),
+    ).out
+    head = out.split("Captions")[0]
+    assert "cut [4,4]" in head
+    assert "timelapse [1,3] x6.0" not in head
+    assert "overlay [5,5]" not in head
+    assert "whole video so far: default 6.5 s" in out
+
+
+def test_preview_unknown_source_is_an_error(project, capsys):
+    err = _run(capsys, "preview", "--config", _cfg(project), "--source", "zzz", code=2).err
+    assert "unknown source 'zzz'" in err

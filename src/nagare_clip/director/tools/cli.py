@@ -20,7 +20,7 @@ from nagare_clip.brief import format_brief
 from nagare_clip.config import get_effective_config
 from nagare_clip.director.director_llm import _max_keep_lines
 from nagare_clip.director.loop import order_segments
-from nagare_clip.director.preview import edit_state
+from nagare_clip.director.preview import edit_state, edit_summary
 from nagare_clip.director.run import VIEW_HEADER, project_context
 from nagare_clip.director.tools.project import (
     Project,
@@ -173,6 +173,21 @@ def _validate(project: Project, data: Any) -> tuple[Edit, list[Problem]]:
     )
 
 
+def _resolve_sources(project: Project, values: list[str] | None) -> set[int] | None:
+    """``--source`` values (a ``[k]`` index or a stem) as segment indices."""
+    if not values:
+        return None
+    out: set[int] = set()
+    for value in values:
+        index = int(value) if value.isdigit() else project.segment_index(value)
+        if index is None or not 1 <= index <= len(project.view.segments):
+            raise PipelineError(
+                f"unknown source {value!r}: give a [k] number or a stem from `view`'s index"
+            )
+        out.add(index)
+    return out
+
+
 def cmd_preview(project: Project, args: argparse.Namespace) -> int:
     state = current_state(project)
     problems: list[Problem] = []
@@ -185,7 +200,27 @@ def cmd_preview(project: Project, args: argparse.Namespace) -> int:
         ops = to_source(project.view, edit)
         order = edit.order or []
         plan = edit.plan if edit.plan is not None else state.plan
-    text = edit_state(project.view, project.transcripts, ops, order=order, plan=plan)
+    only = _resolve_sources(project, args.source)
+    if args.summary:
+        text = edit_summary(
+            project.view,
+            project.transcripts,
+            ops,
+            order=order,
+            min_run_seconds=args.min_run,
+            only=only,
+            focus=args.lines,
+        )
+    else:
+        text = edit_state(
+            project.view,
+            project.transcripts,
+            ops,
+            order=order,
+            plan=plan,
+            only=only,
+            focus=args.lines,
+        )
     print(text)
     if problems:
         print(
@@ -311,6 +346,32 @@ def build_parser() -> argparse.ArgumentParser:
         epilog=EDIT_HELP,
     )
     p.add_argument("--edit", help="Candidate edit JSON file, or - for stdin")
+    p.add_argument(
+        "--summary",
+        action="store_true",
+        help="Compact form: per-source and whole-video runtime, the runs in playback "
+        "order, the captions, and the problems — no per-op detail",
+    )
+    p.add_argument(
+        "--min-run",
+        type=float,
+        default=0.0,
+        metavar="SECONDS",
+        help="With --summary: hide runs shorter than this many on-screen seconds "
+        "(cuts are always shown)",
+    )
+    p.add_argument(
+        "--lines",
+        type=_parse_lines,
+        help="Only the detail (or, with --summary, the runs) touching display lines A-B; "
+        "totals, captions and problems stay whole-video",
+    )
+    p.add_argument(
+        "--source",
+        action="append",
+        help="Only this source's detail ([k] number or stem; repeatable); totals, "
+        "captions and problems stay whole-video",
+    )
     p.set_defaults(func=cmd_preview)
 
     p = sub.add_parser(

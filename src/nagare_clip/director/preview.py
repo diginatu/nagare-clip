@@ -704,6 +704,14 @@ def timeline_runs(
     return runs
 
 
+def _run_in(run: Run, focus: tuple[int, int] | None) -> bool:
+    """Does *run* touch display lines *focus*? (``None``: everything does.)"""
+    if focus is None:
+        return True
+    lines = run.lines or ([run.after] if run.after is not None else [])
+    return any(focus[0] <= n <= focus[1] for n in lines)
+
+
 def _run_line(run: Run) -> str:
     figure = "—" if run.kind == "cut" else _s(run.seconds)
     where = _lines_phrase(run.lines) if run.lines else f"the silence after line {run.after}"
@@ -731,8 +739,14 @@ def preview_segment(
     elsewhere_seconds: float | None = None,
     numbering: Numbering = IDENTITY,
     breaks: AbstractSet[int] = frozenset(),
+    focus: tuple[int, int] | None = None,
 ) -> SegmentPreview:
     """The playback facts for one segment's *ops*, as the director holds them.
+
+    *focus* (display lines ``(first, last)``) narrows the TEXT to the op blocks
+    whose range meets it and the runs that touch it; every figure — the
+    footer, *runtime_seconds*, *captions*, *runs* — is still the whole
+    segment's.  ``None`` (the default) prints everything, as before.
 
     Takes one segment's inputs: the raw
     segment *edit_lines*, *seg_times*/*silences* for those lines,
@@ -951,6 +965,13 @@ def preview_segment(
             out.append(_silence_render(silence, num))
         return out
 
+    def in_focus(op: DirectorOp) -> bool:
+        if focus is None:
+            return True
+        first = num.of(op.lines[0], silence=op.gap_start)
+        last = num.of(op.lines[1], silence=op.gap_end)
+        return first <= focus[1] and focus[0] <= last
+
     blocks: list[str] = []
     for i, op in enumerate(ops):
         body: list[str] = []
@@ -1008,7 +1029,8 @@ def preview_segment(
                 body.extend(boundary_lines(keep))
                 if caption is not None:
                     body.extend(caption_lines(i))
-        blocks.append("\n".join([_op_title(op, num)] + _note_lines(op) + body))
+        if in_focus(op):
+            blocks.append("\n".join([_op_title(op, num)] + _note_lines(op) + body))
 
     default = sum(pb.speech)
     runtime = pb.played(pb.all_lines(), "speech")[1]
@@ -1019,12 +1041,16 @@ def preview_segment(
             f"= {_s(elsewhere_seconds + runtime)}"
         )
     runs = timeline_runs(pb, ops, num, captions, breaks)
-    timeline = "\n".join([label + AS_IT_PLAYS] + [_run_line(run) for run in runs])
-    parts = (
-        [HEADER]
-        + (blocks or ["(no ops: every line plays its default)"])
-        + [timeline, "\n".join(footer)]
-    )
+    shown = [run for run in runs if _run_in(run, focus)]
+    timeline = "\n".join([label + AS_IT_PLAYS] + [_run_line(run) for run in shown])
+    if not blocks:
+        empty = (
+            "(no ops: every line plays its default)"
+            if focus is None or not ops
+            else f"(no ops in lines {focus[0]}-{focus[1]})"
+        )
+        blocks = [empty]
+    parts = [HEADER] + blocks + [timeline, "\n".join(footer)]
     rows = tuple(sorted((num.of(line), ops[i].text or "", dur) for i, line, dur in captions))
     return SegmentPreview("\n\n".join(parts), default, runtime, rows, tuple(runs))
 
@@ -1035,6 +1061,7 @@ def segment_preview(
     index: int,
     ops: Sequence[DirectorOp],
     breaks: AbstractSet[int] = frozenset(),
+    focus: tuple[int, int] | None = None,
 ) -> SegmentPreview:
     """One segment of the finished video, priced under the display numbering."""
     t = transcripts[index - 1]
@@ -1049,6 +1076,7 @@ def segment_preview(
         label=f"segment [{index}] {view.segments[index - 1].label}",
         numbering=numbering_for(view, index),
         breaks=breaks,
+        focus=focus,
     )
 
 
@@ -1075,8 +1103,15 @@ def edit_state(
     drops: Sequence[str] = (),
     order: Sequence[tuple[int, int]] = (),
     plan: str = "",
+    only: AbstractSet[int] | None = None,
+    focus: tuple[int, int] | None = None,
 ) -> str:
     """The complete current edit: what one turn's user message carries.
+
+    *only* (segment indices) and *focus* (display lines) narrow the per-segment
+    detail for a reader paging through a long edit; the totals, the captions
+    and the footer stay whole-video.  Both ``None`` (the default) is the
+    complete edit, byte for byte as before.
 
     *ops* are every op accepted so far, keyed by the segment's 1-based index in
     the playback order.  EVERY segment is rendered, touched this turn or not,
@@ -1117,13 +1152,108 @@ def edit_state(
             f"accepted so far {_s(runtime)} ({_m(runtime)})"
         )
     captions = [row for p in previews for row in p.captions]
-    blocks = [p.text for p in previews]
+    narrowed = only is not None or focus is not None
+    blocks = [
+        segment_preview(view, transcripts, index, ops.get(index, ()), breaks, focus).text
+        if narrowed
+        else p.text
+        for index, p in enumerate(previews, start=1)
+        if _segment_shown(view, index, only, focus)
+    ]
     if breaks:
         position = _playback_position(order)
         captions.sort(key=lambda row: position(row[0]))
-        blocks.append(_reordered(view, order, [run for p in previews for run in p.runs]))
+        if not narrowed:
+            blocks.append(_reordered(view, order, [run for p in previews for run in p.runs]))
     head = [STATE_HEADER] + ([f"{PLAN_HEADER}\n{plan}"] if plan else [])
     return "\n\n".join([*head, *blocks, _caption_block(captions), "\n".join(footer)])
+
+
+def _segment_shown(
+    view: DisplayView, index: int, only: AbstractSet[int] | None, focus: tuple[int, int] | None
+) -> bool:
+    if only is not None and index not in only:
+        return False
+    if focus is None:
+        return True
+    seg = view.segments[index - 1]
+    return seg.first <= focus[1] and focus[0] <= seg.last
+
+
+def edit_summary(
+    view: DisplayView,
+    transcripts: Sequence[SegmentTranscript],
+    ops: Mapping[int, Sequence[DirectorOp]],
+    *,
+    order: Sequence[tuple[int, int]] = (),
+    min_run_seconds: float = 0.0,
+    only: AbstractSet[int] | None = None,
+    focus: tuple[int, int] | None = None,
+) -> str:
+    """The edit in a screenful: what to re-read on every iteration.
+
+    Per source, default → edited runtime; the whole-video total; the video as
+    it plays (every run of :func:`timeline_runs`, in playback order — those
+    shorter than *min_run_seconds* hidden and counted, cuts always shown); and
+    the captions in playback order.  Nothing is re-modelled: the figures are
+    :func:`segment_preview`'s, so they equal :func:`edit_state`'s.  *only* and
+    *focus* narrow the run list, never the totals.
+    """
+    breaks = _order_breaks(order, len(view.lines))
+    previews = [
+        segment_preview(view, transcripts, index, ops.get(index, ()), breaks)
+        for index in range(1, len(transcripts) + 1)
+    ]
+    out = ["EDIT SUMMARY (per source: default → with these ops)"]
+    for index, p in enumerate(previews, start=1):
+        label = f"[{index}] {view.segments[index - 1].label}"
+        if p.runtime_seconds is None or p.default_seconds is None:
+            out.append(f"{label}: not computable (no line timings)")
+        else:
+            out.append(f"{label}: default {_s(p.default_seconds)} → {_s(p.runtime_seconds)}")
+    default = _total(t.default_runtime() for t in transcripts)
+    runtime = _total(
+        p.runtime_seconds if p.runtime_seconds is not None else t.default_runtime()
+        for p, t in zip(previews, transcripts)
+    )
+    if default is None or runtime is None:
+        out.append("whole video: not computable (a source has no line timings)")
+    else:
+        out.append(
+            f"whole video: default {_s(default)} ({_m(default)}) → {_s(runtime)} ({_m(runtime)})"
+        )
+
+    runs: list[tuple[int, Run]] = [
+        (index, run)
+        for index, p in enumerate(previews, start=1)
+        for run in p.runs
+        if _segment_shown(view, index, only, None) and _run_in(run, focus)
+    ]
+    if breaks:
+        position = _playback_position(order)
+        runs.sort(key=lambda r: position(r[1].lines[0] if r[1].lines else (r[1].after or 0) + 1))
+    shown = [r for r in runs if r[1].kind == "cut" or r[1].seconds >= min_run_seconds]
+    hidden = len(runs) - len(shown)
+    title = "The video as it plays"
+    if min_run_seconds > 0:
+        title += f" (runs of {_s(min_run_seconds)} or more; cuts always shown)"
+    out.append("")
+    out.append(title + ":")
+    current = None
+    for index, run in shown:
+        if index != current:
+            out.append(f"▶ [{index}] {view.segments[index - 1].label}")
+            current = index
+        out.append(_run_line(run))
+    if hidden:
+        out.append(f"  ({hidden} shorter run(s) hidden)")
+    captions = [row for p in previews for row in p.captions]
+    if breaks:
+        position = _playback_position(order)
+        captions.sort(key=lambda row: position(row[0]))
+    out.append("")
+    out.append(_caption_block(captions))
+    return "\n".join(out)
 
 
 def _order_breaks(order: Sequence[tuple[int, int]], total: int) -> frozenset[int]:

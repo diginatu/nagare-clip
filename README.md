@@ -96,6 +96,8 @@ The agent uses deterministic tools you can also run yourself (no LLM call):
 ./scripts/director_tools.sh view    --config <yml> [--lines 1-200] [--no-context]  # the numbered video + brief + summaries
 ./scripts/director_tools.sh dump    --config <yml> > edit.json   # the current director files, as an edit
 ./scripts/director_tools.sh preview --config <yml> [--edit edit.json]  # what it will play; writes nothing
+./scripts/director_tools.sh preview --config <yml> --summary [--min-run 20] [--edit edit.json]  # the same in a screenful
+./scripts/director_tools.sh preview --config <yml> --lines 400-520 [--source 3] [--edit edit.json]  # detail for part of the video only
 ./scripts/director_tools.sh write   --config <yml> --edit edit.json    # validate, then write — all or nothing
 ```
 
