@@ -1,0 +1,10 @@
+name: nagare-clip-skills
+version: 0.1.0
+description: Agent skills for editing a video with nagare-clip
+license: MIT
+# One APM package for the skills you use while editing a video — installed
+# into the VIDEO directory, never deployed into this repository:
+#   apm install <nagare-clip checkout>/skills --target claude,codex
+# Each skill lives under .apm/skills/<name>/ (today: nagare-director).
+includes:
+  - .apm/

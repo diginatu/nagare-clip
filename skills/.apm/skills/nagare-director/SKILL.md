@@ -1,6 +1,6 @@
 ---
 name: nagare-director
-description: Direct a nagare-clip rough cut together with the user. Use when the user wants to plan or revise the edit of their nagare-clip video project - what to cut, what to timelapse, where captions go, what plays in which order - or asks to run the director step. Reads the transcript with the repo's deterministic director tools, writes a plan for the user to confirm, previews candidate edits, and writes the director files that guided_edit consumes.
+description: Direct a nagare-clip rough cut together with the user. Use when the user wants to plan or revise the edit of their nagare-clip video project - what to cut, what to timelapse, where captions go, what plays in which order - or asks to run the director step. Reads the transcript with nagare-clip's deterministic director tools, writes a plan for the user to confirm, previews candidate edits, and writes the director files that guided_edit consumes.
 ---
 
 # nagare-director
@@ -16,27 +16,39 @@ pipeline turns it into a Blender project.
 these instructions, the brief and your own plan. Answer every request before
 you call the edit finished. Talk to the user in the language they use.
 
-## Tools
+## Where you are, and the tools
 
-All tools are deterministic (no LLM call) and live in this repository. Run
-them from the repo root; pass the user's config with `--config` (repeatable,
-merged left to right, exactly like the pipeline):
+**The working directory is the video directory** — the project holding the
+footage and its config, not the nagare-clip repository. Config paths such as
+`output_dir: video-editor-ai/` are relative to it, so stay in it.
+
+- **The configs.** A project may layer several, e.g.
+  `--config ../template/nagare_base.yml --config ./nagare_config.yml`. Pass
+  the tools exactly the `--config` files the pipeline uses, in the same
+  order (later files win). A project often has its own wrapper script for
+  running the pipeline (e.g. `./run_nagare_clip.sh`); read it to learn the
+  configs, and use it to run the pipeline.
+- **The nagare-clip checkout.** The tools live in it, at
+  `<nagare-clip>/scripts/director_tools.sh` (the script keeps your working
+  directory). If the checkout's path is not already known — from the
+  conversation, the project's wrapper scripts or the environment — ask the
+  user once.
+
+The tools are deterministic (no LLM call):
 
 ```bash
-./scripts/director_tools.sh view    --config <cfg.yml> [--lines A-B] [--no-context]
-./scripts/director_tools.sh dump    --config <cfg.yml>              # files on disk -> edit JSON
-./scripts/director_tools.sh preview --config <cfg.yml> [--edit FILE|-] [--summary [--min-run S]] [--lines A-B] [--source k]
-./scripts/director_tools.sh write   --config <cfg.yml> --edit FILE|-
+<nagare-clip>/scripts/director_tools.sh view    --config A.yml [--config B.yml] [--lines A-B] [--no-context]
+<nagare-clip>/scripts/director_tools.sh dump    --config ...              # files on disk -> edit JSON
+<nagare-clip>/scripts/director_tools.sh preview --config ... [--edit FILE|-] [--summary [--min-run S]] [--lines A-B] [--source k]
+<nagare-clip>/scripts/director_tools.sh write   --config ... --edit FILE|-
 ```
-
-(`uv run python -m nagare_clip.director.tools ...` is the same thing.)
 
 - `view` — the editorial brief, the keep-width limit, the project summaries,
   each source's line range and default runtime (or why it is unknown), then
   the whole video under **one display numbering**. Page through a long
   video with `--lines 1-200 --no-context`, then `--lines 201-400 ...`.
-- `dump` — what `output/director/` holds now, as an edit file in display
-  numbers. Start from it when revising an earlier edit.
+- `dump` — what the project's `director/` output directory holds now, as an
+  edit file in display numbers. Start from it when revising an earlier edit.
 - `preview` — what an edit plays. `--summary` is the screenful to read every
   iteration: per-source and whole-video runtime, the video as it plays (runs
   in playback order; `--min-run S` hides runs under S seconds, cuts always
@@ -51,17 +63,18 @@ merged left to right, exactly like the pipeline):
   the edit carries a plan.
 
 Every line number you use is the display number `view` printed. Keep candidate
-edits in a scratch file (e.g. `output/director/edit.draft.json`), not in your
-reply alone.
+edits in a scratch file in the project's output directory (e.g.
+`<output_dir>/director/edit.draft.json`), not in your reply alone.
 
 ## Workflow
 
-1. **Find the project.** Ask which config file to use if it is not obvious
-   (`nagare_config.yml` and `config.example.yml` are the usual names). If
-   `view` says text_filter output is missing, run
-   `./scripts/run_pipeline.sh --config <cfg.yml> --to-stage text_filter`
-   first (it needs Docker for transcription; tell the user it can take a
-   while). If `output/director/` already has files, ask whether to revise
+1. **Find the project.** Work out the config files and their order (the
+   project's wrapper script, if any, shows them; otherwise ask) and the
+   nagare-clip checkout. If `view` says text_filter output is missing, run the
+   pipeline up to it first — the project's wrapper, or
+   `<nagare-clip>/scripts/run_pipeline.sh --config ... --to-stage text_filter`
+   (it needs Docker for transcription; tell the user it can take a while). If
+   the project's `director/` output already has files, ask whether to revise
    them (`dump`) or start over.
 2. **Read everything.** Run `view` and read the whole video, every page,
    before you decide anything, including the brief and summaries at the top.
@@ -96,8 +109,9 @@ reply alone.
    (detail only where needed), report again. Update the plan when the
    footage proves it wrong.
 9. **Write** with `write --edit <file>` once the user is happy, then tell them
-   to resume the pipeline:
-   `./scripts/run_pipeline.sh --config <cfg.yml> --from-stage guided_edit`.
+   to resume the pipeline from guided_edit — their wrapper with
+   `--from-stage guided_edit`, or
+   `<nagare-clip>/scripts/run_pipeline.sh --config ... --from-stage guided_edit`.
    The ops only land if the config has `guided_edit.enabled: true` (a
    disabled guided_edit copies the transcript through untouched); `write`
    warns when it is off. cut/timelapse/overlay/keep need no LLM; an `edit`
