@@ -289,8 +289,8 @@ def test_gap_context_extracts_all_frames_in_a_single_docker_call(gap_ctx, monkey
     commands = []
 
     def fake_run_command(cmd, **kwargs):
-        commands.append(cmd)
-        _materialise_frames_from_script(gap_ctx.output_dir, cmd[-1])
+        commands.append((cmd, kwargs))
+        _materialise_frames_from_script(gap_ctx.output_dir, kwargs["stdin_text"])
 
     captured = {}
 
@@ -312,7 +312,7 @@ def test_gap_context_extracts_all_frames_in_a_single_docker_call(gap_ctx, monkey
     # pair SSIM comparison jobs (3 frames -> 2 pairs; three-frame comparison
     # follow-up to Task 9's static prefilter).
     assert len(commands) == 1
-    assert commands[0][-1].count("ffmpeg ") == 5
+    assert commands[0][1]["stdin_text"].count("ffmpeg ") == 5
 
     gfs = captured["gap_frames"]
     assert len(gfs) == 1
@@ -418,7 +418,7 @@ def test_gap_context_a_single_bad_line_does_not_drop_other_frames(gap_ctx, monke
     cuts.write_text("10.000 - 20.000\n", encoding="utf-8")
 
     def fake_run_command(cmd, **kwargs):
-        script = cmd[-1]
+        script = kwargs["stdin_text"]
         lines = [line for line in script.splitlines() if line.strip()]
         # Skip writing the file for the FIRST job only (simulates a failed
         # seek that `|| true` swallowed); the rest still land.
@@ -477,8 +477,8 @@ def test_gap_context_two_sources_share_one_container_without_frame_collision(tmp
     commands = []
 
     def fake_run_command(cmd, **kwargs):
-        commands.append(cmd)
-        _materialise_frames_from_script(ctx.output_dir, cmd[-1])
+        commands.append((cmd, kwargs))
+        _materialise_frames_from_script(ctx.output_dir, kwargs["stdin_text"])
 
     captured = {}
 
@@ -498,7 +498,7 @@ def test_gap_context_two_sources_share_one_container_without_frame_collision(tmp
     assert len(commands) == 1
     # 3 frames x 2 sources (extraction) + 2 consecutive-pair SSIM
     # comparisons per source.
-    assert commands[0][-1].count("ffmpeg ") == 10
+    assert commands[0][1]["stdin_text"].count("ffmpeg ") == 10
 
     assert set(captured) == {"talk1", "talk2"}
     talk1_gfs, talk2_gfs = captured["talk1"], captured["talk2"]
@@ -519,8 +519,8 @@ def test_extract_gap_frames_takes_all_sources_at_once(gap_ctx, monkeypatch):
     commands = []
 
     def fake_run_command(cmd, **kwargs):
-        commands.append(cmd)
-        _materialise_frames_from_script(gap_ctx.output_dir, cmd[-1])
+        commands.append((cmd, kwargs))
+        _materialise_frames_from_script(gap_ctx.output_dir, kwargs["stdin_text"])
 
     monkeypatch.setattr(stages_mod, "run_command", fake_run_command)
 
@@ -562,8 +562,8 @@ def test_extract_gap_frames_static_ssim_zero_disables_ssim_planning(gap_ctx, mon
     commands = []
 
     def fake_run_command(cmd, **kwargs):
-        commands.append(cmd)
-        _materialise_frames_from_script(gap_ctx.output_dir, cmd[-1])
+        commands.append((cmd, kwargs))
+        _materialise_frames_from_script(gap_ctx.output_dir, kwargs["stdin_text"])
 
     monkeypatch.setattr(stages_mod, "run_command", fake_run_command)
     gap_ctx.cfg["gap_context"]["static_ssim"] = 0
@@ -571,7 +571,7 @@ def test_extract_gap_frames_static_ssim_zero_disables_ssim_planning(gap_ctx, mon
     src = gap_ctx.sources[0]
     result = stages_mod._extract_gap_frames(gap_ctx, [(src, [(10.0, 20.0)])])
 
-    script = commands[0][-1]
+    script = commands[0][1]["stdin_text"]
     assert "ssim=stats_file=" not in script
     assert "-filter_complex" not in script
     # 3 frame-extraction lines only, no appended SSIM comparison line.
@@ -621,8 +621,8 @@ def test_extract_gap_frames_reads_back_ssim_stats(gap_ctx, monkeypatch):
     commands = []
 
     def fake_run_command(cmd, **kwargs):
-        commands.append(cmd)
-        script = cmd[-1]
+        commands.append((cmd, kwargs))
+        script = kwargs["stdin_text"]
         _materialise_frames_from_script(gap_ctx.output_dir, script)
         _write_ssim_stats_for_pairs(gap_ctx, script, [0.998, 0.996132])
 
@@ -631,7 +631,7 @@ def test_extract_gap_frames_reads_back_ssim_stats(gap_ctx, monkeypatch):
     src = gap_ctx.sources[0]
     result = stages_mod._extract_gap_frames(gap_ctx, [(src, [(10.0, 20.0)])])
 
-    script = commands[0][-1]
+    script = commands[0][1]["stdin_text"]
     ssim_lines = [line for line in script.splitlines() if "-filter_complex" in line]
     assert len(ssim_lines) == 2
     assert "frames/talk1/10.200.jpg" in ssim_lines[0]  # first
@@ -660,8 +660,8 @@ def test_extract_gap_frames_ssim_pan_away_and_return_scores_low(gap_ctx, monkeyp
     commands = []
 
     def fake_run_command(cmd, **kwargs):
-        commands.append(cmd)
-        script = cmd[-1]
+        commands.append((cmd, kwargs))
+        script = kwargs["stdin_text"]
         _materialise_frames_from_script(gap_ctx.output_dir, script)
         # first-vs-mid: camera mid-pan, very different (low). mid-vs-last:
         # camera has returned, nearly identical (high). A first-vs-last-only
@@ -692,8 +692,8 @@ def test_extract_gap_frames_two_frame_gap_ssim_matches_single_pair(gap_ctx, monk
     commands = []
 
     def fake_run_command(cmd, **kwargs):
-        commands.append(cmd)
-        script = cmd[-1]
+        commands.append((cmd, kwargs))
+        script = kwargs["stdin_text"]
         _materialise_frames_from_script(gap_ctx.output_dir, script)
         _write_ssim_stats_for_pairs(gap_ctx, script, [0.87])
 
@@ -718,8 +718,8 @@ def test_extract_gap_frames_one_frame_gap_ssim_stays_none(gap_ctx, monkeypatch):
     commands = []
 
     def fake_run_command(cmd, **kwargs):
-        commands.append(cmd)
-        script = cmd[-1]
+        commands.append((cmd, kwargs))
+        script = kwargs["stdin_text"]
         _materialise_frames_from_script(gap_ctx.output_dir, script)
 
     monkeypatch.setattr(stages_mod, "run_command", fake_run_command)
@@ -727,7 +727,7 @@ def test_extract_gap_frames_one_frame_gap_ssim_stays_none(gap_ctx, monkeypatch):
     src = gap_ctx.sources[0]
     result = stages_mod._extract_gap_frames(gap_ctx, [(src, [(start, end)])])
 
-    script = commands[0][-1]
+    script = commands[0][1]["stdin_text"]
     assert "-filter_complex" not in script
     assert result["talk1"][0].ssim is None
 
@@ -744,8 +744,8 @@ def test_extract_gap_frames_partial_stats_missing_degrades_to_min_of_survivors(
     commands = []
 
     def fake_run_command(cmd, **kwargs):
-        commands.append(cmd)
-        script = cmd[-1]
+        commands.append((cmd, kwargs))
+        script = kwargs["stdin_text"]
         _materialise_frames_from_script(gap_ctx.output_dir, script)
         # Only the SECOND pair's stats file gets written; the first is
         # missing entirely (score=None means "don't write it").
@@ -770,8 +770,8 @@ def test_extract_gap_frames_unparseable_stats_content_excluded_from_min(gap_ctx,
     commands = []
 
     def fake_run_command(cmd, **kwargs):
-        commands.append(cmd)
-        script = cmd[-1]
+        commands.append((cmd, kwargs))
+        script = kwargs["stdin_text"]
         _materialise_frames_from_script(gap_ctx.output_dir, script)
         ssim_lines = [line for line in script.splitlines() if "-filter_complex" in line]
         assert len(ssim_lines) == 2
@@ -877,3 +877,60 @@ def test_director_adapter_survives_a_missing_plan(tmp_path, monkeypatch):
     monkeypatch.setattr(st, "run_director_conversation", _director_returning([]))
     by_name = {s.name: s for s in st.STAGES}
     by_name["director"].run(_ctx(tmp_path, stems=("a",)))  # nothing in director/ yet
+
+
+def test_gap_context_batch_script_goes_to_stdin_not_argv(gap_ctx, monkeypatch):
+    """The script must never ride in argv (MAX_ARG_STRLEN is 128 KiB)."""
+    import nagare_clip.pipeline.stages as stages_mod
+
+    cuts = gap_ctx.stage_dir("audio_silence") / "talk1_cuts.txt"
+    cuts.parent.mkdir(parents=True, exist_ok=True)
+    cuts.write_text("10.000 - 20.000\n", encoding="utf-8")
+    calls = []
+    monkeypatch.setattr(stages_mod, "run_command", lambda cmd, **k: calls.append((cmd, k)))
+    monkeypatch.setattr(stages_mod, "run_gap_context", lambda *a, **k: None)
+    gap_ctx.cfg["gap_context"]["enabled"] = True
+    next(s for s in stages_mod.STAGES if s.name == "gap_context").run(gap_ctx)
+
+    ((cmd, kwargs),) = calls
+    assert kwargs["stdin_text"].count("ffmpeg ") == 5
+    assert not any("ffmpeg" in a for a in cmd)
+    assert kwargs.get("capture_stderr") is True
+
+
+def test_gap_context_batch_failure_warning_names_the_reason(gap_ctx, monkeypatch, caplog):
+    """`batch frame extraction failed` without the reason hid an
+    `Argument list too long` for a whole run. The warning must carry the
+    exception text and the process's stderr."""
+    import logging
+
+    import nagare_clip.pipeline.stages as stages_mod
+
+    cuts = gap_ctx.stage_dir("audio_silence") / "talk1_cuts.txt"
+    cuts.parent.mkdir(parents=True, exist_ok=True)
+    cuts.write_text("10.000 - 20.000\n", encoding="utf-8")
+
+    def boom(cmd, **kwargs):
+        raise OSError(7, "Argument list too long")
+
+    monkeypatch.setattr(stages_mod, "run_command", boom)
+    monkeypatch.setattr(stages_mod, "run_gap_context", lambda *a, **k: None)
+    gap_ctx.cfg["gap_context"]["enabled"] = True
+    with caplog.at_level(logging.WARNING):
+        next(s for s in stages_mod.STAGES if s.name == "gap_context").run(gap_ctx)
+    msgs = [r.getMessage() for r in caplog.records if "batch frame extraction failed" in r.message]
+    assert len(msgs) == 1
+    assert "Argument list too long" in msgs[0]
+
+    caplog.clear()
+
+    def failed(cmd, **kwargs):
+        raise subprocess.CalledProcessError(125, cmd, stderr="Error: No such image: whisperx\n")
+
+    monkeypatch.setattr(stages_mod, "run_command", failed)
+    with caplog.at_level(logging.WARNING):
+        next(s for s in stages_mod.STAGES if s.name == "gap_context").run(gap_ctx)
+    msgs = [r.getMessage() for r in caplog.records if "batch frame extraction failed" in r.message]
+    assert len(msgs) == 1
+    assert "exit status 125" in msgs[0]
+    assert "No such image: whisperx" in msgs[0]

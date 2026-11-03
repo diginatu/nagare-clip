@@ -250,8 +250,12 @@ order so the shortlist reads as a walk through the video.
 
 Extraction reuses gap_context's batching: **one** `docker compose run` for the
 whole stage via `build_snapshot_batch_cmd`, because a container costs ~0.8s of
-init against ~30ms of actual ffmpeg work per still. A failed batch is logged
-and the shortlist comes back empty — it never aborts the run — and a candidate
+init against ~30ms of actual ffmpeg work per still. The script reaches the
+container's `sh -s` on stdin, never in argv (see
+[`gap_context.md`](gap_context.md)
+for the 128 KiB argv limit that motivated it). A failed batch is logged with
+its reason (exception text plus the stderr tail) and the shortlist comes back
+empty — it never aborts the run — and a candidate
 whose file was not written is dropped individually.
 
 ## What stays manual

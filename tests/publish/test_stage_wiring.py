@@ -118,8 +118,8 @@ def test_enabled_extracts_every_candidate_in_one_container(ctx, monkeypatch):
     seen = {}
 
     def fake_run_command(cmd, **kwargs):
-        scripts.append(cmd[-1])
-        for line in cmd[-1].splitlines():
+        scripts.append(kwargs["stdin_text"])
+        for line in kwargs["stdin_text"].splitlines():
             tokens = shlex.split(line)
             path = ctx.output_dir / tokens[-3].removeprefix("/output/")
             path.parent.mkdir(parents=True, exist_ok=True)
@@ -179,7 +179,7 @@ def test_failed_extraction_does_not_abort_the_stage(ctx, monkeypatch):
 def test_max_frames_caps_the_extraction(ctx, monkeypatch):
     scripts = []
     monkeypatch.setattr(st, "recorder_from_config", lambda *a, **k: _NullRec())
-    monkeypatch.setattr(st, "run_command", lambda cmd, **k: scripts.append(cmd[-1]))
+    monkeypatch.setattr(st, "run_command", lambda cmd, **k: scripts.append(k["stdin_text"]))
     monkeypatch.setattr(st, "run_publish", lambda *a, **k: None)
     _enable(ctx, max_frames=1)
     _segments(ctx, 4)
@@ -219,3 +219,38 @@ def test_the_publish_stage_composites_nothing(ctx, monkeypatch):
     monkeypatch.setattr(st, "run_publish", lambda *a, **k: None)
     _enable(ctx)
     st._publish_run(ctx)
+
+
+def test_extraction_script_goes_to_stdin_not_argv(ctx, monkeypatch):
+    calls = []
+    monkeypatch.setattr(st, "recorder_from_config", lambda *a, **k: _NullRec())
+    monkeypatch.setattr(st, "run_command", lambda cmd, **k: calls.append((cmd, k)))
+    monkeypatch.setattr(st, "run_publish", lambda *a, **k: None)
+    _enable(ctx)
+    _segments(ctx, 2)
+    _director(ctx, [{"type": "overlay", "lines": [1, 1], "text": "x", "duration": 2.0}])
+    next(s for s in st.STAGES if s.name == "publish").run(ctx)
+    ((cmd, kwargs),) = calls
+    assert "ffmpeg " in kwargs["stdin_text"]
+    assert not any("ffmpeg" in a for a in cmd)
+    assert kwargs.get("capture_stderr") is True
+
+
+def test_failed_extraction_warning_names_the_reason(ctx, monkeypatch, caplog):
+    import logging
+
+    monkeypatch.setattr(st, "recorder_from_config", lambda *a, **k: _NullRec())
+
+    def boom(*a, **k):
+        raise OSError(7, "Argument list too long")
+
+    monkeypatch.setattr(st, "run_command", boom)
+    monkeypatch.setattr(st, "run_publish", lambda *a, **k: None)
+    _enable(ctx)
+    _segments(ctx, 2)
+    _director(ctx, [{"type": "overlay", "lines": [1, 1], "text": "x", "duration": 2.0}])
+    with caplog.at_level(logging.WARNING):
+        next(s for s in st.STAGES if s.name == "publish").run(ctx)
+    msgs = [r.getMessage() for r in caplog.records if "batch frame extraction failed" in r.message]
+    assert len(msgs) == 1
+    assert "Argument list too long" in msgs[0]

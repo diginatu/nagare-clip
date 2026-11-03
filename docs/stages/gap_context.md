@@ -74,18 +74,30 @@ float]]]]`) and:
    directory up front.
 2. If there is at least one job, issues **exactly one** `run_command()` call
    — `build_snapshot_batch_cmd()` renders every job as its own `ffmpeg ...
-   || true` line in a shell script, run via `--entrypoint sh whisperx -c
-   "<script>"` inside the whisperx image. Each line keeps the same ffmpeg
+   || true` line in a shell script. It returns a `ShellBatch(argv,
+   script)`: the argv is `docker compose run -T --entrypoint sh whisperx
+   -s`, and the script is fed to that shell **on stdin**
+   (`run_command(..., stdin_text=batch.script)`), **never as an argv
+   element** — Linux caps one argument at `MAX_ARG_STRLEN` (128 KiB), and a
+   real run (831 frame jobs + their SSIM lines, ~340 KB as `sh -c
+   "<script>"`) failed with `OSError: [Errno 7] Argument list too long`
+   before docker even started, so every gap went undescribed. `-T` (no TTY)
+   lets the piped stdin reach the shell. Each line keeps the same ffmpeg
    flags as before (input-side `-ss` fast seek, `-frames:v 1`,
    `scale={width}:-2`, `-q:v 4`, writing to
-   `/output/gap_context/frames/{stem}/{t:.3f}.jpg`), plus `-nostdin` since
-   many ffmpeg invocations now share one shell. **Zero jobs means zero
-   docker calls** — an empty batch never runs an empty/no-op container.
-   The `|| true` on each line means one bad seek can't take down the rest of
-   the batch; the whole `run_command()` call is still wrapped in a broad
-   `except Exception` (a missing/failed batch — docker gone, image gone —
-   must never abort the run; every gap in that case simply gets zero
-   frames).
+   `/output/gap_context/frames/{stem}/{t:.3f}.jpg`), plus `-nostdin` —
+   load-bearing now: the ffmpegs share the shell's stdin, which IS the
+   script, so an ffmpeg without it would swallow the remaining lines.
+   **Zero jobs means zero docker calls** — an empty batch never runs an
+   empty/no-op container. The `|| true` on each line means one bad seek
+   can't take down the rest of the batch; the whole `run_command()` call is
+   still wrapped in a broad `except Exception` (a missing/failed batch —
+   docker gone, image gone — must never abort the run; every gap in that
+   case simply gets zero frames). The warning names the reason
+   (`stages._failure_reason()`: the exception text plus the last 20 lines
+   of the container's stderr, which `capture_stderr=True` keeps) — a bare
+   "batch frame extraction failed" once hid the argv overflow for a whole
+   run.
 3. Regroups the single batch's results back into per-source, per-gap
    `GapFrames`, checking `host_path.is_file()` for each job the same way the
    old per-frame code did — a frame that never landed (bad seek, or the

@@ -13,6 +13,7 @@ import shlex
 import subprocess
 from collections.abc import Sequence
 from pathlib import Path
+from typing import NamedTuple
 
 JA_DEFAULT_ALIGN_MODEL = "vumichien/wav2vec2-large-xlsr-japanese"
 
@@ -82,12 +83,26 @@ def build_silencedetect_cmd(
     ]
 
 
+class ShellBatch(NamedTuple):
+    """A command plus the shell script it reads on stdin.
+
+    The script is never an argv element: Linux caps ONE argument string at
+    MAX_ARG_STRLEN (128 KiB), and a real gap_context run (831 frame jobs plus
+    their SSIM lines, ~340 KB) made `subprocess.run` raise `OSError: [Errno 7]
+    Argument list too long` before docker started. stdin has no such limit
+    and leaves nothing on disk.
+    """
+
+    argv: list[str]
+    script: str
+
+
 def build_snapshot_batch_cmd(
     project_root: Path,
     jobs: Sequence[tuple[str, float, str]],
     width: int,
     ssim_jobs: Sequence[tuple[str, str, str]] = (),
-) -> list[str]:
+) -> ShellBatch:
     """Every gap-context frame for the whole run, via ONE whisperx container.
 
     A `docker compose run` pays ~0.8s of container + nvidia-runtime init
@@ -99,11 +114,14 @@ def build_snapshot_batch_cmd(
     stage's "single Docker container for all source files" precedent.
 
     *jobs* is `(relative, time_s, out_container_path)` tuples; each becomes
-    one `ffmpeg` line in a shell script run via `sh -c` inside the whisperx
-    image. Flags match the previous per-frame command exactly (input-side
-    `-ss` for fast seek, `-frames:v 1`, `scale={width}:-2`, `-q:v 4`) so
-    output is byte-identical; `-nostdin` is added since many ffmpeg
-    invocations now share one shell. Each line ends in `|| true` so one bad
+    one `ffmpeg` line in a shell script that `sh -s` reads from stdin inside
+    the whisperx image (`docker compose run -T`, so the piped stdin reaches
+    the shell with no TTY). Pass `ShellBatch.script` as `run_command`'s
+    `stdin_text`. Flags match the previous per-frame command exactly
+    (input-side `-ss` for fast seek, `-frames:v 1`, `scale={width}:-2`,
+    `-q:v 4`) so output is byte-identical; `-nostdin` on every line is
+    load-bearing: without it the first ffmpeg would read the rest of the
+    script off the shared stdin and the batch would stop after one frame. Each line ends in `|| true` so one bad
     seek can't take down the rest of the batch. Paths are shell-quoted --
     real media filenames contain spaces.
 
@@ -129,15 +147,16 @@ def build_snapshot_batch_cmd(
         f"-filter_complex {shlex.quote(f'ssim=stats_file={stats_out}')} -f null - || true"
         for first, last, stats_out in ssim_jobs
     ]
-    script = "\n".join(lines)
-    return [
+    script = "\n".join(lines) + "\n"
+    argv = [
         *_compose_prefix(project_root),
+        "-T",
         "--entrypoint",
         "sh",
         "whisperx",
-        "-c",
-        script,
+        "-s",
     ]
+    return ShellBatch(argv=argv, script=script)
 
 
 def build_blender_cmd(
@@ -177,10 +196,29 @@ def run_command(
     *,
     env_extra: dict[str, str] | None = None,
     stderr_to: Path | None = None,
+    stdin_text: str | None = None,
+    capture_stderr: bool = False,
 ) -> None:
-    """Run *cmd* with check=True; optionally merge env vars and capture stderr."""
+    """Run *cmd* with check=True; optionally merge env vars and capture stderr.
+
+    *stdin_text* is written to the process's stdin (for scripts too large
+    for argv -- see `ShellBatch`). *capture_stderr* keeps stderr so a
+    `CalledProcessError` carries it (`.stderr`) for the caller's warning;
+    on success it is discarded.
+    """
     env = {**os.environ, **env_extra} if env_extra else None
-    if stderr_to is not None:
+    if stdin_text is not None or capture_stderr:
+        if stderr_to is not None:
+            raise ValueError("stderr_to cannot be combined with stdin_text/capture_stderr")
+        subprocess.run(
+            cmd,
+            check=True,
+            env=env,
+            input=stdin_text,
+            text=True,
+            stderr=subprocess.PIPE if capture_stderr else None,
+        )
+    elif stderr_to is not None:
         with stderr_to.open("w", encoding="utf-8") as f:
             subprocess.run(cmd, check=True, env=env, stdout=subprocess.DEVNULL, stderr=f)
     else:

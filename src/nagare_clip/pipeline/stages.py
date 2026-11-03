@@ -192,6 +192,22 @@ def _sentence_split_required(ctx: PipelineContext) -> list[Path]:
 # --- gap_context ---------------------------------------------------------------
 
 
+def _failure_reason(exc: BaseException, tail_lines: int = 20) -> str:
+    """The exception text plus the tail of the process's stderr, if any.
+
+    A bare "batch frame extraction failed" once hid an `Argument list too
+    long` for a whole run; the reason must always reach the log.
+    """
+    reason = f"{type(exc).__name__}: {exc}"
+    stderr = getattr(exc, "stderr", None)
+    if isinstance(stderr, bytes):
+        stderr = stderr.decode("utf-8", "replace")
+    if stderr and stderr.strip():
+        tail = stderr.strip().splitlines()[-tail_lines:]
+        reason += "\n  stderr:\n    " + "\n    ".join(tail)
+    return reason
+
+
 def _extract_gap_frames(
     ctx: PipelineContext,
     gaps_by_source: list[tuple[SourceMedia, list[tuple[float, float]]]],
@@ -250,13 +266,20 @@ def _extract_gap_frames(
         plan[src.stem] = entries
 
     if jobs:
+        batch = build_snapshot_batch_cmd(ctx.project_root, jobs, width, ssim_jobs=ssim_jobs)
         try:
             run_command(
-                build_snapshot_batch_cmd(ctx.project_root, jobs, width, ssim_jobs=ssim_jobs),
+                batch.argv,
                 env_extra=_docker_env(ctx),
+                stdin_text=batch.script,
+                capture_stderr=True,
             )
-        except Exception:  # noqa: BLE001 - a failed batch must never abort the run
-            logging.warning("gap_context: batch frame extraction failed (%d job(s))", len(jobs))
+        except Exception as exc:  # noqa: BLE001 - a failed batch must never abort the run
+            logging.warning(
+                "gap_context: batch frame extraction failed (%d job(s)): %s",
+                len(jobs),
+                _failure_reason(exc),
+            )
 
     result: dict[str, list[GapFrames]] = {}
     for stem, entries in plan.items():
@@ -914,13 +937,20 @@ def _extract_thumb_frames(
         planned.append((cand, rel, host_path))
 
     if jobs:
+        batch = build_snapshot_batch_cmd(ctx.project_root, jobs, width)
         try:
             run_command(
-                build_snapshot_batch_cmd(ctx.project_root, jobs, width),
+                batch.argv,
                 env_extra=_docker_env(ctx),
+                stdin_text=batch.script,
+                capture_stderr=True,
             )
-        except Exception:  # noqa: BLE001 - a failed batch must never abort the run
-            logging.warning("publish: batch frame extraction failed (%d job(s))", len(jobs))
+        except Exception as exc:  # noqa: BLE001 - a failed batch must never abort the run
+            logging.warning(
+                "publish: batch frame extraction failed (%d job(s)): %s",
+                len(jobs),
+                _failure_reason(exc),
+            )
 
     shots: list[ThumbShot] = []
     for cand, rel, host_path in planned:

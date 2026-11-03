@@ -197,11 +197,11 @@ def test_build_snapshot_batch_cmd_one_container_for_whole_batch():
         ("talk1.mp4", 15.0, "/output/gap_context/frames/talk1/15.000.jpg"),
         ("talk2.mp4", 3.5, "/output/gap_context/frames/talk2/3.500.jpg"),
     ]
-    cmd = build_snapshot_batch_cmd(Path("/proj"), jobs, 960)
+    batch = build_snapshot_batch_cmd(Path("/proj"), jobs, 960)
+    cmd = batch.argv
     assert cmd[:3] == ["docker", "compose", "-f"]
     assert "--entrypoint" in cmd and cmd[cmd.index("--entrypoint") + 1] == "sh"
-    assert cmd[-2] == "-c"
-    script = cmd[-1]
+    script = batch.script
     # One ffmpeg invocation per job, all in the single script.
     assert script.count("ffmpeg ") == len(jobs)
 
@@ -210,8 +210,7 @@ def test_build_snapshot_batch_cmd_preserves_ffmpeg_flags_per_job():
     from nagare_clip.pipeline.external import build_snapshot_batch_cmd
 
     jobs = [("talk1.mp4", 12.6, "/output/gap_context/frames/talk1/12.600.jpg")]
-    cmd = build_snapshot_batch_cmd(Path("/proj"), jobs, 960)
-    script = cmd[-1]
+    script = build_snapshot_batch_cmd(Path("/proj"), jobs, 960).script
     line = script.strip()
     assert "-hide_banner" in line
     assert "-nostats" in line
@@ -235,8 +234,7 @@ def test_build_snapshot_batch_cmd_each_job_tolerates_failure():
         ("a.mp4", 1.0, "/output/gap_context/frames/a/1.000.jpg"),
         ("b.mp4", 2.0, "/output/gap_context/frames/b/2.000.jpg"),
     ]
-    cmd = build_snapshot_batch_cmd(Path("/proj"), jobs, 960)
-    script = cmd[-1]
+    script = build_snapshot_batch_cmd(Path("/proj"), jobs, 960).script
     lines = [line for line in script.splitlines() if line.strip()]
     assert len(lines) == len(jobs)
     for line in lines:
@@ -253,8 +251,7 @@ def test_build_snapshot_batch_cmd_quotes_paths_with_spaces():
     relative = "2022-05-28 23.00.21.mp4"
     out_path = "/output/gap_context/frames/2022-05-28 23.00.21/1.000.jpg"
     jobs = [(relative, 1.0, out_path)]
-    cmd = build_snapshot_batch_cmd(Path("/proj"), jobs, 960)
-    script = cmd[-1].strip()
+    script = build_snapshot_batch_cmd(Path("/proj"), jobs, 960).script.strip()
     # shlex.split must recover the exact tokens -- proves proper quoting,
     # not naive string interpolation that would split on the space.
     tokens = shlex.split(script)
@@ -278,9 +275,8 @@ def test_build_snapshot_batch_cmd_appends_ssim_jobs_after_extraction():
             "/output/gap_context/frames/v/ssim_0.800-9.200.txt",
         )
     ]
-    cmd = build_snapshot_batch_cmd(Path("/proj"), jobs, 960, ssim_jobs=ssim_jobs)
-    script = cmd[-1]
-    lines = script.split("\n")
+    script = build_snapshot_batch_cmd(Path("/proj"), jobs, 960, ssim_jobs=ssim_jobs).script
+    lines = script.splitlines()
     assert len(lines) == 2
     assert "-frames:v 1" in lines[0]  # extraction first
     assert "ssim=stats_file=" in lines[1]  # comparison after
@@ -301,3 +297,117 @@ def test_run_magick_returns_stdout():
     from nagare_clip.pipeline.external import run_magick
 
     assert run_magick(["printf", "hello"]) == "hello"
+
+
+# --- The batch script travels on stdin, never in argv ------------------------
+#
+# Linux caps ONE argv string at MAX_ARG_STRLEN (128 KiB). A real gap_context
+# run with 831 frame jobs + their SSIM jobs built a ~340 KB `sh -c <script>`,
+# so subprocess.run raised `OSError: [Errno 7] Argument list too long` before
+# docker even started, and every gap went undescribed.
+
+_MAX_ARG_STRLEN = 128 * 1024
+
+
+def _big_batch(n_jobs=900, n_ssim=600):
+    rel = "PXL_20260502_112844943 with spaces.mp4"
+    jobs = [
+        (rel, i * 1.5, f"/output/gap_context/frames/PXL_20260502_112844943/{i * 1.5:.3f}.jpg")
+        for i in range(n_jobs)
+    ]
+    ssim_jobs = [
+        (
+            f"/output/gap_context/frames/PXL_20260502_112844943/{i:.3f}.jpg",
+            f"/output/gap_context/frames/PXL_20260502_112844943/{i + 1:.3f}.jpg",
+            f"/output/gap_context/frames/PXL_20260502_112844943/ssim_{i}.txt",
+        )
+        for i in range(n_ssim)
+    ]
+    return jobs, ssim_jobs
+
+
+def test_build_snapshot_batch_cmd_large_batch_keeps_every_argv_element_small():
+    from nagare_clip.pipeline.external import build_snapshot_batch_cmd
+
+    jobs, ssim_jobs = _big_batch()
+    batch = build_snapshot_batch_cmd(Path("/proj"), jobs, 960, ssim_jobs=ssim_jobs)
+    # The script really is past the per-argument limit ...
+    assert len(batch.script.encode()) > _MAX_ARG_STRLEN
+    # ... yet no argv element carries it.
+    assert max(len(a.encode()) for a in batch.argv) < 4096
+    assert sum(len(a.encode()) for a in batch.argv) < 4096
+    assert batch.script.count("ffmpeg ") == len(jobs) + len(ssim_jobs)
+
+
+def test_build_snapshot_batch_cmd_shell_reads_script_from_stdin():
+    """`sh -s` reads its script from stdin, and compose must not allocate a
+    TTY (`-T`) so the piped stdin reaches the container's shell."""
+    from nagare_clip.pipeline.external import build_snapshot_batch_cmd
+
+    jobs = [("a.mp4", 1.0, "/output/gap_context/frames/a/1.000.jpg")]
+    batch = build_snapshot_batch_cmd(Path("/proj"), jobs, 960)
+    argv = batch.argv
+    assert argv[:3] == ["docker", "compose", "-f"]
+    run_at = argv.index("run")
+    assert "-T" in argv[run_at:]
+    assert "-d" not in argv and "--detach" not in argv
+    assert argv[argv.index("--entrypoint") + 1] == "sh"
+    assert argv[-2:] == ["whisperx", "-s"]
+    assert "-c" not in argv
+    assert batch.script not in argv
+
+
+def test_snapshot_batch_script_survives_a_real_sh_over_stdin(tmp_path):
+    """End-to-end over a real shell: a >128 KiB script fed via stdin runs
+    every line, and `-nostdin` on each ffmpeg line is what keeps a command
+    from eating the rest of the script (here: a stub ffmpeg that would)."""
+    from nagare_clip.pipeline.external import build_snapshot_batch_cmd
+
+    bindir = tmp_path / "bin"
+    bindir.mkdir()
+    log = tmp_path / "calls.log"
+    stub = bindir / "ffmpeg"
+    # Stub: drain stdin unless -nostdin is given, then log the output arg.
+    stub.write_text(
+        "#!/bin/sh\n"
+        'case " $* " in *" -nostdin "*) ;; *) cat >/dev/null ;; esac\n'
+        f'echo x >> "{log}"\n'
+    )
+    stub.chmod(0o755)
+    jobs, ssim_jobs = _big_batch()
+    batch = build_snapshot_batch_cmd(Path("/proj"), jobs, 960, ssim_jobs=ssim_jobs)
+    run_command(
+        ["sh", "-s"],
+        env_extra={"PATH": f"{bindir}:/usr/bin:/bin"},
+        stdin_text=batch.script,
+    )
+    assert len(log.read_text().splitlines()) == len(jobs) + len(ssim_jobs)
+
+
+def test_run_command_feeds_stdin_text(tmp_path):
+    out = tmp_path / "stdin.txt"
+    run_command(
+        [
+            "python3",
+            "-c",
+            "import sys; open(sys.argv[1], 'w').write(sys.stdin.read())",
+            str(out),
+        ],
+        stdin_text="hello\nworld\n",
+    )
+    assert out.read_text() == "hello\nworld\n"
+
+
+def test_run_command_failure_carries_the_reason():
+    """A failure must surface something a warning can print."""
+    import subprocess
+
+    import pytest
+
+    with pytest.raises(subprocess.CalledProcessError) as exc:
+        run_command(
+            ["python3", "-c", "import sys; print('boom', file=sys.stderr); sys.exit(3)"],
+            stdin_text="",
+            capture_stderr=True,
+        )
+    assert "boom" in (exc.value.stderr or "")
