@@ -127,7 +127,7 @@ edits in a scratch file in the project's output directory (e.g.
   "plan": "Prose plan, as confirmed with the user.",
   "order": [[41, 80], [1, 40], [81, 212]],
   "ops": [
-    {"type": "cut", "lines": [42, 48], "note": "why / where precisely"},
+    {"type": "cut", "lines": [41, 44], "note": "why / where precisely"},
     {"type": "timelapse", "lines": [60, 72], "factor": 8.0, "text": "配管の取り付け", "note": "..."},
     {"type": "overlay", "lines": [45, 45], "text": "ポイント", "duration": 2.0, "note": ""},
     {"type": "keep", "lines": [50, 51], "note": "..."},

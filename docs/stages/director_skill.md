@@ -211,13 +211,15 @@ types*, *Targets matrix*, *apm compile*, *apm install*):
   files and never overwrites a hand-authored `AGENTS.md`/`CLAUDE.md`. The
   package has no instructions (agents discover skills from their skill
   directories), so it is not used.
-- **`make apm`** smoke-installs the package into a fresh temp directory (left
-  in place; the path is printed), diffs `.claude/skills` and `.agents/skills`
+- **`make apm`** smoke-installs the package into a fresh temp directory
+  (removed on exit by a guarded `trap`), diffs `.claude/skills` and `.agents/skills`
   against `skills/.apm/skills`, and runs `apm audit --ci` there. It needs the
   apm CLI, so it is not in CI. `tests/test_apm_skill.py` checks in CI the
   package manifest, each skill's frontmatter (ASCII, `name` = directory,
   description ≤ 1024 chars), that every `director_tools.sh <cmd>` the skill
-  names exists, and that nothing is deployed at the repo root.
+  names exists, that nothing is deployed at the repo root, and that SKILL.md's
+  edit-format example passes `validate_edit` (so the shape agents copy is one
+  `write` accepts).
 
 ## Follow-ups
 

@@ -55,3 +55,33 @@ def test_skill_names_only_real_tool_commands():
     used = set(re.findall(r"director_tools\.sh\"? (\w+)", text))
     assert used and used <= commands
     assert (ROOT / "scripts" / "director_tools.sh").is_file()
+
+
+def test_skill_md_edit_example_passes_write_validation():
+    """The edit-format example is what agents copy: write must accept it."""
+    import json
+
+    from nagare_clip.director.display import build_display_view
+    from nagare_clip.director.run import SegmentTranscript
+    from nagare_clip.director.tools.validate import validate_edit
+    from nagare_clip.order import Segment
+
+    text = (PACKAGE / ".apm" / "skills" / "nagare-director" / "SKILL.md").read_text(
+        encoding="utf-8"
+    )
+    block = re.search(r"## Edit format\s+```json\n(.*?)\n```", text, re.S)
+    assert block, "SKILL.md must keep a ```json example under '## Edit format'"
+    example = json.loads(block.group(1))
+
+    lines = 212
+    transcript = SegmentTranscript(
+        edit_lines=[f"line {i}" for i in range(1, lines + 1)],
+        first_line=1,
+        seg_times=[(i * 2.0, i * 2.0 + 1.5) for i in range(lines)],
+        silences=None,
+        gaps=[],
+    )
+    view = build_display_view([(Segment("video", None), transcript)])
+    assert len(view.lines) == lines
+    _edit, problems = validate_edit(view, example, has_plan=False, max_keep_lines=8)
+    assert [str(p) for p in problems] == []

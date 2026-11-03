@@ -34,7 +34,7 @@ config-example: ## Regenerate config.example.yml from the config models
 	uv run python -m nagare_clip.config --write-example
 
 apm: ## Smoke-install the skills package into a temp video dir and audit it (needs the apm CLI; not in CI)
-	@tmp=$$(mktemp -d) && echo "smoke install in $$tmp" && cd "$$tmp" && git init -q && \
+	@tmp=$$(mktemp -d) && trap 'rm -rf "$${tmp:?}"' EXIT && echo "smoke install in $$tmp" && cd "$$tmp" && git init -q && \
 		apm install "$(CURDIR)/skills" --target claude,codex && \
 		diff -r "$(CURDIR)/skills/.apm/skills" .claude/skills && \
 		diff -r "$(CURDIR)/skills/.apm/skills" .agents/skills && \
