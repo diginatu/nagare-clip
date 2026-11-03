@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import json
 import shlex
+import subprocess
 
 import pytest
 
@@ -160,20 +161,26 @@ def test_frames_that_ffmpeg_never_wrote_are_dropped(ctx, monkeypatch):
     assert seen["thumbs"] == []
 
 
-def test_failed_extraction_does_not_abort_the_stage(ctx, monkeypatch):
+def test_docker_failure_stops_the_pipeline(ctx, monkeypatch):
+    """A failed extraction batch is a Docker failure: stop, don't publish an
+    empty shortlist."""
+    from nagare_clip.pipeline.errors import PipelineError
+
     seen = {}
     monkeypatch.setattr(st, "recorder_from_config", lambda *a, **k: _NullRec())
 
-    def boom(*a, **k):
-        raise RuntimeError("docker is not running")
+    def boom(cmd, **k):
+        raise subprocess.CalledProcessError(1, cmd, stderr="Cannot connect to the Docker daemon\n")
 
     monkeypatch.setattr(st, "run_command", boom)
     monkeypatch.setattr(st, "run_publish", lambda s, o, cfg, **kw: seen.update(kw))
     _enable(ctx)
     _segments(ctx, 2)
     _director(ctx, [{"type": "overlay", "lines": [1, 1], "text": "x", "duration": 2.0}])
-    next(s for s in st.STAGES if s.name == "publish").run(ctx)
-    assert seen["thumbs"] == []
+    with pytest.raises(PipelineError) as exc:
+        next(s for s in st.STAGES if s.name == "publish").run(ctx)
+    assert "Cannot connect to the Docker daemon" in str(exc.value)
+    assert seen == {}
 
 
 def test_max_frames_caps_the_extraction(ctx, monkeypatch):
@@ -236,8 +243,8 @@ def test_extraction_script_goes_to_stdin_not_argv(ctx, monkeypatch):
     assert kwargs.get("capture_stderr") is True
 
 
-def test_failed_extraction_warning_names_the_reason(ctx, monkeypatch, caplog):
-    import logging
+def test_docker_failure_error_names_the_reason(ctx, monkeypatch):
+    from nagare_clip.pipeline.errors import PipelineError
 
     monkeypatch.setattr(st, "recorder_from_config", lambda *a, **k: _NullRec())
 
@@ -249,8 +256,7 @@ def test_failed_extraction_warning_names_the_reason(ctx, monkeypatch, caplog):
     _enable(ctx)
     _segments(ctx, 2)
     _director(ctx, [{"type": "overlay", "lines": [1, 1], "text": "x", "duration": 2.0}])
-    with caplog.at_level(logging.WARNING):
+    with pytest.raises(PipelineError) as exc:
         next(s for s in st.STAGES if s.name == "publish").run(ctx)
-    msgs = [r.getMessage() for r in caplog.records if "batch frame extraction failed" in r.message]
-    assert len(msgs) == 1
-    assert "Argument list too long" in msgs[0]
+    assert "publish" in str(exc.value)
+    assert "Argument list too long" in str(exc.value)

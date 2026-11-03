@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import json
 import logging
+import subprocess
 from pathlib import Path
 
 from nagare_clip.audio_silence.cuts_file import read_cuts
@@ -196,7 +197,7 @@ def _failure_reason(exc: BaseException, tail_lines: int = 20) -> str:
     """The exception text plus the tail of the process's stderr, if any.
 
     A bare "batch frame extraction failed" once hid an `Argument list too
-    long` for a whole run; the reason must always reach the log.
+    long` for a whole run; the reason must always reach the user.
     """
     reason = f"{type(exc).__name__}: {exc}"
     stderr = getattr(exc, "stderr", None)
@@ -274,12 +275,15 @@ def _extract_gap_frames(
                 stdin_text=batch.script,
                 capture_stderr=True,
             )
-        except Exception as exc:  # noqa: BLE001 - a failed batch must never abort the run
-            logging.warning(
-                "gap_context: batch frame extraction failed (%d job(s)): %s",
-                len(jobs),
-                _failure_reason(exc),
-            )
+        except (OSError, subprocess.CalledProcessError) as exc:
+            # A failed batch is a Docker-level failure (docker missing, image
+            # gone, daemon down, argv too long): one bad seek cannot cause it,
+            # since every line ends in `|| true`. Stop the run here rather
+            # than carry on with no frames.
+            raise PipelineError(
+                f"gap_context: frame extraction in Docker failed "
+                f"({len(jobs)} job(s)): {_failure_reason(exc)}"
+            ) from exc
 
     result: dict[str, list[GapFrames]] = {}
     for stem, entries in plan.items():
@@ -945,12 +949,15 @@ def _extract_thumb_frames(
                 stdin_text=batch.script,
                 capture_stderr=True,
             )
-        except Exception as exc:  # noqa: BLE001 - a failed batch must never abort the run
-            logging.warning(
-                "publish: batch frame extraction failed (%d job(s)): %s",
-                len(jobs),
-                _failure_reason(exc),
-            )
+        except (OSError, subprocess.CalledProcessError) as exc:
+            # A failed batch is a Docker-level failure (docker missing, image
+            # gone, daemon down, argv too long): one bad seek cannot cause it,
+            # since every line ends in `|| true`. Stop the run here rather
+            # than carry on with no frames.
+            raise PipelineError(
+                f"publish: frame extraction in Docker failed "
+                f"({len(jobs)} job(s)): {_failure_reason(exc)}"
+            ) from exc
 
     shots: list[ThumbShot] = []
     for cand, rel, host_path in planned:

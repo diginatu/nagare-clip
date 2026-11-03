@@ -90,18 +90,20 @@ float]]]]`) and:
    script, so an ffmpeg without it would swallow the remaining lines.
    **Zero jobs means zero docker calls** — an empty batch never runs an
    empty/no-op container. The `|| true` on each line means one bad seek
-   can't take down the rest of the batch; the whole `run_command()` call is
-   still wrapped in a broad `except Exception` (a missing/failed batch —
-   docker gone, image gone — must never abort the run; every gap in that
-   case simply gets zero frames). The warning names the reason
-   (`stages._failure_reason()`: the exception text plus the last 20 lines
-   of the container's stderr, which `capture_stderr=True` keeps) — a bare
-   "batch frame extraction failed" once hid the argv overflow for a whole
-   run.
+   can't take down the rest of the batch, so the batch itself fails only at
+   the Docker level (docker missing, daemon down, image gone, argv too
+   long). That **stops the run**: an `OSError`/`CalledProcessError` from
+   `run_command()` becomes a `PipelineError` (the CLI prints it and exits
+   1, no later stage runs), raised before any `{stem}_gaps.json` is
+   written, so the next run redoes the stage. Carrying on with zero frames
+   once produced "0 gap(s) described" for a whole project unnoticed. The
+   error names the reason (`stages._failure_reason()`: the exception text
+   plus the last 20 lines of the container's stderr, which
+   `capture_stderr=True` keeps).
 3. Regroups the single batch's results back into per-source, per-gap
    `GapFrames`, checking `host_path.is_file()` for each job the same way the
-   old per-frame code did — a frame that never landed (bad seek, or the
-   whole batch call raised) is skipped, never fatal. A gap that ends up with
+   old per-frame code did — a frame that never landed (a bad seek inside a
+   batch that otherwise ran) is skipped, never fatal. A gap that ends up with
    zero readable frames is dropped entirely (logged) before it ever reaches
    `describe_gap`.
 

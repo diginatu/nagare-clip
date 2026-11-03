@@ -379,10 +379,13 @@ def test_gap_context_enabled_but_zero_gaps_runs_no_docker(gap_ctx, monkeypatch):
     assert run_calls == []
 
 
-def test_gap_context_batch_call_raising_drops_all_frames_without_aborting(gap_ctx, monkeypatch):
-    """If the ONE docker call itself raises (docker missing, image gone),
-    every gap simply ends up with no frames -- the pipeline must not abort."""
+def test_gap_context_docker_failure_stops_the_pipeline(gap_ctx, monkeypatch):
+    """If the ONE docker call fails (docker missing, image gone, non-zero
+    exit), the stage raises PipelineError -- the run stops there instead of
+    describing zero gaps and carrying on. No gaps file is written, so the
+    next run redoes the stage."""
     import nagare_clip.pipeline.stages as stages_mod
+    from nagare_clip.pipeline.errors import PipelineError
 
     cuts = gap_ctx.stage_dir("audio_silence") / "talk1_cuts.txt"
     cuts.parent.mkdir(parents=True, exist_ok=True)
@@ -391,21 +394,16 @@ def test_gap_context_batch_call_raising_drops_all_frames_without_aborting(gap_ct
     def flaky(cmd, **kwargs):
         raise subprocess.CalledProcessError(1, cmd)
 
-    captured = {}
-
-    def fake_run_gap_context(gap_frames, output, cfg, **kwargs):
-        captured["gap_frames"] = gap_frames
-        output.parent.mkdir(parents=True, exist_ok=True)
-        output.write_text('{"gaps": []}\n', encoding="utf-8")
-
+    called = []
     monkeypatch.setattr(stages_mod, "run_command", flaky)
-    monkeypatch.setattr(stages_mod, "run_gap_context", fake_run_gap_context)
+    monkeypatch.setattr(stages_mod, "run_gap_context", lambda *a, **k: called.append(a))
     gap_ctx.cfg["gap_context"]["enabled"] = True
 
     stage = next(s for s in stages_mod.STAGES if s.name == "gap_context")
-    stage.run(gap_ctx)  # must not raise
-
-    assert captured["gap_frames"] == []  # gap with zero frames is skipped
+    with pytest.raises(PipelineError):
+        stage.run(gap_ctx)
+    assert called == []
+    assert not (gap_ctx.stage_dir("gap_context") / "talk1_gaps.json").exists()
 
 
 def test_gap_context_a_single_bad_line_does_not_drop_other_frames(gap_ctx, monkeypatch):
@@ -898,39 +896,34 @@ def test_gap_context_batch_script_goes_to_stdin_not_argv(gap_ctx, monkeypatch):
     assert kwargs.get("capture_stderr") is True
 
 
-def test_gap_context_batch_failure_warning_names_the_reason(gap_ctx, monkeypatch, caplog):
-    """`batch frame extraction failed` without the reason hid an
-    `Argument list too long` for a whole run. The warning must carry the
-    exception text and the process's stderr."""
-    import logging
-
+def test_gap_context_docker_failure_error_names_the_reason(gap_ctx, monkeypatch):
+    """A bare "batch frame extraction failed" once hid an `Argument list too
+    long` for a whole run. The error must carry the exception text and the
+    process's stderr."""
     import nagare_clip.pipeline.stages as stages_mod
+    from nagare_clip.pipeline.errors import PipelineError
 
     cuts = gap_ctx.stage_dir("audio_silence") / "talk1_cuts.txt"
     cuts.parent.mkdir(parents=True, exist_ok=True)
     cuts.write_text("10.000 - 20.000\n", encoding="utf-8")
+    monkeypatch.setattr(stages_mod, "run_gap_context", lambda *a, **k: None)
+    gap_ctx.cfg["gap_context"]["enabled"] = True
+    stage = next(s for s in stages_mod.STAGES if s.name == "gap_context")
 
     def boom(cmd, **kwargs):
         raise OSError(7, "Argument list too long")
 
     monkeypatch.setattr(stages_mod, "run_command", boom)
-    monkeypatch.setattr(stages_mod, "run_gap_context", lambda *a, **k: None)
-    gap_ctx.cfg["gap_context"]["enabled"] = True
-    with caplog.at_level(logging.WARNING):
-        next(s for s in stages_mod.STAGES if s.name == "gap_context").run(gap_ctx)
-    msgs = [r.getMessage() for r in caplog.records if "batch frame extraction failed" in r.message]
-    assert len(msgs) == 1
-    assert "Argument list too long" in msgs[0]
-
-    caplog.clear()
+    with pytest.raises(PipelineError) as exc:
+        stage.run(gap_ctx)
+    assert "gap_context" in str(exc.value)
+    assert "Argument list too long" in str(exc.value)
 
     def failed(cmd, **kwargs):
         raise subprocess.CalledProcessError(125, cmd, stderr="Error: No such image: whisperx\n")
 
     monkeypatch.setattr(stages_mod, "run_command", failed)
-    with caplog.at_level(logging.WARNING):
-        next(s for s in stages_mod.STAGES if s.name == "gap_context").run(gap_ctx)
-    msgs = [r.getMessage() for r in caplog.records if "batch frame extraction failed" in r.message]
-    assert len(msgs) == 1
-    assert "exit status 125" in msgs[0]
-    assert "No such image: whisperx" in msgs[0]
+    with pytest.raises(PipelineError) as exc:
+        stage.run(gap_ctx)
+    assert "exit status 125" in str(exc.value)
+    assert "No such image: whisperx" in str(exc.value)
