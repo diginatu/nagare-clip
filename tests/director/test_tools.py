@@ -535,3 +535,39 @@ def test_keeps_separated_by_a_speech_line_do_not_chain(project):
         view, {"plan": PLAN, "ops": ops}, has_plan=False, max_keep_lines=1
     )
     assert problems == []
+
+
+# --- view: the default runtime is never omitted silently ------------------------
+
+
+def test_view_prints_each_sources_default_runtime(project, capsys):
+    out = _run(capsys, "view", "--config", _cfg(project), "--no-context").out
+    assert "[1] a: lines 1-4, default 3.0 s" in out
+    assert "[2] b: lines 5-6, default 3.5 s" in out
+    assert "default runtime 6.5 s (0.1 min)" in out
+
+
+def test_view_says_why_a_runtime_is_unknown_missing_json(project, capsys):
+    (project / "out" / "sentence_split" / "b.json").unlink()
+    out = _run(capsys, "view", "--config", _cfg(project), "--no-context").out
+    assert "[2] b: lines 5-6, default unknown — no sentence_split JSON" in out
+    assert "default runtime unknown: [2] b has no line timings" in out
+
+
+def test_view_says_why_a_runtime_is_unknown_segment_count(project, capsys):
+    path = project / "out" / "sentence_split" / "a.json"
+    data = json.loads(path.read_text(encoding="utf-8"))
+    data["segments"] = data["segments"][:2]
+    path.write_text(json.dumps(data), encoding="utf-8")
+    out = _run(capsys, "view", "--config", _cfg(project), "--no-context").out
+    assert "default unknown — sentence_split JSON has 2 segments for 3 transcript lines" in out
+    assert "default runtime unknown: [1] a has no line timings" in out
+
+
+def test_view_says_why_a_runtime_is_unknown_untimed_segment(project, capsys):
+    path = project / "out" / "sentence_split" / "b.json"
+    data = json.loads(path.read_text(encoding="utf-8"))
+    del data["segments"][1]["end"]
+    path.write_text(json.dumps(data), encoding="utf-8")
+    out = _run(capsys, "view", "--config", _cfg(project), "--no-context").out
+    assert "default unknown — source line 2 has no start/end time" in out

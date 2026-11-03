@@ -22,7 +22,12 @@ from nagare_clip.director.director_llm import _max_keep_lines
 from nagare_clip.director.loop import order_segments
 from nagare_clip.director.preview import edit_state
 from nagare_clip.director.run import VIEW_HEADER, project_context
-from nagare_clip.director.tools.project import Project, current_state, load_project
+from nagare_clip.director.tools.project import (
+    Project,
+    current_state,
+    load_project,
+    runtime_status,
+)
 from nagare_clip.director.tools.validate import (
     Edit,
     Problem,
@@ -68,11 +73,30 @@ def _read_edit(source: str) -> Any:
     return json.loads(text)
 
 
-def _segment_index_line(project: Project) -> str:
-    rows = []
-    for seg in project.view.segments:
-        rows.append(f"[{seg.index}] {seg.label}: lines {seg.first}-{seg.last}")
-    return "\n".join(rows)
+def _runtime_index(project: Project) -> tuple[str, str]:
+    """``(headline, index)``: the whole-video default runtime, then one row per
+    source with its own default runtime — or "unknown" and why, never silence."""
+    rows: list[str] = []
+    total = 0.0
+    unknown: list[str] = []
+    for seg, inputs, transcript in zip(project.view.segments, project.inputs, project.transcripts):
+        seconds, why = runtime_status(inputs, transcript)
+        row = f"[{seg.index}] {seg.label}: lines {seg.first}-{seg.last}, "
+        if seconds is None:
+            rows.append(row + f"default unknown — {why}")
+            unknown.append(f"[{seg.index}] {seg.label}")
+        else:
+            rows.append(row + f"default {seconds:.1f} s")
+            total += seconds
+    if unknown:
+        headline = (
+            f"default runtime unknown: {', '.join(unknown)} "
+            f"{'has' if len(unknown) == 1 else 'have'} no line timings "
+            f"(the other sources: {total:.1f} s)"
+        )
+    else:
+        headline = f"default runtime {total:.1f} s ({total / 60:.1f} min)"
+    return headline, "\n".join(rows)
 
 
 def cmd_view(project: Project, args: argparse.Namespace) -> int:
@@ -95,13 +119,9 @@ def cmd_view(project: Project, args: argparse.Namespace) -> int:
         context = project_context(project.ctx.stage_dir("summary") / "summary.json", view)
         if context:
             parts.append(context)
-    runtime = [t.default_runtime() for t in project.transcripts]
-    known = all(r is not None for r in runtime)
-    summary = f"{total} display lines in {len(view.segments)} source(s)"
-    if known:
-        default = sum(runtime)
-        summary += f"; default runtime {default:.1f} s ({default / 60:.1f} min)"
-    parts.append(f"{summary}\n{_segment_index_line(project)}")
+    headline, index = _runtime_index(project)
+    summary = f"{total} display lines in {len(view.segments)} source(s); {headline}"
+    parts.append(f"{summary}\n{index}")
     header = VIEW_HEADER
     if (first, last) != (1, total):
         header += f" Showing lines {first}-{last} of {total}."

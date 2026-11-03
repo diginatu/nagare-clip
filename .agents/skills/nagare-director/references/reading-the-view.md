@@ -33,8 +33,15 @@ numbering:
 - Lines without a bracket mean the timing is unknown (no WhisperX JSON for
   that source); runtimes are then not computable.
 
-The header above the transcript gives the source index (`[k] stem: lines
-a-b`) and the **default runtime** — what the video plays with no op at all.
+The header above the transcript gives the **default runtime** — what the
+video plays with no op at all — and one row per source:
+`[k] stem: lines a-b, default 412.3 s`. When a source has no usable line
+timings, its row says `default unknown — <why>` (no sentence_split JSON, a
+segment count that does not match the transcript's line count, or a line
+with no start/end time), and the headline names that source and gives the
+total of the others. Runtime figures for that source are then missing
+everywhere, including `preview`: tell the user, since the fix is upstream
+(usually re-running sentence_split/text_filter).
 
 `preview` reports, per op, the footage it takes and the seconds it puts on
 screen beside the default seconds for the same lines, the boundary silences it
