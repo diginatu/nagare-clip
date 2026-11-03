@@ -32,10 +32,15 @@ that for the lines in its range only.
 - **timelapse** — plays a long stretch of manual work fast under one on-screen
   caption. Give `factor` (4.0 or more; the tools refuse less — below that it
   is a mild speed-up that would smuggle an uncapped keep over talking) and
-  usually `text`. Pick the factor so the result runs about a minute on
-  screen: a longer span needs a bigger number, a span where little happens
-  can go faster still. Do not settle on one habitual number; `preview` shows
-  the on-screen seconds, so compute it. One op does the whole arrangement:
+  usually `text`. **About a minute on screen is the upper limit for one
+  timelapse, not a target.** How long each one should run depends on the
+  brief's target duration, on how many timelapses the video has (they add
+  up: a dozen near the limit is most of a short video), and on the brief's
+  tone — budget their total against the target in the plan, then size each
+  one to its share. A longer span needs a bigger factor for the same
+  on-screen time, and a span where little happens can go faster still. Do
+  not settle on one habitual length or factor; `preview` shows each
+  timelapse's on-screen seconds, so compute it. One op does the whole arrangement:
   the work runs continuously and the caption stays up for the whole
   timelapse — do not add a `keep` or `overlay` over the same lines. To change
   the caption partway, use consecutive timelapses (a new caption is a new
@@ -44,8 +49,10 @@ that for the lines in its range only.
   (the tools refuse blank text or a non-positive duration). Pick the duration
   from reading length — a short label about 2 s, a full sentence 4-6 s; never
   a fixed value. Its `lines` say WHERE it appears: the first line of the
-  range. Use it at turning points, conclusions, failures and mishaps. Aim for
-  about one per 3-5 minutes of finished video unless the brief sets a rate.
+  range. Use it at turning points, conclusions, failures and mishaps. How
+  many is the brief's call: when it sets a rate or a tone that implies one,
+  follow it; only when it says nothing, a loose default is roughly one per
+  3-5 minutes of finished video.
   All captions share one track, so two on screen at once collide;
   `preview` lists them in playback order.
 - **keep** — protects a span INCLUDING its silences, so an on-screen event

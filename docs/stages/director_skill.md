@@ -134,12 +134,17 @@ round-trips whole edits.
 
 ## The skill (`.apm/skills/nagare-director/`, packaged with APM)
 
-- `SKILL.md` — when to use it, the tools, the workflow, the edit format, the
-  enforced rules. Workflow: run the pipeline to `text_filter` if needed →
-  `view` (every page) → plan in prose (throughline, what to cut/compress and
-  where, caption moments, order and why, expected runtime) → **stop and
-  confirm the plan with the user** → draft ops → `preview --edit` → report the
-  meaningful numbers → iterate → `write` → tell the user to run
+- `SKILL.md` — when to use it, the tools, the workflow, the edit format, and
+  the enforced rules as bare statements (each rule's reason lives only in
+  `editorial-rules.md`; the References section is two one-line links).
+  Workflow: run the pipeline to `text_filter` if needed → `view` (every page)
+  → read `editorial-rules.md` → plan in prose (throughline, what to
+  cut/compress and where, caption moments, order and why, expected runtime
+  including the timelapses' combined share) → **stop and confirm the plan with
+  the user** → draft ops → iterate on `preview --edit --summary`, watching the
+  runtime against the target as the timelapses add up, reading the full
+  detail only with `--lines`/`--source` where needed → report the meaningful
+  numbers → `write` → tell the user to run
   `./scripts/run_pipeline.sh --from-stage guided_edit`. The user always wins.
 - `references/editorial-rules.md` — **the reasoning behind every op and
   rule** (SKILL.md only lists them), migrated from `DIRECTOR_PROMPT` and the
@@ -147,8 +152,14 @@ round-trips whole edits.
   on-screen event must not play chopped into fragments when small noises are
   transcribed as speech — one keep over the whole event, never over ordinary
   talking, the user decides on raising the cap); why `speed` is off the menu;
-  why a timelapse is 4.0x+ and how to size it; cut vs timelapse; overlay
-  timing/density; silence as content; joins; the order; pacing from the
+  why a timelapse is 4.0x+, and that about a minute on screen is its
+  **upper limit, not a target** — its length follows the target duration,
+  how many timelapses there are and the brief (a real run that took the
+  minute literally gave 14 × ~55 s ≈ 13 min against a 30 min ceiling); no
+  single anchor length or factor is given, for the reason AGENTS.md records
+  (one number in a prompt becomes everyone's default); cut vs timelapse;
+  overlay timing, with density yielding to the brief (~1 per 3-5 min only
+  when the brief is silent); silence as content; joins; the order; pacing from the
   speech figure; "the playback is the viewer's"; the editorial brief.
   SKILL.md points to it in the workflow before planning and drafting.
 - `references/reading-the-view.md` — **how to read what the tools print**:

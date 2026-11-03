@@ -25,26 +25,30 @@ merged left to right, exactly like the pipeline):
 ```bash
 ./scripts/director_tools.sh view    --config <cfg.yml> [--lines A-B] [--no-context]
 ./scripts/director_tools.sh dump    --config <cfg.yml>              # files on disk -> edit JSON
-./scripts/director_tools.sh preview --config <cfg.yml> [--edit FILE|-]
+./scripts/director_tools.sh preview --config <cfg.yml> [--edit FILE|-] [--summary [--min-run S]] [--lines A-B] [--source k]
 ./scripts/director_tools.sh write   --config <cfg.yml> --edit FILE|-
 ```
 
 (`uv run python -m nagare_clip.director.tools ...` is the same thing.)
 
 - `view` — the editorial brief, the keep-width limit, the project summaries,
-  an index of sources with their line ranges and the default runtime, then
+  each source's line range and default runtime (or why it is unknown), then
   the whole video under **one display numbering**. Page through a long
   video with `--lines 1-200 --no-context`, then `--lines 201-400 ...`.
 - `dump` — what `output/director/` holds now, as an edit file in display
   numbers. Start from it when revising an earlier edit.
-- `preview` — what an edit plays: each op with the footage it takes and the
-  seconds it puts on screen, the video as it plays in the order, the
-  captions in playback order, and the whole-video runtime. `--edit` previews
-  a candidate without writing anything and lists its problems (exit 1).
+- `preview` — what an edit plays. `--summary` is the screenful to read every
+  iteration: per-source and whole-video runtime, the video as it plays (runs
+  in playback order; `--min-run S` hides runs under S seconds, cuts always
+  shown) and the captions. The full form adds each op's detail (footage,
+  on-screen seconds, unintelligible lines, boundary silences); narrow it with
+  `--lines A-B` or `--source k` — totals, captions and problems stay
+  whole-video. `--edit` previews a candidate without writing anything and
+  lists its problems (exit 1).
 - `write` — validates the whole edit; on **any** problem it prints them all
   and writes nothing (exit 1). Otherwise it writes `{stem}_director.json`
-  for every source, and `director/order.json` / `director/plan.md` when the
-  edit carries them.
+  for every source and `director/order.json`, and `director/plan.md` when
+  the edit carries a plan.
 
 Every line number you use is the display number `view` printed. Keep candidate
 edits in a scratch file (e.g. `output/director/edit.draft.json`), not in your
@@ -60,41 +64,37 @@ reply alone.
    while). If `output/director/` already has files, ask whether to revise
    them (`dump`) or start over.
 2. **Read everything.** Run `view` and read the whole video, every page,
-   before you decide anything. Read the brief and summaries at the top.
-   [references/reading-the-view.md](references/reading-the-view.md) explains what the view shows: the
-   timing brackets (`[4.2s, gap 0.8s]`, `[13.0s speech, 62.9s silence]` —
-   what plays vs what is dropped by default), the numbered `[silent …]`
-   lines you can put in an op, the un-numbered `[silent gap: …]` notes you
-   cannot, and how to read `preview`'s output. Open it before your first
-   `view` if any of that is unfamiliar.
-3. **Before you plan, read [references/editorial-rules.md](references/editorial-rules.md).**
-   It holds the reasoning behind every op and rule, which this file only
-   lists: what a `keep` is FOR (an on-screen event must not play chopped into
-   fragments when small noises are transcribed as speech — one keep over the
-   whole event, never a keep over ordinary talking), why `speed` is off the
-   menu, why a timelapse is 4.0x or more and how to pick its factor, when to
-   cut vs timelapse, caption timing and density, silences worth keeping,
-   the order and seams, pacing from the speech figure, and how to follow the
-   editorial brief. The plan and every op you draft should follow it.
+   before you decide anything, including the brief and summaries at the top.
+   [references/reading-the-view.md](references/reading-the-view.md) explains
+   the notation (timing brackets, silence lines, gap notes, the runtime
+   rows) and `preview`'s output.
+3. **Read [references/editorial-rules.md](references/editorial-rules.md)
+   before you plan.** It holds the reasoning behind every op and rule — what
+   a keep is for, why there is no `speed`, how fast and how long a timelapse
+   should be, cut vs timelapse, captions, silences, order, pacing, and the
+   brief. The plan and every op follow it.
 4. **Write the plan, in prose**: the throughline (what this video is about
    and what the viewer should come away with); what to cut and what to
    compress, roughly where (approximate line numbers mark sections, not op
    boundaries); the moments worth a caption; the order and why, if it should
-   not be shooting order; the runtime you expect against the brief's target.
+   not be shooting order; and the runtime you expect against the brief's
+   target, including how much of it the timelapses will take together.
 5. **Stop and confirm the plan with the user.** Do not draft ops before they
    agree. Revise the plan as they ask.
-6. **Draft the ops** in an edit file (format below), choosing each op by
-   [references/editorial-rules.md](references/editorial-rules.md) (re-read the op's entry when
-   unsure), and run `preview --edit`.
-   Fix every problem it lists. Read the playback, not just the spec: the
-   usual mistake is a span that opens one line too early.
-7. **Show the user the numbers that matter**: default runtime -> runtime with
-   the edit (against the target), each timelapse's footage -> on-screen
-   seconds and factor, what each cut removes, the captions in playback
-   order, and every seam if the order moved anything. Summarise; do not paste
-   the whole preview unless asked.
-8. **Iterate** on their feedback: edit the file, `preview --edit` again,
-   report again. Update the plan when the footage proves it wrong.
+6. **Draft the ops** in an edit file (format below) and run
+   `preview --edit <file> --summary`. Fix every problem it lists. Watch the
+   whole-video runtime against the target **as the timelapses add up**, not
+   only at the end. For any op whose playback you are unsure of, read the
+   detail with `preview --edit <file> --lines A-B`: the usual mistake is a
+   span that opens one line too early.
+7. **Show the user the numbers that matter** — from `--summary`: default ->
+   edited runtime against the target, each timelapse's on-screen seconds and
+   factor, what the cuts remove, the captions in playback order, and every
+   seam if the order moved anything. Summarise; do not paste the preview
+   unless asked.
+8. **Iterate** on their feedback: edit the file, `preview --summary` again
+   (detail only where needed), report again. Update the plan when the
+   footage proves it wrong.
 9. **Write** with `write --edit <file>` once the user is happy, then tell them
    to resume the pipeline:
    `./scripts/run_pipeline.sh --config <cfg.yml> --from-stage guided_edit`.
@@ -129,41 +129,27 @@ reply alone.
   disk. Revise from `dump`, which carries the order in force, so a reorder
   survives.
 - `order` lists display ranges in the order they PLAY, covering every line
-  exactly once. Leave it out for shooting order.
+  exactly once.
 - `plan` is optional: absent, `plan.md` stays. It is required the first time
   (there is none on disk yet).
 
-## References — what is in them and why to open them
+## References
 
-- [references/editorial-rules.md](references/editorial-rules.md) — **the reasoning behind
-  every op and rule**; the list below only states them. What a keep is for
-  (an on-screen event not chopped into fragments by transcribed noises; one
-  keep over the whole event; never over ordinary talking; asking the user
-  before raising the cap), why `speed` is off the menu, why a timelapse is
-  4.0x+ and how to size its factor, cut vs timelapse, overlay timing and
-  density, silences as content, source joins, the order, pacing, "the
-  playback is the viewer's", and the editorial brief. Read it before
-  planning.
-- [references/reading-the-view.md](references/reading-the-view.md) — **how to read what the
-  tools print**: timing brackets (speech vs dropped silence), silence lines
-  vs un-numbered gap notes, the source index and default runtime, and each
-  part of `preview`'s output. Read it before your first `view`.
+- [references/editorial-rules.md](references/editorial-rules.md) — why each op and rule is what it is; read before planning.
+- [references/reading-the-view.md](references/reading-the-view.md) — how to read what `view` and `preview` print.
 
 ## Rules the tools enforce
 
-`write` refuses an edit that breaks any of these (they were learned the hard
-way; the reasons are in the editorial rules):
+`write` refuses an edit that breaks any of these; the reason for each is in
+[references/editorial-rules.md](references/editorial-rules.md).
 
-- no `speed` op — a stretch worth going fast over is a `timelapse`;
-- a `timelapse` needs `factor` >= 4.0; an `overlay` needs non-blank `text` and
-  a positive `duration`;
+- no `speed` op;
+- a `timelapse` needs `factor` >= 4.0;
+- an `overlay` needs non-blank `text` and a positive `duration`;
 - a `keep` spans at most `director.max_keep_lines` lines (`view` states the
-  number), and keeps that touch or overlap count as ONE keep against it —
-  never chain keeps to get past the cap. An event is covered by ONE keep over
-  its whole range; one wider than the cap needs the user's OK to raise
-  `director.max_keep_lines` (or is a timelapse — see the editorial rules);
+  number), and keeps that touch or overlap count as one keep against it;
 - a `cut` range may not overlap any other op's range;
-- one op stays inside one `[k]` source block — split it yourself at the join;
+- one op stays inside one `[k]` source block;
 - a silence line is a numbered line: use its number, never the `"n~"` form;
 - an `edit` op names speech lines only;
 - the order tiles every line once, no range holds only a silence line, and no

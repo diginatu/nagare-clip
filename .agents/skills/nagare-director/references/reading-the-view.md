@@ -48,6 +48,10 @@ screen beside the default seconds for the same lines, the boundary silences it
 leaves out, every unintelligible line under a fast span, the caption timing,
 then the segment as it plays (runs of `1x`, `1x+silence`, `timelapse`, `cut`),
 the video in playback order with every seam quoted, the captions in playback
-order, and `whole video so far: default X → with the ops Y`. Its header text
+order, and `whole video so far: default X → with the ops Y`.
+`preview --summary` prints only the totals, the runs in playback order
+(`1x`, `1x+silence`, `timelapse` with its factor and caption, `cut`, each with
+its on-screen seconds and display lines) and the captions; `--lines`/`--source`
+limit the detail to part of the video. The full form's header text
 was written for the old LLM director ("this conversation", "send plan in any
 reply"); read it as "this edit".
