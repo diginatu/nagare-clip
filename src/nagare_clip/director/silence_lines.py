@@ -90,7 +90,7 @@ class SilenceLine:
 
         The duration is stated HERE and nowhere else: the preceding line's
         bracket drops its ``gap`` part when a silence line follows it
-        (:func:`~nagare_clip.director.director_llm.format_numbered_transcript_timed`),
+        (:func:`~nagare_clip.director.transcript.format_numbered_transcript_timed`),
         so one silence never shows up as two numbers.
 
         *after_line* overrides the line number named, for a view that numbers

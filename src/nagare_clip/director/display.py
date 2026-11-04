@@ -25,15 +25,14 @@ of a range is exactly increment 1's ``"n~"``: the silence AFTER the source line
 it follows, never the line after it.
 
 A range that crosses a segment join is refused rather than clipped: the two
-sides are different footage, so an op over both means nothing — the caller
-(:mod:`nagare_clip.director.loop`) splits a ``cut``/``keep`` at the join and
-refuses the rest.  One source may play as several segments, and not in source
+sides are different footage, so an op over both means nothing
+(:func:`~.checks.join_problem` refuses it).  One source may play as several segments, and not in source
 order (``PXL_20260502_085157585`` plays 1-30, then 84-97, then 31-83), so
 "same stem" never means "same segment" here.
 
 The silence lines are increment 2's — :func:`~.silence_lines.build_silence_lines`
 decides which waits qualify and which gap descriptions they carry, once, in
-:func:`~.run.load_segment_transcript`; this module only numbers what it built.
+:func:`~.load.load_segment_transcript`; this module only numbers what it built.
 
 Pure: no I/O, no LLM.
 """
@@ -44,7 +43,7 @@ from collections.abc import Sequence
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
-from nagare_clip.director.director_llm import (
+from nagare_clip.director.transcript import (
     clean_for_display,
     format_numbered_transcript,
     format_numbered_transcript_timed,
@@ -52,7 +51,7 @@ from nagare_clip.director.director_llm import (
 from nagare_clip.order import Segment, segment_label
 
 if TYPE_CHECKING:  # pragma: no cover - typing only, and run.py may import us
-    from nagare_clip.director.run import SegmentTranscript
+    from nagare_clip.director.load import SegmentTranscript
 
 #: Annotation lines are indented and un-numbered, as they are everywhere else
 #: the director reads them, so neither can be mistaken for a display line.
@@ -166,7 +165,7 @@ def _bodies(transcript: SegmentTranscript) -> list[str]:
     """Each source line rendered as the director sees it, without its number.
 
     The renderer is the segment's own
-    (:func:`~.director_llm.format_numbered_transcript_timed`), so a line's
+    (:func:`~.transcript.format_numbered_transcript_timed`), so a line's
     bracket here and in a per-segment view cannot drift; only the number in
     front of it changes.  A line's number never contains ``": "``, so the split
     is exact.
@@ -192,7 +191,7 @@ def build_display_view(
     """Number every segment's lines, in playback order, from 1.
 
     *segments* are the finished video's segments in playback order, each with
-    the transcript :func:`~.run.load_segment_transcript` loaded for it — so the
+    the transcript :func:`~.load.load_segment_transcript` loaded for it — so the
     silence lines, the brackets and the gap descriptions are the ones increment
     2 already decided on.
     """

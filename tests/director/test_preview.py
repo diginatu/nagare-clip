@@ -6,20 +6,14 @@ numbers asserted here are the ones the model was misjudging.
 
 from __future__ import annotations
 
-import json
 import re
 from dataclasses import replace
 
 import pytest
 
-from nagare_clip.director.director_llm import (
-    DirectorOp,
-    format_numbered_transcript_timed,
-    line_seconds,
-    speech_seconds,
-    try_parse_director_response,
-)
 from nagare_clip.director.display import build_display_view
+from nagare_clip.director.load import SegmentTranscript
+from nagare_clip.director.ops import DirectorOp, keep_cap_problem
 from nagare_clip.director.preview import (
     NOTE_CHARS,
     edit_state,
@@ -27,8 +21,12 @@ from nagare_clip.director.preview import (
     preview_segment,
     resolve_placements,
 )
-from nagare_clip.director.run import SegmentTranscript
 from nagare_clip.director.silence_lines import SilenceLine
+from nagare_clip.director.transcript import (
+    format_numbered_transcript_timed,
+    line_seconds,
+    speech_seconds,
+)
 from nagare_clip.gap_context.gaps import Gap
 from nagare_clip.guided_edit.apply import apply_ops
 from nagare_clip.guided_edit.timelapse import caption_duration, expand_timelapse_ops
@@ -322,15 +320,8 @@ class TestCutsAndClipping:
 
 class TestFooter:
     def test_an_over_width_keep_is_reported_with_the_parsers_reason(self):
-        drops: list[str] = []
-        ops = try_parse_director_response(
-            json.dumps({"ops": [{"type": "keep", "lines": [6, 15]}]}),
-            16,
-            drops=drops,
-            max_keep_lines=4,
-            first_line=5,
-        )
-        assert ops == [] and len(drops) == 1
+        ops: list = []
+        drops = [keep_cap_problem(DirectorOp(type="keep", lines=(6, 15)), 4)]
         text = _preview(FISH, FISH_FIRST, ops, drops=drops).text
         assert f"dropped by the parser (no effect): {drops[0]}" in text
 

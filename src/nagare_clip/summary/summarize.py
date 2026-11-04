@@ -18,12 +18,10 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Any
 
-from nagare_clip.director.director_llm import (
-    _FENCE_RE,
-    _coerce_lines,
-    format_numbered_transcript,
-)
+from nagare_clip.director.ops import coerce_lines
+from nagare_clip.director.transcript import format_numbered_transcript
 from nagare_clip.llm_client import with_trace_meta
+from nagare_clip.llm_json import FENCE_RE
 from nagare_clip.llm_report import (
     DROPPED_ITEMS,
     LLM_ERROR,
@@ -60,7 +58,7 @@ class ProjectSummary:
 
 def _strip_fence(response: str) -> str:
     text = response.strip()
-    fence = _FENCE_RE.match(text)
+    fence = FENCE_RE.match(text)
     return fence.group(1) if fence else text
 
 
@@ -104,7 +102,7 @@ def _parse_parts_response(
     for raw in data["parts"]:
         if not isinstance(raw, dict):
             continue
-        lines = _coerce_lines(raw.get("lines"), num_lines)
+        lines = coerce_lines(raw.get("lines"), num_lines)
         if lines is None:
             _drop(f"part dropped, bad lines {raw.get('lines')!r}")
             continue

@@ -1,15 +1,12 @@
-"""The project's summaries, for the director's cached prefix.
+"""The project's summaries, for the director's view (``director_tools.sh view``).
 
-Lives in the ``director`` package (not ``director_llm``) because it depends on
-the ``summary`` stage; ``director_llm`` stays free of that import so
-``summary`` can keep importing it without a cycle.
+Its own module because it depends on the ``summary`` stage, while
+:mod:`~.transcript` stays free of that import so ``summary`` can import it
+without a cycle.
 
 Facts only: the overall summary and each source's whole-video summary.  The
-``plan`` stage's directions used to be rendered here as instructions — the
-model with the least information setting the frame for the one with the most —
-and their line ranges leaked into op boundaries.  The director now writes its
-own plan in its first turn (:data:`~.loop.PLAN_REQUEST`), so nothing here is an
-instruction and no line range is rendered at all.
+director writes its own plan, so nothing here is an instruction and no line
+range is rendered at all.
 """
 
 from __future__ import annotations

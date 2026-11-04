@@ -76,13 +76,12 @@ class TestWhatIsOnThePage:
         _touch(output / "publish" / "publish.md")
         _touch(output / "render" / "render.md")
         _touch(output / "director" / "plan.md")
-        _touch(output / "director" / "conversation.md")
         _touch(output / "llm_report" / "index.md")
         md = build_index(output, CFG)
         assert "[publish.md](publish/publish.md)" in md
         assert "[render.md](render/render.md)" in md
         assert "[plan.md](director/plan.md)" in md
-        assert "[conversation.md](director/conversation.md)" in md
+        assert "conversation.md" not in md  # the LLM director's file is gone
         assert "[llm_report/index.md](llm_report/index.md)" in md
 
     def test_the_rows_follow_the_pipeline_flow(self, tmp_path):
@@ -93,7 +92,6 @@ class TestWhatIsOnThePage:
         rows = [line for line in md.splitlines() if line.startswith("| ") and "—" in line]
         needles = [
             "director/plan.md",
-            "director/conversation.md",
             ".blend",
             "publish/publish.md",
             "render/render.md",

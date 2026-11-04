@@ -10,18 +10,18 @@ always writes ``order.json``, the identity order when ``order`` is absent, so
 writing the same edit twice gives the same files.  ``plan`` is optional (the
 plan on disk stays), but required while ``plan.md`` holds none.
 
-Every check is the LLM director's own — :func:`~..director_llm.parse_op`
-(types, factor floor, overlay text/duration, range bounds),
-:func:`~..director_llm.off_menu_problem` (no ``speed``),
-:func:`~..director_llm.keep_cap_problem`, :func:`~..loop.join_problem`,
-:func:`~..loop.silence_ref_problem`, :func:`~..loop.order_problems` and
-:func:`~..loop.break_problem` — plus two that only the tools enforce: a ``cut``
-range may not overlap any other op's range (the LLM prompt asks for it and
-``guided_edit`` clips instead), an ``edit`` op may not sit on a silence line
-(``guided_edit`` could not apply it), and keeps that touch or overlap count as
-ONE keep against ``director.max_keep_lines`` — chaining them would restore the
-very span the cap exists to keep dropped.  Unlike the LLM path, nothing is dropped
-or split silently: a problem refuses the whole edit, with its reason.
+The checks: :func:`~..ops.parse_op` (types, factor floor, overlay
+text/duration, an ``edit`` op's ``old``/``new``, range bounds),
+:func:`~..ops.off_menu_problem` (no ``speed``), :func:`~..ops.keep_cap_problem`,
+:func:`~..checks.join_problem`, :func:`~..checks.silence_ref_problem`,
+:func:`~..checks.order_problems` and :func:`~..checks.break_problem`; a ``cut``
+range may not overlap any other op's range (``guided_edit`` would clip it); an
+``edit`` op names one speech line and its ``old`` must occur exactly once in
+that line as ``view`` shows it, outside any marker or patch
+(:func:`~nagare_clip.guided_edit.patch.edit_problem`); and keeps that touch or
+overlap count as ONE keep against ``director.max_keep_lines`` — chaining them
+would restore the very span the cap exists to keep dropped.  Nothing is
+dropped or split silently: a problem refuses the whole edit, with its reason.
 
 Pure: no I/O, no LLM.
 """
@@ -31,14 +31,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field, replace
 from typing import Any
 
-from nagare_clip.director.director_llm import (
-    DirectorOp,
-    keep_cap_problem,
-    off_menu_problem,
-    parse_op,
-)
-from nagare_clip.director.display import DisplayView
-from nagare_clip.director.loop import (
+from nagare_clip.director.checks import (
     Range,
     break_problem,
     join_problem,
@@ -46,6 +39,8 @@ from nagare_clip.director.loop import (
     order_problems,
     silence_ref_problem,
 )
+from nagare_clip.director.display import DisplayView
+from nagare_clip.director.ops import DirectorOp, keep_cap_problem, off_menu_problem, parse_op
 from nagare_clip.guided_edit.patch import edit_problem
 
 KNOWN_KEYS = frozenset({"plan", "order", "ops"})
@@ -243,20 +238,6 @@ def _keep_chain_problems(
             )
         )
     return out
-
-
-def skill_keep_limit_note(max_keep_lines: int) -> str:
-    """The keep cap as the agent skill states it (the LLM director keeps its own
-    :func:`~..director_llm.keep_limit_note`, unchanged)."""
-    return (
-        f'A "keep" op may span at most {max_keep_lines} line(s), and keeps that touch '
-        "or overlap count as one keep against that limit; write refuses either. Cover "
-        "an on-screen event with ONE keep over its whole range, short noise/utterance "
-        "lines included; for one wider than that, ask the user to raise "
-        "director.max_keep_lines (or consider a timelapse for manual work). "
-        'A "timelapse" op needs no keep of its own; it protects its whole range by '
-        "itself."
-    )
 
 
 def to_source(view: DisplayView, edit: Edit) -> dict[int, list[DirectorOp]]:

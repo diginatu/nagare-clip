@@ -7,7 +7,7 @@ from its ops rather than guessed.
 
 from __future__ import annotations
 
-from nagare_clip.director.director_llm import DirectorOp
+from nagare_clip.director.ops import DirectorOp
 from nagare_clip.publish.thumbs import (
     ThumbCandidate,
     cap_candidates,

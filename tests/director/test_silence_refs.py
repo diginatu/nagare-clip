@@ -10,7 +10,7 @@ the wait itself.
 
 from __future__ import annotations
 
-from nagare_clip.director.director_llm import ops_from_dict, ops_to_dict
+from nagare_clip.director.ops import ops_from_dict, ops_to_dict
 
 
 def _one(lines):

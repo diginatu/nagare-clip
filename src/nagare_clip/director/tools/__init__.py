@@ -10,6 +10,7 @@ interactively with the user through the ``nagare-director`` skill
 * ``write``   — validate an edit and write ``{stem}_director.json``,
   ``director/order.json`` and ``director/plan.md`` — all or nothing.
 
-The validation is the LLM director's own (:mod:`~nagare_clip.director.loop`,
-:mod:`~nagare_clip.director.director_llm`), so the two cannot drift.
+The checks live in :mod:`~nagare_clip.director.ops` (one op) and
+:mod:`~nagare_clip.director.checks` (the order, joins, breaks), so every
+reader of the director files validates them the same way.
 """

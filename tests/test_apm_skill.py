@@ -62,7 +62,7 @@ def test_skill_md_edit_example_passes_write_validation():
     import json
 
     from nagare_clip.director.display import build_display_view
-    from nagare_clip.director.run import SegmentTranscript
+    from nagare_clip.director.load import SegmentTranscript
     from nagare_clip.director.tools.validate import validate_edit
     from nagare_clip.order import Segment
 

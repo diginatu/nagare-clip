@@ -112,180 +112,6 @@ SUMMARY_OVERALL_PROMPT = (
     "Output only the JSON object, no other text."
 )
 
-DIRECTOR_PROMPT = (
-    "You are a video editor. You are given the WHOLE finished video as "
-    "numbered lines — speech and silence together, under ONE numbering — "
-    "and edit it over several turns. Decide high-level "
-    # No trigger list here: the overlay bullet already owns "turning points,
-    # conclusions, failures, and mishaps", and a list stated twice is two
-    # places to drift.
-    "edits to tighten AND STAGE the video: cut what drags, but also mark "
-    "the moments that make it worth watching.\n"
-    "\n"
-    # The protocol, stated once.  Each user message repeats the exact reply
-    # shape (director.loop.REPLY_SHAPE), so what belongs here is what a turn
-    # MEANS: that the range is approximate, that a reply owns its range, and
-    # that the playback comes back — the three things that make rewriting an
-    # earlier range a normal move rather than an admission.
-    "Each turn asks for an approximate range, and after each reply you are "
-    "shown the COMPLETE edit — every op, caption and the runtime — so check "
-    "the whole-video requirements every turn. A "
-    # Also in loop.REPLY_SHAPE, on every turn — kept here deliberately.  That
-    # copy is mechanical (how to format a reply); this one is strategic: being
-    # able to go back and rewrite is the move the whole design exists for, and
-    # the model should hold it before it writes its first op, not only when it
-    # reads the shape.  test_director_prompt_states_the_turn_protocol pins it.
-    "reply OWNS the range it names: re-send a range and its ops REPLACE the "
-    "ones you gave for it. "
-    'Reply {"done": true} once every line has been reviewed '
-    "and the playback is what you meant.\n"
-    "\n"
-    # Who is talking.  Only the user side is labelled; the model is the
-    # assistant role.  A person joins by writing an editor entry into
-    # director/conversation.md -- nothing else in the pipeline treats them
-    # differently, so this sentence is the whole of their authority.
-    "Speakers: a Guide: part is the pipeline's routine guidance, worked out "
-    "from the state; an Editor: part is the human editor. Where they disagree "
-    "the editor wins, and answer every editor request before you reply done.\n"
-    "\n"
-    # The plan is the director's own (there is no plan stage any more).  What a
-    # plan covers is in the first ask (loop.PLAN_REQUEST), sent once; what
-    # belongs here is that it stays revisable and that its ranges are sections:
-    # a measured run once copied a plan's part boundaries into its op starts.
-    "Plan: your first reply is a plan for the whole video, in prose. It stays "
-    'in force, shown atop every turn, until you send "plan" again — change it '
-    "whenever the footage proves it wrong. Its line ranges mark sections, not "
-    "op boundaries: choose each op's edges from the lines themselves.\n"
-    "\n"
-    # The order is the conversation's to decide, from shooting order.  Its
-    # meaning lives here, in the cached prefix; REPLY_SHAPE only names the key.
-    # No worked reorder: the editorial call belongs to the brief, and an
-    # example anchors harder than the instruction around it.
-    "Order: the transcript is numbered in shooting order and stays so. To "
-    'change what plays when, add "order": [[first, last], ...] to any reply — '
-    "the ranges in the order they PLAY, covering every line exactly once (cut "
-    "removes footage; order only moves it). It replaces the order in force "
-    "whole. A silence line plays with the range it is in, and a timelapse must "
-    "lie inside one range. The edit you are shown then lists the video as it "
-    "plays, quoting both sides of every seam.\n"
-    "\n"
-    # Every bracket shape the renderer can emit is shown, in one place.  The
-    # four-part form was 17.0% of a real run's brackets while going
-    # undocumented, and the three-part gap form the old legend led with was the
-    # rarest at 4.4% — so the shape the LLM met most often was the one it had
-    # to infer.  Enumerating them costs nothing: this paragraph is four
-    # characters shorter than the one it replaces.
-    "Timing: a line may carry a bracket after its text. [4.2s] is the line's "
-    "duration; [4.2s, gap 0.8s] adds the silent gap before the next line. A "
-    "line holding long internal silence splits it instead — "
-    # Both figures are what intervals renders (intervals.keep.dropped_ranges):
-    # word gaps over silence_threshold included, keep margins given back.  So
-    # the two add up to the footage, which is what a keep or a timelapse plays.
-    "[13.0s speech, 62.9s silence]: 13.0 s plays and 62.9 s is dropped by "
-    "default; the two add up to the line's footage — "
-    "and may carry a gap too: [13.0s speech, 62.9s silence, gap 0.8s]. A "
-    "negligible gap is omitted. A bracket's gap is a SHORT one — a longer "
-    "wait is a "
-    # The gap-rescue reading used to live here, because a 29.9 s wait reached
-    # the director only as `gap 29.9s` inside the preceding line's bracket and
-    # nothing else could be said about it.  It is a line of its own now, which
-    # is where the "this may be the best moment in the shot" reading belongs.
-    "[silent …] line of its own, below.\n"
-    "\n"
-    "Judge pacing from the speech figure, never speech+silence: a long "
-    "speech duration is a candidate for cutting, not speeding up — a long "
-    "stretch of manual work is a timelapse candidate. A keep plays the "
-    "silence too; a timelapse plays speech+silence divided by its factor.\n"
-    "\n"
-    "Silence: a line like\n"
-    "54: [silent 29.9s: a build runs and logs scroll past]\n"
-    # It used to carry no number (the per-segment transcript numbered source
-    # lines only), so the prompt had to teach the "53~" form.  Under the
-    # whole-video numbering it is a line like any other, and the parser
-    # rejects "53~" — so the form is gone rather than kept as an alias.
-    "is the wait between the lines either side of it — 29.9 s in which nobody "
-    "speaks — followed by what is VISIBLE on screen during it. It is a line "
-    "like any other: put its number in an op — a timelapse plays that wait "
-    "fast, a keep restores it. Dead air is the "
-    "fallback reading, not the only one: if the speech either side announces "
-    "something happening (an accident, a cleanup, a wait for a result), that "
-    "silence may be the most watchable moment in the shot. An indented "
-    "[silent gap: …] with no seconds is silence INSIDE the line above.\n"
-    "\n"
-    "Operations (line ranges are inclusive). "
-    "Prefer a timelapse over a cut where the repetition is VISIBLE WORK building "
-    "toward a payoff (failed attempts, assembly, waiting for a result) — "
-    "the buildup is part of the story. Where the repetition is SPEECH, there is no fast option: "
-    "leave it at 1x, or cut the weakest passes. Reserve cut for spans "
-    "that leave the throughline entirely (digressions, dead ends, "
-    "redundant retakes with no payoff):\n"
-    "- cut: remove a boring/redundant span entirely (deletes audio+video).\n"
-    '- timelapse: play a long stretch of manual work fast under one on-screen caption; give "factor" (4.0 or more) and "text". Compressing a stretch is a choice between two modes and this is the second one. LISTENING: the speech carries something the viewer needs — play it at 1x, and if it drags cut the weakest parts instead. TIMELAPSE: the speech is inessential — go genuinely fast and accept that the words become unintelligible; that sacrifice is the point of the mode and is why you must be sure first. Pick "factor" so the result runs about a minute on screen: a longer span needs a bigger number, and a span where little is happening can go faster still. One op does the whole arrangement: the work runs continuously and the caption stays on screen for the entire timelapse — do not add a separate "keep" or "overlay" over the same lines. To change the caption partway through, emit consecutive timelapse ops; a new caption means a new phase of work.\n'
-    '- overlay: show an on-screen caption; give "text" and "duration" '
-    "(how many seconds it stays on screen). Pick the duration from reading "
-    "length — a short label needs about 2 seconds, a full sentence 4 to 6; "
-    'never a fixed value. Its "lines" say WHERE it appears: at the first '
-    "line of the range. Reach "
-    "for it at turning points, conclusions, failures, and mishaps — "
-    # Not "a loose default target" any more.  A real project's brief states
-    # the SAME 3-5 minutes as a floor, so the "if an editorial brief states
-    # otherwise" escape hatch could never fire — two statements of one number
-    # with opposite modality (a two-sided target vs a floor), and the softer
-    # one arriving first.
-    "Aim for one overlay per 3-5 minutes "
-    "of finished video; an editorial brief may set a different rate.\n"
-    # The keep op owns keep mechanics outright: the width rule and the
-    # whole-event span.  Rescuing ONE silence is no longer a keep-width
-    # question at all — "53~" addresses it exactly — so the [N, N+1]
-    # approximation that used to live here is gone.
-    "- keep: protect a span from cutting INCLUDING its silences/non-speech "
-    "gaps. When a continuous event "
-    "is playing out across several gaps — an accident and the cleanup after "
-    "it, a demo running, a result arriving — span the WHOLE event in one "
-    "keep, so the payoff is not chopped into jump cuts. Never widen a keep "
-    "to mark talking as important: speech is never dropped by default, so a "
-    "keep over a talking span only restores its pauses and inflates the "
-    'runtime for nothing. A direction to "feature", "retain" or '
-    '"emphasise" something is editorial emphasis, NOT a request for a keep op.\n'
-    '- edit: a fine within-line text deletion/fix on ONE line: "old" is the exact '
-    'text as shown, "new" its replacement ("" deletes).\n'
-    "\n"
-    "JSON shape, one object per turn:\n"
-    '{"range": [40, 78], "reviewed_through": 78, "ops": [\n'
-    '  {"type": "cut", "lines": [42, 48], "note": "why / where precisely"},\n'
-    '  {"type": "timelapse", "lines": [60, 72], "factor": 8.0, "text": "配管の取り付け", "note": "..."},\n'
-    '  {"type": "overlay", "lines": [45, 45], "text": "ポイント", "duration": 2.0, "note": ""},\n'
-    '  {"type": "keep", "lines": [50, 52], "note": "..."},\n'
-    '  {"type": "edit", "lines": [47, 47], "old": "line", "new": ""}\n'
-    "]}\n"
-    "\n"
-    "Rules:\n"
-    # "lines are this transcript's numbers" is in REPLY_SHAPE, on every turn.
-    # What only this list can say is the one-segment rule.
-    # The fact SEAM_NOTE carried, back after f197206 deleted it with the
-    # per-segment seam block: the whole-video view shows every join, but
-    # seeing a join is not knowing it is one, and the sign-offs survived in
-    # the finished cut.  Stated where [k] is already explained, as a fact --
-    # whether to cut one is the model's call, and this prompt has no room to
-    # argue it either way.
-    "- One op stays inside one [k] block. Each [k] block was recorded as its "
-    "own video, so it can open with a greeting or end with a sign-off.\n"
-    '- A "cut" range must not overlap any other op\'s range (to cut lines '
-    "12-18 but keep line 18, emit cut [12, 17]); overlapping ops are "
-    "clipped and the cut loses the shared lines.\n"
-    '- Use "note" to say precisely WHERE in the line(s) the edit starts '
-    "and ends.\n"
-    "- Playing it back starts from what happens with no op at all: every "
-    "line's speech plays once, at 1x, in the order given, and the silences "
-    "inside and after it are dropped. Each op changes that for the lines in "
-    "its range only — a line you leave outside a range keeps the default.\n"
-    "- The playback you are shown is the viewer's, not the spec's: a range "
-    "that reads fine as a spec can still play wrong, and the usual way is a "
-    'span that opens one line too early — the spec says "timelapse the work", '
-    "the playback has the viewer hearing that very work announced at 5x, "
-    "destroyed. Re-send the range with the boundary moved."
-)
-
 GAP_CONTEXT_PROMPT = (
     "You are watching frames sampled from a SILENT gap in a video (no one is "
     "speaking). Describe what is happening ON SCREEN during the gap.\n"
@@ -630,49 +456,10 @@ class SummaryConfig(BaseModel):
 class DirectorConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
     section_comment: ClassVar[str] = (
-        "director stage (Pass A): a larger LLM reads the whole numbered transcript and\n"
-        "emits high-level edit operations as {stem}_director.json. It never re-outputs\n"
-        "the transcript text. Disabled by default (writes an empty op list = no-op)."
-    )
-    enabled: bool = Field(False, description="Enable the director LLM")
-    provider: str = Field(
-        "ollama_chat",
-        description="LiteLLM provider prefix: ollama_chat | openai | gemini | anthropic",
-    )
-    api_base: str = Field(
-        "",
-        description="Base URL; empty -> Ollama localhost default; leave empty for cloud providers",
-    )
-    model: str = Field(
-        "gpt-oss:120b", description='A larger model (passed to LiteLLM as "<provider>/<model>")'
-    )
-    api_key: str = Field("", description="API key for the provider (or set the provider's env var)")
-    temperature: float = Field(0.2)
-    reasoning_effort: str | None = Field(None)
-    timeout: int = Field(300)
-    response_format: str = Field("json", description="JSON mode for reliable parsing")
-    max_retries: int = Field(
-        2, description="Extra attempts on LLM error / unparseable JSON (0 = single attempt)"
-    )
-    retry_temp_step: float = Field(0.2, description="Temperature increment added on each retry")
-    retry_temp_cap: float = Field(0.8, description="Maximum temperature any retry uses")
-    chunk_lines: int = Field(
-        40,
-        description=(
-            "How many lines of the whole-video transcript one turn of the director's "
-            "conversation is asked to review (approximately — it stops where the footage "
-            "breaks). The turn cap per run is ceil(display lines / this) * 2 + 1 (the plan "
-            "turn); reaching it fails the stage, and every accepted turn is already saved "
-            "in the director's directory, so running it again continues"
-        ),
-    )
-    pause_after_plan: bool = Field(
-        False,
-        description=(
-            "Stop the pipeline (exit 0) after the director writes its first plan, with a "
-            "done mark in director/conversation.md: read director/plan.md, then delete "
-            "the mark (or use scripts/director_say.sh) and run again"
-        ),
+        "director: the nagare-director agent skill writes the director files with the\n"
+        "user (director_tools.sh view/preview/write); the pipeline stops at the director\n"
+        "until they exist, then resumes with --from-stage guided_edit. No LLM here: these\n"
+        "are the settings the skill's tools and the later stages read."
     )
     max_keep_lines: int = Field(
         8,
@@ -691,9 +478,6 @@ class DirectorConfig(BaseModel):
             "guided_edit writes the same silence lines into its _edits.txt, and "
             "check_edits/intervals use this value to know where they belong"
         ),
-    )
-    prompt: str = _commented(
-        DIRECTOR_PROMPT, sample='"..."', description="System prompt (has a sensible default)"
     )
 
 
@@ -1382,8 +1166,7 @@ def _key_paths(d: dict, key: str, prefix: str = "") -> Iterator[str]:
 REMOVED_SECTIONS = {
     "plan": "the director writes its own plan in its first turn (director/plan.md)",
     "plan_revise": (
-        "talk to the director instead: add an '## editor' entry to "
-        "director/conversation.md (scripts/director_say.sh)"
+        "revise the edit with the nagare-director agent skill (director_tools.sh dump, then write)"
     ),
 }
 
@@ -1392,6 +1175,28 @@ REMOVED_SECTIONS = {
 #: where ``keys`` of ``None`` means every key (the section has no settings
 #: left; an empty section is accepted and dropped).
 REMOVED_KEYS: dict[str, tuple[frozenset[str] | None, str]] = {
+    "director": (
+        frozenset(
+            {
+                "enabled",
+                "provider",
+                "api_base",
+                "model",
+                "api_key",
+                "temperature",
+                "reasoning_effort",
+                "timeout",
+                "response_format",
+                "max_retries",
+                "retry_temp_step",
+                "retry_temp_cap",
+                "chunk_lines",
+                "pause_after_plan",
+                "prompt",
+            }
+        ),
+        "the LLM director is gone: the nagare-director agent skill writes the director files",
+    ),
     "guided_edit": (
         None,
         "guided_edit applies the director's ops deterministically and has no settings",

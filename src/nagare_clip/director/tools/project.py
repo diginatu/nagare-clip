@@ -7,11 +7,11 @@ import logging
 from dataclasses import dataclass
 from pathlib import Path
 
-from nagare_clip.director.director_llm import DirectorOp
+from nagare_clip.director.checks import Range, order_ranges
 from nagare_clip.director.display import DisplayView, build_display_view
 from nagare_clip.director.files import director_inputs, read_ops, read_plan
-from nagare_clip.director.loop import Range, order_ranges
-from nagare_clip.director.run import SegmentInputs, SegmentTranscript, load_segment_transcript
+from nagare_clip.director.load import SegmentInputs, SegmentTranscript, load_segment_transcript
+from nagare_clip.director.ops import DirectorOp
 from nagare_clip.order import Segment, identity_segments, normalise, order_from_dict
 from nagare_clip.pipeline.errors import PipelineError
 from nagare_clip.pipeline.runner import PipelineContext
@@ -25,7 +25,7 @@ class Project:
     """One project's director view, plus where its director files live.
 
     The view is always shooting order — one ``[k]`` block per source, numbered
-    once — whatever order is in force, as it is for the LLM director.
+    once — whatever order is in force.
     """
 
     ctx: PipelineContext

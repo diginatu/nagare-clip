@@ -36,8 +36,6 @@ STAGE_ORDER = [
     "text_filter",
     "gap_context",
     "summary",
-    "director",
-    "guided_edit",
     "publish",
 ]
 

@@ -8,7 +8,7 @@ end through Blender.
 
 from __future__ import annotations
 
-from nagare_clip.director.director_llm import DirectorOp
+from nagare_clip.director.ops import DirectorOp
 from nagare_clip.director.preview import preview_segment
 from nagare_clip.director.silence_lines import SilenceLine
 from nagare_clip.gap_context.gaps import Gap

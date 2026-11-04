@@ -17,7 +17,8 @@ import json
 import pytest
 import yaml
 
-from nagare_clip.director import director_llm, loop
+from nagare_clip.director import checks
+from nagare_clip.director.ops import DirectorOp
 from nagare_clip.director.tools.cli import main
 from nagare_clip.director.tools.project import load_project
 from nagare_clip.director.tools.validate import to_source, validate_edit
@@ -382,9 +383,9 @@ def test_display_source_round_trip_every_range(project):
     for a in range(1, total + 1):
         for b in range(a, total + 1):
             if view.to_source(a, b) is None:
-                assert loop.segment_joins(view, a, b)
+                assert checks.segment_joins(view, a, b)
                 continue
-            op = director_llm.DirectorOp(type="cut", lines=(a, b))
+            op = DirectorOp(type="cut", lines=(a, b))
             index, (src,) = next(iter(to_source(view, Edit(ops=[((a, b), op)])).items()))
             assert to_display(view, index, src)["lines"] == [a, b]
 
@@ -459,23 +460,6 @@ def test_preview_of_files_on_disk(project, capsys):
 
 
 # --- shared with the LLM director ------------------------------------------------
-
-
-def test_the_llm_director_drops_what_write_refuses_with_the_same_reason(project):
-    """One implementation: the parser's drop message is the tool's reason."""
-    view = load_project(_load(project)).view
-    ops = [
-        {"type": "speed", "lines": [1, 1], "factor": 2.0},
-        {"type": "timelapse", "lines": [1, 1], "factor": 3.0},
-        {"type": "keep", "lines": [1, 4]},
-        {"type": "overlay", "lines": [1, 1], "text": "x", "duration": 0},
-    ]
-    drops: list[str] = []
-    director_llm.try_parse_director_response(json.dumps({"ops": ops}), len(view.lines), drops, 2)
-    _edit, problems = validate_edit(
-        view, {"plan": PLAN, "ops": ops}, has_plan=False, max_keep_lines=2
-    )
-    assert sorted(drops) == sorted(p.reason for p in problems)
 
 
 def test_edit_ops_are_checked_against_the_line_text(project, capsys):

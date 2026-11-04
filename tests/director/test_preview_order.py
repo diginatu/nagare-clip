@@ -7,10 +7,10 @@ seam quoted, so the model reads the video it made rather than reassembling it.
 
 from __future__ import annotations
 
-from nagare_clip.director.director_llm import DirectorOp
+from nagare_clip.director.ops import DirectorOp
 from nagare_clip.director.preview import REORDERED_HEADER, edit_state, segment_preview
 
-from .test_loop_order import A, B, _view
+from .test_checks_order import A, B, _view
 
 ORDER = [(4, 6), (1, 3), (7, 9)]
 

@@ -18,7 +18,7 @@ import logging
 from collections.abc import Mapping
 from dataclasses import replace
 
-from nagare_clip.director.director_llm import DirectorOp
+from nagare_clip.director.ops import DirectorOp
 
 logger = logging.getLogger(__name__)
 

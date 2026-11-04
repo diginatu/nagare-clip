@@ -11,5 +11,6 @@ class PipelineStop(Exception):
     """A deliberate stop that is not a failure; the CLI prints it and exits 0.
 
     Raised when a stage has done its part and wants a person to look before
-    the pipeline goes on (the director's ``pause_after_plan``).
+    the pipeline goes on (the director checkpoint, until the skill has written
+    the director files).
     """

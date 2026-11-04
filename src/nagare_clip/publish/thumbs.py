@@ -18,7 +18,7 @@ from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:  # annotation only: importing the director here would drag the
     # LLM transport into the render stage, which must never load it.
-    from nagare_clip.director.director_llm import DirectorOp
+    from nagare_clip.director.ops import DirectorOp
 
 # Kinds, most interesting first: an overlay carries the director's own words
 # for the moment, a timelapse boundary shows the before/after of the work, and

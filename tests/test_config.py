@@ -397,193 +397,6 @@ def test_speed_mark_defaults_present():
     assert sm["location_y"] == 0.95
 
 
-def test_director_defaults_present():
-    cfg = get_effective_config(None, {})
-    d = cfg["director"]
-    assert d["enabled"] is False
-    assert d["provider"] == "ollama_chat"
-    assert d["api_base"] == ""
-    assert "model" in d
-    assert d["response_format"] == "json"
-    assert isinstance(d["prompt"], str) and d["prompt"]
-
-
-def test_director_prompt_offers_no_speed_op():
-    """Improvement 16: `speed` is off the director's menu. Three prompt rounds
-    bounded the mild 1.3-2.0 band and it kept coming back (57.4% -> 1.4% ->
-    49.0% -> 29.9% of the finished video), because a middle option is always
-    cheaper to choose than a timelapse. Neither a bullet nor a JSON-shape
-    example may offer it -- an example is what an LLM copies over the prose,
-    and the parser would drop the op it teaches."""
-    prompt = get_effective_config(None, {})["director"]["prompt"]
-    assert not [ln for ln in prompt.splitlines() if ln.startswith("- speed:")]
-    assert '"type": "speed"' not in prompt
-
-
-def test_every_op_type_in_the_json_shape_is_one_the_director_may_emit():
-    """Each JSON-shape example must survive the real LLM-path parser. An
-    example for an off-menu type would be silently dropped at runtime while
-    still teaching the director to emit it."""
-    from nagare_clip.director.director_llm import MENU_TYPES, try_parse_director_response
-
-    prompt = get_effective_config(None, {})["director"]["prompt"]
-    examples = [ln.strip().rstrip(",") for ln in prompt.splitlines() if '{"type": "' in ln]
-    assert len(examples) == len(MENU_TYPES)
-    for example in examples:
-        ops = try_parse_director_response('{"ops": [' + example + "]}", num_lines=100)
-        assert ops, f"prompt example is dropped by the parser: {example}"
-        assert ops[0].type in MENU_TYPES
-
-
-def _timelapse_bullet() -> str:
-    """The single DIRECTOR_PROMPT line describing the `timelapse` op."""
-    prompt = get_effective_config(None, {})["director"]["prompt"]
-    return next(ln for ln in prompt.splitlines() if ln.startswith("- timelapse:"))
-
-
-def test_director_prompt_keeps_the_two_mode_choice():
-    """With `speed` off the menu the listening/timelapse choice lives entirely
-    in the timelapse bullet, and it must still read as a choice between two
-    modes (see docs/superpowers/specs/2026-08-01-speed-two-mode-choice-design.md
-    and 2026-08-09-director-no-speed-op-design.md)."""
-    bullet = _timelapse_bullet().lower()
-    assert "two modes" in bullet
-    assert "listening" in bullet
-    assert "1x" in bullet
-    assert "cut the weakest parts" in bullet
-
-
-def test_director_prompt_timelapse_states_its_price():
-    """A timelapse loses intelligible audio; saying so is what forces an honest
-    choice instead of a mild speed-up that splits the difference."""
-    bullet = _timelapse_bullet().lower()
-    assert "4.0" in bullet
-    assert "unintelligible" in bullet
-
-
-def test_director_prompt_asks_for_a_playback_before_settling_a_range():
-    """Every symptom a real run produced was correct as a spec and wrong on
-    playback: `timelapse [1,15] x5` reads fine, and plays as the speaker
-    announcing that very work at 5x, unintelligible. The director used to be
-    asked to reconstruct that playback in its head; the conversation computes
-    it and hands it back every turn, so the rule is now to READ it — and the
-    one move that makes reading it worth anything is re-sending the range."""
-    prompt = get_effective_config(None, {})["director"]["prompt"].lower()
-    assert "the playback you are shown" in prompt
-    assert "reads fine as a spec" in prompt
-    assert "re-send the range" in prompt
-
-
-def test_director_prompt_states_the_no_op_baseline():
-    """A playback needs a state to play FROM. Every delta was already in the
-    prompt (silences dropped, cut deletes, timelapse destroys speech) but the
-    ground state they are deltas to was not: "outside" appeared zero times, and
-    the two mentions of 1x offered it as a CHOICE ("leave it at 1x") rather
-    than as what an unmarked line already does. `speech is never dropped by
-    default` existed only inside the keep bullet, as an argument against
-    widening keeps."""
-    prompt = get_effective_config(None, {})["director"]["prompt"].lower()
-    assert "with no op at all" in prompt
-    assert "outside a range" in prompt
-
-
-def test_director_prompt_playback_rule_stays_out_of_the_timelapse_bullet():
-    """Improvement 16 again (see test_director_prompt_timelapse_bullet_stays_
-    cheap_to_choose): weight on THIS bullet pushes the director toward the
-    easier option. The playback rule applies to every op's range, so it belongs
-    in Rules where it costs the timelapse choice nothing. A first attempt put
-    it in this bullet and grew it 1026 -> 1684 characters."""
-    assert "play it back" not in _timelapse_bullet().lower()
-
-
-def test_director_prompt_timelapse_is_self_contained():
-    """The whole point of the op: one op does the arrangement three ops used to.
-    The prompt must not ask for a companion keep/speed/overlay, or the director
-    will emit the ops the desugaring already creates."""
-    bullet = _timelapse_bullet().lower()
-    assert 'do not add a separate "keep" or "overlay"' in bullet
-    assert "consecutive" in bullet  # how to change the caption partway through
-
-
-def test_director_prompt_timelapse_ties_factor_to_target_runtime():
-    """A flat factor instruction becomes the director's default regardless of
-    wording (see improvement 11: keep width, overlay duration and the old bare
-    speed factor all clustered on the one number the prompt showed), so the
-    bullet states a target on-screen runtime and lets the span's own length
-    set the number -- rather than showing a factor to copy."""
-    bullet = _timelapse_bullet().lower()
-    assert "about a minute on screen" in bullet
-    assert "longer span" in bullet
-
-
-def test_director_prompt_timelapse_bullet_stays_cheap_to_choose():
-    """Improvement 16: the run that nearly eliminated the mild band is the run
-    where this bullet was at its simplest; the two rounds that grew it (a
-    target length, three worked examples, motion and repetition to weigh) both
-    saw the band come back, because making the right option harder to choose
-    pushes the director to the easier one. The worked-example table is gone
-    and must not creep back."""
-    bullet = _timelapse_bullet().lower()
-    assert "8x" not in bullet and "16x" not in bullet
-    assert "lookup table" not in bullet
-
-
-def test_director_prompt_timelapse_example_parses_and_is_fast():
-    """Pin the documented example to the real parser: a stale one (missing text,
-    or a factor under the floor) would be silently dropped at runtime."""
-    from nagare_clip.director.director_llm import TIMELAPSE_MIN_FACTOR, parse_director_response
-
-    prompt = get_effective_config(None, {})["director"]["prompt"]
-    example = next(
-        line.strip().rstrip(",") for line in prompt.splitlines() if '"type": "timelapse"' in line
-    )
-    ops = parse_director_response('{"ops": [' + example + "]}", num_lines=100)
-    assert len(ops) == 1
-    assert ops[0].type == "timelapse"
-    assert ops[0].factor is not None and ops[0].factor >= TIMELAPSE_MIN_FACTOR
-    assert ops[0].text
-
-
-def test_director_prompt_timing_line_does_not_offer_speed_for_long_duration():
-    """The Timing paragraph must not offer speeding up as the remedy for a
-    long line duration -- that contradicts the two-mode speed rule elsewhere
-    in the prompt (speed is a LISTENING/TIMELAPSE choice, not a dial). A long
-    speech duration should route to cutting instead; a long stretch of manual
-    work remains a timelapse candidate."""
-    cfg = get_effective_config(None, {})
-    prompt = cfg["director"]["prompt"]
-    line = next(ln for ln in prompt.splitlines() if "Judge pacing from the speech figure" in ln)
-    lowered = line.lower()
-    assert "candidates for cutting or speeding up" not in lowered
-    assert "cutting" in lowered
-    assert "timelapse" in lowered
-
-
-@pytest.mark.parametrize("stage", ["director"])
-def test_prompt_documents_duration_and_gap_bracket(stage):
-    """The director/plan inputs carry a `[4.2s, gap 0.8s]` bracket per line/part
-    (rendered by timing.format_dur_gap).  The prompt must explain that notation,
-    and the example it shows must be exactly what the renderer emits — otherwise
-    the LLM is told to read a format we never produce."""
-    from nagare_clip.timing import format_dur_gap
-
-    prompt = get_effective_config(None, {})[stage]["prompt"]
-    assert format_dur_gap(4.2, 0.8) in prompt  # "[4.2s, gap 0.8s]"
-    assert format_dur_gap(4.2, None) in prompt  # "[4.2s]" — last line/part, no gap
-    assert format_dur_gap(13.0, None, 62.9) in prompt  # "[13.0s speech, 62.9s silence]"
-    # The four-part form is 17.0% of the director's real brackets and 20% of the
-    # plan's, yet went undocumented while `[4.2s, gap 0.8s]` -- which the legend
-    # leads with -- is the rarest at 4.4%.  A shape the prompt never shows is a
-    # shape the LLM has to guess at while it is being asked to judge pacing.
-    assert format_dur_gap(13.0, 0.8, 62.9) in prompt  # "[13.0s speech, 62.9s silence, gap 0.8s]"
-    lowered = prompt.lower()
-    assert "duration" in lowered
-    assert "gap" in lowered
-    # A negligible gap is omitted from the bracket; the prompt must say so
-    # rather than implying only the last line/part lacks a gap.
-    assert "negligible" in lowered
-
-
 def test_guided_edit_has_no_settings():
     assert "guided_edit" not in get_effective_config(None, {})
 
@@ -606,15 +419,6 @@ def test_every_removed_guided_edit_key_fails_naming_its_path(tmp_path):
     assert "extra" not in msg.lower()
 
 
-def test_director_override_keeps_other_defaults(tmp_path):
-    cfg_file = tmp_path / "cfg.yml"
-    cfg_file.write_text(yaml.dump({"director": {"enabled": True, "model": "gpt-oss:120b"}}))
-    cfg = get_effective_config(cfg_file)
-    assert cfg["director"]["enabled"] is True
-    assert cfg["director"]["model"] == "gpt-oss:120b"
-    assert cfg["director"]["temperature"] == 0.2
-
-
 def test_llm_report_defaults():
     from nagare_clip.config import get_effective_config
 
@@ -629,7 +433,6 @@ def test_llm_sections_default_provider_and_empty_api_base():
     sections = [
         DEFAULTS["text_filter"],
         DEFAULTS["summary"],
-        DEFAULTS["director"],
     ]
     for sec in sections:
         assert sec["provider"] == "ollama_chat"
@@ -694,240 +497,51 @@ def test_gap_context_prompt_documents_the_markers_describe_parses():
     assert "ACTION:" in prompt
 
 
-def test_director_prompt_documents_silence_lines_and_how_to_address_them():
-    # A silence used to be the one thing in the transcript with no number, so
-    # the prompt had to teach the "n~" form.  Under the whole-video numbering
-    # it has a number like any other line -- and the loop REJECTS "n~" -- so
-    # the prompt must teach the number and nothing else.
-    cfg = get_effective_config(None, {})
-    prompt = cfg["director"]["prompt"]
-    assert "[silent " in prompt
-    assert "53~" not in prompt
-    assert "either endpoint" not in prompt
-    # What acts on it: the two ops that can, named where the line is shown.
-    silence = next(ln for ln in prompt.splitlines() if ln.startswith("is the wait"))
-    assert "put its number in an op" in silence
-    assert "keep" in silence and "timelapse" in silence
+def test_director_keeps_only_what_the_tools_read():
+    assert set(get_effective_config(None, {})["director"]) == {"max_keep_lines", "silence_line_min"}
 
 
-def test_director_prompt_silence_example_matches_the_real_formatter():
-    """The DIRECTOR_PROMPT's documented example line must be exactly what
-    director.silence_lines.SilenceLine renders -- pins the doc example to the
-    real formatter so a rendering change (indent, decimal places, wording)
-    fails loudly here instead of silently going stale in the prompt.
+@pytest.mark.parametrize(
+    "key",
+    [
+        "enabled",
+        "provider",
+        "api_base",
+        "model",
+        "api_key",
+        "temperature",
+        "reasoning_effort",
+        "timeout",
+        "response_format",
+        "max_retries",
+        "retry_temp_step",
+        "retry_temp_cap",
+        "chunk_lines",
+        "pause_after_plan",
+        "prompt",
+    ],
+)
+def test_every_removed_director_key_fails_naming_its_path(tmp_path, key):
+    cfg_file = tmp_path / "cfg.yml"
+    cfg_file.write_text(yaml.dump({"director": {key: 1, "max_keep_lines": 4}}))
+    with pytest.raises(ValueError) as e:
+        get_effective_config(cfg_file)
+    msg = str(e.value)
+    assert f"`director.{key}`" in msg
+    assert "removed" in msg and "nagare-director" in msg
+    assert "extra" not in msg.lower()
 
-    The `[silent gap: ...]` annotation the silence line replaces for a
-    between-line wait survives for silence INSIDE a line, so the whole-video
-    view's prefix for it is pinned too."""
-    from nagare_clip.director.display import build_display_view
-    from nagare_clip.director.run import SegmentTranscript
-    from nagare_clip.director.silence_lines import SilenceLine, silence_body
-    from nagare_clip.gap_context.gaps import Gap
-    from nagare_clip.order import Segment
 
-    cfg = get_effective_config(None, {})
-    prompt = cfg["director"]["prompt"]
-
-    line = SilenceLine(53, 0.0, 29.9, ("a build runs and logs scroll past",))
-    # The whole-video view numbers the silence, so it drops the "after line n"
-    # the un-numbered transcript line carries -- and that is the body the
-    # prompt's example must show.
-    body = silence_body(line.duration, line.descriptions)
-    assert body == "[silent 29.9s: a build runs and logs scroll past]"
-    assert f"54: {body}" in prompt
-
-    gap = Gap(start=0.0, end=12.4, frames=[], description="x")
-    view = build_display_view(
-        [
-            (
-                Segment("A", None),
-                SegmentTranscript(["x"], 1, [(0.0, 1.0)], None, [(1, gap)], []),
-            )
-        ]
+def test_removed_keys_are_all_named_at_once(tmp_path):
+    cfg_file = tmp_path / "cfg.yml"
+    cfg_file.write_text(
+        yaml.dump({"director": {"enabled": True, "model": "x"}, "guided_edit": {"enabled": True}})
     )
-    prefix = view.render().split("\n")[2].split("x]")[0]
-    assert prefix == "    [silent gap: "
-    assert prefix.strip() in prompt
-
-
-def test_director_prompt_overlay_example_carries_a_duration():
-    """The prompt's overlay example must satisfy the real parser: an overlay
-    op without a positive duration is dropped, so a stale example would teach
-    the director to emit ops that never reach the timeline."""
-    from nagare_clip.director.director_llm import parse_director_response
-
-    cfg = get_effective_config(None, {})
-    prompt = cfg["director"]["prompt"]
-    example = next(
-        line.strip().rstrip(",") for line in prompt.splitlines() if '"type": "overlay"' in line
-    )
-    ops = parse_director_response('{"ops": [' + example + "]}", num_lines=100)
-    assert len(ops) == 1
-    assert ops[0].type == "overlay"
-    assert ops[0].duration is not None and ops[0].duration > 0
-
-
-def test_director_prompt_frames_goal_as_tighten_and_stage():
-    """The prompt's opening framing must ask for staging, not just removal --
-    otherwise the director has no license to add overlays or keep a moment
-    (see docs/superpowers/specs/2026-07-28-director-prompt-stage-not-trim-design.md)."""
-    cfg = get_effective_config(None, {})
-    prompt = cfg["director"]["prompt"]
-    opening = prompt.split("\n\n")[0].lower()
-    assert "tighten" in opening
-    assert "stage" in opening
-
-
-def test_director_prompt_treats_long_gap_as_keep_candidate_when_speech_announces_event():
-    """A long gap must not be an unconditional 'dead air' rule -- the prompt
-    must tell the director to read the surrounding speech and keep a gap that
-    the speech says is meaningful (an accident, a cleanup, a wait for a result)."""
-    cfg = get_effective_config(None, {})
-    prompt = cfg["director"]["prompt"].lower()
-    assert "fallback" in prompt
-    assert "accident" in prompt
-    assert "watchable moment" in prompt
-
-
-def test_director_prompt_prefers_timelapse_for_visible_work_reserves_cut_for_digressions():
-    """Repetition that is VISIBLE WORK should be timelapsed rather than deleted --
-    the tighten-rather-than-delete instinct from the 2026-07-28 rewrite -- while
-    cut stays reserved for spans that leave the throughline entirely."""
-    cfg = get_effective_config(None, {})
-    prompt = cfg["director"]["prompt"].lower()
-    assert "payoff" in prompt
-    assert "throughline" in prompt
-    assert "buildup" in prompt
-    assert "visible work" in prompt
-
-
-def test_director_prompt_does_not_offer_a_fast_option_for_repeated_speech():
-    """The prefer-timelapse-over-cut paragraph must route repeated SPEECH to 1x
-    or a cut.  Left ungated it reads as a licence to shave talking with a mild
-    speed-up, which is how a real run put 57% of the finished video under speed
-    with 85% of that footage carrying captions.  It must not name `speed`
-    either: with the op off the menu, mentioning it is naming an option that no
-    longer exists."""
-    cfg = get_effective_config(None, {})
-    prompt = cfg["director"]["prompt"]
-    # The paragraph is one prompt line ending in ":" above the bullet list --
-    # select it alone, so a bullet's own wording cannot satisfy these for it.
-    para = next(ln for ln in prompt.splitlines() if "Prefer a timelapse over a cut" in ln).lower()
-    assert "speech" in para
-    assert "speed" not in para
-    assert "1x" in para
-    assert "cut the weakest passes" in para
-
-
-def test_director_prompt_documents_overlay_density_target():
-    """Overlay needs a sense of when/how often -- a loose numeric target that
-    an editorial brief (future feature) can override, not a hard rule."""
-    cfg = get_effective_config(None, {})
-    prompt = cfg["director"]["prompt"]
-    assert "3-5 minutes" in prompt
-    assert "editorial brief" in prompt.lower()
-
-
-def test_director_prompt_scales_keep_width_to_what_is_on_screen():
-    """A keep's width must follow what is on screen: narrow to rescue one silent
-    gap, but wide enough to carry a continuous event (an accident, a cleanup)
-    without chopping the payoff into jump cuts.  Widening one to mark *talking*
-    as important stays forbidden — that abuse took a 22.3-minute cut to 53.9."""
-    cfg = get_effective_config(None, {})
-    prompt = cfg["director"]["prompt"]
-    # Rescuing one silence no longer needs a keep over the lines around it:
-    # the silence is addressable on its own ("53~"), so the [N, N+1] mechanic
-    # -- which could only ever approximate it -- is gone.
-    assert "[N, N+1]" not in prompt
-    assert "narrowest range" not in prompt
-    # A continuous event may still be spanned whole.
-    assert "WHOLE event" in prompt
-    assert "jump cuts" in prompt
-    # Talking is never a reason to widen one.
-    assert "Never widen a keep to mark talking as important" in prompt
-    # And a plan-side "feature/retain" direction must not be read as a keep op.
-    assert "editorial emphasis, NOT a " in prompt
-
-
-def test_the_reply_contract_is_stated_by_the_turn_that_needs_it():
-    """`loop.REPLY_SHAPE` goes out with every single turn, immediately above the
-    reply it governs, and already says that op line numbers are this
-    transcript's. DIRECTOR_PROMPT said it again 9,000 characters earlier, to be
-    reread every turn for nothing.
-
-    Only the mechanical half moves out. That a reply OWNS its range and
-    re-sending REPLACES its ops stays in the prefix as well, deliberately:
-    that copy is strategic rather than formatting -- being able to go back and
-    rewrite is the move the whole design exists for, and the model should hold
-    it before it writes its first op. `test_director_prompt_states_the_turn_
-    protocol` pins that one."""
-    from nagare_clip.director.loop import REPLY_SHAPE
-
-    prompt = get_effective_config(None, {})["director"]["prompt"]
-    for claim in ("REPLACE", "re-send", "this transcript's numbers"):
-        assert claim.lower() in REPLY_SHAPE.lower(), claim
-    assert '"lines" are this transcript\'s numbers' not in prompt
-    # "Output only the JSON object" likewise: every turn ends in REPLY_SHAPE's
-    # "one JSON object and nothing else", directly above the reply.
-    assert "nothing else" in REPLY_SHAPE
-    assert "Output only the JSON object" not in prompt
-    # What only the prefix can say -- one op cannot span two segments -- stays.
-    assert "inside one [k] block" in prompt
-
-
-def test_director_prompt_states_each_keep_rule_in_exactly_one_place():
-    """An audit of the assembled prompt found the same rules restated across the
-    role line, the Timing legend, the Visual-context paragraph, the op menu and
-    the generated keep-limit note -- `dropped by default` four times, the
-    `[N, N+1]` mechanic three times, the overlay trigger list verbatim twice.
-
-    Repetition is not free here. The one rule that governs where an op's
-    boundary goes is stated ONCE, at 55% into the prompt, while the plan's
-    concrete line ranges arrive at 82% -- so the prompt's own emphasis is
-    inverted relative to what actually needs saying. Restating a mechanic in
-    four places also makes it four places to drift: the keep-limit note used to
-    assert that "a continuous on-screen event fits well inside" the 8-line cap,
-    which is false in exactly the case the whole-event keep rule exists for.
-
-    Each of these belongs to one owner: the keep op bullet owns keep mechanics,
-    the Timing legend owns bracket notation, the overlay bullet owns when to
-    caption."""
-    prompt = get_effective_config(None, {})["director"]["prompt"]
-    # The [N, N+1] rescue mechanic is gone entirely: a silence line is
-    # addressed as "53~", exactly, so an approximation of it in a second
-    # vocabulary is one more place to drift.  It must not creep back.
-    assert prompt.count("[N, N+1]") == 0
-    # "dropped by default" is the Timing legend's job; the keep bullet and the
-    # visual-context paragraph point at it rather than restating it.
-    assert prompt.count("dropped by default") <= 2
-    # The overlay trigger list is the overlay bullet's, not the role line's.
-    assert prompt.count("mishaps") == 1
-
-
-def test_director_prompt_lets_a_described_action_span_its_whole_run():
-    """Ending every described gap's keep at [N, N+1] is what lost the
-    water-spill cleanup, so the whole-run rule has to survive -- but it now
-    lives once, in the keep bullet, rather than being restated in the
-    visual-context paragraph. The bullet states it more completely (it names
-    the accident/demo/result cases and the jump-cut consequence), and keeping
-    one owner is what stopped the two copies drifting apart."""
-    prompt = get_effective_config(None, {})["director"]["prompt"]
-    keep_bullet = next(ln for ln in prompt.splitlines() if ln.startswith("- keep:"))
-    assert "across several gaps" in keep_bullet
-    assert "WHOLE event in one keep" in keep_bullet
-    # And the silence paragraph must not restate it: it names the ops that
-    # act on a silence and leaves how wide to the bullet that owns it.
-    silence = next(ln for ln in prompt.splitlines() if ln.startswith("is the wait"))
-    assert "keep" in silence and "timelapse" in silence
-    assert "WHOLE event" not in silence and "jump cuts" not in silence
-
-
-def test_director_chunk_lines_default():
-    """How many display lines one turn of the conversation is asked to review.
-    The turn cap is ceil(lines / chunk_lines) * 2, so this number sets both how
-    much the director holds at once and how many turns it may spend."""
-    cfg = get_effective_config(None, {})
-    assert cfg["director"]["chunk_lines"] == 40
+    with pytest.raises(ValueError) as e:
+        get_effective_config(cfg_file)
+    msg = str(e.value)
+    for path in ("director.enabled", "director.model", "guided_edit.enabled"):
+        assert f"`{path}`" in msg
 
 
 def test_director_max_keep_lines_default():
@@ -1074,84 +688,6 @@ def test_a_config_still_carrying_publish_thumbnail_fails_loudly(tmp_path):
     assert "thumbnail" in str(e.value)
 
 
-def test_director_prompt_says_who_the_editor_is():
-    prompt = get_effective_config(None, {})["director"]["prompt"]
-    assert "Guide:" in prompt and "Editor:" in prompt
-    assert "the editor wins" in prompt
-
-
-def test_director_prompt_explains_the_plan():
-    prompt = get_effective_config(None, {})["director"]["prompt"]
-    assert "your first reply is a plan" in prompt
-    assert "not op boundaries" in prompt
-
-
-def test_director_prompt_explains_the_order():
-    prompt = get_effective_config(None, {})["director"]["prompt"]
-    assert '"order": [[first, last], ...]' in prompt
-    assert "shooting order" in prompt
-    assert "covering every line exactly once" in prompt
-
-
-def test_director_prompt_did_not_grow_for_the_silence_lines():
-    """Improvement 16: every round that grew this prompt cost something, so a
-    feature that adds a paragraph has to pay for it by deleting what it makes
-    redundant -- here the gap-rescue mechanics in the Timing legend and the
-    visual-context paragraph, and the [N, N+1] rule in the keep bullet.  6289
-    characters is what it measured before the silence lines went in.
-
-    The conversation raised the ceiling to 6600 ONCE, deliberately: the turn
-    protocol (an approximate range per turn, a reply that owns its range, and
-    `done`) is what the model is doing now, and no wording of it is free.  It
-    paid what it could -- the "53~" teaching (a silence is a numbered line
-    now), the transcript-echo rule the last Rules line already covers, the
-    1-based-numbering restatement above the menu, and half the playback rule
-    (the preview computes that playback now) -- which is 300 of the 604
-    characters the protocol cost.  Anything further must delete, not raise.
-
-    6495 -> 6595: the seam fact (a [k] block was recorded as its own video, so
-    it can open with a greeting or end with a sign-off) took 100 of the 104
-    characters that were left, inside the ceiling rather than over it.  Four
-    characters remain: the next addition here deletes something first.
-
-    6595 -> 6589: the bracket legend's new facts (speech + silence add up to
-    the footage; a keep plays the silence; a timelapse plays speech+silence
-    over its factor) were paid for by rewording the Timing/pacing lines and
-    deleting "Those are the only four forms" and "no timing, no bracket".
-
-    6589 -> 6107, and the ceiling back BELOW 6289, the size before the silence
-    lines: the conversation's 311-character raise is repaid in full.  Only
-    restatements went -- sentences another part of the assembled message
-    already says: "Output only the JSON object" (REPLY_SHAPE, every turn),
-    "every segment in playback order" (VIEW_HEADER), "the stretch you really
-    reviewed" (the turn's ask), "different footage ... refused" (the loop's
-    refusal says both), the cut-overlap rule's second statement of itself,
-    the overlay's "not how long it shows" (its duration says so), and the
-    reasons trailing "buildup", "mishaps" and "note".  No fact left the
-    message; the next addition deletes before it adds.
-
-    6107 -> 6580, and the ceiling raised to 6600 deliberately, the second
-    time: the director now decides the playback order.  Its meaning (the view
-    stays in shooting order, ranges in the order they play, coverage, a
-    silence line travels with its range, a timelapse stays inside one range)
-    belongs in this cached prefix, not in REPLY_SHAPE, which every turn re-sends
-    UNCACHED -- so REPLY_SHAPE was cut to naming the key.  Nothing else to
-    delete paid for it; the next addition deletes before it adds.
-
-    6580 -> 6865, ceiling 6900: the director writes its own plan (the plan
-    stage's directions are no longer shown).  The prompt says only that the
-    plan exists, stays revisable and marks sections, not op boundaries; what a
-    plan covers is in loop.PLAN_REQUEST, sent once.  The prefix as a whole
-    SHRANK: the directions list and SECTION_BOUNDARY_NOTE left it.
-
-    -> ceiling 7150: the Speakers paragraph.  The director resumes from its
-    directory and a person joins by writing an editor entry; the prompt is the
-    only place that says what an Editor: part is and that it wins, since no
-    code treats the person differently."""
-    prompt = get_effective_config(None, {})["director"]["prompt"]
-    assert len(prompt) < 7150
-
-
 def _display_view(n: int = 100):
     """A flat one-segment view, enough for the loop to read a reply against."""
     from nagare_clip.director.display import DisplayLine, DisplaySegment, DisplayView
@@ -1165,73 +701,6 @@ def _display_view(n: int = 100):
     )
 
 
-def test_director_prompt_says_a_join_is_where_two_recordings_meet():
-    """`SEAM_NOTE` went out in f197206 with the per-segment seam block, on the
-    reasoning that a whole-video view makes every join visible.  The finished
-    cut still carried a sign-off at every join: SEEING a join is not the same
-    as KNOWING it is one.  The fact goes back -- a [k] block was recorded as
-    its own video, so it can open with a greeting or end with a sign-off --
-    adapted to the whole-video view, where there is no seam block to put it in.
-
-    The fact, not the rule: whether to cut one is the model's call, and a
-    prompt that decided it for the model would be the editorial judgement this
-    stage exists to make."""
-    prompt = get_effective_config(None, {})["director"]["prompt"]
-    bullet = next(line for line in prompt.split("\n") if "sign-off" in line)
-    sentence = next(s for s in bullet.split(". ") if "sign-off" in s)
-    lowered = sentence.lower()
-    assert "[k]" in sentence
-    assert "recorded as its own video" in lowered
-    assert "greeting" in lowered
-    assert not any(word in lowered for word in ("cut", "remove", "delete", "must", "never"))
-
-
-def test_director_prompt_states_the_turn_protocol():
-    """The director is no longer one call over one segment: it is a
-    conversation over the whole video. A prompt describing the old shape is
-    not merely stale, it contradicts what every user message asks for."""
-    prompt = get_effective_config(None, {})["director"]["prompt"]
-    lowered = prompt.lower()
-    assert "one numbering" in lowered  # the whole video, numbered once
-    assert '"range"' in prompt and '"reviewed_through"' in prompt
-    assert '{"done": true}' in prompt
-    # Re-sending a range REPLACES its ops — the one move that makes the
-    # playback worth reading.
-    assert "replace" in lowered
-
-
-def test_director_prompt_turn_shape_is_the_one_the_loop_parses():
-    """Pin the documented reply to the real reader: a stale shape here is a
-    turn the loop rejects, and the retry ladder burns on it."""
-    from nagare_clip.director.loop import LoopState, apply_reply
-
-    prompt = get_effective_config(None, {})["director"]["prompt"]
-    start = prompt.index('{"range"')
-    shape = prompt[start : prompt.index("]}", start) + 2]
-    view = _display_view()
-    state = LoopState(plan="p")  # the range shape follows the planning turn
-    result = apply_reply(view, state, shape)
-    assert result.error is None and result.refusal is None
-    assert {op.type for op in result.ops} == {"cut", "timelapse", "overlay", "keep", "edit"}
-    assert state.reviewed_through == 78
-
-
-def test_director_prompt_bracket_legend_says_what_each_figure_plays():
-    """The speech/silence split is now what intervals renders: the speech figure
-    is what plays at 1x with no op, the silence is every second of the line the
-    render drops, and the two add up to the line's footage.  Without that last
-    fact the director cannot price its own ops: a timelapse plays the WHOLE
-    footage over its factor, not the speech figure over it, and a keep plays
-    the silence back.  Stated in the Timing legend, which owns the notation,
-    and paid for there -- the ceiling above is not raised."""
-    prompt = get_effective_config(None, {})["director"]["prompt"]
-    timing = next(ln for ln in prompt.splitlines() if ln.startswith("Timing:"))
-    assert "add up to the line's footage" in timing
-    pacing = next(ln for ln in prompt.splitlines() if "Judge pacing from the speech figure" in ln)
-    assert "a timelapse plays speech+silence divided by its factor" in pacing
-    assert "a keep plays the silence too" in pacing.lower()
-
-
 # ---------------------------------------------------------------------------
 # reasoning_effort: passed straight to LiteLLM; the old `thinking` key is gone
 # ---------------------------------------------------------------------------
@@ -1240,7 +709,6 @@ _LLM_SECTIONS = [
     ("sentence_split",),
     ("text_filter",),
     ("summary",),
-    ("director",),
     ("gap_context",),
     ("publish",),
     ("publish", "describe_frames"),

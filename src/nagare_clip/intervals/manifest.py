@@ -1,7 +1,7 @@
 """Resolve the segment order from line numbers into source seconds.
 
 The order is written in line numbers because that is the only coordinate the
-director, the summaries and the human conversation share; ``blender`` knows only
+director, the summaries and the human share; ``blender`` knows only
 seconds.  ``intervals`` already reads the sentence_split JSON and produces
 second-based output, so it is the **single conversion point** between the two:
 the director is the authority on the order up to and including this stage, and

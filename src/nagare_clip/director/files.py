@@ -17,8 +17,8 @@ import json
 import logging
 from pathlib import Path
 
-from nagare_clip.director.director_llm import DirectorOp, ops_from_dict, ops_to_dict
-from nagare_clip.director.run import SegmentInputs, silence_line_min
+from nagare_clip.director.load import SegmentInputs, silence_line_min
+from nagare_clip.director.ops import DirectorOp, ops_from_dict, ops_to_dict
 from nagare_clip.order import Segment, order_from_dict, segments_to_dict
 from nagare_clip.pipeline.runner import PipelineContext
 

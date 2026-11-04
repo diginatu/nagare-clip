@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import pytest
 
-from nagare_clip.director.director_llm import DirectorOp, ops_from_dict
+from nagare_clip.director.ops import DirectorOp, ops_from_dict
 from nagare_clip.director.preview import preview_segment, resolve_placements
 from nagare_clip.director.silence_lines import SilenceLine
 from nagare_clip.edit_lines import gap_spans, insert_silence_lines

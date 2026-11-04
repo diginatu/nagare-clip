@@ -1,41 +1,28 @@
-"""Director stage (Pass A): parse/validate the big LLM's edit-operation JSON.
+"""The director's operations: the ``{stem}_director.json`` contract.
 
-The director never re-outputs the transcript; it returns a JSON object
-``{"ops": [...]}`` where each op references segment lines by 1-based number.
-This module turns that response into validated :class:`DirectorOp` objects,
-dropping any malformed/out-of-range op (with a warning) so a single bad op
-never derails the rest.
+An op references source lines by 1-based number (``"n~"`` names the silence
+after line ``n``) and never re-outputs transcript text, except an ``edit``
+op's exact ``old``/``new``.  :func:`parse_op` validates one op — the shared
+check the agent skill's ``write`` tool reports and :func:`ops_from_dict`
+(every reader of a hand-editable file) drops by.
 """
 
 from __future__ import annotations
 
-import json
 import logging
 import re
-from collections.abc import Callable, Sequence
+from collections.abc import Sequence
 from dataclasses import dataclass, field
 from typing import Any
 
 from nagare_clip.guided_edit.patch import forbidden_problem
-from nagare_clip.intervals.sync_json import (
-    CUT_TAG_RE,
-    KEEP_TAG_RE,
-    OVERLAY_TAG_RE,
-    SPEED_TAG_RE,
-)
-from nagare_clip.text_filter.llm_filter import (  # noqa: F401 - _call_llm is run.py's patch seam
-    _call_llm,
-    apply_patches_to_lines,
-)
-from nagare_clip.timing import bracket_seconds, format_dur_gap
 
 logger = logging.getLogger(__name__)
 
-CallLLM = Callable[[list[dict[str, str]], dict[str, Any]], str]
-
 VALID_TYPES = {"cut", "speed", "overlay", "keep", "edit", "timelapse"}
 
-# What the director LLM may emit.  ``speed`` is off the menu: three rounds of
+
+# What the director may emit.  ``speed`` is off the menu: three rounds of
 # prompt tightening bounded the mild 1.3-2.0 band and it kept coming back
 # (57.4% -> 1.4% -> 49.0% -> 29.9% of the finished video across four runs of the
 # same footage), because a middle option is always cheaper to choose than a
@@ -45,11 +32,10 @@ VALID_TYPES = {"cut", "speed", "overlay", "keep", "edit", "timelapse"}
 # hand-editable _director.json.
 MENU_TYPES = VALID_TYPES - {"speed"}
 
-# The factor DIRECTOR_PROMPT calls a real timelapse; the parse-time floor for
+
+# What counts as a real timelapse; the parse-time floor for
 # a "timelapse" op (see parse_op) below which it is a mild speed-up instead.
 TIMELAPSE_MIN_FACTOR = 4.0
-
-_FENCE_RE = re.compile(r"^\s*```(?:json)?\s*(.*?)\s*```\s*$", re.DOTALL)
 
 
 @dataclass
@@ -75,42 +61,7 @@ class DirectorOp:
     extra: dict = field(default_factory=dict)
 
 
-def _max_keep_lines(cfg: dict[str, Any]) -> int:
-    """Read ``director.max_keep_lines`` defensively (``0``/invalid = no limit)."""
-    raw = cfg.get("max_keep_lines", 0)
-    if isinstance(raw, bool) or not isinstance(raw, int) or raw < 0:
-        return 0
-    return raw
-
-
-def keep_limit_note(max_keep_lines: int) -> str:
-    """The one-line prompt addendum stating the configured ``keep`` width cap.
-
-    Generated rather than written into ``DIRECTOR_PROMPT`` so the number the
-    LLM is told is always the number the parser enforces.
-    """
-    # The op menu tells the director to span a whole continuous event in ONE
-    # keep; this cap can make that impossible, and _apply_keep_cap DROPS the
-    # op rather than clamping it — so following the menu loses the keep
-    # entirely and jump-cuts the very event it was protecting.  The note used
-    # to paper over that with "a continuous on-screen event fits well inside
-    # that", which is false in exactly the case the whole-event rule exists
-    # for.  Saying what to do instead turns a silent drop into a usable route:
-    # consecutive keeps do not overlap, so they all survive.
-    #
-    # The "do not stretch a keep across a talking span" warning is gone from
-    # here too — the keep bullet states it more completely ("Never widen a
-    # keep to mark talking as important ... inflates the runtime for
-    # nothing"), and this note is appended far from the menu.
-    return (
-        f'A "keep" op may span at most {max_keep_lines} line(s); a wider one is '
-        "rejected and has no effect — to hold a longer event, emit consecutive "
-        'keeps that each stay within the cap. A "timelapse" op needs no keep of '
-        "its own; it protects its whole range by itself."
-    )
-
-
-def _coerce_lines(value: Any, num_lines: int | None, first_line: int = 1) -> tuple[int, int] | None:
+def coerce_lines(value: Any, num_lines: int | None, first_line: int = 1) -> tuple[int, int] | None:
     """Validate a ``lines`` value into a 1-based inclusive (start, end) range.
 
     ``num_lines`` of ``None`` drops the upper bound, for reading a *different*
@@ -164,10 +115,10 @@ def _coerce_endpoint(value: Any) -> tuple[int, bool] | None:
 def _coerce_line_range(
     value: Any, num_lines: int | None, first_line: int = 1
 ) -> tuple[tuple[int, int], bool, bool] | None:
-    """A director op's ``lines``: the same range as :func:`_coerce_lines`, plus
+    """A director op's ``lines``: the same range as :func:`coerce_lines`, plus
     which edges name the silence after their line.
 
-    Separate from :func:`_coerce_lines` because ``summary`` shares that one for
+    Separate from :func:`coerce_lines` because ``summary`` shares that one for
     part ranges, where a silence reference has no meaning.  Every range check
     is the same: a silence edge is an edge of the SAME line, so it relaxes
     nothing.
@@ -196,7 +147,8 @@ def parse_op(
     """One op as the director wrote it, validated; ``None`` (with the reason
     appended to *drops*) when it is malformed.
 
-    Shared by the LLM director's parser and the agent skill's tools, so the
+    Used by the agent skill's ``write`` tool and every reader of a
+    ``_director.json`` (:func:`ops_from_dict`), so the
     timelapse factor floor, the overlay text/duration rules and the range
     checks are one implementation.
     """
@@ -316,9 +268,7 @@ def parse_op(
 def keep_cap_problem(op: DirectorOp, max_keep_lines: int) -> str | None:
     """Why *op* breaks the ``keep`` width cap, or ``None``.
 
-    Shared by the LLM director (:func:`_apply_keep_cap`, which drops the op)
-    and the agent skill's ``write`` tool (which refuses the whole edit), so the
-    two cannot disagree about what is too wide.  ``0`` = no limit.
+    The agent skill's ``write`` tool refuses an edit with one.  ``0`` = no limit.
     """
     if max_keep_lines <= 0 or op.type != "keep":
         return None
@@ -336,7 +286,7 @@ def off_menu_problem(op: DirectorOp) -> str | None:
     """Why *op* is not an operation the director may emit, or ``None``.
 
     Currently that is ``speed`` only (see :data:`MENU_TYPES`).  Shared by the
-    LLM director and the agent skill's tools.
+    agent skill's tools.
     """
     if op.type in MENU_TYPES:
         return None
@@ -345,112 +295,6 @@ def off_menu_problem(op: DirectorOp) -> str | None:
         'director may emit; a stretch worth going fast over is a "timelapse", '
         'anything else plays at 1x or is a "cut"'
     )
-
-
-def _apply_keep_cap(
-    ops: list[DirectorOp],
-    max_keep_lines: int,
-    drops: list[str] | None,
-) -> list[DirectorOp]:
-    """Post-pass: drop a ``keep`` op wider than ``max_keep_lines``.  Kept as a
-    pass over the whole parsed list (rather than a check inside
-    :func:`parse_op`) so the drop message/logging stays in one place; tests
-    assert on it.  The check itself is :func:`keep_cap_problem`.
-    """
-    kept: list[DirectorOp] = []
-    for op in ops:
-        msg = keep_cap_problem(op, max_keep_lines)
-        if msg:
-            logger.warning("Director op dropped: %s", msg)
-            if drops is not None:
-                drops.append(msg)
-            continue
-        kept.append(op)
-    return kept
-
-
-def _drop_off_menu_ops(
-    ops: list[DirectorOp],
-    drops: list[str] | None,
-) -> list[DirectorOp]:
-    """Post-pass: drop an op whose type is not on the director's menu.
-
-    A post-pass rather than a check inside :func:`parse_op` — like
-    :func:`_apply_keep_cap` — so the drop message/logging stays in one place and
-    :func:`ops_from_dict` (the hand-edit path) is left uncapped.  The check
-    itself is :func:`off_menu_problem`.
-    """
-    kept: list[DirectorOp] = []
-    for op in ops:
-        msg = off_menu_problem(op)
-        if msg:
-            logger.warning("Director op dropped: %s", msg)
-            if drops is not None:
-                drops.append(msg)
-            continue
-        kept.append(op)
-    return kept
-
-
-def strip_code_fence(response: str) -> str:
-    """*response* without the ```` ```json ```` fence models keep wrapping it in.
-
-    Shared with :mod:`nagare_clip.director.loop`, whose reply is a JSON object
-    with more in it than ``ops`` — so the two readers of one model's JSON
-    cannot disagree about what a fenced reply is.
-    """
-    text = response.strip()
-    fence = _FENCE_RE.match(text)
-    return fence.group(1) if fence else text
-
-
-def try_parse_director_response(
-    response: str,
-    num_lines: int,
-    drops: list[str] | None = None,
-    max_keep_lines: int = 0,
-    first_line: int = 1,
-) -> list[DirectorOp] | None:
-    """Parse the director LLM response, distinguishing failure from empty.
-
-    Returns ``None`` on a *hard* parse failure (invalid JSON / no ``ops``
-    array) so the caller can retry; returns the (possibly empty) validated op
-    list otherwise.  A valid ``{"ops": []}`` is a legitimate "no edits" result
-    and yields ``[]`` (not ``None``).  Individual malformed ops are skipped
-    (logged) rather than aborting the whole list.
-
-    ``max_keep_lines`` (config ``director.max_keep_lines``, ``0`` = no limit)
-    drops a ``keep`` op wider than that many lines: dropping it degrades to the
-    default behaviour (speech kept, internal silence cut) instead of restoring
-    a span's worth of dead air. Applied as a post-pass (:func:`_apply_keep_cap`)
-    after every op is parsed.
-    """
-    try:
-        data = json.loads(strip_code_fence(response))
-    except (ValueError, TypeError):
-        logger.warning("Director response is not valid JSON; ignoring")
-        return None
-    if not isinstance(data, dict) or not isinstance(data.get("ops"), list):
-        logger.warning("Director response has no 'ops' array; ignoring")
-        return None
-
-    ops: list[DirectorOp] = []
-    for raw in data["ops"]:
-        op = parse_op(raw, num_lines, drops, first_line)
-        if op is not None:
-            ops.append(op)
-    return _apply_keep_cap(_drop_off_menu_ops(ops, drops), max_keep_lines, drops)
-
-
-def parse_director_response(
-    response: str, num_lines: int, max_keep_lines: int = 0
-) -> list[DirectorOp]:
-    """Parse the director LLM response into validated ops.
-
-    Thin wrapper over :func:`try_parse_director_response` that collapses a hard
-    parse failure to ``[]`` (backward-compatible).
-    """
-    return try_parse_director_response(response, num_lines, max_keep_lines=max_keep_lines) or []
 
 
 def ops_from_dict(data: Any, num_lines: int | None) -> list[DirectorOp]:
@@ -490,112 +334,6 @@ def collect_overlay_texts(ops: Sequence[DirectorOp]) -> list[str]:
     return out
 
 
-def clean_for_display(edit_lines: list[str]) -> list[str]:
-    """Render edit lines as plain readable text for the director.
-
-    Applies ``{{old->new}}`` patches and strips any marker tags so the LLM
-    sees clean prose, not edit syntax.
-    """
-    stripped = [
-        CUT_TAG_RE.sub(
-            "",
-            OVERLAY_TAG_RE.sub("", SPEED_TAG_RE.sub("", KEEP_TAG_RE.sub("", line))),
-        )
-        for line in edit_lines
-    ]
-    return apply_patches_to_lines(stripped)
-
-
-def format_numbered_transcript(clean_lines: list[str], first_line: int = 1) -> str:
-    """Format clean lines as ``N: text``, matching the filter LLM.
-
-    *first_line* is where this slice starts in the source's own numbering, so a
-    segment beginning at line 31 presents its first line as ``31:``.
-    """
-    return "\n".join(f"{i + first_line}: {text}" for i, text in enumerate(clean_lines))
-
-
-def speech_seconds(
-    seg_times: Sequence[tuple[float | None, float | None]],
-    silences: Sequence[float] | None = None,
-) -> list[float | None]:
-    """Seconds each line plays with no op at all: its span minus what the
-    intervals stage drops inside it (``None`` when the line is untimed).
-
-    *silences* come from :func:`nagare_clip.director.run.source_drops`, the
-    intervals stage's own keep chain, so this IS the render's 1x figure.
-
-    The one definition of a line's playing time — the transcript brackets and
-    the whole-video "default runtime" both read it, so they cannot drift.
-    """
-    out: list[float | None] = []
-    for i, (start, end) in enumerate(seg_times):
-        raw = end - start if start is not None and end is not None else None
-        sil = silences[i] if silences is not None and i < len(silences) else None
-        out.append(max(raw - sil, 0.0) if raw is not None and sil else raw)
-    return out
-
-
-def line_seconds(
-    seg_times: Sequence[tuple[float | None, float | None]],
-    silences: Sequence[float] | None = None,
-) -> list[float | None]:
-    """Each line's duration exactly as its transcript bracket prints it.
-
-    Differs from :func:`speech_seconds` only where a sub-second silence is
-    folded back in for display.  Per-line figures quoted back to the director
-    (the playback preview) read this, so a line never carries two numbers;
-    runtimes keep summing :func:`speech_seconds`, because the intervals stage
-    drops that silence regardless of what the bracket shows.
-    """
-    out: list[float | None] = []
-    for i, dur in enumerate(speech_seconds(seg_times, silences)):
-        sil = silences[i] if silences is not None and i < len(silences) else None
-        out.append(None if dur is None else bracket_seconds(dur, sil))
-    return out
-
-
-def format_numbered_transcript_timed(
-    clean_lines: list[str],
-    seg_times: list[tuple[float | None, float | None]],
-    silences: list[float] | None = None,
-    first_line: int = 1,
-    silence_after: set[int] | None = None,
-) -> str:
-    """``N: text  [dur, gap]`` (1-based), gap = time to the next line.
-
-    Per line: ``dur = end - start``; ``gap = next.start - this.end`` (the last
-    line has no gap).  When *silences* is given (the seconds of each line's
-    span the intervals stage drops, from
-    :func:`nagare_clip.director.run.source_drops`),
-    a line with significant internal silence renders
-    ``[12.9s speech, 62.9s silence]`` — speech-only duration — so the LLM
-    never judges pacing from span time that is mostly already-dropped silence.
-    A missing ``start``/``end`` degrades that line's bracket via
-    :func:`format_dur_gap` (possibly to no bracket at all).
-
-    *silence_after* are the line numbers a silence line follows: that wait is
-    stated there, in seconds of its own, so printing it here too would give one
-    silence two numbers the director has to reconcile.
-    """
-    out: list[str] = []
-    speech = speech_seconds(seg_times, silences)
-    for i, text in enumerate(clean_lines):
-        _, end = seg_times[i]
-        sil = silences[i] if silences is not None and i < len(silences) else None
-        dur = speech[i]
-        gap: float | None = None
-        if silence_after and i + first_line in silence_after:
-            pass
-        elif i + 1 < len(clean_lines):
-            nxt_start = seg_times[i + 1][0]
-            if end is not None and nxt_start is not None:
-                gap = nxt_start - end
-        bracket = format_dur_gap(dur, gap, sil)
-        out.append(f"{i + first_line}: {text}  {bracket}".rstrip())
-    return "\n".join(out)
-
-
 def ops_to_dict(ops: list[DirectorOp]) -> dict[str, Any]:
     """Serialise ops to the ``{stem}_director.json`` shape."""
     out: list[dict[str, Any]] = []
@@ -620,3 +358,24 @@ def ops_to_dict(ops: list[DirectorOp]) -> dict[str, Any]:
             entry["note"] = op.note
         out.append(entry)
     return {"ops": out}
+
+
+def max_keep_lines(director_cfg: dict[str, Any]) -> int:
+    """Read ``director.max_keep_lines`` defensively (``0``/invalid = no limit)."""
+    raw = director_cfg.get("max_keep_lines", 0)
+    if isinstance(raw, bool) or not isinstance(raw, int) or raw < 0:
+        return 0
+    return raw
+
+
+def keep_limit_note(max_keep_lines: int) -> str:
+    """The keep cap as the director is told it (``view`` prints it)."""
+    return (
+        f'A "keep" op may span at most {max_keep_lines} line(s), and keeps that touch '
+        "or overlap count as one keep against that limit; write refuses either. Cover "
+        "an on-screen event with ONE keep over its whole range, short noise/utterance "
+        "lines included; for one wider than that, ask the user to raise "
+        "director.max_keep_lines (or consider a timelapse for manual work). "
+        'A "timelapse" op needs no keep of its own; it protects its whole range by '
+        "itself."
+    )

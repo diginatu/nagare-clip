@@ -12,7 +12,7 @@ from __future__ import annotations
 
 import json
 
-import nagare_clip.director.run as director_run
+import nagare_clip.director.load as director_run
 from nagare_clip.director.display import build_display_view
 from nagare_clip.order import Segment
 

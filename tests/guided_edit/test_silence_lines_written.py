@@ -11,9 +11,9 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from nagare_clip.director.director_llm import DirectorOp
 from nagare_clip.director.display import build_display_view
-from nagare_clip.director.run import SegmentInputs, load_segment_transcript
+from nagare_clip.director.load import SegmentInputs, load_segment_transcript
+from nagare_clip.director.ops import DirectorOp
 from nagare_clip.edit_lines import parse_edit_lines
 from nagare_clip.gap_context.gaps import Gap, gaps_to_dict
 from nagare_clip.guided_edit.apply import apply_ops

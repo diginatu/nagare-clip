@@ -19,11 +19,7 @@ from nagare_clip.blender.frames import ordered_sources
 from nagare_clip.blender.warnings_file import WARNINGS_FILENAME
 from nagare_clip.cut_report.report import build_cut_report
 from nagare_clip.director import files as director_files
-from nagare_clip.director.director_llm import (
-    DirectorOp,
-    collect_overlay_texts,
-    ops_from_dict,
-)
+from nagare_clip.director.ops import DirectorOp, collect_overlay_texts, ops_from_dict
 from nagare_clip.director.tools.project import current_state, project_for
 from nagare_clip.edit_lines import parse_edit_lines
 from nagare_clip.gap_context.describe import GapFrames

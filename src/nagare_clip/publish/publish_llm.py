@@ -32,9 +32,9 @@ from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
 from typing import Any
 
-from nagare_clip.director.director_llm import _FENCE_RE
 from nagare_clip.llm_client import call_llm as _call_llm
 from nagare_clip.llm_client import with_trace_meta
+from nagare_clip.llm_json import FENCE_RE
 from nagare_clip.llm_report import (
     DROPPED_ITEMS,
     LLM_ERROR,
@@ -184,7 +184,7 @@ def try_parse_publish_response(
             drops.append(msg)
 
     text = response.strip()
-    fence = _FENCE_RE.match(text)
+    fence = FENCE_RE.match(text)
     if fence:
         text = fence.group(1)
     try:

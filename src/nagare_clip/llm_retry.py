@@ -1,6 +1,6 @@
-"""Shared bounded-retry helpers for the LLM stages (director, guided_edit).
+"""Shared bounded-retry helpers for the LLM stages.
 
-Both stages retry a failed LLM call/verification a bounded number of times,
+Each retries a failed LLM call/verification a bounded number of times,
 nudging the sampling temperature upward on each successive attempt so a
 deterministic low-temperature failure is not reproduced identically.
 """

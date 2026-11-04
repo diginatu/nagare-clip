@@ -12,7 +12,7 @@ from nagare_clip.director.display import build_display_view
 from nagare_clip.order import Segment
 from nagare_clip.summary.summarize import PartSummary, ProjectSummary
 
-from .test_loop_order import A, B
+from .test_checks_order import A, B
 
 
 def _view():

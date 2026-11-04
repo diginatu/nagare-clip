@@ -15,7 +15,7 @@ import json
 import logging
 from pathlib import Path
 
-from nagare_clip.director.director_llm import ops_from_dict
+from nagare_clip.director.ops import ops_from_dict
 from nagare_clip.director.silence_lines import build_silence_lines
 from nagare_clip.edit_lines import (
     gap_spans,

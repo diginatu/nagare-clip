@@ -13,7 +13,7 @@ tag never corrupts the file.
 
 from __future__ import annotations
 
-from nagare_clip.director.director_llm import DirectorOp
+from nagare_clip.director.ops import DirectorOp
 from nagare_clip.edit_lines import EditFile, parse_edit_lines
 from nagare_clip.intervals.sync_json import (
     _OVERLAY_MARK_RE,

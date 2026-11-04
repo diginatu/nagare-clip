@@ -18,11 +18,11 @@ from typing import Any
 
 from nagare_clip.brief import format_brief
 from nagare_clip.config import get_effective_config
-from nagare_clip.director.director_llm import _max_keep_lines
+from nagare_clip.director.checks import order_segments
 from nagare_clip.director.files import write_ops, write_order, write_plan
-from nagare_clip.director.loop import order_segments
+from nagare_clip.director.load import VIEW_HEADER, project_context
+from nagare_clip.director.ops import keep_limit_note, max_keep_lines
 from nagare_clip.director.preview import edit_state, edit_summary
-from nagare_clip.director.run import VIEW_HEADER, project_context
 from nagare_clip.director.tools.project import (
     Project,
     current_state,
@@ -32,7 +32,6 @@ from nagare_clip.director.tools.project import (
 from nagare_clip.director.tools.validate import (
     Edit,
     Problem,
-    skill_keep_limit_note,
     to_display,
     to_source,
     validate_edit,
@@ -109,9 +108,9 @@ def cmd_view(project: Project, args: argparse.Namespace) -> int:
         brief = format_brief(cfg.get("project"))
         if brief:
             parts.append(brief)
-        max_keep = _max_keep_lines(cfg["director"])
+        max_keep = max_keep_lines(cfg["director"])
         if max_keep > 0:
-            parts.append(skill_keep_limit_note(max_keep))
+            parts.append(keep_limit_note(max_keep))
         context = project_context(project.ctx.stage_dir("summary") / "summary.json", view)
         if context:
             parts.append(context)
@@ -165,7 +164,7 @@ def _validate(project: Project, data: Any) -> tuple[Edit, list[Problem]]:
         project.view,
         data,
         has_plan=bool(state.plan),
-        max_keep_lines=_max_keep_lines(project.ctx.cfg["director"]),
+        max_keep_lines=max_keep_lines(project.ctx.cfg["director"]),
     )
 
 
@@ -238,7 +237,7 @@ def write_edit(project: Project, edit: Edit) -> list[Path]:
     for seg in project.view.segments:
         write_ops(ctx, seg.stem, by_index.get(seg.index, []))
         written.append(project.director_dir / f"{seg.stem}_director.json")
-    # Always, like the LLM director: the edit is the whole state, so writing
+    # Always: the edit is the whole state, so writing
     # the same edit twice gives the same files.
     segments = (
         order_segments(project.view, edit.order) if edit.order else identity_segments(project.stems)
@@ -264,13 +263,6 @@ def cmd_write(project: Project, args: argparse.Namespace) -> int:
         "Next: ./scripts/run_pipeline.sh --from-stage guided_edit "
         "(with the same --config) to apply the ops and build the .blend."
     )
-    cfg = project.ctx.cfg
-    if cfg["director"].get("enabled", False):
-        print(
-            "warning: director.enabled is true, so running the director stage would let the "
-            "LLM director continue from these files. Resume from guided_edit, or disable it.",
-            file=sys.stderr,
-        )
     return 0
 
 

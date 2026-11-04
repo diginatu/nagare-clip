@@ -36,9 +36,9 @@ guided_edit's own :func:`~nagare_clip.guided_edit.apply.resolve_span_ops` (after
 the real timelapse expansion), so an op is reported where it will actually land.
 
 Two figures, each the one the director already sees for its scope: a *line*'s
-seconds are its transcript bracket (:func:`~.director_llm.line_seconds`, which
+seconds are its transcript bracket (:func:`~.transcript.line_seconds`, which
 folds a sub-second silence back in), and a *segment*'s runtime sums
-:func:`~.director_llm.speech_seconds`, as the whole-video header's "default
+:func:`~.transcript.speech_seconds`, as the whole-video header's "default
 runtime" does, because the intervals stage drops that silence regardless.
 Markers already in the edit lines steer the clipping but are not played back.
 """
@@ -50,15 +50,11 @@ from collections.abc import Set as AbstractSet
 from dataclasses import dataclass, field, replace
 from typing import TYPE_CHECKING
 
-from nagare_clip.director.director_llm import (
-    DirectorOp,
-    clean_for_display,
-    line_seconds,
-    speech_seconds,
-)
+from nagare_clip.director.checks import order_breaks
 from nagare_clip.director.display import DisplayView
-from nagare_clip.director.loop import order_breaks
+from nagare_clip.director.ops import DirectorOp
 from nagare_clip.director.silence_lines import INDENT, SilenceLine, silence_body
+from nagare_clip.director.transcript import clean_for_display, line_seconds, speech_seconds
 from nagare_clip.edit_lines import insert_silence_lines, parse_edit_lines
 from nagare_clip.gap_context.gaps import Gap
 from nagare_clip.guided_edit.apply import blocking_types, resolve_span_ops
@@ -66,7 +62,7 @@ from nagare_clip.guided_edit.timelapse import expand_timelapse_ops
 from nagare_clip.timing import gap_shown, silence_shown
 
 if TYPE_CHECKING:  # pragma: no cover - typing only; run.py imports this module
-    from nagare_clip.director.run import SegmentTranscript
+    from nagare_clip.director.load import SegmentTranscript
 
 #: Speech in a span sped up this much or more cannot be followed (user's rule).
 UNINTELLIGIBLE_FACTOR = 2.0
@@ -91,16 +87,15 @@ WHOLE_VIDEO = "whole video so far"
 #: Heads the edit state: what follows is the whole current edit, not a diff.
 STATE_HEADER = (
     "THE COMPLETE EDIT AS IT STANDS. Every segment of the video, every op "
-    "accepted so far and what it plays, then every caption in order and the "
-    "runtime. This block is the whole state of the edit: it is recomputed "
-    "from scratch each turn, so nothing earlier in this conversation "
-    "describes the edit as it is now."
+    "in this edit and what it plays, then every caption in order and the "
+    "runtime. This block is the whole state of this edit, recomputed from "
+    "its ops every time."
 )
 
 CAPTIONS_HEADER = "Captions in playback order"
 
 #: Heads the plan in force, which leads the edit state once there is one.
-PLAN_HEADER = 'YOUR PLAN (in force — send "plan" in any reply to replace it):'
+PLAN_HEADER = "THE PLAN of this edit:"
 
 #: Heads the reordered playback, when the order is not the view's order.
 REORDERED_HEADER = (
@@ -339,9 +334,8 @@ def _op_ref(op: DirectorOp, index: int, num: Numbering = IDENTITY) -> str:
 def _note_lines(op: DirectorOp) -> list[str]:
     """The op's own note, truncated — never dropped.
 
-    With no preview history in the conversation, the note is the only record
-    the model has of WHY it made an op; losing it to length would leave a range
-    of the edit it can no longer account for.
+    The note is the only record of WHY an op was made; losing it to length
+    would leave a range of the edit no one can account for.
     """
     note = op.note.replace("\n", " ").strip()
     if not note:
@@ -619,7 +613,7 @@ def timeline_runs(
     """The segment as it plays: consecutive display lines grouped by their fate.
 
     *breaks* are the display lines after which the playback order jumps
-    elsewhere (:func:`~.loop.order_breaks`): a run always ends there, so every
+    elsewhere (:func:`~.checks.order_breaks`): a run always ends there, so every
     run lies inside one range of the order and can be listed where it plays.
 
     Derived from the SAME resolved playback as every per-op block above it
@@ -1106,31 +1100,28 @@ def edit_state(
     only: AbstractSet[int] | None = None,
     focus: tuple[int, int] | None = None,
 ) -> str:
-    """The complete current edit: what one turn's user message carries.
+    """The complete current edit, as ``director_tools.sh preview`` prints it.
 
     *only* (segment indices) and *focus* (display lines) narrow the per-segment
     detail for a reader paging through a long edit; the totals, the captions
     and the footer stay whole-video.  Both ``None`` (the default) is the
     complete edit, byte for byte as before.
 
-    *ops* are every op accepted so far, keyed by the segment's 1-based index in
-    the playback order.  EVERY segment is rendered, touched this turn or not,
-    with its whole op list — a reader who has seen nothing but the system
-    message could continue the job from this block alone, which is the point:
-    the conversation no longer carries a preview of its own past, so anything
-    missing here is a fact the model does not have.
+    *ops* are every op of the edit, keyed by the segment's 1-based index in
+    the playback order.  EVERY segment is rendered with its whole op list, so
+    the block alone describes the edit.
 
     Whole-video facts the brief is written in — total runtime, the captions in
     order and how many there are — are otherwise uncheckable: no single
     segment's preview can answer them.
 
     *order* is the playback order in force, as display ranges
-    (:attr:`~.loop.LoopState.order`).  When it moves anything, the runs are
+    (the edit's ``order``).  When it moves anything, the runs are
     also listed in that order, range by range, with every seam quoted — the
     transcript is numbered in shooting order, and this is where the model
     reads the video it actually made.
 
-    *plan* is the plan in force (:attr:`~.loop.LoopState.plan`); it leads the
+    *plan* is the plan in force (``plan.md``, or the edit plan); it leads the
     block, so the ops below are read against it every turn.
     """
     breaks = _order_breaks(order, len(view.lines))

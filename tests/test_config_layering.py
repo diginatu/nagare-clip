@@ -136,8 +136,8 @@ def test_snapshot_names_its_source_files_in_order(tmp_path: Path):
 
 
 def test_snapshot_redacts_api_keys(tmp_path: Path):
-    src = _write(tmp_path / "a.yml", {"director": {"api_key": "sk-secret"}})
+    src = _write(tmp_path / "a.yml", {"summary": {"api_key": "sk-secret"}})
     cfg = get_effective_config(src)
     snap = write_effective_config(cfg, tmp_path / "out", [src])
     assert "sk-secret" not in snap.read_text(encoding="utf-8")
-    assert cfg["director"]["api_key"] == "sk-secret"  # the in-memory config is untouched
+    assert cfg["summary"]["api_key"] == "sk-secret"  # the in-memory config is untouched

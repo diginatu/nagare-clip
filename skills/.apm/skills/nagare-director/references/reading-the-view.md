@@ -52,6 +52,4 @@ order, and `whole video so far: default X → with the ops Y`.
 `preview --summary` prints only the totals, the runs in playback order
 (`1x`, `1x+silence`, `timelapse` with its factor and caption, `cut`, each with
 its on-screen seconds and display lines) and the captions; `--lines`/`--source`
-limit the detail to part of the video. The full form's header text
-was written for the old LLM director ("this conversation", "send plan in any
-reply"); read it as "this edit".
+limit the detail to part of the video.

@@ -6,12 +6,10 @@ source file, so an offset introduced here would have to be undone there.
 
 from __future__ import annotations
 
-import json
-
-from nagare_clip.director.director_llm import (
+from nagare_clip.director.ops import parse_op
+from nagare_clip.director.transcript import (
     format_numbered_transcript,
     format_numbered_transcript_timed,
-    try_parse_director_response,
 )
 
 TIMES = [(0.0, 1.0), (2.0, 3.0), (4.0, 5.0)]
@@ -32,9 +30,8 @@ class TestAbsoluteNumbering:
 
 class TestOpRangeValidation:
     def _parse(self, lines, **kw):
-        return try_parse_director_response(
-            json.dumps({"ops": [{"type": "cut", "lines": lines}]}), **kw
-        )
+        op = parse_op({"type": "cut", "lines": lines}, **kw)
+        return [] if op is None else [op]
 
     def test_an_op_inside_the_segment_is_kept(self):
         ops = self._parse([32, 33], num_lines=33, first_line=31)

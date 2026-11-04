@@ -15,8 +15,8 @@ import pytest
 
 from nagare_clip.audio_silence.cuts_file import write_cuts
 from nagare_clip.config import DEFAULTS
-from nagare_clip.director.director_llm import speech_seconds
-from nagare_clip.director.run import SegmentInputs, SegmentTranscript, load_segment_transcript
+from nagare_clip.director.load import SegmentInputs, SegmentTranscript, load_segment_transcript
+from nagare_clip.director.transcript import speech_seconds
 from nagare_clip.order import Segment
 
 
@@ -145,7 +145,7 @@ class TestSilenceIsWhatIntervalsDrops:
         # The same line in the playback preview: its timeline row priced it at
         # 0.0 s while the bracket read [0.2s] and the render played 0.22 s.
         # A cut on line 2 makes it a run of its own, so its seconds are legible.
-        from nagare_clip.director.director_llm import DirectorOp
+        from nagare_clip.director.ops import DirectorOp
         from nagare_clip.director.preview import preview_segment
 
         lines = [

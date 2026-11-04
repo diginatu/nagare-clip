@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from nagare_clip.director.run import SegmentInputs, load_segment_transcript
+from nagare_clip.director.load import SegmentInputs, load_segment_transcript
 from nagare_clip.order import Segment
 from nagare_clip.pipeline import stages
 

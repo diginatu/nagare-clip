@@ -10,10 +10,10 @@ differently.  Both go through :meth:`SilenceLine.body`, which is
 from __future__ import annotations
 
 from nagare_clip import edit_lines
-from nagare_clip.director import run as director_run
+from nagare_clip.director import load as director_run
 from nagare_clip.director import silence_lines
 from nagare_clip.director.display import build_display_view
-from nagare_clip.director.run import SegmentTranscript
+from nagare_clip.director.load import SegmentTranscript
 from nagare_clip.director.silence_lines import SilenceLine
 from nagare_clip.order import Segment
 

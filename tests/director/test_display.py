@@ -9,7 +9,7 @@ into 1-30, 84-97 and 31-83, in that playback order).
 from __future__ import annotations
 
 from nagare_clip.director.display import DisplayLine, build_display_view
-from nagare_clip.director.run import SegmentTranscript
+from nagare_clip.director.load import SegmentTranscript
 from nagare_clip.director.silence_lines import SilenceLine
 from nagare_clip.gap_context.gaps import Gap
 from nagare_clip.order import Segment
