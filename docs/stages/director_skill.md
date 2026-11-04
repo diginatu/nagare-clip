@@ -15,11 +15,13 @@ Everything after the director is deterministic, and the pipeline is split at
 it:
 
 - the `director` stage is a **checkpoint** with no LLM
-  ([pipeline.md](pipeline.md#the-director-checkpoint)): it stops the run
-  (`PipelineStop`, exit 0) until `order.json` and every source's
-  `_director.json` exist, stops it again when they no longer map onto the
-  transcripts, and otherwise logs `Continuing with N op(s) (…); shooting
-  order` and lets it continue;
+  ([pipeline.md](pipeline.md#the-director-checkpoint)): a run that reaches
+  it always stops (`PipelineStop`, exit 0) — the stages before it just
+  re-ran, so the director files must be written or revised with the skill;
+- resuming with `--from-stage guided_edit` checks the files: missing
+  `order.json`/`_director.json` or anything that no longer maps onto the
+  transcripts is a `PipelineError`; otherwise guided_edit logs
+  `Continuing with N op(s) (…); shooting order` and goes on;
 - `guided_edit` has no LLM and no settings: it applies every op, the `edit`
   op included, as markers/patches in `_edits.txt`;
 - the user resumes with `--from-stage guided_edit` after `write`.
@@ -50,9 +52,9 @@ line is in range.
 
 Loading (`tools/project.py::load_project` → `project_for(ctx, stems)`) goes
 through `director.files.director_inputs()` and
-`director.load.load_segment_transcript()`; the checkpoint calls the same
-`project_for()` with the pipeline's own context, so the tools and the
-checkpoint see one view. Stems come from `project_stems(input_videos_dir)`,
+`director.load.load_segment_transcript()`; guided_edit's check calls the same
+`project_for()` with the pipeline's own context, so the tools and that
+check see one view. Stems come from `project_stems(input_videos_dir)`,
 else from `text_filter/*_edits.txt`. A missing `_edits.txt` is exit 2 naming
 `--to-stage text_filter`. Writing goes through `director.files.write_ops/
 write_order/write_plan` (the public home of the director files' I/O, moved
@@ -66,7 +68,7 @@ expected markers and a reordered `timeline.json`.
 `current_state()` maps the files on disk back onto the view
 (`view.from_source`, `checks.order_ranges`); an op or order that no longer maps
 (a transcript or `director.silence_line_min` changed) is listed as a warning
-and left out. The checkpoint stops the pipeline on the same list, and `view`
+and left out. Resuming at guided_edit fails on the same list, and `view`
 prints it to stderr (after the view) so an agent reading `view` first notices.
 
 ## The edit file
@@ -248,7 +250,8 @@ types*, *Targets matrix*, *apm compile*, *apm install*):
 - The `edit` op is deterministic (above); guided_edit has no LLM and no
   settings (any `guided_edit.*` key fails config loading naming its path; an
   empty section is accepted).
-- The director stage is a checkpoint; the auto-write of empty director files
+- The director stage is a checkpoint that always stops; guided_edit checks the
+  files on resume; the auto-write of empty director files
   for a disabled director is gone.
 - Deleted: `director/loop.py`'s conversation protocol,
   `director/conversation.py`, the conversation half of `director/run.py`, the

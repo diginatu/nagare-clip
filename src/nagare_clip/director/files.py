@@ -3,7 +3,7 @@
 ``director/`` holds the director's decisions — one ``{stem}_director.json``
 per source (ops in source coordinates), ``order.json`` (the playback order)
 and ``plan.md`` (the plan in prose).  The agent skill's ``write`` tool writes
-them, the ``director`` checkpoint checks them, and ``guided_edit``,
+them, ``guided_edit`` checks them on resume, and ``guided_edit``,
 ``intervals`` (through the order) and ``publish`` read them.  All three are
 hand-editable.
 
@@ -115,12 +115,13 @@ def read_order(ctx: PipelineContext) -> list[Segment] | None:
 
 
 def missing_files(ctx: PipelineContext, stems: list[str]) -> list[Path]:
-    """The director files a run needs and does not have.
+    """The director files a resumed run needs and does not have.
 
     The director's output "exists" when ``order.json`` and a
     ``{stem}_director.json`` for every one of *stems* (the whole project) are
     there — what ``write`` always writes.  ``plan.md`` is not required: it is
-    for the human (and ``publish``, which treats it as optional).
+    for the human (and ``publish``, which treats it as optional).  The
+    checkpoint uses it to word its stop message.
     """
     wanted = [order_path(ctx)] + [ops_path(ctx, stem) for stem in stems]
     return [path for path in wanted if not path.is_file()]

@@ -15,19 +15,13 @@ import nagare_clip.pipeline.stages as stages
 def test_guided_edit_gets_the_sources_timings_and_gaps(tmp_path: Path, monkeypatch):
     seen: dict = {}
 
-    def fake(edits, director, output, cfg, *, json_path=None, gaps_path=None, recorder=None):
+    def fake(edits, director, output, cfg, *, json_path=None, gaps_path=None):
         seen.update(edits=edits, json_path=json_path, gaps_path=gaps_path)
 
     monkeypatch.setattr(stages, "run_guided_edit", fake)
-
-    class _Rec:
-        def clear(self):
-            pass
-
-        def rebuild_index(self):
-            pass
-
-    monkeypatch.setattr(stages, "_recorder", lambda ctx, name: _Rec())
+    # The director-file check and the order note have tests of their own.
+    monkeypatch.setattr(stages, "_check_director_files", lambda ctx: None)
+    monkeypatch.setattr(stages, "write_order_note", lambda ctx: None)
 
     class _Src:
         stem = "clip"

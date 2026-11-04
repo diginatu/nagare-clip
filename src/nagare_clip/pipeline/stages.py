@@ -488,45 +488,31 @@ def _timeline_segments(ctx: PipelineContext) -> list[Segment]:
 
 # --- director ----------------------------------------------------------------
 
-#: How a person gets past the checkpoint: the skill is the director.
-SKILL_HINT = (
-    "Run the nagare-director agent skill in the video directory (it writes "
-    "{dir}), then resume with --from-stage guided_edit."
-)
-
 
 def _director_run(ctx: PipelineContext) -> None:
-    """The director checkpoint: no LLM, it only checks the director's files.
+    """The director checkpoint: no LLM, and the run ALWAYS stops here.
 
     The director is the nagare-director agent skill, which writes
-    ``director/`` with the user.  Here the run stops cleanly
-    (:class:`PipelineStop`, exit 0) until those files exist — ``order.json``
-    and a ``{stem}_director.json`` for every source
-    (:func:`director_files.missing_files`) — and while any of them no longer
-    maps onto the current transcripts (the tools' own
-    :func:`~nagare_clip.director.tools.project.current_state`, e.g. after
-    sentence_split or text_filter re-ran).  When they pass, it logs what the
-    run continues with, so an empty edit is visible rather than silent.
+    ``director/`` with the user.  A run that reached this stage re-ran the
+    stages before it, so any director files on disk were made for the
+    previous transcripts: continuing past them is never what anyone wants.
+    It raises :class:`PipelineStop` (exit 0) saying what to do — direct (or
+    revise, ``dump`` then ``write``) with the skill, then resume with
+    ``--from-stage guided_edit``, where the files are checked
+    (:func:`_check_director_files`).
     """
     stems = project_stems(ctx.input_videos_dir) or ctx.stems
-    hint = SKILL_HINT.format(dir=director_files.director_dir(ctx))
-    missing = director_files.missing_files(ctx, stems)
-    if missing:
-        listed = "\n".join(f"  {path}" for path in missing)
-        raise PipelineStop(f"[director] Director files missing:\n{listed}\n{hint}")
-
-    project = project_for(ctx, stems)
-    state = current_state(project)
-    if state.unmapped:
-        listed = "\n".join(f"  {note}" for note in state.unmapped)
-        raise PipelineStop(
-            "[director] The director files no longer map onto the current transcripts "
-            f"(an earlier stage re-ran):\n{listed}\nRevise them with the nagare-director "
-            "skill (director_tools.sh dump, then write), then resume with "
-            "--from-stage guided_edit."
+    d = director_files.director_dir(ctx)
+    if director_files.missing_files(ctx, stems):
+        state = f"No director files yet in {d}: direct the video with the nagare-director skill"
+    else:
+        state = (
+            f"The director files in {d} were made before the stages above re-ran: "
+            "revise them with the nagare-director skill (director_tools.sh dump, then write)"
         )
-    print(f"[director] {director_summary(project, state)}")
-    write_order_note(ctx)
+    raise PipelineStop(
+        f"[director] Stopped at the director. {state}, then resume with --from-stage guided_edit."
+    )
 
 
 def director_summary(project, state) -> str:
@@ -539,13 +525,40 @@ def director_summary(project, state) -> str:
 
 
 def _director_required(ctx: PipelineContext) -> list[Path]:
-    return [director_files.ops_path(ctx, s) for s in ctx.stems]
+    """What resuming past the director needs: ``order.json`` and every
+    source's ``_director.json`` (checked by the runner when it is skipped)."""
+    return [director_files.order_path(ctx)] + [director_files.ops_path(ctx, s) for s in ctx.stems]
 
 
 # --- guided_edit -------------------------------------------------------------
 
 
+def _check_director_files(ctx: PipelineContext) -> None:
+    """The director files must map onto the current transcripts, whole project.
+
+    The tools' own :func:`~nagare_clip.director.tools.project.current_state`
+    — not re-modelled.  Something that no longer maps (an earlier stage re-ran
+    since ``write``) is a :class:`PipelineError`: the user asked to continue.
+    On success, one line says what the run continues with, so an empty edit is
+    visible rather than silent.
+    """
+    stems = project_stems(ctx.input_videos_dir) or ctx.stems
+    project = project_for(ctx, stems)
+    state = current_state(project)
+    if state.unmapped:
+        listed = "\n".join(f"  {note}" for note in state.unmapped)
+        raise PipelineError(
+            "[guided_edit] The director files no longer map onto the current transcripts "
+            f"(an earlier stage re-ran since they were written):\n{listed}\nRevise them with "
+            "the nagare-director skill (director_tools.sh dump, then write), then resume "
+            "with --from-stage guided_edit."
+        )
+    print(f"[guided_edit] {director_summary(project, state)}")
+
+
 def _guided_edit_run(ctx: PipelineContext) -> None:
+    _check_director_files(ctx)
+    write_order_note(ctx)
     for src in ctx.sources:
         print(f"[guided_edit] Applying director ops: {src.stem}")
         run_guided_edit(

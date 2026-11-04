@@ -9,7 +9,7 @@ runtime behavior.
 
 ## Modules
 
-- `errors.py` — `PipelineStop`, a deliberate stop that is not a failure (the director checkpoint, until the nagare-director skill has written the director files): `cli.main()` prints it to stdout and returns 0, and `run_stages` re-raises it unwrapped. `PipelineError`, the single user-facing failure type. `cli.main()`
+- `errors.py` — `PipelineStop`, a deliberate stop that is not a failure (the director checkpoint, which always stops so the director files are written or revised with the skill): `cli.main()` prints it to stdout and returns 0, and `run_stages` re-raises it unwrapped. `PipelineError`, the single user-facing failure type. `cli.main()`
   catches it, prints the message to stderr, and returns exit code 1 (no
   traceback for expected failures like a bad `--from-stage` name or a missing
   source file).
@@ -145,25 +145,33 @@ interpreter exit, instead of once per stage subprocess under the old script.
 
 The `director` stage makes no LLM call: the director is the nagare-director
 agent skill ([director_skill.md](director_skill.md)), which writes
-`director/` with the user. `_director_run` only checks those files:
+`director/` with the user.
 
-- **Missing** — the director's output "exists" when `director/order.json` and
-  a `{stem}_director.json` for every project source are there
-  (`director.files.missing_files()`; `plan.md` is not required). Otherwise it
-  raises `PipelineStop` (exit 0) listing the missing files and saying to run
-  the skill, then resume with `--from-stage guided_edit`. Nothing writes empty
-  director files any more, so a run from scratch always stops here.
-- **Stale** — when the files exist but no longer map onto the current
-  transcripts (`director.tools.project.current_state().unmapped`: an op or the
-  order outside the view, e.g. after sentence_split or text_filter re-ran), it
-  stops the same way, listing what does not map and saying to revise with
-  `director_tools.sh dump`, then `write`.
-- **Passing** — it prints one line, `Continuing with N op(s) (a 2, b 0);
-  shooting order` (or `a reordered playback`), so an empty edit is visible,
-  writes the order note and the run goes on.
+**`_director_run` always stops** (`PipelineStop`, exit 0). A run that reached
+the director re-ran the stages before it, so any director files on disk were
+made for the previous transcripts, and continuing past them is never what
+anyone wants. The message covers both cases: no director files yet (direct
+the video with the skill), or files from an earlier pass (revise them:
+`director_tools.sh dump`, then `write`); either way, then resume with
+`--from-stage guided_edit`. Nothing writes empty director files, so a run
+from scratch stops here too.
 
-`--from-stage guided_edit` skips the checkpoint as before (the skipped
-director's required outputs are the `_director.json` files).
+The checks run where the run actually continues — **resuming with
+`--from-stage guided_edit`**:
+
+- **Missing** — the runner's skip-validation of the skipped director
+  (`_director_required`: `director/order.json` and every source's
+  `_director.json`; `plan.md` is not required) fails with the usual
+  `Missing director output: …` `PipelineError`.
+- **Stale** — `_check_director_files()`, at the start of guided_edit and for
+  the whole project before any source is processed, loads the view
+  (`tools.project.project_for`) and fails with a `PipelineError` (not a stop:
+  the user asked to continue) when anything in the files does not map
+  (`director.tools.project.current_state().unmapped`), listing it and saying
+  to revise with `dump`, then `write`.
+- **Passing** — it prints `Continuing with N op(s) (a 2, b 0); shooting
+  order` (or `a reordered playback`), so an empty edit is visible, writes
+  the order note (intervals writes it again) and guided_edit goes on.
 
 ## Output layout
 

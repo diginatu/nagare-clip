@@ -104,8 +104,8 @@ number names one line however the order changes.
   seam quoted. Captions are listed in playback order. The runtime does not
   depend on the order.
 
-The director checkpoint requires `director/order.json`
-([pipeline.md](pipeline.md#the-director-checkpoint)) and stops when it no
+Resuming with `--from-stage guided_edit` requires `director/order.json`
+([pipeline.md](pipeline.md#the-director-checkpoint)) and fails when it no
 longer maps onto the transcripts.
 
 ## Where the authority lives

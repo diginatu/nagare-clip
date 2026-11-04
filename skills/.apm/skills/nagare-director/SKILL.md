@@ -114,10 +114,12 @@ edits in a scratch file in the project's output directory (e.g.
    to resume the pipeline from guided_edit — their wrapper with
    `--from-stage guided_edit`, or
    `<nagare-clip>/scripts/run_pipeline.sh --config ... --from-stage guided_edit`.
-   guided_edit applies every op deterministically (no LLM). If an earlier
-   stage re-runs later and the files no longer map onto the transcript, the
-   pipeline stops at the director and lists what doesn't map: revise from
-   `dump` and `write` again. Hand edits of the written files are fine;
+   guided_edit applies every op deterministically (no LLM). Always resume
+   from guided_edit: a run that starts earlier re-runs the stages before the
+   director and stops there, because the director files must then be revised
+   (`dump`, then `write` again). If the files no longer map onto the
+   transcript, resuming fails and lists what doesn't map — revise the same
+   way. Hand edits of the written files are fine;
    `preview` (no `--edit`) shows what is on disk.
 
 ## Edit format

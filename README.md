@@ -12,13 +12,13 @@ The pipeline creates a rough-cut Blender project for human review and fine-tunin
 4. gap_context (optional): a vision LLM snapshots+describes long silent gaps (from `_cuts.txt`) so summary/director can see what the transcript can't -> reviewable `output/gap_context/{stem}_gaps.json` + JPEG frames; disabled by default (no-op)
 5. summary (optional, project-wide): a larger LLM segments every video into line-range parts + summaries, a whole-video summary, and misspelling-prone keywords, and writes one all-videos summary -> reviewable `output/summary/summary.json`; the per-video summary and keywords are used by text_filter/director
 6. text_filter: Text editing checkpoint -> `_edits.txt` (copy of `.txt`, or LLM-corrected with `{{old->new}}` markers), optionally primed with summary-stage context
-7. director: a **checkpoint** — you direct the cut with a coding agent through the `nagare-director` skill, which writes `output/director/` (`plan.md`, `order.json`, `{stem}_director.json`); the pipeline stops here until those files exist, then you resume with `--from-stage guided_edit`
+7. director: a **checkpoint** — you direct the cut with a coding agent through the `nagare-director` skill, which writes `output/director/` (`plan.md`, `order.json`, `{stem}_director.json`); a run always stops here, and you resume with `--from-stage guided_edit`
 8. guided_edit: applies the director's ops into `_edits.txt` deterministically (no LLM)
 9. intervals: Patch application + keep intervals -> `*_intervals.json` keep ranges (audio cuts unioned in), plus `output/intervals/timeline.json` — the order in seconds
 10. blender: Blender headless -> `.blend` with VSE strips arranged back-to-back, in the order `timeline.json` gives
 11. publish (optional, project-wide): title candidates, a description with chapter timestamps taken from the finished timeline, thumbnail copy and candidate stills -> reviewable `output/publish/publish.md` + `publish.json`
 
-Stages are referenced by name (`--from-stage <name>`); the sentence_split/gap_context/summary/publish stages are no-ops unless enabled in config. A run from scratch always stops at the director (exit 0) until the director files exist — see *Directing with a coding agent* below.
+Stages are referenced by name (`--from-stage <name>`); the sentence_split/gap_context/summary/publish stages are no-ops unless enabled in config. A run always stops at the director (exit 0); resume with `--from-stage guided_edit` once the director files are written — see *Directing with a coding agent* below.
 
 ## Human Editing Workflow
 
@@ -69,7 +69,7 @@ segment plays where, and where it was before.
 
 #### Directing with a coding agent (the `nagare-director` skill)
 
-The director is an **agent skill**: you direct the cut together with a coding agent (Claude Code, GitHub Copilot, Codex, Cursor, Gemini, …) in its own chat, and it writes the `output/director/` files. The pipeline stops at the `director` stage (exit 0) until they exist — `director/order.json` plus a `{stem}_director.json` for every source — and tells you to run the skill and resume with `--from-stage guided_edit`. If an earlier stage re-runs later and the files no longer map onto the new transcripts, it stops again and lists what doesn't map; revise with the skill (`dump`, then `write`). When it passes it prints how many ops each source has and whether the order moved, so an empty edit is never silent.
+The director is an **agent skill**: you direct the cut together with a coding agent (Claude Code, GitHub Copilot, Codex, Cursor, Gemini, …) in its own chat, and it writes the `output/director/` files. A run that reaches the `director` stage **always stops** there (exit 0): either no director files exist yet, or the stages before it just re-ran and the files were made for the old transcripts. Direct (or revise: `dump`, then `write`) with the skill, then resume with `--from-stage guided_edit`. Resuming checks the files: `director/order.json` plus a `{stem}_director.json` for every source must exist, and anything that no longer maps onto the transcripts fails the run with a list and the same advice. When it passes, guided_edit prints how many ops each source has and whether the order moved, so an empty edit is never silent.
 
 0. Install the skill into your **video directory** once, with [APM](https://github.com/microsoft/apm). The skills for editing a video are one APM package in this repo's `skills/` directory; it is never deployed into the nagare-clip repo itself:
 
@@ -357,9 +357,10 @@ uv run pytest
 
 The first run stops at the director (exit 0) and says so: direct the cut with
 the `nagare-director` skill (see *Directing with a coding agent*), then resume
-with `./scripts/run_pipeline.sh --from-stage guided_edit`. Later runs that
-start before the director continue through it as long as the director files
-still map onto the transcripts.
+with `./scripts/run_pipeline.sh --from-stage guided_edit`. Any run that starts
+before the director stops there again, because the stages it re-ran may have
+changed what the director files refer to; revise them with the skill and
+resume from guided_edit.
 
 Or target a single file with `--source`:
 
@@ -489,8 +490,8 @@ loading with a message naming each one. Delete:
   `silence_line_min`.
 
 An older project's `output/director/` may hold empty `_director.json` files
-the old pipeline wrote for a disabled director; the checkpoint then passes
-with `Continuing with 0 op(s)` — run the skill to direct it.
+the old pipeline wrote for a disabled director; resuming from guided_edit then
+passes with `Continuing with 0 op(s)` — run the skill to direct it.
 `director/conversation.md` is no longer read and can be deleted.
 
 ### project: the editorial brief
