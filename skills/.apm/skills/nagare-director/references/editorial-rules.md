@@ -1,7 +1,7 @@
 # Editorial rules
 
-Migrated from the LLM director's prompt (`director.prompt` in
-`src/nagare_clip/config.py`), which past prompt-tuning shaped. Where a rule
+Migrated from the removed LLM director's prompt, which past prompt-tuning
+shaped. Where a rule
 says "the tools refuse", `write` enforces it; the rest is judgement.
 
 ## The goal: tighten AND stage
@@ -76,8 +76,10 @@ that for the lines in its range only.
   in the project config and you use ONE keep; or, if it is manual work worth
   seeing fast, consider a timelapse. Never work around the cap without the
   user's OK.
-- **edit** — a fine within-line text deletion or fix; describe it precisely in
-  `note` (where it starts and ends). Speech lines only.
+- **edit** — a fine within-line text deletion or fix on one speech line,
+  stated exactly: `old` is the text as `view` shows it, `new` the
+  replacement (`""` deletes). It is applied as written, with no model in
+  between, so quote enough of the line that `old` occurs once.
 - **speed** does not exist for you (the tools refuse it). Repeated prompt
   rounds could not keep a mild 1.3-2.0x from spreading over large parts of
   the video, because a middle option is always easier to choose than a real

@@ -12,13 +12,13 @@ The pipeline creates a rough-cut Blender project for human review and fine-tunin
 4. gap_context (optional): a vision LLM snapshots+describes long silent gaps (from `_cuts.txt`) so summary/director can see what the transcript can't -> reviewable `output/gap_context/{stem}_gaps.json` + JPEG frames; disabled by default (no-op)
 5. summary (optional, project-wide): a larger LLM segments every video into line-range parts + summaries, a whole-video summary, and misspelling-prone keywords, and writes one all-videos summary -> reviewable `output/summary/summary.json`; the per-video summary and keywords are used by text_filter/director
 6. text_filter: Text editing checkpoint -> `_edits.txt` (copy of `.txt`, or LLM-corrected with `{{old->new}}` markers), optionally primed with summary-stage context
-7. director (optional): a larger LLM writes its own plan, then proposes high-level edits and the playback order in **one conversation over the whole video** -> reviewable `output/director/` (`plan.md`, `order.json`, `_director.json`, `conversation.md` — where you can talk to it)
-8. guided_edit (optional): a small LLM applies the director's ops into `_edits.txt` (deterministically verified)
+7. director: a **checkpoint** — you direct the cut with a coding agent through the `nagare-director` skill, which writes `output/director/` (`plan.md`, `order.json`, `{stem}_director.json`); the pipeline stops here until those files exist, then you resume with `--from-stage guided_edit`
+8. guided_edit: applies the director's ops into `_edits.txt` deterministically (no LLM)
 9. intervals: Patch application + keep intervals -> `*_intervals.json` keep ranges (audio cuts unioned in), plus `output/intervals/timeline.json` — the order in seconds
 10. blender: Blender headless -> `.blend` with VSE strips arranged back-to-back, in the order `timeline.json` gives
 11. publish (optional, project-wide): title candidates, a description with chapter timestamps taken from the finished timeline, thumbnail copy and candidate stills -> reviewable `output/publish/publish.md` + `publish.json`
 
-Stages are referenced by name (`--from-stage <name>`); the gap_context/summary/director/guided_edit/publish stages are no-ops unless enabled in config.
+Stages are referenced by name (`--from-stage <name>`); the sentence_split/gap_context/summary/publish stages are no-ops unless enabled in config. A run from scratch always stops at the director (exit 0) until the director files exist — see *Directing with a coding agent* below.
 
 ## Human Editing Workflow
 
@@ -29,19 +29,18 @@ Stages are referenced by name (`--from-stage <name>`); the gap_context/summary/d
 
 The `{{old->new}}` syntax replaces `old` with `new` in the transcript. Use `{{delete->}}` to remove text, `{{->insert}}` to insert text.
 
-The optional `director` + `guided_edit` stages automate steps like the above with LLMs: enable `director.enabled`/`guided_edit.enabled` in config, then a larger LLM proposes edits (cut/timelapse/overlay/keep/edit) into a reviewable `output/director/{stem}_director.json`, and guided_edit applies them — any op it cannot apply cleanly is logged and recorded in the LLM report (`output/llm_report/`). A `timelapse` op names a range, a factor of 4.0+ and a caption, and guided_edit expands it into a `<keep><speed>` span with an `<overlay/>` that lasts the whole timelapse — so the three markers cannot disagree, which is what produced sped-up jump cuts when they were three separate ops. There is deliberately **no mild `speed` op** on the director's menu: compressing a stretch is a two-mode choice — either it is work worth watching fast (`timelapse`) or material worth cutting — and offering a middle option in between made a sustained mild fast-forward the register several real runs settled into. You can still write a `<speed factor="N.N">` tag into `_edits.txt` yourself (see below), and a `speed` op you hand-write into `_director.json` is still applied. Span ops (cut/speed/overlay/keep) are a pure whole-line-range wrap, applied deterministically with no LLM call; if a span op's range overlaps a same-type tag already in the file (e.g. one you hand-authored) or an earlier op, it is clipped to the free lines (or dropped if fully covered) so the tags stay valid. Only `edit` ops (a within-line `{{old->new}}` the director only described in prose) call the small LLM, retrying per op on an error / failed verification and nudging the temperature up each attempt. To see what a set of director ops will actually play before rendering anything, run `./scripts/director_preview.sh --config <yml>` (read-only, no LLM call; `--director-dir` previews an older set of `_director.json` files): per segment it states each op's footage and on-screen seconds, the gaps it leaves outside its range, the speech a 2x-or-faster span makes unintelligible, overlapping captions, then the segment as it plays — every stretch in order with its on-screen seconds, so a sliver of 1x footage trapped between two timelapses is visible as the run it is — and the runtime with the ops. The director likewise retries a failed LLM call (connection error / unparseable JSON); tune `max_retries`, `retry_temp_step`, and `retry_temp_cap` per stage (`max_retries: 0` disables retry).
+The `director` checkpoint and `guided_edit` automate steps like the above: you direct the cut with a coding agent (below), it writes edits (cut/timelapse/overlay/keep/edit) into a reviewable `output/director/{stem}_director.json`, and guided_edit applies them into `_edits.txt` with no LLM call — any op it cannot apply cleanly is logged. A `timelapse` op names a range, a factor of 4.0+ and a caption, and guided_edit expands it into a `<keep><speed>` span with an `<overlay/>` that lasts the whole timelapse — so the three markers cannot disagree, which is what produced sped-up jump cuts when they were three separate ops. There is deliberately **no mild `speed` op** for the director: compressing a stretch is a two-mode choice — either it is work worth watching fast (`timelapse`) or material worth cutting. You can still write a `<speed factor="N.N">` tag into `_edits.txt` yourself (see below), and a `speed` op you hand-write into `_director.json` is still applied. Span ops (cut/speed/overlay/keep) are a whole-line-range wrap; if a span op's range overlaps a same-type tag already in the file (e.g. one you hand-authored) or an earlier op, it is clipped to the free lines (or dropped if fully covered) so the tags stay valid. An `edit` op states its change exactly — `{"type": "edit", "lines": [n, n], "old": "<text as view shows it>", "new": "<replacement>"}` (`""` deletes) — and is applied as one `{{old->new}}` patch on that line.
 
-A director `keep` op protects a span from cutting **including its silences**, and its width follows what is on screen: the narrowest range (normally `[N, N+1]`) to rescue one silent gap, or the whole run of lines when a continuous event is playing out — an accident and the cleanup after it, a demo running — since chopping such a sequence into per-gap keeps reads as jump cuts through the payoff. What it is *not* is a way to mark a long span of **talking** as important: speech is never dropped by default, so a keep over talking only restores its pauses (in one real run, keep ops of 20-35 lines took a 22.3-minute cut to 53.9 minutes). `director.max_keep_lines` (default `8`, `0` = no limit) drops any wider `keep` the LLM proposes — a continuous event fits well inside that, precisely because nobody is talking through it — logged, and listed in the LLM report — so those lines fall back to the normal behaviour (speech kept, internal silence cut). The limit is stated to the director in its prompt automatically, so raising or lowering it needs no prompt edit. It applies only to the LLM's output: a `keep` you write by hand into `{stem}_director.json` is always honoured. The cap has no exceptions — a fast span that needs a keep of its own belongs in a `timelapse` op instead, which carries its protection as part of what the op means rather than asking the cap to look the other way.
+A director `keep` op protects a span from cutting **including its silences**, and its width follows what is on screen: the narrowest range to rescue one silent gap, or the whole run of lines when a continuous event is playing out — an accident and the cleanup after it, a demo running — since chopping such a sequence into per-gap keeps reads as jump cuts through the payoff. What it is *not* is a way to mark a long span of **talking** as important: speech is never dropped by default, so a keep over talking only restores its pauses. `director.max_keep_lines` (default `8`, `0` = no limit) is the cap the skill's `write` enforces, counting keeps that touch as one keep; a `keep` you write by hand into `{stem}_director.json` is always honoured. A fast span that needs a keep of its own belongs in a `timelapse` op instead.
 
-The optional `summary` stage runs **once over all source videos** (project-wide) and gives downstream stages cross-video context. Enable `summary.enabled` in config: it runs before `text_filter`, segments each sentence_split transcript into line-range parts with a summary each, lists per-video misspelling-prone keywords, generates a whole-video summary per video, and writes one all-videos summary to `output/summary/summary.json` (`{summary, parts, keywords, video_summaries}`) — its per-video summary/part summaries/keywords also prime the `text_filter` LLM's prompt, the `director` reads the overall and per-video summaries as facts, and `publish` builds its chapters from the parts. (There used to be `plan`/`plan_revise` stages between them; the director now writes its own plan, and you talk to it directly — see below.)
+The optional `summary` stage runs **once over all source videos** (project-wide) and gives downstream stages cross-video context. Enable `summary.enabled` in config: it runs before `text_filter`, segments each sentence_split transcript into line-range parts with a summary each, lists per-video misspelling-prone keywords, generates a whole-video summary per video, and writes one all-videos summary to `output/summary/summary.json` (`{summary, parts, keywords, video_summaries}`) — its per-video summary/part summaries/keywords also prime the `text_filter` LLM's prompt, the director's `view` shows the overall and per-video summaries as facts, and `publish` builds its chapters from the parts.
 
 #### The order of the finished video
 
 By default the finished video is the source clips concatenated in name order.
-The **director** decides the order: in any reply of its conversation it may send
-an `order` — the ranges of its transcript in the order they should play, down to
-a single line — and it can change it again on any later turn. It starts from
-shooting order. The order it ends with is written to
+The **director** decides the order: its edit may carry an `order` — the ranges
+of the transcript in the order they should play, down to a single line. An edit
+without one is shooting order. The order is written to
 `output/director/order.json` as a list of *segments* (one stretch of one source)
 in playback order:
 
@@ -59,32 +58,18 @@ silence plays at the end of this segment instead of at the start of whatever
 plays line 84. The one rule is that the segments **cover every line of every
 source exactly once** — dropping footage is `cut`'s job, so an order that leaves
 lines out is rejected whole and the pipeline falls back to shooting order. The
-director also refuses an order that would split one of its timelapses in two.
+director's `write` also refuses an order that would split one of its timelapses in two.
 
 You can hand-edit `director/order.json` and resume with `--from-stage intervals`;
-it is validated on every run. Without one (the director never ran), the video
-is in shooting order.
+it is validated on every run.
 
 A reorder is never silent: whenever the finished video is not in shooting order
 (or an order was rejected), `output/llm_report/notes/order.md` says so — which
 segment plays where, and where it was before.
 
-The director edits the whole finished video in **one conversation**, not one call per segment. Every source's transcript is rendered once, in shooting order, under a single line numbering that covers speech lines and long silences alike, and that rendering plus the project's context sits inside the cached system prefix — byte-identical on every turn. Each turn asks for an *approximate* range ("around lines 41 to 80"), the reply's ops come back priced by a computed playback preview, and any earlier range may be rewritten at any time; the model ends with `done`. A reply may also reorder the video (see *The order of the finished video*): the transcript keeps its numbering, and the preview then lists the video as it plays, range by range, quoting both sides of every new seam. `director.chunk_lines` (default `40`) sets the size of the range asked for, and the turn cap is `ceil(display lines / chunk_lines) * 2` — reaching it fails the stage, but every accepted turn is already saved, so running the director again continues. `--source` no longer narrows the director: one conversation owns the whole video. This replaces the per-segment arrangement and everything that propped it up — the seam lines at each join, the captions and ops already committed earlier, and the `[k]N`-qualified whole-video reference — because the conversation now reads both sides of every join and remembers its own edits. What the seam note SAID is not gone, though: seeing a join is not the same as knowing it is one, and the sign-offs survived the first whole-video cut — so `director.prompt` states, where it explains `[k]`, that each block was recorded as its own video and can therefore open with a greeting or end with a sign-off. Whether to cut one is the model's call.
-
-The director's **first turn is its plan**: before any op it reads the whole video and writes, in prose, the throughline, what to cut or compress and roughly where, the moments worth a caption, the order (and why, if it changes) and the runtime it expects. That plan stays in force — shown at the top of the edit on every later turn — until the director sends a new one, which it may do on any turn when the footage proves the plan wrong. Its line ranges are sections, not op boundaries (the prompt says so). The plan it ends with is written to `output/director/plan.md` for you to read. The project's **overall summary and each video's whole-video summary** ride in the cached prefix as plain facts; the `plan` stage's directions do not — the least-informed opinion no longer frames the most-informed model, and their ranges no longer leak into op boundaries.
-
-**Talking to the director.** `output/director/` is the director's state — `plan.md`, `order.json`, each `{stem}_director.json` and `conversation.md` — and every run of the stage is one step over it: it reads the files, takes turns, and writes them back after each turn. When the model finishes it appends a `## done` line to `conversation.md`, and from then on the stage makes no call and touches nothing. To ask for changes, delete that line and write what you want under an `## editor` heading, or let the script do both:
-
-```bash
-./scripts/director_say.sh "冒頭のあいさつは残して。配管の速回しは長すぎる"
-./scripts/run_pipeline.sh --from-stage director
-```
-
-The director reads your note as `Editor:` (its own routine guidance is labelled `Guide:`), is told the editor wins, and answers before finishing again. You can also edit `plan.md`, `order.json` or a `_director.json` directly between runs — the next run starts from what the files say. To start over, delete `output/director/`. With `director.pause_after_plan: true` the pipeline stops (exit 0) right after the plan is written, so you can read `plan.md` and steer before any op is made.
-
 #### Directing with a coding agent (the `nagare-director` skill)
 
-The LLM director above is being replaced by an **agent skill**: you direct the cut together with a coding agent (Claude Code, GitHub Copilot, Codex, Cursor, Gemini, …) in its own chat, and it writes the same `output/director/` files. For now both exist — the LLM director still works and is scheduled for removal.
+The director is an **agent skill**: you direct the cut together with a coding agent (Claude Code, GitHub Copilot, Codex, Cursor, Gemini, …) in its own chat, and it writes the `output/director/` files. The pipeline stops at the `director` stage (exit 0) until they exist — `director/order.json` plus a `{stem}_director.json` for every source — and tells you to run the skill and resume with `--from-stage guided_edit`. If an earlier stage re-runs later and the files no longer map onto the new transcripts, it stops again and lists what doesn't map; revise with the skill (`dump`, then `write`). When it passes it prints how many ops each source has and whether the order moved, so an empty edit is never silent.
 
 0. Install the skill into your **video directory** once, with [APM](https://github.com/microsoft/apm). The skills for editing a video are one APM package in this repo's `skills/` directory; it is never deployed into the nagare-clip repo itself:
 
@@ -97,7 +82,7 @@ The LLM director above is being replaced by an **agent skill**: you direct the c
    Prefer the local checkout: the skill text and the scripts it calls are then the same version. Either form records the dependency in the video directory's `apm.yml`, so a later bare `apm install` reproduces it. It deploys to `.claude/skills/` (Claude Code) and `.agents/skills/` (Copilot, Codex, Cursor, Gemini).
 1. Run the pipeline up to the text checkpoint, from the video directory: your project's wrapper script, or `<nagare-clip>/scripts/run_pipeline.sh --config <yml> --to-stage text_filter`.
 2. In the video directory, ask your agent to direct the video (for example "nagare-director で編集して"). It calls `<nagare-clip>/scripts/director_tools.sh` with the same `--config` files the pipeline uses, and asks you for the checkout's path if it cannot find it. The agent reads the whole video, writes a plan, **asks you to confirm it**, drafts the edits, shows you the runtime/timelapse/caption numbers from a preview, and changes them as you ask. You can redirect it at any time.
-3. When you are happy, it writes the files and you resume from guided_edit (your wrapper, or `<nagare-clip>/scripts/run_pipeline.sh --config <yml> --from-stage guided_edit`). Set `guided_edit.enabled: true` in the config — a disabled guided_edit copies the transcript through without applying the ops (cut/timelapse/overlay/keep need no LLM; only an `edit` op uses guided_edit's model). Keep `director.enabled` off, or the LLM director will continue from those files. `write` warns about both.
+3. When you are happy, it writes the files and you resume from guided_edit (your wrapper, or `<nagare-clip>/scripts/run_pipeline.sh --config <yml> --from-stage guided_edit`). guided_edit applies every op with no LLM call.
 
 The agent uses deterministic tools you can also run yourself (no LLM call):
 
@@ -110,9 +95,9 @@ The agent uses deterministic tools you can also run yourself (no LLM call):
 ./scripts/director_tools.sh write   --config <yml> --edit edit.json    # validate, then write — all or nothing
 ```
 
-An edit is `{"plan": "...", "order": [[a, b], ...], "ops": [...]}` in the line numbers `view` prints. It is the complete state: `ops` replaces every op and an edit without `order` is shooting order (`order.json` is always written), so revise from `dump` to keep a reorder; without `plan`, `plan.md` stays. `write` checks everything the LLM director checks (no `speed` op, timelapse factor ≥ 4.0, overlay text + duration, the keep-width cap, one source per op, the order covers every line once and never splits a timelapse) plus that a `cut` does not overlap another op and that touching keeps together stay within the cap, and lists **every** problem at once without writing anything. Maintainers: the skill's source is `skills/.apm/skills/nagare-director/` (package manifest `skills/apm.yml`); after editing it, run `make apm`, which smoke-installs the package into a temp video directory and runs `apm audit --ci` there. Details: [`docs/stages/director_skill.md`](docs/stages/director_skill.md).
+An edit is `{"plan": "...", "order": [[a, b], ...], "ops": [...]}` in the line numbers `view` prints. It is the complete state: `ops` replaces every op and an edit without `order` is shooting order (`order.json` is always written), so revise from `dump` to keep a reorder; without `plan`, `plan.md` stays. `write` checks no `speed` op, timelapse factor ≥ 4.0, overlay text + duration, the keep-width cap (touching keeps count as one), one source per op, that a `cut` does not overlap another op, that an `edit` op names one speech line whose text holds its `old` exactly once outside any marker or patch, and that the order covers every line once and never splits a timelapse — and lists **every** problem at once without writing anything. Hand edits of the written files are fine; `preview` (no `--edit`) shows what is on disk. Maintainers: the skill's source is `skills/.apm/skills/nagare-director/` (package manifest `skills/apm.yml`); after editing it, run `make apm`, which smoke-installs the package into a temp video directory and runs `apm audit --ci` there. Details: [`docs/stages/director_skill.md`](docs/stages/director_skill.md).
 
-To help the LLM reason about pacing, the `director` also sees **calculated durations and in-between gaps**: its numbered transcript annotates each line with `[4.2s, gap 0.8s]` (per-sentence duration + gap to the next line). Its default prompt explains the bracket notation (what the duration is, that the gap is the silence before the next line, and that a negligible gap — or the last line — shows no gap at all), so the LLM can act on it. These times come from the WhisperX `{stem}.json`; the orchestrator feeds the stage the sentence_split `{stem}.json` automatically, so there's nothing to wire up yourself. `director` splits that duration into what plays vs. what the `intervals` stage will drop, e.g. `[12.9s speech, 62.9s silence]` — computed live with the same keep-interval code the `intervals` stage runs (word gaps over `intervals.silence_threshold`, the audio_silence `{stem}_cuts.txt`, keep margins, captions, `min_cut`), so the two figures add up to the line's footage and the speech figure is exactly what plays with no op. It falls back to the plain `[Ns, gap Ns]` form when nothing inside the span is dropped. To run a single stage on its own (reusing its inputs from a previous pipeline run), use `./scripts/run_pipeline.sh --from-stage X --to-stage X`.
+To help reason about pacing, the director's `view` also shows **calculated durations and in-between gaps**: each line carries `[4.2s, gap 0.8s]` (per-sentence duration + gap to the next line; the skill's `references/reading-the-view.md` explains the notation). These times come from the sentence_split `{stem}.json`. The view splits that duration into what plays vs. what the `intervals` stage will drop, e.g. `[12.9s speech, 62.9s silence]` — computed live with the same keep-interval code the `intervals` stage runs (word gaps over `intervals.silence_threshold`, the audio_silence `{stem}_cuts.txt`, keep margins, captions, `min_cut`), so the two figures add up to the line's footage and the speech figure is exactly what plays with no op. It falls back to the plain `[Ns, gap Ns]` form when nothing inside the span is dropped. To run a single stage on its own (reusing its inputs from a previous pipeline run), use `./scripts/run_pipeline.sh --from-stage X --to-stage X`.
 
 Before resuming, you can validate your edits in one pass (reports **every** problem at once, with line numbers, instead of failing on the first like the intervals stage does):
 
@@ -141,7 +126,7 @@ one that failed partway — rewrites one page at the top of the output directory
 It names the `.blend` (the deliverable is otherwise mentioned in no file at
 all), links the files written to be read by a human, states
 the finished cut in one line, and embeds the rendered thumbnails. The rows
-follow the pipeline's flow: `director/plan.md` and `director/conversation.md`, the `.blend`,
+follow the pipeline's flow: `director/plan.md`, the `.blend`,
 `publish/publish.md`, `render/render.md`, and last `llm_report/index.md`,
 which covers the whole run's LLM calls rather than one stage. The cut report
 has no row of its own: `llm_report/index.md` already embeds it, and the
@@ -259,7 +244,7 @@ just does not draw the segmented progress bar. When the conditions are not met,
 
 ### LLM report (`output/llm_report/`)
 
-Every LLM stage (`sentence_split`, `gap_context`, `text_filter`, `summary`, `director`, `guided_edit`, `publish`)
+Every LLM stage (`sentence_split`, `gap_context`, `text_filter`, `summary`, `publish`)
 writes a per-call record under `output/llm_report/`: an `index.md` table
 (stage, unit, attempts, outcome, reason) linking to per-call detail files under
 `<stage>/<unit>.md` that hold the full prompt and raw response for every attempt,
@@ -290,7 +275,7 @@ The **findings print only on a breach**, each naming the threshold it breached:
 |---|---|---|
 | `caption-compressed` | a caption already too dense to read, *and* inside a `speed_range` that divides its screen time again | `cut_report.caption_chars_per_sec` (18.0) |
 | `caption-fast` | the same density outside any speed range | same |
-| `timelapse-long` | a timelapse left on screen far past the director prompt's "about a minute" — a factor picked too low leaves a sustained fast-forward | `cut_report.timelapse_max_screen` (180.0s) |
+| `timelapse-long` | a timelapse left on screen far past the skill's "about a minute" ceiling — a factor picked too low leaves a sustained fast-forward | `cut_report.timelapse_max_screen` (180.0s) |
 | `keep-gap` | a cut too short to be worth the jump | `intervals.min_cut` |
 | `keep-fragment` | a keep interval too short to register | `cut_report.min_keep_fragment` (1.0s) |
 | `blender-warning` | one of Blender's clamp/overlap notices, lifted out of its startup noise |  |
@@ -369,6 +354,12 @@ uv run pytest
 ```bash
 ./scripts/run_pipeline.sh
 ```
+
+The first run stops at the director (exit 0) and says so: direct the cut with
+the `nagare-director` skill (see *Directing with a coding agent*), then resume
+with `./scripts/run_pipeline.sh --from-stage guided_edit`. Later runs that
+start before the director continue through it as long as the director files
+still map onto the transcripts.
 
 Or target a single file with `--source`:
 
@@ -453,8 +444,8 @@ cd /mnt/work/YouTube/my_video
 ```yaml
 # ../nagare_base.yml — shared by every video
 director:
-  enabled: true
   max_keep_lines: 8
+  silence_line_min: 5.0
 text_filter:
   keywords: [サイフォン, オーバーフロー]
 
@@ -463,7 +454,7 @@ project:
   audience: "DIY hobbyists on YouTube"
   target_duration: "about 12 minutes"
 director:
-  max_keep_lines: 4        # overrides this one key; director.enabled stays true
+  max_keep_lines: 4        # overrides this one key; silence_line_min stays 5.0
 text_filter:
   keywords: [ポンプ]        # replaces the base list; lists are not concatenated
 ```
@@ -482,9 +473,29 @@ Each run writes the merged result to `output/effective_config.yml` (with
 what the Blender subprocess reads, and a record of what the run actually used;
 edit your own files, not this one.
 
+### Migrating a config from the LLM director
+
+The LLM director and guided_edit's LLM are gone, and their keys now fail config
+loading with a message naming each one. Delete:
+
+- every key under `guided_edit:` (`enabled`, `provider`, `api_base`, `model`,
+  `api_key`, `temperature`, `reasoning_effort`, `timeout`, `context_lines`,
+  `max_retries`, `retry_temp_step`, `retry_temp_cap`, `prompt`) — the section
+  has no settings left; an empty `guided_edit:` is accepted;
+- under `director:`, `enabled`, `provider`, `api_base`, `model`, `api_key`,
+  `temperature`, `reasoning_effort`, `timeout`, `response_format`,
+  `max_retries`, `retry_temp_step`, `retry_temp_cap`, `chunk_lines`,
+  `pause_after_plan` and `prompt`. Keep `max_keep_lines` and
+  `silence_line_min`.
+
+An older project's `output/director/` may hold empty `_director.json` files
+the old pipeline wrote for a disabled director; the checkpoint then passes
+with `Continuing with 0 op(s)` — run the skill to direct it.
+`director/conversation.md` is no longer read and can be deleted.
+
 ### project: the editorial brief
 
-The `project:` section tells the editorial LLM stages what the transcript never says — who the video is for, how long it should be, how it should feel, and what happened last episode. Everything set here is appended to the system prompts of `summary`, `director`, `text_filter` and `publish`; every field is optional free text and defaults to empty (with nothing set, prompts are exactly as they were before this section existed).
+The `project:` section tells the editorial LLM stages what the transcript never says — who the video is for, how long it should be, how it should feel, and what happened last episode. Everything set here is appended to the system prompts of `summary`, `text_filter` and `publish`, and printed at the top of the director's `view`; every field is optional free text and defaults to empty (with nothing set, prompts are exactly as they were before this section existed).
 
 ```yaml
 project:
@@ -499,11 +510,11 @@ project:
 
 `previous_summary` is how a series carries over: point it at the earlier project's `output/summary/summary.json` and the director learns what "これ" refers to when the cut opens mid-story. A missing or unreadable file just drops that one line (logged), leaving the rest of the brief intact. `target_duration` and `tone` are what let `director` plan for the runtime you want and deviate from its default ~1-overlay-per-3-5-minutes density. The mechanical stages (`gap_context`, `sentence_split`, `guided_edit`) are deliberately not briefed.
 
-The config file covers all sections, each named after its stage: `general`, `project`, `transcription`, `audio_silence`, `sentence_split`, `gap_context`, `text_filter`, `summary`, `director`, `guided_edit`, `intervals`, `blender`, `publish`, `render`, `cut_report`, `pipeline`. The old `plan:`/`plan_revise:` sections are rejected with a message: those stages were removed. See `config.example.yml` for the full list of keys and their defaults.
+The config file covers all sections, each named after its stage: `general`, `project`, `transcription`, `audio_silence`, `sentence_split`, `gap_context`, `text_filter`, `summary`, `director`, `intervals`, `blender`, `publish`, `render`, `cut_report`, `pipeline`. The old `plan:`/`plan_revise:` sections, every `guided_edit:` key and the LLM director's keys are rejected with a message naming them (see *Migrating a config from the LLM director*). See `config.example.yml` for the full list of keys and their defaults.
 
 ### Choosing an LLM provider
 
-Every LLM stage (`sentence_split`, `gap_context`, `text_filter`, `summary`, `director`, `guided_edit`, `publish`) routes through a unified transport backed by the [LiteLLM](https://github.com/BerriAI/litellm) library, so you can point any stage at a local or cloud provider. On a stage's config block, set `provider:` to one of `ollama_chat` (default, local Ollama), `openai`, `gemini`, or `anthropic`, and set `model:` to that provider's model name — LiteLLM receives the combined `"<provider>/<model>"`. Supply credentials with `api_key:` (or the provider's standard environment variable, e.g. `OPENAI_API_KEY`, `GEMINI_API_KEY`, `ANTHROPIC_API_KEY`). Leave `api_base:` empty for cloud providers; for `ollama_chat` an empty `api_base` falls back to local Ollama (`http://localhost:11434`). Each stage chooses its provider independently, so you can mix (e.g. a cloud model for `director` and local Ollama for `guided_edit`).
+Every LLM stage (`sentence_split`, `gap_context`, `text_filter`, `summary`, `publish`) routes through a unified transport backed by the [LiteLLM](https://github.com/BerriAI/litellm) library, so you can point any stage at a local or cloud provider. On a stage's config block, set `provider:` to one of `ollama_chat` (default, local Ollama), `openai`, `gemini`, or `anthropic`, and set `model:` to that provider's model name — LiteLLM receives the combined `"<provider>/<model>"`. Supply credentials with `api_key:` (or the provider's standard environment variable, e.g. `OPENAI_API_KEY`, `GEMINI_API_KEY`, `ANTHROPIC_API_KEY`). Leave `api_base:` empty for cloud providers; for `ollama_chat` an empty `api_base` falls back to local Ollama (`http://localhost:11434`). Each stage chooses its provider independently, so you can mix (e.g. a cloud model for `director` and local Ollama for `guided_edit`).
 
 ```yaml
 director:

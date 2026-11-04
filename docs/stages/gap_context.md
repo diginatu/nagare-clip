@@ -202,7 +202,7 @@ the director/summary stages never see.
   narratively "happens" off-camera, or vice versa) — below-threshold gaps
   still go through the normal ACTION:/STATIC: marker path unchanged. Hand-
   flipping `"static": false` in `{stem}_gaps.json` forces a prefiltered gap
-  back into the summary/director prompts exactly as it does for an
+  back into the summary prompt / the director's view exactly as it does for an
   LLM-judged static gap.
 - The pan-away-and-return false positive described above is now
   **mitigated** by the consecutive-pair min (previously an open risk when
@@ -376,7 +376,7 @@ hand-edited file can never break the pipeline:
 - `static` reads leniently: only JSON `true` counts; absent (pre-static
   files) or any non-boolean value → `false`. This is the second field a human
   is expected to hand-edit — flipping `"static": false` forces a gap the
-  vision LLM judged static back into the summary/director prompts.
+  vision LLM judged static back into the summary prompt or the director's view.
 
 `load_gaps(path)` wraps `gaps_from_dict` with file I/O: a missing path (or
 `None`), unreadable file, or invalid JSON all degrade to `[]` (logged), never
@@ -424,7 +424,7 @@ it to that video's user content — `if gap_block:` — so an absent/empty block
 byte-identical to before this feature existed.
 
 **`director`'s indented, un-numbered annotation (`director/display.py`)**:
-`director/run.py` anchors each source's gaps (`anchor_gaps`) and hands them to
+`director/load.py` anchors each source's gaps (`anchor_gaps`) and hands them to
 `silence_lines.build_silence_lines()`, which gives a gap whose midpoint falls in
 a between-line wait to that wait's numbered silence line; the ones left over
 (a silence INSIDE a line) stay in `SegmentTranscript.gaps`.
@@ -436,18 +436,12 @@ stay unambiguous and an annotation can never itself become a line an op
 targets. Several gaps on one line all appear, in order. With `gap_context`
 disabled (`load_gaps` on a missing/empty file gives `[]`) nothing is added.
 
-The default `DIRECTOR_PROMPT` (`config.py`) documents the annotation's exact
-rendering (`    [silent gap: a build runs and logs scroll past]`) and
-the rule the director is meant to act on: such gaps are dropped by default
-(same as any other non-speech gap), and if the visual content is worth
-watching, the director should emit a `keep` op spanning the annotated line and
-the next one — **a `keep` over lines `[N, N+1]` preserves the silence between
-them** — with an explicit reminder that annotation lines are never valid `op`
-line references. `tests/test_config.py::test_director_prompt_gap_example_matches_the_real_formatter`
-pins that documented line to the director view's actual output
-for the equivalent `Gap`, not just to a substring match, so a rendering change
-(indent width, decimal places, wording) fails loudly instead of the prompt
-silently drifting from reality.
+The nagare-director skill's `references/reading-the-view.md` documents the
+annotation's rendering and the rule the director acts on: such gaps are
+dropped by default (same as any other non-speech gap), a gap worth watching
+gets a `keep` over its numbered silence line (or the whole event in ONE keep),
+and annotation lines are never valid op line references — the tools have no
+number for them.
 
 `[N, N+1]` is the shape for rescuing **one** gap, not the shape of every keep.
 When the described action is still unfolding in the next annotation (or the

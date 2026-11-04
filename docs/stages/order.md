@@ -66,51 +66,47 @@ same order a full run would.
 a partial repair, which would be a video with a scene silently moved. Validation
 runs twice on purpose:
 
-- at **parse time** in the director's loop (`loop.read_order` via
-  `loop.order_problems`, in display numbers), so a model's order is refused
-  before it is ever written — and the agent skill's `write` tool runs the same
-  `order_problems` (see [`director_skill.md`](director_skill.md));
+- at **write time** in the agent skill's `write` tool (`checks.read_order` via
+  `checks.order_problems`, in display numbers), so a bad order is refused
+  before it is ever written (see [`director_skill.md`](director_skill.md));
 - at **resolve time** in `pipeline/stages._resolve_order`, because
   `director/order.json` is hand-editable and `sentence_split`/`summary` can
   re-run underneath it.
 
 ## The director decides it
 
-The director's view is **always shooting order** — one `[k]` block per source,
-numbered once — whatever order is in force. The order is conversation state
-(`LoopState.order`, display ranges), not the shape of the transcript, so a
-display number names one line for the whole conversation and the cached system
-message never changes.
+The director (the nagare-director agent skill, through `director_tools.sh`)
+reads a view that is **always shooting order** — one `[k]` block per source,
+numbered once — whatever order is in force. The order is part of the edit
+(`order`, display ranges), not the shape of the transcript, so a display
+number names one line however the order changes.
 
-- **A reply may carry `order`**: display ranges in playback order, replacing the
-  order in force whole, on any turn — alone (`{"order": …}`, which changes
-  nothing else) or beside a range's ops. It must tile `1..N`; a problem refuses
-  the order only (the ops still land) and the previous order stays.
+- **An edit may carry `order`**: display ranges in playback order. It must
+  tile `1..N`; an edit without one is shooting order, and `write` always
+  writes `order.json`.
 - **A range may start or end on a silence line.** A silence plays with the range
   it is in: ending on the silence after `b` becomes `b~`; starting on it starts
   at `b+1`, which already owns that silence. A range of only a silence line is
   refused.
 - **A range over a source boundary** is two segments that happen to be adjacent
-  (`loop.order_segments` splits it).
+  (`checks.order_segments` splits it).
 - **Timelapses**: an order break inside one source would cut a timelapse's
-  speed-up in two with its caption on one side. An order whose break falls
-  inside any timelapse left standing by the reply is refused, and a new
-  timelapse across a break of the order in force is refused. `cut`/`keep` may
-  cross a break — on disk they stay one op and `intervals` computes them once.
-  A break is a range end whose next range does not start on the next line
-  (`loop.order_breaks`).
-- **The start** is `director/order.json` when the directory already holds one
-  (the director resumes from its directory), converted by `loop.order_ranges`;
-  otherwise shooting order.
-- **What the model sees**: when the order moves anything, `edit_state` adds the
+  speed-up in two with its caption on one side, so an order whose break falls
+  inside a timelapse of the edit is refused, and so is a timelapse across a
+  break. `cut`/`keep` may cross a break — on disk they stay one op and
+  `intervals` computes them once. A break is a range end whose next range
+  does not start on the next line (`checks.order_breaks`).
+- **Revising** starts from `dump`, which maps `director/order.json` back onto
+  the view (`checks.order_ranges`), so a reorder survives.
+- **What `preview` shows**: when the order moves anything, `edit_state` adds the
   video as it plays — `timeline_runs()` takes the breaks as forced run ends, so
   every run lies inside one range and is listed there — with both sides of every
   seam quoted. Captions are listed in playback order. The runtime does not
   depend on the order.
 
-The stage writes `director/order.json` (`{"order": [...]}`) on every run — the
-seed when the model never sent one, a disabled director included, and before a
-failing conversation raises.
+The director checkpoint requires `director/order.json`
+([pipeline.md](pipeline.md#the-director-checkpoint)) and stops when it no
+longer maps onto the transcripts.
 
 ## Where the authority lives
 
@@ -120,8 +116,7 @@ failing conversation raises.
 
 `pipeline/stages._resolve_order` reads `director/order.json`, else shooting
 order. The manifest builder and the order note read it
-(through `_timeline_segments`); `director_preview` does too, per segment in
-playback order. `blender`, `publish` and `cut_report` read the manifest and
+(through `_timeline_segments`). `blender`, `publish` and `cut_report` read the manifest and
 never an order. Nothing downstream of `intervals` re-derives a time from a line
 number, and nothing upstream reasons in seconds.
 
@@ -214,18 +209,20 @@ reorder changes the shape of the finished video more than any other single
 decision, and the failure mode to avoid is a human noticing it only while
 watching the result.
 
-## What the prompt says, and what it deliberately does not
+## What the skill says, and what it deliberately does not
 
-`DIRECTOR_PROMPT`'s Order paragraph gives the `order` key, the coverage contract
-as a **rule**, and what a silence line and a timelapse do at a range edge.
+The skill (`SKILL.md`, `references/editorial-rules.md`) gives the `order` key,
+the coverage contract as a **rule**, and what a silence line and a timelapse
+do at a range edge.
 
 It carries **no worked reorder**. The editorial call belongs in the `project:`
 brief — which on the project this was built for asks for the device thread first
 and the fish thread second, and says the sources need not stay in shooting
-order. A prompt that also argued for reordering would compete with the brief,
+order. Text that also argued for reordering would compete with the brief,
 and this project has repeatedly watched the brief lose that competition; a
 worked example anchors harder than the instruction around it (improvement 11).
 
 (The order used to be the `plan` stage's to state and `plan_revise`'s to
 restate; both stages were removed when the director took the order, its own
-plan and the human conversation over.)
+plan and the human conversation over; that LLM director has since been
+replaced by the agent skill.)

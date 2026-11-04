@@ -9,7 +9,7 @@ runtime behavior.
 
 ## Modules
 
-- `errors.py` — `PipelineStop`, a deliberate stop that is not a failure (the director's `pause_after_plan`): `cli.main()` prints it to stdout and returns 0, and `run_stages` re-raises it unwrapped. `PipelineError`, the single user-facing failure type. `cli.main()`
+- `errors.py` — `PipelineStop`, a deliberate stop that is not a failure (the director checkpoint, until the nagare-director skill has written the director files): `cli.main()` prints it to stdout and returns 0, and `run_stages` re-raises it unwrapped. `PipelineError`, the single user-facing failure type. `cli.main()`
   catches it, prints the message to stderr, and returns exit code 1 (no
   traceback for expected failures like a bad `--from-stage` name or a missing
   source file).
@@ -66,17 +66,17 @@ runtime behavior.
   `STAGES` (the `Stage` registry consumed by `runner.run_stages`). One adapter
   function per stage translates `PipelineContext` into that stage's typed
   `run()` call (`run_audio_silence`, `run_sentence_split`, `run_gap_context`,
-  `run_summary`, `run_text_filter`, `run_director_conversation`,
-  `run_guided_edit`, `run_intervals`, `run_publish`) or an external command
-  (`transcription`, `blender`). `transcription`, `summary`, `director`, `blender`
+  `run_summary`, `run_text_filter`, `run_guided_edit`, `run_intervals`,
+  `run_publish`) or an external command
+  (`transcription`, `blender`); `director` is a checkpoint (below).
+  `transcription`, `summary`, `director`, `blender`
   and `publish` run once per pipeline invocation; `audio_silence`,
   `sentence_split`, `gap_context`, `text_filter`, `guided_edit`,
   and `intervals` loop per source inside their adapter. `publish` runs once
   but still reads per-source material (its frame shortlist and caption list),
   which it gathers in the adapter before a single batched Docker call — the
   same shape as `gap_context`'s extraction. Each LLM stage adapter
-  (`sentence_split`, `gap_context`, `summary`, `text_filter`, `director`,
-  `guided_edit`, `publish`) owns its `llm_report.Recorder`
+  (`sentence_split`, `gap_context`, `summary`, `text_filter`, `publish`) owns its `llm_report.Recorder`
   lifecycle: it builds one
   recorder via `recorder_from_config(stage, cfg, override_dir=...)`, calls
   `rec.clear()` **once before** its stem loop (so a stage's `output/llm_report/`
@@ -118,12 +118,10 @@ you'll see the "No video files found" `PipelineError` instead.
 discovery: the stems of every video in the input directory, in name order — the
 order the `blender` stage concatenates, since `_blender_run` just hands it
 `ctx.sources`. It exists because `ctx.sources` answers "what is this run
-processing", which `--source` narrows, while the `director` stage needs "what
+processing", which `--source` narrows, while the `director` checkpoint needs "what
 does the finished video contain", which `--source` does not change. So
-`_director_run` positions each video with `project_stems(...) or ctx.stems` and
-passes the earlier videos' `_director.json` paths alongside; a `--source b.mp4
---from-stage director` re-run therefore still sees `video 2 of 3` and videos
-1's captions. An input directory holding videos outside the project would
+`_director_run` checks the director files of `project_stems(...) or ctx.stems`:
+a `--source b.mp4` run still requires every source's `_director.json`. An input directory holding videos outside the project would
 mis-state the count — but it is exactly the set a full run would concatenate,
 so the two never disagree with each other.
 
@@ -143,11 +141,35 @@ step is needed for in-process stages. The Blender subprocess (`external.py`'s
 `atexit`-registered Langfuse flush (`flush_traces()`) fires exactly once, at
 interpreter exit, instead of once per stage subprocess under the old script.
 
+## The director checkpoint
+
+The `director` stage makes no LLM call: the director is the nagare-director
+agent skill ([director_skill.md](director_skill.md)), which writes
+`director/` with the user. `_director_run` only checks those files:
+
+- **Missing** — the director's output "exists" when `director/order.json` and
+  a `{stem}_director.json` for every project source are there
+  (`director.files.missing_files()`; `plan.md` is not required). Otherwise it
+  raises `PipelineStop` (exit 0) listing the missing files and saying to run
+  the skill, then resume with `--from-stage guided_edit`. Nothing writes empty
+  director files any more, so a run from scratch always stops here.
+- **Stale** — when the files exist but no longer map onto the current
+  transcripts (`director.tools.project.current_state().unmapped`: an op or the
+  order outside the view, e.g. after sentence_split or text_filter re-ran), it
+  stops the same way, listing what does not map and saying to revise with
+  `director_tools.sh dump`, then `write`.
+- **Passing** — it prints one line, `Continuing with N op(s) (a 2, b 0);
+  shooting order` (or `a reordered playback`), so an empty edit is visible,
+  writes the order note and the run goes on.
+
+`--from-stage guided_edit` skips the checkpoint as before (the skipped
+director's required outputs are the `_director.json` files).
+
 ## Output layout
 
 Output dirs are one per stage by name, created up front by `cli.main()`:
 `output/transcription|audio_silence|sentence_split|gap_context|summary|text_filter|director|guided_edit|intervals|blender|publish|render/`.
-`sentence_split`/`gap_context`/`summary`/`director`/`guided_edit`/`publish` all still run
+`sentence_split`/`gap_context`/`summary`/`guided_edit`/`publish` all still run
 unconditionally (cheap no-ops when their stage is disabled in config), exactly
 as under the bash orchestrator — see [AGENTS.md](../../AGENTS.md#pipeline-overview)
 for what each no-op produces.
@@ -173,7 +195,7 @@ the whole design:
   concept then.
 
 The file rows are in pipeline-flow order (`index_page._rows()`, pinned by a
-test): `director/plan.md` and `director/conversation.md`, the `.blend`,
+test): `director/plan.md`, the `.blend`,
 `publish.md`, `render.md`, and `llm_report/index.md` last because it covers
 every call of the run rather than one stage. `cut_report.md` deliberately has
 no row: `llm_report/index.md` inlines it (its `## finished cut` section) and the

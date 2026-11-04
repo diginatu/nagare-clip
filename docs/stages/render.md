@@ -22,7 +22,7 @@ the thing being changed sits *between* the two halves — a background that
 should have been the next frame over, a headline the model got nearly right. A
 stage boundary is exactly the mechanism this pipeline already has for "stop
 here, edit the artifact, resume", and every other hand-editable contract in the
-repo (`_director.json`, `order.json`, `conversation.md`) sits on one:
+repo (`_director.json`, `order.json`, `_edits.txt`) sits on one:
 
 ```bash
 $EDITOR output/publish/publish.json          # retype a hook, swap a colour

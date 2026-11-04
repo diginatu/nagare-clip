@@ -7,10 +7,10 @@ the hard constraints live in the top-level [`AGENTS.md`](../../AGENTS.md).
 
 | Topic | File |
 |-------|------|
-| Project editorial brief injected into summary/director/text_filter/publish prompts | [project_brief.md](project_brief.md) |
+| Project editorial brief injected into summary/text_filter/publish prompts (and printed by the director's `view`) | [project_brief.md](project_brief.md) |
 | Audio-silence detection | [audio_silence.md](audio_silence.md) |
 | Sentence re-segmentation, windowing/carry-over, force-split | [sentence_split.md](sentence_split.md) |
-| Silent-gap visual context (vision LLM, summary/director consumption) | [gap_context.md](gap_context.md) |
+| Silent-gap visual context (vision LLM, summary/director-view consumption) | [gap_context.md](gap_context.md) |
 | Text filter + summary-stage filter context | [text_filter.md](text_filter.md) |
 | Intervals: `<keep>`/`<speed>`/`<overlay/>`/`<cut>` markers, margins, captions | [intervals.md](intervals.md) |
 | Blender VSE layout, text styling, retiming | [blender.md](blender.md) |

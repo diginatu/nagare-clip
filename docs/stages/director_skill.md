@@ -1,21 +1,28 @@
-# director skill — directing with a coding agent (phase 1)
+# director skill — directing with a coding agent
 
-The `director` stage is being replaced by an **agent skill**: a general coding
-agent (Claude Code, GitHub Copilot, Codex, Cursor, Gemini, …) plays the
-director interactively with the user, calling deterministic tools from this
-repository, and writes the same files the LLM director wrote —
-`{stem}_director.json`, `director/order.json`, `director/plan.md`.
+The director is an **agent skill**: a general coding agent (Claude Code,
+GitHub Copilot, Codex, Cursor, Gemini, …) plays the director interactively
+with the user, calling deterministic tools from this repository, and writes
+the director files — `{stem}_director.json`, `director/order.json`,
+`director/plan.md`.
 
-**Phase 1 is purely additive.** The LLM director (`director/loop.py`,
-`run.py`, `conversation.py`, `director_llm.py`, `director_say.sh`) still exists,
-still runs when `director.enabled` is on, and behaves byte-identically (the
-golden conversation test is unchanged). It is scheduled for removal in a later
-phase, together with making `guided_edit` fully deterministic and splitting
-the pipeline at the director (stop after `text_filter`, resume with
-`--from-stage guided_edit`).
+The LLM director (a hand-rolled conversation over LiteLLM, `director.enabled`,
+`conversation.md`, `director_say.sh`) is **gone** (phases 2 and 3). Why: the
+conversation.md / done-mark / `director_say.sh` channel made human↔AI
+back-and-forth clumsy, and a coding agent already is that channel.
 
-Why: the conversation.md / done-mark / `director_say.sh` channel made
-human↔AI back-and-forth clumsy. A coding agent already is that channel.
+Everything after the director is deterministic, and the pipeline is split at
+it:
+
+- the `director` stage is a **checkpoint** with no LLM
+  ([pipeline.md](pipeline.md#the-director-checkpoint)): it stops the run
+  (`PipelineStop`, exit 0) until `order.json` and every source's
+  `_director.json` exist, stops it again when they no longer map onto the
+  transcripts, and otherwise logs `Continuing with N op(s) (…); shooting
+  order` and lets it continue;
+- `guided_edit` has no LLM and no settings: it applies every op, the `edit`
+  op included, as markers/patches in `_edits.txt`;
+- the user resumes with `--from-stage guided_edit` after `write`.
 
 ## The tools (`src/nagare_clip/director/tools/`, no LLM call)
 
@@ -27,42 +34,39 @@ uv run python -m nagare_clip.director.tools {view,dump,preview,write} ...
 `--config` is repeatable and deep-merged like the pipeline's. All line numbers
 are the **display numbering**: every source in shooting order, numbered once,
 speech and silence lines together (`director.display.build_display_view`) —
-the same view the LLM director reads.
+the view the checkpoint loads too.
 
 | command | does | writes |
 | --- | --- | --- |
-| `view [--lines A-B] [--no-context]` | brief (`brief.format_brief`), `validate.skill_keep_limit_note` (the cap, and that touching keeps count as one — the LLM director's own `keep_limit_note` advises chaining keeps and is left unchanged), `project_context_block`, a source index — one row per source with its line range and its default runtime, or `default unknown — <why>` (`project.runtime_status()`: no sentence_split JSON, segment count ≠ transcript line count, or a line without start/end) — and the whole-video default runtime, or `unknown` naming the source(s); never omitted silently, `VIEW_HEADER`, `DisplayView.render(first, last)` | nothing |
+| `view [--lines A-B] [--no-context]` | brief (`brief.format_brief`), `ops.keep_limit_note` (the cap, and that touching keeps count as one), `project_context_block`, a source index — one row per source with its line range and its default runtime, or `default unknown — <why>` (`project.runtime_status()`: no sentence_split JSON, segment count ≠ transcript line count, or a line without start/end) — and the whole-video default runtime, or `unknown` naming the source(s); never omitted silently, `VIEW_HEADER`, `DisplayView.render(first, last)` | nothing |
 | `dump` | `director/` as one edit file in display numbering (`plan`, `order` when not shooting order, `ops`) — revising from it preserves a reorder | nothing |
-| `preview [--edit FILE\|-] [--summary [--min-run S]] [--lines A-B] [--source k]` | `preview.edit_state()` over the files on disk or a candidate edit: plan, per-op playback, segment runs, the video as it plays with seams, captions in playback order, whole-video runtime. `--summary` prints `preview.edit_summary()` instead — per-source default → edited runtime, the whole-video total, every `timeline_runs()` run in playback order (`--min-run S` hides runs under S on-screen seconds and counts them; cuts always shown), the captions in playback order — about a screenful, for every iteration. `--lines A-B` / `--source k` (index or stem, repeatable) narrow the per-segment detail (or the summary's run list) via `edit_state(only=, focus=)` / `preview_segment(focus=)`; totals, captions and problems stay whole-video. Nothing is re-modelled: the summary's figures are `segment_preview()`'s, and with no narrowing `edit_state()`'s output is byte-identical to before (the director golden test). A candidate's problems go to stderr and exit 1; only the ops that passed their own checks are previewed | nothing |
+| `preview [--edit FILE\|-] [--summary [--min-run S]] [--lines A-B] [--source k]` | `preview.edit_state()` over the files on disk or a candidate edit: plan, per-op playback, segment runs, the video as it plays with seams, captions in playback order, whole-video runtime. `--summary` prints `preview.edit_summary()` instead — per-source default → edited runtime, the whole-video total, every `timeline_runs()` run in playback order (`--min-run S` hides runs under S on-screen seconds and counts them; cuts always shown), the captions in playback order — about a screenful, for every iteration. `--lines A-B` / `--source k` (index or stem, repeatable) narrow the per-segment detail (or the summary's run list) via `edit_state(only=, focus=)` / `preview_segment(focus=)`; totals, captions and problems stay whole-video. Nothing is re-modelled: the summary's figures are `segment_preview()`'s, and with no narrowing `edit_state()` prints the whole edit. A candidate's problems go to stderr and exit 1; only the ops that passed their own checks are previewed | nothing |
 | `write --edit FILE\|-` | validates; on any problem prints them **all** (stderr, exit 1) and writes nothing; else writes every `{stem}_director.json` (empty list included), and `order.json`/`plan.md` when the edit carries them | director files |
 
-`view` without `--lines` is what `director.run.system_message()` renders minus
-the instructional `director.prompt`. `DisplayView.render()` gained an optional
+`DisplayView.render()` gained an optional
 `first`/`last` range (defaults unchanged): a block heading is kept for every
 block with a line in range, its leading gap descriptions only when its first
 line is in range.
 
-Loading (`tools/project.py::load_project`) goes through
-`pipeline.stages.director_inputs()` — factored out of `_director_run`, which
-now calls it too — and `director.run.load_segment_transcript()`, so the view,
-brackets, silence lines and gap annotations are the stage's. Stems come from
-`project_stems(input_videos_dir)`, else from `text_filter/*_edits.txt`. A
-missing `_edits.txt` is exit 2 naming `--to-stage text_filter`. Writing reuses
-`stages._write_director_ops/_order/_plan`.
+Loading (`tools/project.py::load_project` → `project_for(ctx, stems)`) goes
+through `director.files.director_inputs()` and
+`director.load.load_segment_transcript()`; the checkpoint calls the same
+`project_for()` with the pipeline's own context, so the tools and the
+checkpoint see one view. Stems come from `project_stems(input_videos_dir)`,
+else from `text_filter/*_edits.txt`. A missing `_edits.txt` is exit 2 naming
+`--to-stage text_filter`. Writing goes through `director.files.write_ops/
+write_order/write_plan` (the public home of the director files' I/O, moved
+out of `pipeline/stages.py`).
 
-After writing, `write` warns (stderr) when `guided_edit.enabled` is false —
-a disabled guided_edit copies `_edits.txt` through and the ops never land
-(span ops need no LLM; only an `edit` op uses guided_edit's model) — and when
-`director.enabled` is true (the LLM director would resume from these files if
-the director stage ran). Verified end to end on a fixture project:
-`write` → `run_pipeline.sh --from-stage guided_edit --to-stage intervals`
-with `guided_edit.enabled: true` produced the expected markers and a reordered
-`timeline.json`.
+After writing, `write` prints the next step (`run_pipeline.sh --from-stage
+guided_edit`). Verified end to end on a fixture project in phase 1:
+`write` → `--from-stage guided_edit --to-stage intervals` produced the
+expected markers and a reordered `timeline.json`.
 
 `current_state()` maps the files on disk back onto the view
-(`view.from_source`, `loop.order_ranges`); an op or order that no longer maps
+(`view.from_source`, `checks.order_ranges`); an op or order that no longer maps
 (a transcript or `director.silence_line_min` changed) is listed as a warning
-and left out.
+and left out. The checkpoint stops the pipeline on the same list.
 
 ## The edit file
 
@@ -74,8 +78,7 @@ The edit is the **complete state**, so writing it twice gives the same files:
 
 - `ops` is required and **replaces every op** in the director files.
 - `order` absent means **shooting order**: `write` always writes
-  `director/order.json` (the identity order when absent), as the LLM director
-  writes it on every run. The timelapse/break checks use the edit's own order,
+  `director/order.json` (the identity order when absent). The timelapse/break checks use the edit's own order,
   never the one on disk. `dump` emits the order in force, so an edit revised
   from `dump` keeps a reorder.
 - `plan` is optional; absent, `plan.md` stays. It is required while `plan.md`
@@ -84,21 +87,21 @@ The edit is the **complete state**, so writing it twice gives the same files:
 
 ## Validation (`tools/validate.py::validate_edit`, pure)
 
-Every check is a shared pure function the LLM director also calls, extracted
-in this phase so the two cannot drift:
+| check | function |
+| --- | --- |
+| type, range bounds, timelapse factor ≥ `TIMELAPSE_MIN_FACTOR`, overlay text/duration, an `edit` op's shape (one line, `old` non-empty, `new` a string, no patch/marker syntax or line break in either) | `director.ops.parse_op` |
+| no `speed` (`MENU_TYPES`) | `director.ops.off_menu_problem` |
+| keep width ≤ `director.max_keep_lines` (display lines, silence lines count) | `director.ops.keep_cap_problem` |
+| no `"n~"` in display numbering | `director.checks.silence_ref_problem` |
+| op inside one `[k]` block | `director.checks.join_problem` (every crossing refused) |
+| order tiles 1..N; no silence-only range; no break inside a timelapse | `director.checks.order_problems` (uses `read_order`) |
+| no timelapse across a break of the edit's order | `director.checks.break_problem` |
+| an `edit` op's `old` occurs exactly once in its line as `view` shows it, outside any marker or patch | `guided_edit.patch.edit_problem` |
 
-| check | function | LLM director |
-| --- | --- | --- |
-| type, range bounds, timelapse factor ≥ `TIMELAPSE_MIN_FACTOR`, overlay text/duration | `director_llm.parse_op` (was `_parse_op`) | drops the op |
-| no `speed` (`MENU_TYPES`) | `director_llm.off_menu_problem` | drops (`_drop_off_menu_ops`) |
-| keep width ≤ `director.max_keep_lines` (display lines, silence lines count) | `director_llm.keep_cap_problem` | drops (`_apply_keep_cap`) |
-| no `"n~"` in display numbering | `loop.silence_ref_problem` | drops |
-| op inside one `[k]` block | `loop.join_problem(splittable=frozenset())` | splits cut/keep, refuses the rest |
-| order tiles 1..N; no silence-only range; no break inside a timelapse | `loop.order_problems` (uses `loop.read_order`, was `_read_order`) | refuses the order (`_apply_order` reports the first problem) |
-| no timelapse across a break of the edit's order | `loop.break_problem` | refuses the op |
+`parse_op` is also what every reader of a `_director.json` drops a malformed
+op by (`ops_from_dict`, used by guided_edit, publish and the tools).
 
-Three checks only the tools enforce (the LLM path's behaviour is unchanged, by
-decision):
+Checks over several ops:
 
 - **keeps that touch or overlap count as one keep** against
   `director.max_keep_lines` — chaining keeps that each fit would restore the
@@ -107,25 +110,43 @@ decision):
   recordings, not one event); the problem is reported on the chain's first op
   and names the route: cover the event with ONE keep; for one wider than the
   cap, ask the user to raise `max_keep_lines` (or consider a timelapse for
-  manual work). The skill's keep rule: a keep exists so an on-screen event is
-  not chopped into fragments when small noises are transcribed as speech —
-  ONE keep over the whole event, those short lines included, up to the cap;
-  never a keep to emphasise ordinary talking; never chained keeps; never past
-  the cap without the user's OK.
-  The LLM director's `keep_limit_note()` is deliberately unchanged (it goes
-  with the LLM director in a later phase).
-- **a `cut` range may not overlap any other op's range** — the prompt asks for
-  it; guided_edit otherwise clips the cut. Two overlapping cuts are reported
-  once, on the earlier.
-- **an `edit` op names speech lines only** — guided_edit reports an edit on a
-  silence line unapplied.
+  manual work).
+- **a `cut` range may not overlap any other op's range** — guided_edit would
+  otherwise clip the cut. Two overlapping cuts are reported once, on the
+  earlier.
+- **an `edit` op names a speech line** — a silence line has no words.
+
+### The `edit` op
+
+`{"type": "edit", "lines": [n, n], "old": "<exact text>", "new": "<replacement>"}`
+(`new` may be `""`, a deletion). The agent reads the real line text through
+`view`, so it states the change exactly and no model applies it:
+guided_edit wraps the raw characters `old` reads as in one `{{old->new}}`
+patch (`guided_edit/patch.py::apply_edit`).
+
+- **Single-line, by decision.** A `{{old->new}}` patch cannot span lines, and
+  one `_edits.txt` line is one WhisperX segment; a change across two lines is
+  two edit ops.
+- **"As the director sees it"** is `transcript.clean_for_display` of the line:
+  patches applied, marker tags stripped. `DisplayLine.raw` carries the raw
+  `_edits.txt` line; `patch._clean_map()` maps each visible character back to
+  its raw index (text a patch contributes maps to nothing), and refuses a line
+  whose markup it cannot map rather than guess.
+- **Exactly once** (overlapping occurrences count): quote more of the line if
+  it repeats.
+- **Not through a marker or patch**: the matched characters must be plain,
+  contiguous raw text. Touching a marker at the edge is fine.
+- `old`/`new` may not contain `{{`, `}}`, `->`, `<`, `>` or a line break, so
+  the patch always parses back (and cannot smuggle a marker in).
+
+The prose-`note` form of `edit` is gone; `ops_from_dict` drops one (logged).
 
 Nothing is split or dropped silently: a problem refuses the whole edit.
 Problems are `Problem(where, reason, op)`, sorted edit/plan/order first then
 by op number, each naming the op (`op #3 (timelapse [60, 72])`) and why. A
 test asserts the LLM parser's drop messages equal the tools' reasons for the
-same ops. Annotation lines (`[silent gap: …]`) have no number, so an op on
-one is unrepresentable.
+Annotation lines (`[silent gap: …]`) have no number, so an op on one is
+unrepresentable.
 
 `to_source()` converts with `DisplayView.to_source()` (a silence line at an
 edge becomes `"n~"`), `order_segments` + `normalise` convert the order; a test
@@ -221,11 +242,40 @@ types*, *Targets matrix*, *apm compile*, *apm install*):
   edit-format example passes `validate_edit` (so the shape agents copy is one
   `write` accepts).
 
+## Phase 2/3 (done)
+
+- The `edit` op is deterministic (above); guided_edit has no LLM and no
+  settings (any `guided_edit.*` key fails config loading naming its path; an
+  empty section is accepted).
+- The director stage is a checkpoint; the auto-write of empty director files
+  for a disabled director is gone.
+- Deleted: `director/loop.py`'s conversation protocol,
+  `director/conversation.py`, the conversation half of `director/run.py`, the
+  generation/prompt half of `director_llm.py`, `DIRECTOR_PROMPT`,
+  `scripts/director_say.sh`, the golden conversation test, the director and
+  guided_edit units in `llm_report`, and `preview_cli.py` /
+  `scripts/director_preview.sh` (superseded by `director_tools.sh preview`;
+  the only thing it added was recovering the LLM parser's dropped ops from
+  the LLM report, and the tools refuse instead of dropping).
+- Shared code moved to public modules: `director/ops.py` (the op contract
+  and per-op checks, `max_keep_lines`, `keep_limit_note`),
+  `director/transcript.py` (clean/numbered/timed transcript, which `summary`
+  reuses), `director/checks.py` (order and join/break checks),
+  `director/load.py` (`SegmentInputs`, `load_segment_transcript`,
+  `VIEW_HEADER`, `project_context`), `director/files.py` (the director files'
+  I/O, `director_inputs`, `missing_files`), `nagare_clip/llm_json.py`
+  (`FENCE_RE`, `strip_code_fence`).
+- Removed director keys (each fails config loading naming its path):
+  `enabled`, `provider`, `api_base`, `model`, `api_key`, `temperature`,
+  `reasoning_effort`, `timeout`, `response_format`, `max_retries`,
+  `retry_temp_step`, `retry_temp_cap`, `chunk_lines`, `pause_after_plan`,
+  `prompt`. `max_keep_lines` (the keep cap) and `silence_line_min` stay.
+- `preview`'s header reads as "this edit" (`STATE_HEADER`, `PLAN_HEADER =
+  "THE PLAN of this edit:"`); the workaround notes in the skill are gone.
+  The old `keep_limit_note()` (which advised chaining keeps) is replaced by
+  the skill's note, now `ops.keep_limit_note()`.
+
 ## Follow-ups
 
 - Consider a **time-based keep cap** (seconds of restored silence) instead of
   a line count: a line-count cap treats a 2 s pause and a 60 s wait alike.
-- **Phase 3** (removing the LLM director): fix `preview`'s header text, which
-  was written for the LLM director ("YOUR PLAN … send "plan" in any reply",
-  "this conversation"), then remove the workaround notes about it from
-  SKILL.md and `references/reading-the-view.md`.

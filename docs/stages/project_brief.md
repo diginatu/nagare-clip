@@ -52,7 +52,6 @@ already-merged `cfg` dict and no LLM module gained a new parameter:
 | Stage | Prompt key(s) briefed | Ordering |
 |-------|----------------------|----------|
 | `summary` | `prompt`, `overall_prompt` | both the per-video map call and the all-videos reduce call |
-| `director` | `prompt` | brief first, then the summaries block (`director.context.project_context_block`), all in the cacheable system message |
 | `text_filter` | `prompt` | brief first, then `build_enhanced_prompt`'s per-video summary/keyword context (which stays closest to the transcript) |
 | `publish` | `prompt` | — (the audience/tone the title, lead and thumbnail copy are written for) |
 
@@ -64,14 +63,15 @@ reaches every source's LLM call independently and each one obeys it from its own
 vantage point. A real 7-source run put the same "explain the rig early on" recap
 caption on four of the videos, each op individually correct.
 
-The `director` no longer has this problem: it reads the whole video in one
-conversation, so a START/END instruction is about the one finished video it is
-editing. `summary` and `publish` run once project-wide, and `text_filter`
+The `director` does not have this problem: it is the nagare-director agent
+skill, whose `director_tools.sh view` prints the brief (`brief.format_brief`)
+above the whole video, so a START/END instruction is about the one finished
+video it is editing. `summary` and `publish` run once project-wide, and `text_filter`
 makes no editorial placement decisions.
 
-`gap_context`, `sentence_split` and `guided_edit` are deliberately **not**
-briefed: they are mechanical (describe frames / split sentences / apply an op
-verbatim), and editorial framing there is noise at best and a licence to
+`gap_context` and `sentence_split` are deliberately **not** briefed (and
+`guided_edit` makes no LLM call at all): they are mechanical (describe frames /
+split sentences / apply an op verbatim), and editorial framing there is noise at best and a licence to
 paraphrase at worst.
 
 ## No-brief invariant

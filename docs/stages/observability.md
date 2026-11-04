@@ -10,7 +10,7 @@ chokepoint, `nagare_clip.llm_client.call_llm`.
 - Unit front-matter carries `started_at`/`duration_ms`. The duration is measured from `Recorder.begin(unit)` — called at each unit's start, before its first LLM call (every stage pairs it with its `with_trace_meta(...)` line) — to `flush_unit()`. Stages record an `attempt()` only **after** a call returns, so without `begin()` the start time defaulted to first-attempt time and every report said `duration_ms: 0`. `begin()` is idempotent per unit (`setdefault`) and a no-op on a disabled recorder.
 - `text_filter` report units are stem-prefixed (`<stem> lines 5-8 (size 4)` → `<stem>_lines_5-8_size_4.md`): every video restarts its line numbering at 1, so un-prefixed units from a multi-video run collided on the same report file and silently overwrote each other (`filter_transcript(..., stem=...)`, passed by `run_text_filter` from the txt basename; empty stem keeps the old name for direct callers).
 - `gap_context` is the one multimodal LLM stage: its per-call user message embeds each frame as a base64 `data:image/...;base64,...` `image_url` part. The recorder never sees that payload — `gap_context.describe._report_messages()` flattens the recorded message to the same text header plus a `Frames:\n- <relpath>` list before handing it to `recorder.attempt()`, so `output/llm_report/gap_context/<unit>.md` holds frame **paths**, never base64 (`tests/gap_context/test_describe.py::test_describe_gap_recorder_excludes_base64_payloads` pins this) — keeping report files small, diffable, and free of binary blobs.
-- Span ops in guided_edit are applied deterministically (no LLM call); their records render as `deterministic — <outcome>` with no temperature, and never contribute a model name to the unit front-matter.
+- `guided_edit` and the `director` checkpoint make no LLM call and record nothing; a deterministic record (`deterministic=True`) still renders as `deterministic — <outcome>` with no temperature and never contributes a model name to the unit front-matter.
 
 ## Deterministic notes (`llm_report/notes/`)
 
@@ -21,7 +21,7 @@ produced with **no LLM call**:
 
 | file | written by | covers |
 |---|---|---|
-| `order.md` | `pipeline.stages.write_order_note` after `director` and `intervals` | whether the finished video is out of shooting order, or an order was rejected ([order.md](order.md)) |
+| `order.md` | `pipeline.stages.write_order_note` after the `director` checkpoint and `intervals` | whether the finished video is out of shooting order, or an order was rejected ([order.md](order.md)) |
 | `cut_report.md` | `pipeline.stages.write_cut_report` after `intervals`, again after `blender` | the finished cut's measurements + threshold breaches ([cut_report.md](cut_report.md)) |
 
 Both state plainly what happened (the cut report with the number each finding

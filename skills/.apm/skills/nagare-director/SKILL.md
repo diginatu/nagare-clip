@@ -73,7 +73,9 @@ edits in a scratch file in the project's output directory (e.g.
    nagare-clip checkout. If `view` says text_filter output is missing, run the
    pipeline up to it first — the project's wrapper, or
    `<nagare-clip>/scripts/run_pipeline.sh --config ... --to-stage text_filter`
-   (it needs Docker for transcription; tell the user it can take a while). If
+   (it needs Docker for transcription; tell the user it can take a while). A
+   full pipeline run also stops by itself at the director, saying to run this
+   skill, until the director files exist. If
    the project's `director/` output already has files, ask whether to revise
    them (`dump`) or start over.
 2. **Read everything.** Run `view` and read the whole video, every page,
@@ -112,13 +114,11 @@ edits in a scratch file in the project's output directory (e.g.
    to resume the pipeline from guided_edit — their wrapper with
    `--from-stage guided_edit`, or
    `<nagare-clip>/scripts/run_pipeline.sh --config ... --from-stage guided_edit`.
-   The ops only land if the config has `guided_edit.enabled: true` (a
-   disabled guided_edit copies the transcript through untouched); `write`
-   warns when it is off. cut/timelapse/overlay/keep need no LLM; an `edit`
-   op uses guided_edit's model. Keep `director.enabled` off (or resume from
-   guided_edit), or the old LLM director would continue from these files.
-   Hand edits of the written files are fine; `preview` (no `--edit`) shows
-   what is on disk.
+   guided_edit applies every op deterministically (no LLM). If an earlier
+   stage re-runs later and the files no longer map onto the transcript, the
+   pipeline stops at the director and lists what doesn't map: revise from
+   `dump` and `write` again. Hand edits of the written files are fine;
+   `preview` (no `--edit`) shows what is on disk.
 
 ## Edit format
 
@@ -136,6 +136,10 @@ edits in a scratch file in the project's output directory (e.g.
 }
 ```
 
+- An `edit` op is one exact text change on ONE speech line: `old` is the
+  text exactly as `view` shows that line (it must occur there once — quote
+  more of the line if it repeats), `new` its replacement (`""` deletes).
+  It may not reach into a marker or an earlier patch on the line.
 - `ops` is required and **replaces every op** in the director files; send
   `[]` for none. Lines are `[first, last]`, inclusive, display numbers.
 - The edit is the **complete state**: `write` always writes `order.json`, and
@@ -165,7 +169,9 @@ edits in a scratch file in the project's output directory (e.g.
 - a `cut` range may not overlap any other op's range;
 - one op stays inside one `[k]` source block;
 - a silence line is a numbered line: use its number, never the `"n~"` form;
-- an `edit` op names speech lines only;
+- an `edit` op names one speech line, and its `old` occurs exactly once in
+  that line's text as `view` shows it, outside any marker or patch; neither
+  `old` nor `new` holds `{{`, `}}`, `->`, `<`, `>` or a line break;
 - the order tiles every line once, no range holds only a silence line, and no
   timelapse straddles a break of the order (a range end whose next range does
   not start on the next line).
