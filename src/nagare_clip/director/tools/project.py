@@ -9,17 +9,13 @@ from pathlib import Path
 
 from nagare_clip.director.director_llm import DirectorOp
 from nagare_clip.director.display import DisplayView, build_display_view
+from nagare_clip.director.files import director_inputs, read_ops, read_plan
 from nagare_clip.director.loop import Range, order_ranges
 from nagare_clip.director.run import SegmentInputs, SegmentTranscript, load_segment_transcript
 from nagare_clip.order import Segment, identity_segments, normalise, order_from_dict
 from nagare_clip.pipeline.errors import PipelineError
 from nagare_clip.pipeline.runner import PipelineContext
 from nagare_clip.pipeline.sources import SourceMedia, project_stems
-from nagare_clip.pipeline.stages import (
-    _read_director_ops,
-    _read_director_plan,
-    director_inputs,
-)
 
 EDITS_SUFFIX = "_edits.txt"
 
@@ -86,7 +82,13 @@ def load_project(cfg: dict) -> Project:
             "run the pipeline through text_filter first "
             "(./scripts/run_pipeline.sh --to-stage text_filter)"
         )
-    segments = identity_segments(ctx.stems)
+    return project_for(ctx, ctx.stems)
+
+
+def project_for(ctx: PipelineContext, stems: list[str]) -> Project:
+    """*stems*' director view under *ctx* — the pipeline's own context for the
+    director checkpoint, :func:`load_project`'s for the tools."""
+    segments = identity_segments(stems)
     inputs = director_inputs(ctx, segments)
     missing = [str(i.edits) for i in inputs if not i.edits.is_file()]
     if missing:
@@ -132,7 +134,7 @@ def current_state(project: Project) -> CurrentState:
     view = project.view
     unmapped: list[str] = []
     ops: dict[int, list[DirectorOp]] = {}
-    for stem, stem_ops in _read_director_ops(project.ctx, project.stems).items():
+    for stem, stem_ops in read_ops(project.ctx, project.stems).items():
         index = project.segment_index(stem)
         for op in stem_ops:
             a = view.from_source(index, op.lines[0], silence=op.gap_start) if index else None
@@ -149,9 +151,7 @@ def current_state(project: Project) -> CurrentState:
             order = order_ranges(view, segments)
             if not order:
                 unmapped.append("order.json does not tile the view; shooting order shown")
-    return CurrentState(
-        ops=ops, order=order, plan=_read_director_plan(project.ctx), unmapped=unmapped
-    )
+    return CurrentState(ops=ops, order=order, plan=read_plan(project.ctx), unmapped=unmapped)
 
 
 def display_range(project: Project, index: int, op: DirectorOp) -> Range | None:

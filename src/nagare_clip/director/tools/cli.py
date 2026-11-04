@@ -19,6 +19,7 @@ from typing import Any
 from nagare_clip.brief import format_brief
 from nagare_clip.config import get_effective_config
 from nagare_clip.director.director_llm import _max_keep_lines
+from nagare_clip.director.files import write_ops, write_order, write_plan
 from nagare_clip.director.loop import order_segments
 from nagare_clip.director.preview import edit_state, edit_summary
 from nagare_clip.director.run import VIEW_HEADER, project_context
@@ -38,11 +39,6 @@ from nagare_clip.director.tools.validate import (
 )
 from nagare_clip.order import identity_segments, normalise
 from nagare_clip.pipeline.errors import PipelineError
-from nagare_clip.pipeline.stages import (
-    _write_director_ops,
-    _write_director_order,
-    _write_director_plan,
-)
 
 EDIT_HELP = (
     'An edit is one JSON object in DISPLAY numbering: {"plan": "<prose>", '
@@ -240,7 +236,7 @@ def write_edit(project: Project, edit: Edit) -> list[Path]:
     by_index = to_source(project.view, edit)
     written: list[Path] = []
     for seg in project.view.segments:
-        _write_director_ops(ctx, seg.stem, by_index.get(seg.index, []))
+        write_ops(ctx, seg.stem, by_index.get(seg.index, []))
         written.append(project.director_dir / f"{seg.stem}_director.json")
     # Always, like the LLM director: the edit is the whole state, so writing
     # the same edit twice gives the same files.
@@ -249,10 +245,10 @@ def write_edit(project: Project, edit: Edit) -> list[Path]:
     )
     if segments is None:  # pragma: no cover - validated
         raise PipelineError("order does not map onto the sources")
-    _write_director_order(ctx, normalise(segments, project.line_counts))
+    write_order(ctx, normalise(segments, project.line_counts))
     written.append(project.director_dir / "order.json")
     if edit.plan is not None:
-        _write_director_plan(ctx, edit.plan)
+        write_plan(ctx, edit.plan)
         written.append(project.director_dir / "plan.md")
     return written
 
