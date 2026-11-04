@@ -26,7 +26,7 @@ format-check: ## Verify formatting without modifying files
 validate: ## Fast structural checks (docker compose, py_compile, shell syntax)
 	docker compose config --services >/dev/null
 	uv run python -m py_compile $$(find src/nagare_clip -name '*.py')
-	bash -n scripts/run_pipeline.sh scripts/director_tools.sh
+	for f in scripts/*.sh; do bash -n "$$f" || exit 1; done
 
 check: lint format-check validate test ## Everything CI runs
 

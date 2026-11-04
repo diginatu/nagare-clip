@@ -437,7 +437,7 @@ uv run python -m nagare_clip.pipeline --from-stage intervals --to-stage interval
 Canonical developer commands live in the `Makefile` (run `make help`):
 
 - `make check` — everything CI runs: `lint` + `format-check` + `validate` + `test`.
-- `make validate` — fast structural checks: `docker compose config`, `python -m py_compile` on every module under `src/nagare_clip/`, and `bash -n scripts/run_pipeline.sh`.
+- `make validate` — fast structural checks: `docker compose config`, `python -m py_compile` on every module under `src/nagare_clip/`, and `bash -n` on every `scripts/*.sh` (one file at a time: `bash -n a b` checks only `a`).
 - `make lint` / `make format` — ruff lint / auto-format.
 - `make apm` — smoke-install the `skills/` package into a temp video directory, diff the deployed copies against the source and run `apm audit --ci` there (needs the apm CLI; not part of CI).
 - `make test` — the pytest suite.
