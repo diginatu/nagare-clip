@@ -716,22 +716,16 @@ def _director_required(ctx: PipelineContext) -> list[Path]:
 
 
 def _guided_edit_run(ctx: PipelineContext) -> None:
-    rec = _recorder(ctx, "guided_edit")
-    rec.clear()
-    try:
-        for src in ctx.sources:
-            print(f"[guided_edit] Applying director ops: {src.stem}")
-            run_guided_edit(
-                ctx.stage_dir("text_filter") / f"{src.stem}_edits.txt",
-                ctx.stage_dir("director") / f"{src.stem}_director.json",
-                ctx.stage_dir("guided_edit") / f"{src.stem}_edits.txt",
-                ctx.cfg,
-                json_path=ctx.stage_dir("sentence_split") / f"{src.stem}.json",
-                gaps_path=ctx.stage_dir("gap_context") / f"{src.stem}_gaps.json",
-                recorder=rec,
-            )
-    finally:
-        rec.rebuild_index()
+    for src in ctx.sources:
+        print(f"[guided_edit] Applying director ops: {src.stem}")
+        run_guided_edit(
+            ctx.stage_dir("text_filter") / f"{src.stem}_edits.txt",
+            ctx.stage_dir("director") / f"{src.stem}_director.json",
+            ctx.stage_dir("guided_edit") / f"{src.stem}_edits.txt",
+            ctx.cfg,
+            json_path=ctx.stage_dir("sentence_split") / f"{src.stem}.json",
+            gaps_path=ctx.stage_dir("gap_context") / f"{src.stem}_gaps.json",
+        )
 
 
 def _guided_edit_required(ctx: PipelineContext) -> list[Path]:

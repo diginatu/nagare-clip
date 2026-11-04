@@ -43,7 +43,7 @@ class TestParseValid:
           {"type": "timelapse", "lines": [5, 6], "factor": 8.0, "note": ""},
           {"type": "overlay", "lines": [1, 1], "text": "ポイント", "duration": 2.5},
           {"type": "keep", "lines": [7, 8]},
-          {"type": "edit", "lines": [3, 3], "note": "drop restatement"}
+          {"type": "edit", "lines": [3, 3], "old": "x", "new": ""}
         ]}"""
         ops = parse_director_response(resp, num_lines=10)
         assert [o.type for o in ops] == ["cut", "timelapse", "overlay", "keep", "edit"]
@@ -497,7 +497,7 @@ class TestSpeedIsOffTheDirectorsMenu:
                     {"type": "cut", "lines": [1, 2]},
                     {"type": "overlay", "lines": [3, 3], "text": "ポイント", "duration": 2.0},
                     {"type": "keep", "lines": [4, 5]},
-                    {"type": "edit", "lines": [6, 6], "note": "n"},
+                    {"type": "edit", "lines": [6, 6], "old": "x", "new": ""},
                     {"type": "timelapse", "lines": [7, 20], "factor": 8.0, "text": "作業"},
                 ]
             }

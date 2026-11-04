@@ -43,7 +43,7 @@ def _new_path(tmp_path: Path, monkeypatch, ops: list[dict]) -> tuple[dict, list[
     (tmp_path / "tf_edits.txt").write_text("\n".join(TEXT_FILTER_LINES) + "\n", encoding="utf-8")
     (tmp_path / "c_director.json").write_text(json.dumps({"ops": ops}), encoding="utf-8")
     (tmp_path / "config.yml").write_text(
-        yaml.safe_dump({"intervals": INTERVALS_CFG, "guided_edit": {"enabled": True}}),
+        yaml.safe_dump({"intervals": INTERVALS_CFG}),
         encoding="utf-8",
     )
     cfg = get_effective_config(tmp_path / "config.yml", {})

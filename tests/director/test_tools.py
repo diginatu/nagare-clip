@@ -171,7 +171,7 @@ def test_write_refuses_everything_at_once_and_writes_nothing(project, capsys):
             {"type": "overlay", "lines": [1, 1], "text": " ", "duration": 2},
             {"type": "overlay", "lines": [1, 1], "text": "ok"},
             {"type": "cut", "lines": [3, 4]},
-            {"type": "edit", "lines": [2, 2], "note": "x"},
+            {"type": "edit", "lines": [2, 2], "old": "x", "new": ""},
             {"type": "cut", "lines": [1, "2~"]},
             "x",
             {"type": "keep", "lines": [1, 4]},
@@ -355,7 +355,7 @@ def test_silence_edges_become_n_tilde(project, capsys):
             "order": [[3, 4], [1, 2], [5, 6]],
             "ops": [
                 {"type": "keep", "lines": [2, 2], "note": "w"},
-                {"type": "edit", "lines": [3, 3], "note": "drop の"},
+                {"type": "edit", "lines": [3, 3], "old": "の", "new": "", "note": "drop の"},
                 {"type": "timelapse", "lines": [5, 6], "factor": 4.0, "text": "a\nb", "note": ""},
             ],
         },
@@ -478,22 +478,39 @@ def test_the_llm_director_drops_what_write_refuses_with_the_same_reason(project)
     assert sorted(drops) == sorted(p.reason for p in problems)
 
 
-def test_write_warns_when_guided_edit_would_not_apply_the_ops(project, capsys):
-    err = _run(capsys, "write", "--config", _cfg(project), "--edit", _edit_file(project, GOOD)).err
-    assert "guided_edit.enabled is false" in err
-    on = project / "on.yml"
-    on.write_text("guided_edit:\n  enabled: true\n", encoding="utf-8")
+def test_edit_ops_are_checked_against_the_line_text(project, capsys):
+    """An edit op is one exact patch: one speech line, ``old`` once in its text
+    as view shows it, and never through a marker or patch."""
+    edits = project / "out" / "text_filter" / "b_edits.txt"
+    edits.write_text("bの<keep>1行</keep>目\nbの2行目\n", encoding="utf-8")
+    bad = {
+        "plan": PLAN,
+        "ops": [
+            {"type": "edit", "lines": [1, 1], "old": "z", "new": ""},
+            {"type": "edit", "lines": [3, 3], "old": "明日", "new": ""},
+            {"type": "edit", "lines": [5, 5], "old": "の1", "new": ""},
+            {"type": "edit", "lines": [6, 6], "old": "行", "new": "<cut>"},
+            {"type": "edit", "lines": [3, 4], "old": "a", "new": ""},
+            {"type": "edit", "lines": [6, 6], "old": "2行"},
+        ],
+    }
     err = _run(
-        capsys,
-        "write",
-        "--config",
-        _cfg(project),
-        "--config",
-        str(on),
-        "--edit",
-        _edit_file(project, GOOD),
+        capsys, "write", "--config", _cfg(project), "--edit", _edit_file(project, bad), code=1
     ).err
-    assert "guided_edit.enabled" not in err
+    assert not _director(project).exists()
+    for expected in [
+        "op #1 (edit [1, 1]): 'old' 'z' does not occur",
+        "op #2 (edit [3, 3]): 'old' '明日' does not occur",
+        "op #3 (edit [5, 5]): 'old' 'の1' cuts through an existing marker",
+        "op #4 (edit [6, 6]): edit op 'new' contains '<'",
+        "op #5 (edit [3, 4]): edit op names lines [3, 4]; an edit op names exactly one line",
+        "op #6 (edit [6, 6]): edit op needs 'new'",
+    ]:
+        assert expected in err, (expected, err)
+    good = {"plan": PLAN, "ops": [{"type": "edit", "lines": [5, 5], "old": "bの", "new": "Bの"}]}
+    _run(capsys, "write", "--config", _cfg(project), "--edit", _edit_file(project, good))
+    written = json.loads((_director(project) / "b_director.json").read_text(encoding="utf-8"))
+    assert written["ops"] == [{"type": "edit", "lines": [1, 1], "old": "bの", "new": "Bの"}]
 
 
 def test_keeps_separated_by_a_speech_line_do_not_chain(project):

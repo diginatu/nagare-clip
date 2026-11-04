@@ -36,7 +36,7 @@ def _expanded(ops):
 @pytest.mark.parametrize("name", sorted(CASES))
 def test_resolve_span_ops_lands_what_apply_ops_lands(name):
     ops = [op for op in _expanded(CASES[name]) if op.type != "edit"]
-    applied, _ = apply_ops(SILENCED, ops, {})
+    applied, _ = apply_ops(SILENCED, ops)
     placed = resolve_span_ops(SILENCED, ops)
     last = SILENCED
     for i in sorted(placed, key=lambda i: (ops[i].type == "cut", i)):

@@ -341,8 +341,6 @@ class TestGetEffectiveConfig:
         cfg_file.write_text(yaml.dump({"gap_context": {"context_lines": 4}}))
         cfg = get_effective_config(cfg_file)
         assert cfg["gap_context"]["context_lines"] == 4
-        # Independent of guided_edit's same-named knob
-        assert cfg["guided_edit"]["context_lines"] == 1
 
     def test_gap_context_context_lines_rejects_a_negative(self, tmp_path: Path):
         cfg_file = tmp_path / "cfg.yml"
@@ -586,14 +584,26 @@ def test_prompt_documents_duration_and_gap_bracket(stage):
     assert "negligible" in lowered
 
 
-def test_guided_edit_defaults_present():
-    cfg = get_effective_config(None, {})
-    g = cfg["guided_edit"]
-    assert g["enabled"] is False
-    assert g["provider"] == "ollama_chat"
-    assert g["api_base"] == ""
-    assert "model" in g
-    assert isinstance(g["prompt"], str) and g["prompt"]
+def test_guided_edit_has_no_settings():
+    assert "guided_edit" not in get_effective_config(None, {})
+
+
+@pytest.mark.parametrize("value", [{}, None])
+def test_an_empty_guided_edit_section_is_accepted(tmp_path, value):
+    cfg_file = tmp_path / "cfg.yml"
+    cfg_file.write_text(yaml.dump({"guided_edit": value}))
+    assert "guided_edit" not in get_effective_config(cfg_file)
+
+
+def test_every_removed_guided_edit_key_fails_naming_its_path(tmp_path):
+    cfg_file = tmp_path / "cfg.yml"
+    cfg_file.write_text(yaml.dump({"guided_edit": {"enabled": True, "model": "x"}}))
+    with pytest.raises(ValueError) as e:
+        get_effective_config(cfg_file)
+    msg = str(e.value)
+    assert "`guided_edit.enabled`" in msg and "`guided_edit.model`" in msg
+    assert "removed" in msg
+    assert "extra" not in msg.lower()
 
 
 def test_director_override_keeps_other_defaults(tmp_path):
@@ -620,7 +630,6 @@ def test_llm_sections_default_provider_and_empty_api_base():
         DEFAULTS["text_filter"],
         DEFAULTS["summary"],
         DEFAULTS["director"],
-        DEFAULTS["guided_edit"],
     ]
     for sec in sections:
         assert sec["provider"] == "ollama_chat"
@@ -1232,7 +1241,6 @@ _LLM_SECTIONS = [
     ("text_filter",),
     ("summary",),
     ("director",),
-    ("guided_edit",),
     ("gap_context",),
     ("publish",),
     ("publish", "describe_frames"),

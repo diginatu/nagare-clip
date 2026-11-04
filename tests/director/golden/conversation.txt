@@ -23,7 +23,7 @@ Operations (line ranges are inclusive). Prefer a timelapse over a cut where the 
 - timelapse: play a long stretch of manual work fast under one on-screen caption; give "factor" (4.0 or more) and "text". Compressing a stretch is a choice between two modes and this is the second one. LISTENING: the speech carries something the viewer needs — play it at 1x, and if it drags cut the weakest parts instead. TIMELAPSE: the speech is inessential — go genuinely fast and accept that the words become unintelligible; that sacrifice is the point of the mode and is why you must be sure first. Pick "factor" so the result runs about a minute on screen: a longer span needs a bigger number, and a span where little is happening can go faster still. One op does the whole arrangement: the work runs continuously and the caption stays on screen for the entire timelapse — do not add a separate "keep" or "overlay" over the same lines. To change the caption partway through, emit consecutive timelapse ops; a new caption means a new phase of work.
 - overlay: show an on-screen caption; give "text" and "duration" (how many seconds it stays on screen). Pick the duration from reading length — a short label needs about 2 seconds, a full sentence 4 to 6; never a fixed value. Its "lines" say WHERE it appears: at the first line of the range. Reach for it at turning points, conclusions, failures, and mishaps — Aim for one overlay per 3-5 minutes of finished video; an editorial brief may set a different rate.
 - keep: protect a span from cutting INCLUDING its silences/non-speech gaps. When a continuous event is playing out across several gaps — an accident and the cleanup after it, a demo running, a result arriving — span the WHOLE event in one keep, so the payoff is not chopped into jump cuts. Never widen a keep to mark talking as important: speech is never dropped by default, so a keep over a talking span only restores its pauses and inflates the runtime for nothing. A direction to "feature", "retain" or "emphasise" something is editorial emphasis, NOT a request for a keep op.
-- edit: request a fine within-line text deletion/fix; describe it in "note".
+- edit: a fine within-line text deletion/fix on ONE line: "old" is the exact text as shown, "new" its replacement ("" deletes).
 
 JSON shape, one object per turn:
 {"range": [40, 78], "reviewed_through": 78, "ops": [
@@ -31,7 +31,7 @@ JSON shape, one object per turn:
   {"type": "timelapse", "lines": [60, 72], "factor": 8.0, "text": "配管の取り付け", "note": "..."},
   {"type": "overlay", "lines": [45, 45], "text": "ポイント", "duration": 2.0, "note": ""},
   {"type": "keep", "lines": [50, 52], "note": "..."},
-  {"type": "edit", "lines": [47, 47], "note": "delete the redundant restatement"}
+  {"type": "edit", "lines": [47, 47], "old": "line", "new": ""}
 ]}
 
 Rules:

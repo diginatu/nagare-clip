@@ -1,4 +1,4 @@
-"""guided_edit.run: disabled passthrough and enabled apply paths."""
+"""guided_edit.run: every op applied deterministically; no ops, no change."""
 
 from __future__ import annotations
 
@@ -7,34 +7,39 @@ import json
 import nagare_clip.guided_edit.run as ge_run
 
 
-def test_disabled_copies_through(tmp_path):
-    """When guided_edit.enabled is False, copy edits through unchanged."""
+def test_no_ops_copies_through(tmp_path):
+    """An empty or missing _director.json changes nothing."""
     edits = tmp_path / "clip_edits.txt"
     edits.write_text("あ\nい\n", encoding="utf-8")
+    empty = tmp_path / "clip_director.json"
+    empty.write_text(json.dumps({"ops": []}), encoding="utf-8")
+    for director in (empty, tmp_path / "missing_director.json"):
+        out = tmp_path / "out_edits.txt"
+        ge_run.run_guided_edit(edits_txt=edits, director_json=director, output=out, cfg={})
+        assert out.read_text(encoding="utf-8") == "あ\nい\n"
+
+
+def test_edit_op_is_applied_as_its_exact_patch(tmp_path):
+    edits = tmp_path / "clip_edits.txt"
+    edits.write_text("えーと今日は\nかきく\n", encoding="utf-8")
     director = tmp_path / "clip_director.json"
-    director.write_text(json.dumps({"ops": [{"type": "cut", "lines": [1, 1]}]}), encoding="utf-8")
-    out = tmp_path / "out_edits.txt"
-
-    cfg = {"guided_edit": {"enabled": False}}
-    ge_run.run_guided_edit(
-        edits_txt=edits,
-        director_json=director,
-        output=out,
-        cfg=cfg,
+    director.write_text(
+        json.dumps({"ops": [{"type": "edit", "lines": [1, 1], "old": "えーと", "new": ""}]}),
+        encoding="utf-8",
     )
+    out = tmp_path / "out_edits.txt"
+    ge_run.run_guided_edit(edits_txt=edits, director_json=director, output=out, cfg={})
+    assert out.read_text(encoding="utf-8").splitlines() == ["{{えーと->}}今日は", "かきく"]
 
-    assert out.read_text(encoding="utf-8") == "あ\nい\n"
 
-
-def test_enabled_applies_ops(tmp_path):
-    """When guided_edit.enabled is True, apply director ops."""
+def test_applies_ops(tmp_path):
     edits = tmp_path / "clip_edits.txt"
     edits.write_text("あいう\nかきく\n", encoding="utf-8")
     director = tmp_path / "clip_director.json"
     director.write_text(json.dumps({"ops": [{"type": "cut", "lines": [1, 1]}]}), encoding="utf-8")
     out = tmp_path / "out_edits.txt"
 
-    cfg = {"guided_edit": {"enabled": True}}
+    cfg = {}
     ge_run.run_guided_edit(
         edits_txt=edits,
         director_json=director,
@@ -78,7 +83,7 @@ def test_timelapse_op_becomes_nested_markers_with_a_spanning_caption(tmp_path):
         edits_txt=edits,
         director_json=director,
         output=out,
-        cfg={"guided_edit": {"enabled": True}},
+        cfg={},
         json_path=whisper,
     )
 
@@ -119,7 +124,7 @@ def test_timelapse_output_passes_the_edits_checker(tmp_path):
         edits_txt=edits,
         director_json=director,
         output=out,
-        cfg={"guided_edit": {"enabled": True}},
+        cfg={},
         json_path=whisper,
     )
 
@@ -144,7 +149,7 @@ def test_timelapse_without_json_still_applies_speed_and_keep(tmp_path):
         edits_txt=edits,
         director_json=director,
         output=out,
-        cfg={"guided_edit": {"enabled": True}},
+        cfg={},
     )
 
     written = out.read_text(encoding="utf-8").splitlines()

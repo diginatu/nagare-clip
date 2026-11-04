@@ -29,7 +29,7 @@ S1, S3, S4 = "[silent 10.0s]", "[silent 8.0s]", "[silent 6.0s]"
 SILENCED = ["あい", S1, "うえ", "おか", S3, "きく", S4, "けこ", "さし"]
 
 
-def _run(tmp_path: Path, ops: list[dict], *, enabled=True, json_path=True, gaps=None, cfg=None):
+def _run(tmp_path: Path, ops: list[dict], *, json_path=True, gaps=None, cfg=None):
     (tmp_path / "c.json").write_text(json.dumps(WHISPERX), encoding="utf-8")
     (tmp_path / "tf_edits.txt").write_text("\n".join(TEXT_FILTER_LINES) + "\n", encoding="utf-8")
     (tmp_path / "c_director.json").write_text(json.dumps({"ops": ops}), encoding="utf-8")
@@ -37,23 +37,23 @@ def _run(tmp_path: Path, ops: list[dict], *, enabled=True, json_path=True, gaps=
         tmp_path / "tf_edits.txt",
         tmp_path / "c_director.json",
         tmp_path / "c_edits.txt",
-        cfg or {"guided_edit": {"enabled": enabled}},
+        cfg or {},
         json_path=(tmp_path / "c.json") if json_path else None,
         gaps_path=gaps,
     )
     return (tmp_path / "c_edits.txt").read_text(encoding="utf-8").splitlines()
 
 
-def test_disabled_still_writes_the_silence_lines(tmp_path):
-    assert _run(tmp_path, [{"type": "cut", "lines": [1, 1]}], enabled=False) == SILENCED
+def test_no_ops_still_writes_the_silence_lines(tmp_path):
+    assert _run(tmp_path, []) == SILENCED
 
 
 def test_without_timings_there_are_no_silence_lines(tmp_path):
-    assert _run(tmp_path, [], enabled=False, json_path=False) == TEXT_FILTER_LINES
+    assert _run(tmp_path, [], json_path=False) == TEXT_FILTER_LINES
 
 
 def test_the_threshold_is_director_silence_line_min(tmp_path):
-    cfg = {"guided_edit": {"enabled": False}, "director": {"silence_line_min": 7.0}}
+    cfg = {"director": {"silence_line_min": 7.0}}
     assert S4 not in _run(tmp_path, [], cfg=cfg)
 
 
@@ -93,7 +93,7 @@ def test_every_op_is_in_the_file(tmp_path):
 def test_a_silence_with_no_line_is_not_applied(caplog):
     # 0.5 s after line 2: shorter than silence_line_min, so no line to hold it.
     op = DirectorOp(type="keep", lines=(2, 2), gap_start=True, gap_end=True)
-    lines, unapplied = apply_ops(SILENCED, [op], {})
+    lines, unapplied = apply_ops(SILENCED, [op])
     assert lines == SILENCED
     ((dropped, reason),) = unapplied
     assert dropped is op
@@ -102,7 +102,7 @@ def test_a_silence_with_no_line_is_not_applied(caplog):
 
 def test_an_edit_op_cannot_address_a_silence():
     op = DirectorOp(type="edit", lines=(1, 1), gap_start=True, gap_end=True)
-    _, unapplied = apply_ops(SILENCED, [op], {}, call_llm=lambda *a: "")
+    _, unapplied = apply_ops(SILENCED, [op])
     ((_, reason),) = unapplied
     assert "cannot address a silence" in reason
 
@@ -114,7 +114,7 @@ def test_a_clip_never_ends_on_a_silence_the_op_did_not_address():
     lines = list(SILENCED)
     lines[5] = "<keep>きく</keep>"
     op = DirectorOp(type="keep", lines=(2, 4))
-    out, unapplied = apply_ops(lines, [op], {})
+    out, unapplied = apply_ops(lines, [op])
     assert unapplied == []
     assert out[2:6] == ["<keep>うえ", "おか</keep>", S3, "<keep>きく</keep>"]
 
@@ -123,7 +123,7 @@ def test_an_overlay_skips_a_silence_it_did_not_address():
     lines = list(SILENCED)
     lines[3] = '<overlay text="a" duration="1.0"/>おか'
     op = DirectorOp(type="overlay", lines=(3, 4), text="b", duration=1.0)
-    out, _ = apply_ops(lines, [op], {})
+    out, _ = apply_ops(lines, [op])
     assert out[4] == S3
     assert out[5] == '<overlay text="b" duration="1.0"/>きく'
 
@@ -149,7 +149,7 @@ def test_the_written_line_is_the_display_line(tmp_path):
         json.dumps(gaps_to_dict([Gap(2.0, 10.0, [], "a hand ] enters", static=False)])),
         encoding="utf-8",
     )
-    out = _run(tmp_path, [], enabled=False, gaps=gaps)
+    out = _run(tmp_path, [], gaps=gaps)
     transcript = load_segment_transcript(
         SegmentInputs(Segment("c", None), tmp_path / "tf_edits.txt", tmp_path / "c.json", gaps)
     )
@@ -164,7 +164,7 @@ def test_a_description_mentioning_a_tag_does_not_block_an_op():
     lines = list(SILENCED)
     lines[1] = "[silent 10.0s: a <keep> sign]"
     op = DirectorOp(type="keep", lines=(1, 1), gap_start=True, gap_end=True)
-    out, unapplied = apply_ops(lines, [op], {})
+    out, unapplied = apply_ops(lines, [op])
     assert unapplied == []
     assert out[1] == "<keep>[silent 10.0s: a <keep> sign]</keep>"
 
@@ -182,11 +182,11 @@ def test_a_clip_picks_the_run_it_picked_before_silence_lines_existed():
     # silence lines inside a run must not make it look longer.
     legacy = ["あい", "うえ", "<keep>おか</keep>", "きく", "けこ", "さし"]
     op = DirectorOp(type="keep", lines=(1, 5))
-    before, _ = apply_ops(legacy, [op], {})
+    before, _ = apply_ops(legacy, [op])
     assert before[:2] == ["<keep>あい", "うえ</keep>"]
 
     lines = list(SILENCED)
     lines[3] = "<keep>おか</keep>"
-    out, unapplied = apply_ops(lines, [op], {})
+    out, unapplied = apply_ops(lines, [op])
     assert unapplied == []
     assert out[:3] == ["<keep>あい", S1, "うえ</keep>"]

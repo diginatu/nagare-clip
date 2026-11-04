@@ -75,7 +75,7 @@ def test_skill_md_edit_example_passes_write_validation():
 
     lines = 212
     transcript = SegmentTranscript(
-        edit_lines=[f"line {i}" for i in range(1, lines + 1)],
+        edit_lines=[f"えーと line {i}" for i in range(1, lines + 1)],
         first_line=1,
         seg_times=[(i * 2.0, i * 2.0 + 1.5) for i in range(lines)],
         silences=None,

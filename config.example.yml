@@ -157,26 +157,6 @@ director:
   silence_line_min: 5.0   # Shortest wait between two lines (seconds) shown to the director as a silence line of its own, addressable as "n~"; a shorter one stays a `gap Xs` figure in the preceding line's bracket. Matches gap_context.min_gap by default, so every described gap has a line to land in. guided_edit writes the same silence lines into its _edits.txt, and check_edits/intervals use this value to know where they belong
   # prompt: "..."   # System prompt (has a sensible default)
 
-# guided_edit stage (Pass B2): a small local LLM applies each director op,
-# inserting <cut>/<speed>/<overlay>/<keep> tags (and {{old->new}} patches) into
-# the verbatim _edits.txt, where the director's silence lines are written in
-# so an op on "n~" is a marker too. Disabled by default (copies edits
-# through, silence lines added).
-guided_edit:
-  enabled: false   # Enable applying director ops
-  provider: ollama_chat   # LiteLLM provider prefix: ollama_chat | openai | gemini | anthropic
-  api_base: ""   # Base URL; empty -> Ollama localhost default; leave empty for cloud providers
-  model: "qwen3.5:4b"   # The same small model as text_filter is fine (passed to LiteLLM as "<provider>/<model>")
-  api_key: ""   # API key for the provider (or set the provider's env var)
-  temperature: 0.1
-  reasoning_effort: null
-  timeout: 60
-  context_lines: 1   # Lines of context shown to the LLM around an "edit" op boundary
-  max_retries: 2   # Extra attempts on LLM error / failed verification (0 = single attempt)
-  retry_temp_step: 0.2   # Temperature increment added on each retry
-  retry_temp_cap: 0.8   # Maximum temperature any retry uses
-  # prompt: "..."   # System prompt (has a sensible default)
-
 # intervals stage: patch application + keep-interval merge.
 # Audio cuts from audio_silence are unioned here.
 intervals:

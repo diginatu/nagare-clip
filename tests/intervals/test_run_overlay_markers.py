@@ -219,7 +219,7 @@ def test_director_duration_survives_guided_edit_into_intervals(monkeypatch, tmp_
         edits_txt=edits,
         director_json=director,
         output=guided,
-        cfg={"guided_edit": {"enabled": True}},
+        cfg={},
     )
     assert (
         guided.read_text(encoding="utf-8")

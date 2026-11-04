@@ -16,6 +16,7 @@ from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
 from typing import Any
 
+from nagare_clip.guided_edit.patch import forbidden_problem
 from nagare_clip.intervals.sync_json import (
     CUT_TAG_RE,
     KEEP_TAG_RE,
@@ -67,6 +68,10 @@ class DirectorOp:
     # wait after line 53" was unexpressible.
     gap_start: bool = False
     gap_end: bool = False
+    # edit: the exact text as the director reads the line, and its
+    # replacement ("" deletes).  guided_edit wraps it as {{old->new}}.
+    old: str | None = None
+    new: str | None = None
     extra: dict = field(default_factory=dict)
 
 
@@ -272,6 +277,28 @@ def parse_op(
             _drop(f"overlay duration {duration!r} <= 0")
             return None
 
+    old: str | None = None
+    new: str | None = None
+    if op_type == "edit":
+        # One exact patch on one line: a {{old->new}} cannot span lines, and
+        # one _edits.txt line is one WhisperX segment.
+        if lines[0] != lines[1] or gap_start or gap_end:
+            _drop(f"edit op names lines {list(lines)}; an edit op names exactly one line")
+            return None
+        raw_old, raw_new = raw.get("old"), raw.get("new")
+        if not isinstance(raw_old, str) or raw_old == "":
+            _drop("edit op needs 'old': the exact text to change, as view shows the line")
+            return None
+        if not isinstance(raw_new, str):
+            _drop("edit op needs 'new': the replacement text (\"\" deletes 'old')")
+            return None
+        for name, value in (("old", raw_old), ("new", raw_new)):
+            reason = forbidden_problem(name, value)
+            if reason:
+                _drop(reason)
+                return None
+        old, new = raw_old, raw_new
+
     return DirectorOp(
         type=op_type,
         lines=lines,
@@ -281,6 +308,8 @@ def parse_op(
         duration=duration,
         gap_start=gap_start,
         gap_end=gap_end,
+        old=old,
+        new=new,
     )
 
 
@@ -584,6 +613,9 @@ def ops_to_dict(ops: list[DirectorOp]) -> dict[str, Any]:
             entry["text"] = op.text
         if op.duration is not None:
             entry["duration"] = op.duration
+        if op.old is not None:
+            entry["old"] = op.old
+            entry["new"] = op.new or ""
         if op.note:
             entry["note"] = op.note
         out.append(entry)

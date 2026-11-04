@@ -76,6 +76,9 @@ class DisplayLine:
     is_silence: bool
     text: str
     annotations: tuple[str, ...] = ()
+    #: A speech line's raw ``_edits.txt`` text, markers and patches included
+    #: (``""`` for a silence line): what an ``edit`` op's patch is placed in.
+    raw: str = ""
 
 
 @dataclass(frozen=True)
@@ -213,6 +216,7 @@ def build_display_view(
                     is_silence=False,
                     text=body,
                     annotations=tuple(annotations.get(offset + 1, ())),
+                    raw=transcript.edit_lines[offset],
                 )
             )
             silence = silences.get(source_line)

@@ -46,6 +46,7 @@ from nagare_clip.director.loop import (
     order_problems,
     silence_ref_problem,
 )
+from nagare_clip.guided_edit.patch import edit_problem
 
 KNOWN_KEYS = frozenset({"plan", "order", "ops"})
 
@@ -154,12 +155,14 @@ def validate_edit(
             join_problem(view, op.type, *span, splittable=frozenset()),
         ]
         if op.type == "edit":
-            silent = [n for n in range(span[0], span[1] + 1) if view.lines[n - 1].is_silence]
-            if silent:
+            line = view.lines[span[0] - 1]
+            if line.is_silence:
                 reasons.append(
-                    f"line {silent[0]} is a silence line; an edit op changes words, "
-                    "so it must name speech lines only"
+                    f"line {span[0]} is a silence line; an edit op changes words, "
+                    "so it must name a speech line"
                 )
+            else:
+                reasons.append(edit_problem(line.raw, op.old or "", op.new or ""))
         found = [r for r in reasons if r]
         problems.extend(Problem(where, r, i) for r in found)
         if not found:
@@ -290,5 +293,8 @@ def to_display(view: DisplayView, index: int, op: DirectorOp) -> dict[str, Any] 
         out["text"] = op.text
     if op.duration is not None:
         out["duration"] = op.duration
+    if op.old is not None:
+        out["old"] = op.old
+        out["new"] = op.new or ""
     out["note"] = op.note
     return out

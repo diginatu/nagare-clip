@@ -98,7 +98,7 @@ def test_apply_ops_reports_an_unexpanded_timelapse_instead_of_raising():
     public. An unexpanded op must be reported, not crash _span_tags."""
     from nagare_clip.guided_edit.apply import apply_ops
 
-    lines, unapplied = apply_ops(["あ", "い"], [_tl(a=1, b=2)], {})
+    lines, unapplied = apply_ops(["あ", "い"], [_tl(a=1, b=2)])
     assert lines == ["あ", "い"]
     assert len(unapplied) == 1
     assert "unexpanded" in unapplied[0][1]

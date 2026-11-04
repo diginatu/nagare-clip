@@ -401,12 +401,7 @@ def test_apply_ops_and_the_preview_clip_identically(ops):
     lines = [""] * (FISH_FIRST - 1) + [r[3] for r in FISH]
     seg_times = [(None, None)] * (FISH_FIRST - 1) + [(r[0], r[1]) for r in FISH]
 
-    def no_llm(_m, _c):
-        raise AssertionError("span ops make no LLM call")
-
-    applied, _ = apply_ops(
-        lines, expand_timelapse_ops(ops, seg_times), {"prompt": ""}, call_llm=no_llm
-    )
+    applied, _ = apply_ops(lines, expand_timelapse_ops(ops, seg_times))
     placed = resolve_placements(lines, ops, seg_times)
     previewed = {
         (p.kind, p.lines[0], p.lines[1]) for per_op in placed for p in per_op if p.lines is not None

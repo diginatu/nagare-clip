@@ -247,7 +247,8 @@ DIRECTOR_PROMPT = (
     "keep over a talking span only restores its pauses and inflates the "
     'runtime for nothing. A direction to "feature", "retain" or '
     '"emphasise" something is editorial emphasis, NOT a request for a keep op.\n'
-    '- edit: request a fine within-line text deletion/fix; describe it in "note".\n'
+    '- edit: a fine within-line text deletion/fix on ONE line: "old" is the exact '
+    'text as shown, "new" its replacement ("" deletes).\n'
     "\n"
     "JSON shape, one object per turn:\n"
     '{"range": [40, 78], "reviewed_through": 78, "ops": [\n'
@@ -255,7 +256,7 @@ DIRECTOR_PROMPT = (
     '  {"type": "timelapse", "lines": [60, 72], "factor": 8.0, "text": "配管の取り付け", "note": "..."},\n'
     '  {"type": "overlay", "lines": [45, 45], "text": "ポイント", "duration": 2.0, "note": ""},\n'
     '  {"type": "keep", "lines": [50, 52], "note": "..."},\n'
-    '  {"type": "edit", "lines": [47, 47], "note": "delete the redundant restatement"}\n'
+    '  {"type": "edit", "lines": [47, 47], "old": "line", "new": ""}\n'
     "]}\n"
     "\n"
     "Rules:\n"
@@ -283,29 +284,6 @@ DIRECTOR_PROMPT = (
     'span that opens one line too early — the spec says "timelapse the work", '
     "the playback has the viewer hearing that very work announced at 5x, "
     "destroyed. Re-send the range with the boundary moved."
-)
-
-GUIDED_EDIT_PROMPT = (
-    "You apply ONE editing instruction to Japanese subtitle lines.\n"
-    "You are given numbered lines and an instruction. Insert the "
-    "requested marker into the line text at the precise position "
-    "described, and return the lines unchanged otherwise.\n"
-    "\n"
-    "Markers:\n"
-    "- Cut a span:    wrap it in <cut>...</cut>\n"
-    '- Speed up:      wrap it in <speed factor="N.N">...</speed>\n'
-    '- Overlay text:  insert <overlay text="..." duration="N.N"/> where it '
-    "starts (a self-closing point marker; there is no closing tag)\n"
-    "- Keep/protect:  wrap it in <keep>...</keep>\n"
-    "- Delete words within a line: {{old->}} (old copied verbatim)\n"
-    "- Fix words within a line:    {{old->new}}\n"
-    "\n"
-    "Rules:\n"
-    "- Copy each line fully with its number. Change ONLY by inserting "
-    "markers or {{old->new}}; never rephrase or reorder the original text.\n"
-    "- For a span across multiple lines, open the tag on the first line "
-    "and close it on the last line.\n"
-    "- Output the same numbered lines, nothing else."
 )
 
 GAP_CONTEXT_PROMPT = (
@@ -716,45 +694,6 @@ class DirectorConfig(BaseModel):
     )
     prompt: str = _commented(
         DIRECTOR_PROMPT, sample='"..."', description="System prompt (has a sensible default)"
-    )
-
-
-class GuidedEditConfig(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-    section_comment: ClassVar[str] = (
-        "guided_edit stage (Pass B2): a small local LLM applies each director op,\n"
-        "inserting <cut>/<speed>/<overlay>/<keep> tags (and {{old->new}} patches) into\n"
-        "the verbatim _edits.txt, where the director's silence lines are written in\n"
-        'so an op on "n~" is a marker too. Disabled by default (copies edits\n'
-        "through, silence lines added)."
-    )
-    enabled: bool = Field(False, description="Enable applying director ops")
-    provider: str = Field(
-        "ollama_chat",
-        description="LiteLLM provider prefix: ollama_chat | openai | gemini | anthropic",
-    )
-    api_base: str = Field(
-        "",
-        description="Base URL; empty -> Ollama localhost default; leave empty for cloud providers",
-    )
-    model: str = Field(
-        "qwen3.5:4b",
-        description='The same small model as text_filter is fine (passed to LiteLLM as "<provider>/<model>")',
-    )
-    api_key: str = Field("", description="API key for the provider (or set the provider's env var)")
-    temperature: float = Field(0.1)
-    reasoning_effort: str | None = Field(None)
-    timeout: int = Field(60)
-    context_lines: int = Field(
-        1, description='Lines of context shown to the LLM around an "edit" op boundary'
-    )
-    max_retries: int = Field(
-        2, description="Extra attempts on LLM error / failed verification (0 = single attempt)"
-    )
-    retry_temp_step: float = Field(0.2, description="Temperature increment added on each retry")
-    retry_temp_cap: float = Field(0.8, description="Maximum temperature any retry uses")
-    prompt: str = _commented(
-        GUIDED_EDIT_PROMPT, sample='"..."', description="System prompt (has a sensible default)"
     )
 
 
@@ -1310,7 +1249,6 @@ class NagareClipConfig(BaseModel):
     summary: SummaryConfig = Field(default_factory=SummaryConfig)
     text_filter: TextFilterConfig = Field(default_factory=TextFilterConfig)
     director: DirectorConfig = Field(default_factory=DirectorConfig)
-    guided_edit: GuidedEditConfig = Field(default_factory=GuidedEditConfig)
     intervals: IntervalsConfig = Field(default_factory=IntervalsConfig)
     blender: BlenderConfig = Field(default_factory=BlenderConfig)
     publish: PublishConfig = Field(default_factory=PublishConfig)
@@ -1450,6 +1388,39 @@ REMOVED_SECTIONS = {
 }
 
 
+#: Keys removed from a section that still exists: ``{section: (keys, why)}``,
+#: where ``keys`` of ``None`` means every key (the section has no settings
+#: left; an empty section is accepted and dropped).
+REMOVED_KEYS: dict[str, tuple[frozenset[str] | None, str]] = {
+    "guided_edit": (
+        None,
+        "guided_edit applies the director's ops deterministically and has no settings",
+    ),
+}
+
+
+def _removed_key_paths(merged: dict) -> list[str]:
+    """Every removed ``section.key`` present in *merged*, and why, one per line.
+
+    A section left with no settings (``keys`` of ``None``) that is present but
+    empty is dropped here, so it validates.
+    """
+    out: list[str] = []
+    for section, (keys, why) in REMOVED_KEYS.items():
+        value = merged.get(section)
+        if section not in merged:
+            continue
+        if keys is None and not value:
+            del merged[section]
+            continue
+        present = sorted(value) if isinstance(value, dict) else [""]
+        gone = [k for k in present if keys is None or k in keys]
+        out.extend(f"`{section}.{k}`" if k else f"`{section}:`" for k in gone)
+        if gone:
+            out[-1] += f" ({why})"
+    return out
+
+
 def _reject_removed_keys(merged: dict) -> None:
     """Fail on a removed key or section with a message that names it.
 
@@ -1470,6 +1441,13 @@ def _reject_removed_keys(merged: dict) -> None:
             "config section(s) removed with their stage: "
             + "; ".join(f"`{name}:` -- {REMOVED_SECTIONS[name]}" for name in gone)
             + ". Delete the section(s) from the config."
+        )
+    removed = _removed_key_paths(merged)
+    if removed:
+        raise ValueError(
+            "config key(s) removed: "
+            + ", ".join(removed)
+            + ". Delete them from the config; they no longer do anything."
         )
     paths = list(_key_paths(merged, "thinking"))
     if paths:

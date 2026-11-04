@@ -131,7 +131,7 @@ edits in a scratch file in the project's output directory (e.g.
     {"type": "timelapse", "lines": [60, 72], "factor": 8.0, "text": "配管の取り付け", "note": "..."},
     {"type": "overlay", "lines": [45, 45], "text": "ポイント", "duration": 2.0, "note": ""},
     {"type": "keep", "lines": [50, 51], "note": "..."},
-    {"type": "edit", "lines": [47, 47], "note": "delete the redundant restatement"}
+    {"type": "edit", "lines": [47, 47], "old": "えーと", "new": "", "note": "filler"}
   ]
 }
 ```

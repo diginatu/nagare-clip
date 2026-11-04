@@ -3,10 +3,9 @@
 Span ops (``cut``/``speed``/``keep``) are a pure whole-line-range wrap — the
 director already fixed the boundaries, so they are applied deterministically
 with no LLM call (see :func:`apply_span_op`); ``overlay`` is a single point
-marker carrying its own duration (:func:`apply_point_op`).  Only ``edit``
-ops, which need a within-line ``{{old->new}}`` the director only described in
-prose, go through a small-LLM call over the op's boundary line(s); the result
-is spliced back into the verbatim edit lines.  Every op is verified via
+marker carrying its own duration (:func:`apply_point_op`); an ``edit`` op
+states its change exactly and is spliced as one ``{{old->new}}`` patch
+(:mod:`~nagare_clip.guided_edit.patch`).  No op needs an LLM.  Every op is verified via
 :mod:`reconcile` and a failing one is reverted and recorded, so a forgotten
 closing tag or a silent rephrase never corrupts the file.
 """
@@ -14,13 +13,11 @@ closing tag or a silent rephrase never corrupts the file.
 from __future__ import annotations
 
 import logging
-import re
-from collections.abc import Callable
 from dataclasses import dataclass, replace
-from typing import Any
 
 from nagare_clip.director.director_llm import DirectorOp
 from nagare_clip.edit_lines import EditFile, parse_edit_lines
+from nagare_clip.guided_edit.patch import apply_edit, edit_problem
 from nagare_clip.guided_edit.reconcile import verify_op
 from nagare_clip.intervals.sync_json import (
     _SPEED_OPEN_RE,
@@ -28,24 +25,10 @@ from nagare_clip.intervals.sync_json import (
     SPEED_TAG_RE,
     escape_overlay_text,
 )
-from nagare_clip.llm_client import with_trace_meta
-from nagare_clip.llm_report import (
-    DROPPED_ITEMS,
-    LLM_ERROR,
-    NULL_RECORDER,
-    OK,
-    VERIFY_FAIL,
-    Recorder,
-)
-from nagare_clip.llm_retry import cfg_for_attempt, retry_attempts
-from nagare_clip.text_filter.llm_filter import _call_llm
 
 logger = logging.getLogger(__name__)
 
-CallLLM = Callable[[list[dict[str, str]], dict[str, Any]], str]
 Unapplied = tuple[DirectorOp, str]
-
-_LINE_RE = re.compile(r"^\s*(\d+):\s?(.*)$")
 
 
 def _open_close_counts(line: str, op_type: str) -> tuple[int, int]:
@@ -323,262 +306,75 @@ def apply_point_op(lines: list[str], op: DirectorOp) -> list[str]:
     return new
 
 
-def _instruction(op: DirectorOp) -> str:
-    if op.type == "cut":
-        what = "Cut (delete) the span described below by wrapping it in <cut>...</cut>."
-    elif op.type == "speed":
-        what = f'Speed up the span by wrapping it in <speed factor="{op.factor}">...</speed>.'
-    elif op.type == "overlay":
-        what = (
-            f"Add an on-screen overlay by inserting <overlay "
-            f'text="{escape_overlay_text(op.text or "")}" duration="{op.duration}"/> '
-            f"at the position described."
+def _edit_reason(lines: list[str], op: DirectorOp) -> str | None:
+    """Why an ``edit`` op cannot be applied to its line, or ``None``."""
+    if op.lines[0] != op.lines[1]:
+        return "edit op must name exactly one line"
+    if op.old is None or op.new is None:
+        return "edit op needs 'old' (the exact text) and 'new' (its replacement)"
+    return edit_problem(lines[op.lines[0] - 1], op.old, op.new)
+
+
+def _apply_one(lines: list[str], op: DirectorOp) -> tuple[list[str] | None, str | None]:
+    """*op* (physical lines) applied to *lines*: ``(new lines, None)`` or
+    ``(None, why not)``.  A clipped span op is logged, not refused."""
+    if op.type == "timelapse":
+        # run_guided_edit desugars these before we see them (see
+        # guided_edit.timelapse); reaching here means a caller skipped that
+        # step, and _span_tags has no marker pair for the type.
+        return None, UNEXPANDED_TIMELAPSE
+    if op.type == "edit":
+        # An edit op states its change exactly: one {{old->new}} patch.
+        reason = _edit_reason(lines, op)
+        if reason is not None:
+            return None, reason
+        candidate = list(lines)
+        a = op.lines[0]
+        candidate[a - 1] = apply_edit(lines[a - 1], op.old or "", op.new or "")
+        reason = verify_op(lines, candidate, op)
+        return (candidate, None) if reason is None else (None, reason)
+    # Span ops are a pure line-range wrap.  Clip the range to lines it may
+    # touch (see blocked_lines) so the tags stay disjoint where the downstream
+    # extractors require it.
+    placed = place_span_op(lines, op)
+    clipped = placed.lines
+    if clipped is None:
+        return None, placed.reason or ""
+    moved = clipped[0] != op.lines[0] if op.type == "overlay" else clipped != tuple(op.lines)
+    if moved:
+        logger.warning(
+            "guided_edit: op %s clipped from %s to %s (span overlap)",
+            op.type,
+            tuple(op.lines),
+            clipped,
         )
-    elif op.type == "keep":
-        what = "Protect the span from being cut by wrapping it in <keep>...</keep>."
-    elif op.type == "edit":
-        what = "Make the within-line text edit described below using {{old->new}}."
-    else:  # pragma: no cover - parse layer rejects unknown types
-        what = "Edit the span."
-    note = f" Where: {op.note}" if op.note else ""
-    return what + note
+    return (placed.candidate, None) if placed.applied else (None, placed.reason)
 
 
-def build_user_prompt(op: DirectorOp, lines: list[str]) -> str:
-    """Numbered boundary line(s) for the op, with the middle omitted for wide
-    ranges (the tag's open/close on the boundaries spans them automatically)."""
-    a, b = op.lines
-    parts = [_instruction(op), "", "Lines:"]
-    if a == b:
-        parts.append(f"{a}: {lines[a - 1]}")
-    else:
-        parts.append(f"{a}: {lines[a - 1]}")
-        if b - a > 1:
-            parts.append(f"... ({b - a - 1} line(s) in between are included automatically) ...")
-        parts.append(f"{b}: {lines[b - 1]}")
-    return "\n".join(parts)
+def apply_ops(edit_lines: list[str], ops: list[DirectorOp]) -> tuple[list[str], list[Unapplied]]:
+    """Apply ops in :func:`span_op_order`; return (new_lines, unapplied).
 
-
-def _parse_returned_lines(response: str, allowed: set[int]) -> dict[int, str]:
-    out: dict[int, str] = {}
-    for raw in response.splitlines():
-        m = _LINE_RE.match(raw)
-        if m:
-            n = int(m.group(1))
-            if n in allowed:
-                out[n] = m.group(2)
-    return out
-
-
-def _build_messages(op: DirectorOp, lines: list[str], cfg: dict[str, Any]) -> list[dict[str, str]]:
-    return [
-        {"role": "system", "content": cfg.get("prompt", "")},
-        {"role": "user", "content": build_user_prompt(op, lines)},
-    ]
-
-
-def _apply_one_op(
-    lines: list[str],
-    op: DirectorOp,
-    cfg: dict[str, Any],
-    call_llm: CallLLM,
-    messages: list[dict[str, str]],
-) -> tuple[list[str], str]:
-    """Returns (new_lines, raw_response)."""
-    a, b = op.lines
-    allowed = {a} if a == b else {a, b}
-    response = call_llm(messages, cfg)
-    returned = _parse_returned_lines(response, allowed)
-    new_lines = list(lines)
-    for n, text in returned.items():
-        new_lines[n - 1] = text
-    return new_lines, response
-
-
-def apply_ops(
-    edit_lines: list[str],
-    ops: list[DirectorOp],
-    cfg: dict[str, Any],
-    *,
-    call_llm: CallLLM = _call_llm,
-    recorder: Recorder = NULL_RECORDER,
-    unit: str = "guided_edit",
-) -> tuple[list[str], list[Unapplied]]:
-    """Apply ops sequentially; return (new_lines, unapplied).
-
-    Span ops are wrapped deterministically (no LLM, no retry) and verified;
-    ``edit`` ops call the LLM and, if the result altered the underlying text or
-    was not reflected, retry (config ``max_retries``) with a nudged temperature.
-    Any op that still fails verification is reverted and added to *unapplied*
-    with the last failure reason.
+    Every op is applied deterministically (no LLM): span ops are wrapped,
+    overlays inserted, ``edit`` ops spliced as their exact ``{{old->new}}``
+    patch.  Each is verified; one that fails is left out and added to
+    *unapplied* with the reason (and logged).
     """
     lines = list(edit_lines)
     # The silence lines are fixed before any op lands, so one parse maps every
-    # op; ops keep their SOURCE coordinates for the report and "unapplied".
+    # op; ops keep their SOURCE coordinates for "unapplied".
     parsed = parse_edit_lines(lines)
     unapplied: list[Unapplied] = []
-    recorder.begin(unit)
-    cfg = with_trace_meta(cfg, stage=recorder.stage, unit=unit)
-    attempts = retry_attempts(cfg)
     for i in span_op_order(ops):
         source_op = ops[i]
-        section = f"op {i}: {source_op.type} [{_edge(source_op, 0)}-{_edge(source_op, 1)}]"
         mapped = to_physical(parsed, source_op)
         if isinstance(mapped, str) and source_op.type != "timelapse":
-            recorder.attempt(
-                unit=unit,
-                attempt=0,
-                total=1,
-                messages=[],
-                outcome=VERIFY_FAIL,
-                reason=mapped,
-                cfg=None,
-                deterministic=True,
-                section=section,
-            )
-            logger.warning("guided_edit: op %s dropped: %s", source_op.type, mapped)
-            unapplied.append((source_op, mapped))
-            continue
-        op = source_op if isinstance(mapped, str) else mapped
-        if op.type == "timelapse":
-            # run_guided_edit desugars these before we see them (see
-            # guided_edit.timelapse); reaching here means a caller skipped that
-            # step, and _span_tags has no marker pair for the type.
-            reason = UNEXPANDED_TIMELAPSE
-            recorder.attempt(
-                unit=unit,
-                attempt=0,
-                total=1,
-                messages=[],
-                outcome=VERIFY_FAIL,
-                reason=reason,
-                cfg=None,
-                deterministic=True,
-                section=section,
-            )
-            logger.warning("guided_edit: op %s dropped: %s", op.type, reason)
-            unapplied.append((source_op, reason))
-            continue
-        if op.type != "edit":
-            # Span ops are a pure line-range wrap — no LLM judgement needed.
-            # Clip the range to lines it may touch (see blocked_lines) so the
-            # tags stay disjoint where the downstream extractors require it.
-            placed = place_span_op(lines, op)
-            clipped = placed.lines
-            if clipped is None:
-                reason = placed.reason or ""
-                recorder.attempt(
-                    unit=unit,
-                    attempt=0,
-                    total=1,
-                    messages=[],
-                    outcome=VERIFY_FAIL,
-                    reason=reason,
-                    cfg=None,
-                    deterministic=True,
-                    section=section,
-                )
-                logger.warning("guided_edit: op %s dropped: %s", op.type, reason)
-                unapplied.append((source_op, reason))
-                continue
-            if op.type == "overlay":
-                moved = clipped[0] != op.lines[0]
-            else:
-                moved = clipped != tuple(op.lines)
-            if moved:
-                logger.warning(
-                    "guided_edit: op %s clipped from %s to %s (span overlap)",
-                    op.type,
-                    tuple(op.lines),
-                    clipped,
-                )
-            reason = placed.reason
-            recorder.attempt(
-                unit=unit,
-                attempt=0,
-                total=1,
-                messages=[],
-                response="\n".join(placed.candidate[clipped[0] - 1 : clipped[1]]),
-                outcome=OK if reason is None else VERIFY_FAIL,
-                reason="" if reason is None else reason,
-                cfg=None,
-                deterministic=True,
-                section=section,
-            )
-            if placed.applied:
-                lines = placed.candidate
-            else:
-                unapplied.append((source_op, reason))
-            continue
-        last_reason = f"{op.type} op not applied"
-        applied = False
-        for attempt in range(attempts):
-            attempt_cfg = cfg_for_attempt(cfg, attempt)
-            messages = _build_messages(op, lines, attempt_cfg)
-            try:
-                candidate, response = _apply_one_op(lines, op, attempt_cfg, call_llm, messages)
-            except Exception as e:  # noqa: BLE001 - LLM/parse failures are recoverable
-                last_reason = f"LLM/apply error: {e}"
-                logger.warning(
-                    "guided_edit: op %s attempt %d/%d failed: %s",
-                    op.type,
-                    attempt + 1,
-                    attempts,
-                    e,
-                )
-                recorder.attempt(
-                    unit=unit,
-                    attempt=attempt,
-                    total=attempts,
-                    messages=messages,
-                    error=str(e),
-                    outcome=LLM_ERROR,
-                    reason=last_reason,
-                    cfg=attempt_cfg,
-                    section=section,
-                )
-                continue
-            reason = verify_op(lines, candidate, op)
-            if reason is None:
-                recorder.attempt(
-                    unit=unit,
-                    attempt=attempt,
-                    total=attempts,
-                    messages=messages,
-                    response=response,
-                    outcome=OK,
-                    cfg=attempt_cfg,
-                    section=section,
-                )
-                lines = candidate
-                applied = True
-                break
-            last_reason = reason
-            recorder.attempt(
-                unit=unit,
-                attempt=attempt,
-                total=attempts,
-                messages=messages,
-                response=response,
-                outcome=VERIFY_FAIL,
-                reason=reason,
-                cfg=attempt_cfg,
-                section=section,
-            )
-            logger.warning(
-                "guided_edit: op %s attempt %d/%d reverted: %s",
-                op.type,
-                attempt + 1,
-                attempts,
-                reason,
-            )
-        if not applied:
-            unapplied.append((source_op, last_reason))
-    if unapplied:
-        outcome = DROPPED_ITEMS
-        reason = f"{len(unapplied)}/{len(ops)} op(s) unapplied"
-    else:
-        outcome = OK
-        reason = f"{len(ops)} op(s) applied"
-    recorder.flush_unit(unit, outcome=outcome, reason=reason)
+            new, reason = None, mapped
+        else:
+            new, reason = _apply_one(lines, source_op if isinstance(mapped, str) else mapped)
+        if new is None:
+            where = f"[{_edge(source_op, 0)}-{_edge(source_op, 1)}]"
+            logger.warning("guided_edit: op %s %s dropped: %s", source_op.type, where, reason)
+            unapplied.append((source_op, reason or ""))
+        else:
+            lines = new
     return lines, unapplied
