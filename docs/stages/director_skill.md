@@ -66,7 +66,8 @@ expected markers and a reordered `timeline.json`.
 `current_state()` maps the files on disk back onto the view
 (`view.from_source`, `checks.order_ranges`); an op or order that no longer maps
 (a transcript or `director.silence_line_min` changed) is listed as a warning
-and left out. The checkpoint stops the pipeline on the same list.
+and left out. The checkpoint stops the pipeline on the same list, and `view`
+prints it to stderr (after the view) so an agent reading `view` first notices.
 
 ## The edit file
 

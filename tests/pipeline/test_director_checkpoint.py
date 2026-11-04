@@ -114,3 +114,18 @@ def test_a_run_from_scratch_stops_at_the_director(project):  # noqa: F811
         run_stages(st.STAGES, ctx)
     assert not (project / "out" / "guided_edit").exists()
     assert not _director(project).exists()
+
+
+def test_view_warns_when_the_files_on_disk_no_longer_map(project, capsys):  # noqa: F811
+    _write(project, capsys, {"plan": PLAN, "ops": [{"type": "cut", "lines": [6, 6]}]})
+    assert main(["view", "--config", _cfg(project)]) == 0
+    assert "do not map" not in capsys.readouterr().err
+    (project / "out" / "text_filter" / "b_edits.txt").write_text("bの1行目\n", encoding="utf-8")
+    seg_path = project / "out" / "sentence_split" / "b.json"
+    seg = json.loads(seg_path.read_text(encoding="utf-8"))
+    seg["segments"] = seg["segments"][:1]
+    seg_path.write_text(json.dumps(seg), encoding="utf-8")
+    assert main(["view", "--config", _cfg(project)]) == 0
+    err = capsys.readouterr().err
+    assert "1 item(s) in the director files on disk do not map" in err
+    assert "b_director.json: cut [2, 2]" in err

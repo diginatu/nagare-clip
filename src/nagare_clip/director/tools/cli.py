@@ -123,6 +123,16 @@ def cmd_view(project: Project, args: argparse.Namespace) -> int:
     parts.append(header)
     parts.append(view.render(first, last))
     print("\n\n".join(parts))
+    unmapped = current_state(project).unmapped
+    if unmapped:
+        print(
+            f"warning: {len(unmapped)} item(s) in the director files on disk do not map onto "
+            "this view (an earlier stage re-ran); run dump to see what is left, then revise "
+            "and write:",
+            file=sys.stderr,
+        )
+        for note in unmapped:
+            print(f"  {note}", file=sys.stderr)
     return 0
 
 
