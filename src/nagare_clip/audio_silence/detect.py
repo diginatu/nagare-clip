@@ -15,7 +15,8 @@ _SILENCE_START_RE = re.compile(r"silence_start:\s*(-?\d+(?:\.\d+)?)")
 _SILENCE_END_RE = re.compile(r"silence_end:\s*(-?\d+(?:\.\d+)?)")
 
 
-def _parse_duration(stderr: str) -> float | None:
+def parse_media_duration(stderr: str) -> float | None:
+    """The media duration from ffmpeg's ``Duration:`` line, or ``None``."""
     m = _DURATION_RE.search(stderr)
     if not m:
         return None
@@ -31,7 +32,7 @@ def parse_silencedetect_output(stderr: str) -> list[tuple[float, float]]:
     own ``Duration:`` line. Unparseable lines and orphan ``silence_end``
     lines are ignored.
     """
-    duration = _parse_duration(stderr)
+    duration = parse_media_duration(stderr)
     ranges: list[tuple[float, float]] = []
     pending_start: float | None = None
 

@@ -18,12 +18,26 @@ _HEADER = (
 
 _RANGE_RE = re.compile(r"^\s*(\d+(?:\.\d+)?)\s*-\s*(\d+(?:\.\d+)?)\s*$")
 
+#: The media duration ffmpeg reported, recorded as a comment so every reader of
+#: the ranges ignores it.  The one place the pipeline keeps a source's length:
+#: WhisperX's JSON has none, and a source with no speech has no word to end on
+#: (:func:`nagare_clip.edit_lines.with_media_end`).
+_DURATION_PREFIX = "# media duration: "
+_DURATION_RE = re.compile(r"^#\s*media duration:\s*(\d+(?:\.\d+)?)\s*s?\s*$")
 
-def write_cuts(path: Path, ranges: Sequence[tuple[float, float]]) -> None:
-    """Write *ranges* (sorted by start) to *path* with an editing header."""
+
+def write_cuts(
+    path: Path, ranges: Sequence[tuple[float, float]], duration: float | None = None
+) -> None:
+    """Write *ranges* (sorted by start) to *path* with an editing header.
+
+    *duration* (the media's, from ffmpeg) is recorded as a ``#`` comment.
+    """
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
     lines = [_HEADER]
+    if duration is not None and duration > 0:
+        lines.append(f"{_DURATION_PREFIX}{duration:.3f}s\n")
     for start, end in sorted(ranges, key=lambda r: r[0]):
         lines.append(f"{start:.3f} - {end:.3f}\n")
     path.write_text("".join(lines), encoding="utf-8")
@@ -54,3 +68,23 @@ def read_cuts(path: Path) -> list[tuple[float, float]]:
             continue
         ranges.append((start, end))
     return ranges
+
+
+def read_media_duration(path: Path | None) -> float | None:
+    """The media duration a cut list recorded, or ``None``.
+
+    ``None`` for a missing file, one written before the duration was recorded,
+    one from a run with audio_silence disabled, or one whose comment a human
+    deleted — the callers then degrade explicitly rather than guess.
+    """
+    if path is None:
+        return None
+    path = Path(path)
+    if not path.is_file():
+        return None
+    for raw in path.read_text(encoding="utf-8").splitlines():
+        m = _DURATION_RE.match(raw.strip())
+        if m:
+            value = float(m.group(1))
+            return value if value > 0 else None
+    return None

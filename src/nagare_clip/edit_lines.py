@@ -13,6 +13,14 @@ one record of every edit.  A silence line's identity is its POSITION — which
 speech lines it sits between; the seconds and the description are for humans
 and nothing here reads them.
 
+The wait BEFORE line 1 — the source's start to line 1's first word — is a
+silence line too, the **leading** one, written above line 1 and addressed as
+``"0~"``.  A source with no speech at all (WhisperX ``segments: []``) is one
+leading silence line: the whole source, ``0.0`` to the media end
+(:func:`with_media_end`).  A file without its leading silence line is still
+read (it shifts nothing: it is position 0) — every file written before it
+existed looks like that.
+
 The bracket body is opaque: it runs from ``[silent `` to the first UNescaped
 ``]`` (:func:`silence_body` escapes ``\\`` and ``]`` inside descriptions), and
 markers are recognised only outside it, so a description mentioning
@@ -77,7 +85,9 @@ def silence_body(
     first unescaped ``]``.
     """
     body = f"silent {seconds:.1f}s"
-    if after_line is not None:
+    if after_line == 0:
+        body += " before line 1"
+    elif after_line is not None:
         body += f" after line {after_line}"
     if descriptions:
         body += ": " + JOIN.join(_escape(d) for d in descriptions)
@@ -96,15 +106,62 @@ def silence_line_min(director_cfg: dict) -> float:
     return float(raw)
 
 
+def with_media_end(whisperx_data: dict[str, Any], seconds: float | None) -> dict[str, Any]:
+    """*whisperx_data* with the media end recorded, for a source with no speech.
+
+    WhisperX's JSON carries no duration, and a source with no segments has no
+    word to take its end from, so the whole source — its leading silence line
+    (:func:`gap_spans`) and what ``intervals`` plays — would be zero seconds
+    long.  The media end comes from the audio_silence cut list
+    (:func:`nagare_clip.audio_silence.cuts_file.read_media_duration`, ffmpeg's
+    own ``Duration:``) and rides here as the ``duration`` key
+    :func:`~nagare_clip.intervals.speech.get_duration_sec` already honours.
+
+    Only a source with no segments is touched: a speech source's timeline ends
+    where its words do, as it always has.  ``None`` (no cut list, or one written
+    before it recorded the duration) leaves the data alone — no leading silence
+    line rather than a guess.
+    """
+    if whisperx_data.get("segments") or seconds is None or seconds <= 0:
+        return whisperx_data
+    if isinstance(whisperx_data.get("duration"), (int, float)):
+        return whisperx_data
+    return {**whisperx_data, "duration": float(seconds)}
+
+
+def leading_span(whisperx_data: dict[str, Any]) -> tuple[float, float] | None:
+    """``(0.0, end)`` of the wait before line 1, or ``None``.
+
+    Line 1's first timed word ends it; with no segments at all, the media end
+    (``duration``, :func:`with_media_end`) does.  A line 1 with no timed word,
+    or a zero-speech source with no known end, has none.
+    """
+    segments = whisperx_data.get("segments") or []
+    if not segments:
+        duration = whisperx_data.get("duration")
+        if isinstance(duration, bool) or not isinstance(duration, (int, float)):
+            return None
+        return (0.0, float(duration)) if duration > 0 else None
+    spans = line_speech_spans({"segments": segments[:1]})
+    if not spans or not spans[0]:
+        return None
+    end = spans[0][0][0]
+    return (0.0, end) if end > 0 else None
+
+
 def gap_spans(whisperx_data: dict[str, Any]) -> dict[int, tuple[float, float]]:
     """``{line: (start, end)}`` for the silence after every line that has one.
 
     Between :func:`~nagare_clip.intervals.speech.line_speech_spans` — the very
     silence ``run_intervals`` drops — at any length: the threshold is
-    :func:`expected_silences`' decision.
+    :func:`expected_silences`' decision.  Key ``0`` is the leading silence,
+    before line 1 (:func:`leading_span`).
     """
     spans = line_speech_spans(whisperx_data)
     out: dict[int, tuple[float, float]] = {}
+    lead = leading_span(whisperx_data)
+    if lead is not None:
+        out[0] = lead
     for i in range(len(spans) - 1):
         if not spans[i] or not spans[i + 1]:
             continue
@@ -122,10 +179,14 @@ def expected_silences(whisperx_data: dict[str, Any], min_seconds: float) -> set[
 def insert_silence_lines(speech_lines: Sequence[str], bodies: Mapping[int, str]) -> list[str]:
     """*speech_lines* with ``bodies[n]`` written after speech line ``n``.
 
-    A body after the last line is not written: no silence follows the end.
+    ``bodies[0]`` — the leading silence — is written before line 1 (and is the
+    whole file of a source with no speech).  A body after the last line is not
+    written: no silence follows the end.
     """
     out: list[str] = []
     last = len(speech_lines)
+    if 0 in bodies:
+        out.append(bodies[0])
     for n, line in enumerate(speech_lines, start=1):
         out.append(line)
         if n < last and n in bodies:
@@ -184,7 +245,7 @@ class Slot:
 
     *speech_line* is a speech line's own 1-based number (= its WhisperX
     segment) or, for a silence line, the ``n`` it follows (the ``n`` of
-    ``"n~"``; ``0`` = before the first speech line, which is invalid).
+    ``"n~"``; ``0`` = the leading silence, before the first speech line).
     """
 
     file_line: int
@@ -314,8 +375,10 @@ def silence_problems(
 
     Silence lines are generated by guided_edit, never hand-added: only markers
     may change on or around one.  A file with no silence line at all is the
-    legacy shape and is not checked.  The seconds and the description are not
-    compared — nothing reads them.
+    legacy shape and is not checked.  A missing LEADING silence line is not
+    reported either: it is position 0, so its absence moves no marker, and
+    every file written before it existed lacks it.  The seconds and the
+    description are not compared — nothing reads them.
     """
     silences = parsed.silences()
     if not silences:
@@ -325,20 +388,19 @@ def silence_problems(
     seen: set[int] = set()
     for s in silences:
         n = s.speech_line
-        if n == 0:
-            problems.append((s.file_line, "silence line before the first speech line"))
-        elif n in seen:
-            problems.append((s.file_line, f"duplicate silence line after speech line {n}"))
+        where = "before speech line 1" if n == 0 else f"after speech line {n}"
+        if n in seen:
+            problems.append((s.file_line, f"duplicate silence line {where}"))
         elif n not in expected:
             problems.append(
                 (
                     s.file_line,
-                    f"unexpected silence line after speech line {n} "
+                    f"unexpected silence line {where} "
                     f"(no silence{threshold} there; silence lines are generated by guided_edit)",
                 )
             )
         seen.add(n)
-    for n in sorted(expected - seen):
+    for n in sorted(expected - seen - {0}):
         speech_at = parsed.file_index(n, False)
         if speech_at is None:
             continue

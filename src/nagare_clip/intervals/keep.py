@@ -82,6 +82,14 @@ def compute_keep_intervals(
         excludes.append((0.0, speech_spans[0][0]))
         silence_excludes += 1
 
+    if not whisperx_data.get("segments") and duration_sec > ivl["silence_threshold"]:
+        # No speech at all: the whole source is its leading silence (the
+        # "0~" silence line, edit_lines.leading_span), dropped by default like
+        # any leading silence and played only under a <keep>.
+        logging.debug("Silence gap: 0.000-%.3f [no speech]", duration_sec)
+        excludes.append((0.0, duration_sec))
+        silence_excludes += 1
+
     if speech_spans and (duration_sec - speech_spans[-1][1]) > ivl["silence_threshold"]:
         logging.debug(
             "Silence gap: %.3f-%.3f (%.3fs) [trailing]",

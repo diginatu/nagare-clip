@@ -2,7 +2,8 @@
 
 ffmpeg ``silencedetect`` runs inside the whisperx Docker image (driven by the
 pipeline orchestrator); this function consumes the captured stderr and writes
-a human-editable ``{stem}_cuts.txt``. Without *raw_path* (or when
+a human-editable ``{stem}_cuts.txt`` (with ffmpeg's media duration recorded as
+a ``# media duration:`` comment). Without *raw_path* (or when
 ``audio_silence.enabled`` is false) it writes a header-only file so the
 downstream union in the intervals stage becomes a no-op.
 """
@@ -13,7 +14,7 @@ import logging
 from pathlib import Path
 
 from nagare_clip.audio_silence.cuts_file import write_cuts
-from nagare_clip.audio_silence.detect import parse_silencedetect_output
+from nagare_clip.audio_silence.detect import parse_media_duration, parse_silencedetect_output
 
 
 def run_audio_silence(output: Path, cfg: dict, *, raw_path: Path | None = None) -> None:
@@ -27,5 +28,7 @@ def run_audio_silence(output: Path, cfg: dict, *, raw_path: Path | None = None) 
 
     stderr = raw_path.read_text(encoding="utf-8")
     ranges = parse_silencedetect_output(stderr)
-    write_cuts(output, ranges)
+    # The media's own length, recorded alongside: a source with no speech has
+    # no other place the pipeline could learn where it ends.
+    write_cuts(output, ranges, duration=parse_media_duration(stderr))
     logging.info("audio_silence: detected %d silence range(s), wrote %s", len(ranges), output)

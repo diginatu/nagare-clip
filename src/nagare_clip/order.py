@@ -149,7 +149,12 @@ def validate_segments(segments: Sequence[Segment], line_counts: Mapping[str, int
     for stem, segs in by_stem.items():
         count = line_counts[stem]
         if count < 1:
-            problems.append(f"{stem}: has no lines to cover")
+            # A source with no speech has no line to split it at: it plays
+            # whole (its one silence line), once, or not at all.
+            if any(seg.lines is not None for seg in segs):
+                problems.append(f"{stem}: has no lines, so only the whole source can play")
+            elif len(segs) > 1:
+                problems.append(f"{stem}: the whole source is covered more than once")
             continue
         ranges: list[tuple[int, int]] = []
         for seg in segs:

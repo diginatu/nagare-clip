@@ -568,6 +568,7 @@ def _guided_edit_run(ctx: PipelineContext) -> None:
             ctx.cfg,
             json_path=ctx.stage_dir("sentence_split") / f"{src.stem}.json",
             gaps_path=ctx.stage_dir("gap_context") / f"{src.stem}_gaps.json",
+            cuts_txt=ctx.stage_dir("audio_silence") / f"{src.stem}_cuts.txt",
         )
 
 

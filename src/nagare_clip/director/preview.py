@@ -354,8 +354,12 @@ class _Playback:
         seg_times: SegTimes,
         silences: Sequence[float] | None,
         placements: list[list[Placement]],
+        lead: float | None = None,
     ):
         self.first = first
+        #: Seconds of the leading silence (the wait before line 1, ``"0~"``)
+        #: when this segment starts at the source's start and has that line.
+        self.lead = lead if first <= 1 else None
         self.last = first + len(seg_times) - 1
         self.times = list(seg_times)
         sil = list(silences) if silences is not None else [0.0] * len(seg_times)
@@ -420,6 +424,8 @@ class _Playback:
         return sil if silence_shown(sil) else 0.0
 
     def gap_after(self, n: int) -> float | None:
+        if n == 0:
+            return self.lead
         if n >= self.last:
             return None
         return self.start(n + 1) - self.end(n)
@@ -472,10 +478,21 @@ class _Playback:
     def all_lines(self) -> list[int]:
         return list(range(self.first, self.last + 1))
 
+    def lead_onscreen(self) -> float:
+        """On-screen seconds of the leading silence (0 unless an op plays it)."""
+        if self.lead is None or not self.gap_plays(0):
+            return 0.0
+        return max(self.lead, 0.0) / self.gap_factor(0)
+
+    def runtime(self) -> float:
+        """The segment's on-screen seconds: its lines, plus a played leading silence."""
+        return self.lead_onscreen() + self.played(self.all_lines(), "speech")[1]
+
     def timeline_start(self, n: int) -> float:
         """Where line *n* starts on the edited timeline of this segment."""
         before = list(range(self.first, n))
         _, onscreen, _ = self.played(before, "speech")
+        onscreen += self.lead_onscreen()
         if before and self.gap_plays(n - 1):
             onscreen += max(self.gap_after(n - 1) or 0.0, 0.0) / self.gap_factor(n - 1)
         return onscreen
@@ -607,7 +624,7 @@ def timeline_runs(
     pb: _Playback,
     ops: list[DirectorOp],
     num: Numbering = IDENTITY,
-    captions: Sequence[tuple[int, int, float]] = (),
+    captions: Sequence[tuple[int, int, float, bool]] = (),
     breaks: AbstractSet[int] = frozenset(),
 ) -> list[Run]:
     """The segment as it plays: consecutive display lines grouped by their fate.
@@ -622,8 +639,8 @@ def timeline_runs(
     a line's speech seconds, a kept line's whole span, a gap only where one
     op holds both its sides — so the runs sum to that runtime exactly.
 
-    *captions* are the ``(op index, line, duration)`` overlays the caller
-    already resolved; an ``overlay`` changes no runtime, so it rides the run
+    *captions* are the ``(op index, line, duration, on a silence line)``
+    overlays the caller already resolved; an ``overlay`` changes no runtime, so it rides the run
     it starts in instead of breaking the sequence with a row of its own.
     """
 
@@ -673,6 +690,15 @@ def timeline_runs(
         if number is not None:
             runs[-1].lines.append(number)
 
+    if pb.lead is not None:
+        # The leading silence plays (or is dropped) before line 1.
+        plays = pb.gap_plays(0)
+        seconds = pb.lead_onscreen()
+        number = num.silence.get(0)
+        if number is not None:
+            add(gap_owner(0), seconds, number)
+        elif plays:
+            add(gap_owner(0), seconds, None, after=0)
     for n in pb.all_lines():
         add(line_owner(n), pb.line_footage(n, "speech") / pb.factor(n), num.of(n))
         if n >= pb.last:
@@ -687,10 +713,10 @@ def timeline_runs(
             # No line of its own, and something is playing it: a ``"n~"`` op
             # on a wait too short to be numbered.  It is still on screen.
             add(gap_owner(n), seconds, None, after=num.of(n))
-    for index, line, duration in captions:
+    for index, line, duration, on_silence in captions:
         if ops[index].type != "overlay":
             continue  # a timelapse's caption is already on its own run
-        number = num.of(line)
+        number = num.of(line, silence=on_silence)
         for run in runs:
             if number in run.lines:
                 run.captions.append((ops[index].text or "", duration))
@@ -708,7 +734,13 @@ def _run_in(run: Run, focus: tuple[int, int] | None) -> bool:
 
 def _run_line(run: Run) -> str:
     figure = "—" if run.kind == "cut" else _s(run.seconds)
-    where = _lines_phrase(run.lines) if run.lines else f"the silence after line {run.after}"
+    where = (
+        _lines_phrase(run.lines)
+        if run.lines
+        else "the silence before line 1"
+        if run.after == 0
+        else f"the silence after line {run.after}"
+    )
     out = f"  {run.label:<11}{figure:>7}  {where}"
     if run.factor is not None:
         out += f"  x{run.factor}"
@@ -777,28 +809,34 @@ def preview_segment(
         [(None, None)] * pad + list(seg_times),
         silence_lines=silence_lines,
     )
-    pb = _Playback(first_line, seg_times, silences, placements)
+    lead = next((s.duration for s in silence_lines if s.after_line == 0), None)
+    pb = _Playback(first_line, seg_times, silences, placements, lead)
 
     def text_of(n: int) -> str:
         return clean[n - first_line]
 
-    # Captions on the edited timeline: (op index, line, seconds).
-    captions: list[tuple[int, int, float]] = []
+    # Captions on the edited timeline: (op index, line, seconds, on a silence
+    # line — the line is then the "n~" it hangs from).
+    captions: list[tuple[int, int, float, bool]] = []
     for i, per_op in enumerate(placements):
         for p in per_op:
             if p.kind == "overlay" and p.lines is not None and p.op.duration:
-                captions.append((i, p.lines[0], p.op.duration))
+                captions.append((i, p.lines[0], p.op.duration, p.gap_start))
+
+    def caption_start(line: int, on_silence: bool) -> float:
+        # The leading silence plays first: a caption on it starts at 0.
+        return 0.0 if on_silence and line == 0 else pb.timeline_start(line)
 
     def caption_lines(i: int) -> list[str]:
         out = []
-        for k, line, dur in captions:
+        for k, line, dur, on_silence in captions:
             if k != i:
                 continue
-            start = pb.timeline_start(line)
-            for k2, line2, dur2 in captions:
+            start = caption_start(line, on_silence)
+            for k2, line2, dur2, on_silence2 in captions:
                 if k2 == i:
                     continue
-                start2 = pb.timeline_start(line2)
+                start2 = caption_start(line2, on_silence2)
                 overlap = min(start + dur, start2 + dur2) - max(start, start2)
                 if overlap > 0 and f"{overlap:.1f}" != "0.0":
                     out.append(
@@ -832,7 +870,8 @@ def preview_segment(
             return []
         a, b = rng[0], rng[-1]
         out = []
-        if a > first_line and gap_shown(pb.gap_after(a - 1)):
+        # a == 1: the leading silence before the source's first line.
+        if (a > first_line or a == 1) and gap_shown(pb.gap_after(a - 1)):
             out.extend(silence_note(a - 1))
         if b < pb.last and gap_shown(pb.gap_after(b)):
             out.extend(silence_note(b))
@@ -884,10 +923,17 @@ def preview_segment(
     def resolved_bounds(op: DirectorOp) -> tuple[float, float] | None:
         """A ``"n~"`` op's real time range: its silence edges are times, not lines."""
         first, last = op.lines
-        if not (first_line <= first <= pb.last and first_line <= last <= pb.last):
+
+        def edge_ok(n: int, gap: bool) -> bool:
+            if n == 0:
+                # "0~": the leading silence, when this segment has its line.
+                return gap and pb.lead is not None
+            if not first_line <= n <= pb.last:
+                return False
+            return not gap or n < pb.last  # no following line, no silence to end at
+
+        if not (edge_ok(first, op.gap_start) and edge_ok(last, op.gap_end)):
             return None
-        if (op.gap_start and first >= pb.last) or (op.gap_end and last >= pb.last):
-            return None  # no following line, so no silence to end at
         start = (
             _silence_after(pb, first, silence_lines, anchored_gaps).start
             if op.gap_start
@@ -1027,7 +1073,7 @@ def preview_segment(
             blocks.append("\n".join([_op_title(op, num)] + _note_lines(op) + body))
 
     default = sum(pb.speech)
-    runtime = pb.played(pb.all_lines(), "speech")[1]
+    runtime = pb.runtime()
     footer = footer_drops + [f"{label}: default {_s(default)} → with these ops {_s(runtime)}"]
     if elsewhere_seconds is not None:
         footer.append(
@@ -1045,7 +1091,12 @@ def preview_segment(
         )
         blocks = [empty]
     parts = [HEADER] + blocks + [timeline, "\n".join(footer)]
-    rows = tuple(sorted((num.of(line), ops[i].text or "", dur) for i, line, dur in captions))
+    rows = tuple(
+        sorted(
+            (num.of(line, silence=on_silence), ops[i].text or "", dur)
+            for i, line, dur, on_silence in captions
+        )
+    )
     return SegmentPreview("\n\n".join(parts), default, runtime, rows, tuple(runs))
 
 

@@ -3,7 +3,8 @@
 The output carries the director's silence lines (:mod:`nagare_clip.edit_lines`)
 — the waits it was shown as lines of their own, in the very text it read — so
 an op on ``"n~"`` lands as an ordinary marker on the silence line after ``n``
-and ``_edits.txt`` stays the one record of every edit.  They are written
+(``"0~"``: the leading silence line, above line 1) and ``_edits.txt`` stays the
+one record of every edit.  They are written
 whether or not there are ops (a human can ``<keep>`` a silence without the
 director).  Every op is applied deterministically — no LLM call at all — and
 no ops (an empty or missing ``_director.json``) means no change.
@@ -15,6 +16,7 @@ import json
 import logging
 from pathlib import Path
 
+from nagare_clip.audio_silence.cuts_file import read_media_duration
 from nagare_clip.director.ops import ops_from_dict
 from nagare_clip.director.silence_lines import build_silence_lines
 from nagare_clip.edit_lines import (
@@ -22,6 +24,7 @@ from nagare_clip.edit_lines import (
     insert_silence_lines,
     parse_edit_lines,
     silence_line_min,
+    with_media_end,
 )
 from nagare_clip.gap_context.context import anchor_gaps
 from nagare_clip.gap_context.gaps import load_gaps
@@ -59,12 +62,17 @@ def run_guided_edit(
     *,
     json_path: Path | None = None,
     gaps_path: Path | None = None,
+    cuts_txt: Path | None = None,
 ) -> None:
     min_seconds = silence_line_min(cfg.get("director", {}))
 
     # Read once: the timings decide the silence lines, size a timelapse's
-    # caption, and drive the closing check_edits pass.
+    # caption, and drive the closing check_edits pass.  A source with no speech
+    # ends where the media does (*cuts_txt* records it): its one leading
+    # silence line is the whole source.
     json_data = json.loads(json_path.read_text(encoding="utf-8")) if json_path else None
+    if json_data is not None:
+        json_data = with_media_end(json_data, read_media_duration(cuts_txt))
     edit_lines = with_silence_lines(
         edits_txt.read_text(encoding="utf-8").splitlines(), json_data, min_seconds, gaps_path
     )
@@ -87,7 +95,9 @@ def run_guided_edit(
     )
 
     output.parent.mkdir(parents=True, exist_ok=True)
-    output.write_text("\n".join(result_lines) + "\n", encoding="utf-8")
+    # No line at all (a source with no speech and no known end) is an empty
+    # file: a lone "\n" would read back as one empty speech line.
+    output.write_text("".join(f"{line}\n" for line in result_lines), encoding="utf-8")
     logging.info("guided_edit: wrote %s", output)
 
     if json_data is not None:

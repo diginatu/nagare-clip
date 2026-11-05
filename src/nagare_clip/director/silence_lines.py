@@ -63,7 +63,8 @@ class SilenceLine:
     """One wait between two lines: where it is, how long, what is visible.
 
     *after_line* is the 1-based SOURCE line the silence follows — the ``n`` of
-    the ``"n~"`` that addresses it.
+    the ``"n~"`` that addresses it; ``0`` is the leading silence, before line 1
+    (``"0~"``).
     """
 
     after_line: int
@@ -123,7 +124,9 @@ def build_silence_lines(
     ``lines=(a, b)`` restricts the result to one segment: the silence after its
     last line leads into the segment that plays NEXT (``anchor_gaps``' rule),
     and one before its first line is unaddressable from inside it, so both are
-    left out.
+    left out — except the LEADING silence (``after_line`` 0, the wait before
+    line 1), which a slice starting at line 1 holds.  A source with no speech
+    is that one silence line, ``0.0`` to the media end.
     """
     spans = gap_spans(whisperx_data)
     shown = expected_silences(whisperx_data, min_seconds)
@@ -131,7 +134,11 @@ def build_silence_lines(
     claimed: set[int] = set()
     out: list[SilenceLine] = []
     for after_line in sorted(spans):
-        if not (first <= after_line < last):
+        # The leading silence (after_line 0) is the source's own start, so only
+        # a slice that starts there has it; a later segment's run-up is the
+        # silence after the line before it, addressed from that segment.
+        leading = after_line == 0 and first <= 1
+        if not (leading or first <= after_line < last):
             continue
         if after_line not in shown:
             continue

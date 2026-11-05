@@ -13,7 +13,7 @@ import logging
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from nagare_clip.audio_silence.cuts_file import read_cuts
+from nagare_clip.audio_silence.cuts_file import read_cuts, read_media_duration
 from nagare_clip.config import DEFAULTS
 from nagare_clip.director.context import project_context_block
 from nagare_clip.director.display import DisplayView
@@ -23,7 +23,7 @@ from nagare_clip.director.silence_lines import (
     build_silence_lines,
 )
 from nagare_clip.director.transcript import speech_seconds
-from nagare_clip.edit_lines import parse_edit_lines
+from nagare_clip.edit_lines import parse_edit_lines, with_media_end
 from nagare_clip.edit_lines import silence_line_min as silence_line_min  # re-export
 from nagare_clip.gap_context.context import anchor_gaps
 from nagare_clip.gap_context.gaps import Gap, load_gaps
@@ -135,6 +135,9 @@ def load_segment_transcript(inputs: SegmentInputs) -> SegmentTranscript:
     if inputs.json_path and inputs.json_path.is_file():
         try:
             data = json.loads(inputs.json_path.read_text(encoding="utf-8"))
+            # A source with no speech ends where the media does, as intervals
+            # reads it; its leading silence line is the whole source.
+            data = with_media_end(data, read_media_duration(inputs.cuts_txt))
             seg_times = segment_times(data)
         except (ValueError, OSError):
             logging.warning("director: could not read --json %s", inputs.json_path)
@@ -143,11 +146,17 @@ def load_segment_transcript(inputs: SegmentInputs) -> SegmentTranscript:
         silences = segment_silences(
             seg_times, source_drops(data, all_lines, inputs.cuts_txt, inputs.intervals_cfg)
         )
+    elif seg_times is not None:
+        silences = []
+    # A source with no speech still has gaps: every one is before line 1
+    # (anchor 0), where its leading silence line claims it.
     gap_list = (
-        anchor_gaps(load_gaps(inputs.gaps), seg_times or [], segment.lines) if seg_times else []
+        anchor_gaps(load_gaps(inputs.gaps), seg_times, segment.lines)
+        if seg_times is not None
+        else []
     )
     silence_lines: list[SilenceLine] = []
-    if seg_times:
+    if seg_times is not None:
         # The word times, not the segment bounds: this is the silence the
         # intervals stage drops and "n~" edits.
         silence_lines, gap_list = build_silence_lines(

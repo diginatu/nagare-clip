@@ -36,7 +36,16 @@ uv run python -m nagare_clip.director.tools {view,dump,preview,write} ...
 `--config` is repeatable and deep-merged like the pipeline's. All line numbers
 are the **display numbering**: every source in shooting order, numbered once,
 speech and silence lines together (`director.display.build_display_view`) —
-the view the checkpoint loads too.
+the view the checkpoint loads too. A source's block opens with its **leading
+silence line** when the wait before its line 1 is at least
+`director.silence_line_min` (source `"0~"`); a source with no speech at all is
+a block of that one line, `0.0` to the media end its `_cuts.txt` records
+(`edit_lines.with_media_end()`, applied by `load.load_segment_transcript()`),
+carrying the gap_context descriptions inside it (anchor `0`, passed through
+even though `seg_times` is empty). With no recorded media end such a block has
+no line at all and `render()` prints its heading with `(no lines)`; nothing on
+this path assumes a source has a line (`_bodies()` returns `[]` for an empty
+transcript rather than splitting `""` into a phantom line).
 
 | command | does | writes |
 | --- | --- | --- |
@@ -49,6 +58,14 @@ the view the checkpoint loads too.
 `first`/`last` range (defaults unchanged): a block heading is kept for every
 block with a line in range, its leading gap descriptions only when its first
 line is in range.
+
+The preview models the leading silence as the gap after line `0`
+(`preview._Playback.lead`, the leading silence line's seconds, only for a
+segment starting at the source's line 1): it is dropped by default, a
+`"0~"`-edged keep/timelapse plays it (`lead_onscreen()`, added to the
+segment's `runtime()` and to every `timeline_start()`), `timeline_runs()` puts
+it first, a keep starting at line 1 names it among its boundary gaps, and a
+caption on a silence line is listed under that silence line's display number.
 
 Loading (`tools/project.py::load_project` → `project_for(ctx, stems)`) goes
 through `director.files.director_inputs()` and
@@ -152,7 +169,11 @@ Annotation lines (`[silent gap: …]`) have no number, so an op on one is
 unrepresentable.
 
 `to_source()` converts with `DisplayView.to_source()` (a silence line at an
-edge becomes `"n~"`), `order_segments` + `normalise` convert the order; a test
+edge becomes `"n~"`; the leading one `"0~"`, which `ops.parse_op` accepts only
+as a silence edge of a range starting at the source's line 1),
+`order_segments` + `normalise` convert the order (a range over a speechless
+source's one silence line is the whole-source segment; `order_ranges` gives
+line 1 its leading silence line back); a test
 round-trips every single-segment display range, and `write` → `dump`
 round-trips whole edits.
 

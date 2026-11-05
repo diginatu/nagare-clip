@@ -58,7 +58,11 @@ def caption_duration(
     factor = op.factor
     if not factor or factor <= 0:
         return None
-    if a < 1 or b > len(seg_times):
+    # A silence edge reads the silence's own times (``"0~"`` included: the
+    # leading silence has no line before it); a line edge needs that line.
+    if (not op.gap_start and a < 1) or a < 0 or b > len(seg_times):
+        return None
+    if not op.gap_end and b < 1:
         return None
     silences = silences or {}
     if op.gap_start:

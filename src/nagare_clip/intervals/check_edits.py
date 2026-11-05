@@ -16,7 +16,8 @@ so the verdict matches what the intervals stage would do):
 - speech-line count vs. number of JSON segments (speech lines map 1:1 to
   segments);
 - silence lines (``guided_edit`` writes one after speech line ``n`` for every
-  wait of at least ``director.silence_line_min``): missing, duplicated,
+  wait of at least ``director.silence_line_min``, and a leading one before
+  line 1 for the wait before it): missing, duplicated,
   unexpected or text-carrying ones are named by physical line.  Their bracket
   body is opaque — never scanned for tags or patches — and its seconds and
   description are not compared;
@@ -39,12 +40,14 @@ import sys
 from pathlib import Path
 from typing import Any, NamedTuple
 
+from nagare_clip.audio_silence.cuts_file import read_media_duration
 from nagare_clip.edit_lines import (
     DEFAULT_SILENCE_LINE_MIN,
     MARKER_RE,
     expected_silences,
     parse_edit_lines,
     silence_problems,
+    with_media_end,
 )
 from nagare_clip.intervals.sync_json import (
     _OVERLAY_MARK_RE,
@@ -316,6 +319,15 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     )
     parser.add_argument("--json", required=True, dest="json_path", help="WhisperX JSON path")
     parser.add_argument(
+        "--cuts-txt",
+        default=None,
+        dest="cuts_txt",
+        help=(
+            "the audio_silence _cuts.txt: its recorded media duration is where a "
+            "source with no speech ends (its leading silence line)"
+        ),
+    )
+    parser.add_argument(
         "--silence-line-min",
         type=float,
         default=DEFAULT_SILENCE_LINE_MIN,
@@ -333,6 +345,8 @@ def main(argv: list[str] | None = None) -> None:
     edit_lines = Path(args.edits_txt).read_text(encoding="utf-8").splitlines()
     with open(args.json_path, encoding="utf-8") as f:
         json_data = json.load(f)
+    if args.cuts_txt:
+        json_data = with_media_end(json_data, read_media_duration(Path(args.cuts_txt)))
 
     problems = check_edits(edit_lines, json_data, silence_line_min=args.silence_line_min)
     for p in problems:

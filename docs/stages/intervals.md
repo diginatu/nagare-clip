@@ -20,6 +20,27 @@ is then an ordinary marker on that line, and `_edits.txt` stays the single
 record of every edit (the old time-resolved side channel, `op_times.py` +
 `run_intervals(extra=)`, is deleted).
 
+- **The leading silence line.** The wait before line 1 — `0.0` to line 1's
+  first timed word (`edit_lines.leading_span()`) — is a silence line too,
+  written ABOVE line 1 when it is at least `director.silence_line_min`, and
+  addressed as `"0~"` (`gap_spans()` key `0`; a `Slot` with `speech_line` `0`).
+  Only a source's TRUE start has one: a segment of a split source starting at
+  line `a > 1` is still addressed by `"(a-1)~"`.
+- **A source with no speech** (WhisperX `segments: []`, an empty
+  `_edits.txt`) is exactly one leading silence line: `0.0` to the **media
+  end**. WhisperX's JSON carries no duration, so audio_silence records
+  ffmpeg's own `Duration:` in `_cuts.txt` as a `# media duration: 42.500s`
+  comment (`cuts_file.read_media_duration()`), and every reader that needs it
+  (`run_intervals`, guided_edit, the director's loader, `check_edits
+  --cuts-txt`) puts it on the JSON as its `duration` key through
+  `edit_lines.with_media_end()` — which touches a source with no segments
+  only, so a speech source's timeline still ends where its words do. No
+  recorded duration (audio_silence disabled, a cut list written before this,
+  the comment deleted) → no leading silence line and 0 s of footage, never a
+  guess. `compute_keep_intervals` treats the whole of such a source as its
+  leading silence: dropped by default (`excludes (0, duration)`), played only
+  under a `<keep>` — so `<keep>[silent 42.5s: …]</keep>` keeps all of it.
+
 - **One parser.** `nagare_clip.edit_lines.parse_edit_lines()` splits the file
   into speech lines (one per WhisperX segment) and silence lines identified by
   **position** (which speech lines they sit between). Every reader goes
@@ -49,7 +70,9 @@ record of every edit (the old time-resolved side channel, `op_times.py` +
   director.silence_line_min)` — so re-running `sentence_split`, or changing
   `silence_line_min`, after guided_edit makes intervals refuse the old file
   until guided_edit re-runs. A file with no silence line at all is the legacy
-  shape and is not checked.
+  shape and is not checked. A missing **leading** silence line is not
+  reported either (it is position 0, so its absence moves no marker, and every
+  file written before it existed lacks it); an unexpected or duplicated one is.
 - **Equivalence.** `tests/intervals/test_silence_equivalence.py` compares the
   marker path against frozen output of the deleted time-resolved path. The one
   known difference: a speech-side edge resolves to the raw word end/start
@@ -74,6 +97,8 @@ record of every edit (the old time-resolved side channel, `op_times.py` +
 per-source loop it resolves the director's order and writes
 `output/intervals/timeline.json`. A segment `[a, b]` runs from the end of line
 `a-1` to the end of line `b`, so each segment owns the silent gap preceding its
-first line and a moved segment takes its own run-up with it.
+first line and a moved segment takes its own run-up with it. A segment starting
+at line 1 starts at `0.0`, so it owns the leading silence; a source with no
+speech is one whole-source segment, `0.0` to its `duration_sec` (the media end).
 
 See [`order.md`](order.md).

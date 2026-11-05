@@ -53,7 +53,7 @@ def test_a_scalar_line_still_means_that_one_line():
 
 
 def test_malformed_silence_references_are_dropped():
-    for bad in (["~53", 55], ["0~", "0~"], ["abc~", 55], ["53~~", 55], [53, "52~"], ["5 3~", 6]):
+    for bad in (["~53", 55], ["abc~", 55], ["53~~", 55], [53, "52~"], ["5 3~", 6], [0, 5]):
         assert ops_from_dict({"ops": [{"type": "cut", "lines": bad}]}, 100) == [], (
             f"{bad!r} should be dropped"
         )

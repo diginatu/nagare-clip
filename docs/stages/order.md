@@ -86,8 +86,11 @@ number names one line however the order changes.
   writes `order.json`.
 - **A range may start or end on a silence line.** A silence plays with the range
   it is in: ending on the silence after `b` becomes `b~`; starting on it starts
-  at `b+1`, which already owns that silence. A range of only a silence line is
-  refused.
+  at `b+1`, which already owns that silence (the leading silence, `0~`, is
+  line 1's). A range of only a silence line is refused — except a source with
+  no speech, whose one silence line IS the source: it becomes the whole-source
+  segment (`checks.order_segments`), and `order.validate_segments` accepts a
+  zero-line source covered by exactly one whole-source segment.
 - **A range over a source boundary** is two segments that happen to be adjacent
   (`checks.order_segments` splits it).
 - **Timelapses**: an order break inside one source would cut a timelapse's

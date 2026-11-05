@@ -407,7 +407,10 @@ roughly three quarters of described gaps were static noise). Details:
   accounts for this silence" (`test_anchor_gaps_midpoint_not_start_decides_the_anchor`,
   `test_anchor_gaps_picks_the_last_line_before_the_midpoint_not_the_first`).
 - `anchor == 0` means the gap precedes every line ("before line 1"); this is
-  also what an empty `seg_times` list produces (no line ever qualifies).
+  also what an empty `seg_times` list produces (no line ever qualifies) — a
+  source with no speech. `director/load.py` anchors gaps whenever the JSON was
+  read, empty `seg_times` included, so such a source's descriptions reach the
+  view: they land in its one (leading) silence line.
 - `anchor == len(lines)` means the gap follows the transcript's final line
   (trailing silence) — the director view renders it under the last line
   rather than dropping it.
@@ -426,7 +429,8 @@ byte-identical to before this feature existed.
 **`director`'s indented, un-numbered annotation (`director/display.py`)**:
 `director/load.py` anchors each source's gaps (`anchor_gaps`) and hands them to
 `silence_lines.build_silence_lines()`, which gives a gap whose midpoint falls in
-a between-line wait to that wait's numbered silence line; the ones left over
+a between-line wait — or the leading wait before line 1 — to that wait's
+numbered silence line; the ones left over
 (a silence INSIDE a line) stay in `SegmentTranscript.gaps`.
 `build_display_view()` collects those per line and `DisplayView.render()`
 prints each as `    [silent gap: {description}]` (four-space indent) right

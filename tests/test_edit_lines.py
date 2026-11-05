@@ -56,13 +56,19 @@ def test_insert_never_writes_a_silence_after_the_last_line():
 # --- the silence set -----------------------------------------------------------
 
 
-def test_gap_spans_are_every_between_line_gap():
-    assert gap_spans(WHISPERX) == {1: (1.4, 11.4), 2: (12.0, 12.5), 3: (13.0, 21.0)}
+def test_gap_spans_are_every_between_line_gap_and_the_leading_one():
+    # Key 0 is the wait before line 1: the source's start to its first word.
+    assert gap_spans(WHISPERX) == {
+        0: (0.0, 1.0),
+        1: (1.4, 11.4),
+        2: (12.0, 12.5),
+        3: (13.0, 21.0),
+    }
 
 
 def test_expected_silences_apply_the_threshold():
     assert expected_silences(WHISPERX, 5.0) == {1, 3}
-    assert expected_silences(WHISPERX, 0.0) == {1, 2, 3}
+    assert expected_silences(WHISPERX, 0.0) == {0, 1, 2, 3}
     assert expected_silences(WHISPERX, 9.0) == {1}
 
 
@@ -229,11 +235,12 @@ def test_a_moved_silence_line_is_missing_at_one_place_and_unexpected_at_another(
     assert "unexpected silence line after speech line 2" in problems[1][1]
 
 
-def test_a_silence_line_before_the_first_speech_line_is_named():
+def test_a_leading_silence_line_where_there_is_none_is_named():
+    # The 1.0 s before line 1 is under the 5.0 s threshold: no leading line.
     lines = ["[silent 1.0s]", "あ", "[silent 10.0s]", "い", "う", "[silent 8.0s]", "え"]
     ((line, message),) = _problems(lines)
     assert line == 1
-    assert "before the first speech line" in message
+    assert "unexpected silence line before speech line 1" in message
 
 
 def test_text_added_to_a_silence_line_says_so():

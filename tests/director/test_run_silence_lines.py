@@ -75,8 +75,10 @@ def _run(tmp_path, monkeypatch, cfg=CFG, gaps=None):
 
 def test_the_wait_between_two_lines_is_shown_as_its_own_line(tmp_path, monkeypatch):
     user = _run(tmp_path, monkeypatch)
-    # Line 1 of the source is display line 1; the wait after it is display 2.
-    assert "2: [silent 29.9s]" in user
+    # The 501 s before line 1 is the leading silence line (display 1); line 1
+    # of the source is display 2, and the wait after it is display 3.
+    assert user.startswith("[1] a\n1: [silent 501.0s]\n2: その状態で")
+    assert "3: [silent 29.9s]" in user
     # ...and the line it follows no longer counts it a second time.
     assert "gap 29.9s" not in user
 
@@ -85,7 +87,7 @@ def test_the_gap_description_becomes_the_silence_lines_text(tmp_path, monkeypatc
     # The very annotation that used to be printed above the line.
     gaps = _gaps(tmp_path, 505.0, 525.0, "デモが動く")
     user = _run(tmp_path, monkeypatch, gaps=gaps)
-    assert "2: [silent 29.9s: デモが動く]" in user
+    assert "3: [silent 29.9s: デモが動く]" in user
     assert "[silent gap:" not in user
 
 
@@ -121,7 +123,7 @@ def test_the_silence_is_measured_from_the_words_not_the_segment_bounds(tmp_path)
     ]
     js = tmp_path / "a.json"
     js.write_text(json.dumps({"segments": segments}), encoding="utf-8")
-    assert "2: [silent 29.9s]" in _rendered(edits, js)
+    assert "3: [silent 29.9s]" in _rendered(edits, js)
 
 
 def test_the_default_threshold_is_the_configured_one():

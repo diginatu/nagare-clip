@@ -22,7 +22,9 @@ so the model names one range per turn and the code converts it back to the
 per-source coordinates ``_director.json``, ``guided_edit`` and ``intervals``
 have always spoken (:meth:`DisplayView.to_source`).  A silence line at an edge
 of a range is exactly increment 1's ``"n~"``: the silence AFTER the source line
-it follows, never the line after it.
+it follows, never the line after it.  The wait before a source's line 1 is its
+leading silence line, first in its block, ``"0~"``; a source with no speech is
+a block of that one line.
 
 A range that crosses a segment join is refused rather than clipped: the two
 sides are different footage, so an op over both means nothing
@@ -52,6 +54,7 @@ from nagare_clip.order import Segment, segment_label
 
 if TYPE_CHECKING:  # pragma: no cover - typing only, and run.py may import us
     from nagare_clip.director.load import SegmentTranscript
+    from nagare_clip.director.silence_lines import SilenceLine
 
 #: Annotation lines are indented and un-numbered, as they are everywhere else
 #: the director reads them, so neither can be mistaken for a display line.
@@ -63,7 +66,8 @@ class DisplayLine:
     """One line of the finished video's single numbering.
 
     *source_line* is the speech line's own number in its source — or, for a
-    silence line, the line the silence FOLLOWS (the ``n`` of ``"n~"``).
+    silence line, the line the silence FOLLOWS (the ``n`` of ``"n~"``; ``0`` for
+    the leading silence, before line 1).
     *annotations* are gap descriptions no silence line claimed; they are shown
     under this line, un-numbered, exactly as they were before.
     """
@@ -113,6 +117,11 @@ class DisplayView:
         blocks: list[str] = []
         for seg in self.segments:
             a, b = max(seg.first, lo), min(seg.last, hi)
+            if seg.first > seg.last and lo <= seg.first <= hi + 1:
+                # A source with no speech and no known length has no line at
+                # all, not even its leading silence; say so rather than drop it.
+                blocks.append(f"[{seg.index}] {seg.label}\n{INDENT}(no lines)")
+                continue
             if a > b:
                 continue
             out = [f"[{seg.index}] {seg.label}"]
@@ -170,6 +179,10 @@ def _bodies(transcript: SegmentTranscript) -> list[str]:
     front of it changes.  A line's number never contains ``": "``, so the split
     is exact.
     """
+    if not transcript.edit_lines:
+        # A source with no speech: no line at all (splitting the empty block
+        # would invent one), only its leading silence line.
+        return []
     clean = clean_for_display(transcript.edit_lines)
     seg_times = transcript.seg_times
     if seg_times is not None and len(seg_times) == len(clean):
@@ -183,6 +196,20 @@ def _bodies(transcript: SegmentTranscript) -> list[str]:
     else:
         block = format_numbered_transcript(clean, first_line=transcript.first_line)
     return [text.split(": ", 1)[1] if ": " in text else "" for text in block.split("\n")]
+
+
+def _silence_line(number: int, segment: int, stem: str, silence: SilenceLine) -> DisplayLine:
+    return DisplayLine(
+        number=number,
+        segment=segment,
+        stem=stem,
+        source_line=silence.after_line,
+        is_silence=True,
+        # No "after line n" here: the line above it is that line, and this one
+        # has a number of its own.  The same text guided_edit writes into
+        # _edits.txt.
+        text=silence.body(),
+    )
 
 
 def build_display_view(
@@ -204,6 +231,11 @@ def build_display_view(
         for anchor, gap in transcript.gaps:
             annotations.setdefault(anchor, []).append(gap.description)
         first = len(lines) + 1
+
+        # The leading silence (the wait before line 1, "0~") comes first.
+        leading = silences.get(0) if transcript.first_line <= 1 else None
+        if leading is not None:
+            lines.append(_silence_line(len(lines) + 1, index, segment.stem, leading))
         for offset, body in enumerate(bodies):
             source_line = transcript.first_line + offset
             lines.append(
@@ -220,19 +252,7 @@ def build_display_view(
             )
             silence = silences.get(source_line)
             if silence is not None:
-                lines.append(
-                    DisplayLine(
-                        number=len(lines) + 1,
-                        segment=index,
-                        stem=segment.stem,
-                        source_line=source_line,
-                        is_silence=True,
-                        # No "after line n" here: the line above it is that
-                        # line, and this one has a number of its own.  The same
-                        # text guided_edit writes into _edits.txt.
-                        text=silence.body(),
-                    )
-                )
+                lines.append(_silence_line(len(lines) + 1, index, segment.stem, silence))
         blocks.append(
             DisplaySegment(
                 index=index,

@@ -1,7 +1,7 @@
 """The director's operations: the ``{stem}_director.json`` contract.
 
 An op references source lines by 1-based number (``"n~"`` names the silence
-after line ``n``) and never re-outputs transcript text, except an ``edit``
+after line ``n``; ``"0~"`` the leading silence, before line 1) and never re-outputs transcript text, except an ``edit``
 op's exact ``old``/``new``.  :func:`parse_op` validates one op — the shared
 check the agent skill's ``write`` tool reports and :func:`ops_from_dict`
 (every reader of a hand-editable file) drops by.
@@ -121,7 +121,9 @@ def _coerce_line_range(
     Separate from :func:`coerce_lines` because ``summary`` shares that one for
     part ranges, where a silence reference has no meaning.  Every range check
     is the same: a silence edge is an edge of the SAME line, so it relaxes
-    nothing.
+    nothing — except ``"0~"``, the leading silence, which has no line of its
+    own to hang from and is accepted as ``0`` when *first_line* is the
+    source's start.
     """
     if isinstance(value, (list, tuple)) and len(value) == 2:
         first, last = value
@@ -131,7 +133,12 @@ def _coerce_line_range(
     end = _coerce_endpoint(last)
     if start is None or end is None:
         return None
-    if not (max(1, first_line) <= start[0] <= end[0]):
+    # "0~" is the leading silence, before line 1: only a range that starts at
+    # the source's true start may name it, and only as a silence edge.
+    lowest = 0 if start[1] and first_line <= 1 else max(1, first_line)
+    if not (lowest <= start[0] <= end[0]):
+        return None
+    if end[0] == 0 and not end[1]:
         return None
     if num_lines is not None and end[0] > num_lines:
         return None

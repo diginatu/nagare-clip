@@ -100,7 +100,9 @@ def order_segments(view: DisplayView, order: list[Range]) -> list[Segment] | Non
     """*order* in source coordinates, split at source boundaries.
 
     A range's first line is the speech line itself, or — for a silence line —
-    the line after it (the silence before a line is its segment's by default).
+    the line after it (the silence before a line is its segment's by default;
+    the leading silence, ``0~``, is line 1's).  A source with no speech is one
+    silence line and becomes the whole-source segment.
     Its last line is a speech line, or a silence line, which becomes that line
     ``~`` (:attr:`~nagare_clip.order.Segment.gap_end`).  ``None`` when a piece
     holds no speech line at all.  Not normalised: the caller knows the counts.
@@ -113,9 +115,19 @@ def order_segments(view: DisplayView, order: list[Range]) -> list[Segment] | Non
                 return None
             begin = start.source_line + 1 if start.is_silence else start.source_line
             if begin > end.source_line:
+                if _speechless(view, start.segment):
+                    # A source with no speech is its one (leading) silence
+                    # line: it plays whole or not at all.
+                    out.append(Segment(start.stem, None))
+                    continue
                 return None
             out.append(Segment(start.stem, (begin, end.source_line), end.is_silence))
     return out
+
+
+def _speechless(view: DisplayView, segment: int) -> bool:
+    """Does display block *segment* hold no speech line at all?"""
+    return not any(line.segment == segment and not line.is_silence for line in view.lines)
 
 
 def order_ranges(view: DisplayView, segments: list[Segment]) -> list[Range]:
@@ -145,6 +157,9 @@ def order_ranges(view: DisplayView, segments: list[Segment]) -> list[Range]:
         for block in blocks:
             if a > 1 and (seg.stem, a - 1) not in claimed:
                 x = x or view.from_source(block.index, a - 1, silence=True)
+            if a == 1:
+                # The leading silence plays with line 1, whatever comes first.
+                x = x or view.from_source(block.index, 0, silence=True)
             x = x or view.from_source(block.index, a)
             if seg.gap_end:
                 y = y or view.from_source(block.index, b, silence=True)

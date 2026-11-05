@@ -27,7 +27,10 @@ numbering:
   gap_context stage described it. It has a number of its own: put that
   number in an op (a keep restores the wait, a timelapse plays it fast, an
   order range may start or end on it). Without a description it reads
-  `[silent 29.9s]`.
+  `[silent 29.9s]`. A source's block may open with one: the wait before its
+  first line, addressed the same way. A source with no speech at all is a
+  block of that one silence line — the whole source; it plays only if an op
+  covers it (a keep, or a timelapse to show it fast).
 - An indented `[silent gap: ...]` with no number is silence INSIDE the line
   above. It cannot be addressed; act on the numbered line.
 - Lines without a bracket mean the timing is unknown (no WhisperX JSON for
