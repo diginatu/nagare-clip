@@ -16,6 +16,18 @@ logger = logging.getLogger(__name__)
 PATCH_RE = re.compile(r"\{\{([^}]*?)->(.*?)\}\}")
 _LINE_RE = re.compile(r"^(\d+):\s?(.*)")
 
+HINT_HEADER = "Reference (second recognizer, may be wrong):"
+
+HINT_INSTRUCTIONS = (
+    "After the numbered lines, a reference block may follow: a second speech "
+    "recognizer's reading of the lines where it differs from the transcript "
+    "(`(none)` means it heard nothing there). The reference can be wrong. Use it "
+    "only as evidence to fix a misrecognition in the original line, by marking "
+    "the fix with {{old->new}} on the original text. Never copy the reference's "
+    "punctuation, fillers or phrasing, and leave a line alone when the "
+    "reference gives no clear evidence of an error."
+)
+
 
 def apply_patches_to_lines(lines: list[str]) -> list[str]:
     """Apply {{old->new}} patches in each line, returning clean text.
@@ -40,6 +52,7 @@ def filter_transcript(
     call_llm=None,
     recorder: Recorder = NULL_RECORDER,
     stem: str = "",
+    hints: list[str | None] | None = None,
 ) -> list[str]:
     """Send transcript lines to LLM in batches, return lines with {{old->new}} markers.
 
@@ -55,6 +68,10 @@ def filter_transcript(
     batch_size = cfg.get("batch_size", 10)
     batches = _batch_lines(lines, batch_size)
     result = list(lines)  # copy
+    if hints is not None and any(h is not None for h in hints):
+        cfg = {**cfg, "prompt": f"{cfg.get('prompt', '')}\n\n{HINT_INSTRUCTIONS}"}
+    else:
+        hints = None
 
     stats: dict[int, dict[str, int]] = defaultdict(lambda: {"total": 0, "succeeded": 0})
     for batch in batches:
@@ -67,6 +84,7 @@ def filter_transcript(
             call_llm=call_llm,
             recorder=recorder,
             stem=stem,
+            hints=hints,
         )
 
     _log_stats(stats, batch_size)
@@ -83,6 +101,7 @@ def _process_batch(
     call_llm=None,
     recorder: Recorder = NULL_RECORDER,
     stem: str = "",
+    hints: list[str | None] | None = None,
 ) -> None:
     """Run one LLM call for ``batch``; on any line missing from the parse
     result, recursively retry the failed lines with a halved batch size
@@ -102,7 +121,7 @@ def _process_batch(
     cfg = with_trace_meta(cfg, stage=recorder.stage, unit=unit)
     messages = [
         {"role": "system", "content": cfg.get("prompt", "")},
-        {"role": "user", "content": _format_batch(batch)},
+        {"role": "user", "content": _format_batch(batch) + _format_hints(batch, hints)},
     ]
     try:
         response = call_llm(messages, cfg)
@@ -181,7 +200,22 @@ def _process_batch(
             call_llm=call_llm,
             recorder=recorder,
             stem=stem,
+            hints=hints,
         )
+
+
+def _format_hints(batch: list[tuple[int, str]], hints: list[str | None] | None) -> str:
+    """The reference block for ``batch`` ('' when none of its lines has a hint)."""
+    if hints is None:
+        return ""
+    rows = [
+        f"{idx + 1}: {hints[idx] or '(none)'}"
+        for idx, _ in batch
+        if idx < len(hints) and hints[idx] is not None
+    ]
+    if not rows:
+        return ""
+    return f"\n\n{HINT_HEADER}\n" + "\n".join(rows)
 
 
 def _log_stats(stats: dict[int, dict[str, int]], initial_size: int) -> None:

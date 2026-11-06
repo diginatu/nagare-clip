@@ -41,6 +41,7 @@ def run_text_filter(
     *,
     summary_json: Path | None = None,
     recorder: Recorder = NULL_RECORDER,
+    hints: list[str | None] | None = None,
 ) -> None:
     s2 = cfg["text_filter"]
     lines = txt.read_text(encoding="utf-8").splitlines()
@@ -73,7 +74,9 @@ def run_text_filter(
                 len(keywords),
             )
 
-        result_lines = filter_transcript(lines, filter_cfg, recorder=recorder, stem=txt.stem)
+        result_lines = filter_transcript(
+            lines, filter_cfg, recorder=recorder, stem=txt.stem, hints=hints
+        )
 
         changes = sum(1 for o, c in zip(lines, result_lines) if o != c)
         logging.info("text_filter: %d/%d lines modified by AI", changes, len(lines))
