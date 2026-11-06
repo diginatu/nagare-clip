@@ -76,9 +76,10 @@ runtime behavior.
   into the WhisperX-compatible `{stem}.json`/`.txt`. `audio_silence` runs
   **first** (its speech regions define the transcription chunks, packed to
   `transcription.max_chunk_seconds`); resuming at `transcription` requires
-  `{stem}_vad.json` on disk. `summary`, `director`, `blender`
-  and `publish` run once per pipeline invocation; `sentence_split`, `gap_context`, `text_filter`, `guided_edit`,
-  and `intervals` loop per source inside their adapter. `publish` runs once
+  `{stem}_vad.json` on disk. `summary`, `director`, `blender` and `publish`
+  run once per pipeline invocation; `sentence_split`, `gap_context`,
+  `text_filter`, `guided_edit` and `intervals` loop per source inside their
+  adapter. `publish` runs once
   but still reads per-source material (its frame shortlist and caption list),
   which it gathers in the adapter before a single batched Docker call — the
   same shape as `gap_context`'s extraction. Each LLM stage adapter
@@ -89,9 +90,9 @@ runtime behavior.
   subdir is cleared exactly once per run, not once per source), then
   `rec.rebuild_index()` in a `finally` after the loop.
 - `cli.py` — `argparse` flags mirror the historical bash script
-  (`--source` repeatable, `--config` repeatable, `--language`, `--input-videos-dir`,
+  (`--source` repeatable, `--config` repeatable, `--input-videos-dir`,
   `--output-dir`, `--keep-pre-margin`, `--keep-post-margin`, `--from-stage`,
-  `--to-stage`, `--align-model`). Explicit CLI values are folded into a
+  `--to-stage`; `--language` and `--align-model` are gone with WhisperX). Explicit CLI values are folded into a
   `cli_overrides` dict (`build_cli_overrides`) and passed to
   `get_effective_config(config_paths, cli_overrides)`, so precedence is
   **CLI > later YAML > earlier YAML > model defaults**, validated once on the

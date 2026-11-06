@@ -6,8 +6,8 @@ Agent guidance for this repository.
 
 Maintain and improve a multi-stage rough-cut pipeline:
 
-1. WhisperX transcription in Docker
-2. Audio-silence (jump-cut) detection — Silero VAD v6, editable cut list
+1. Audio-silence (jump-cut) detection — Silero VAD v6 in the `transcribe/` worker, always on and **first**; editable cut list, and its speech regions define the transcription chunks
+2. Haas-ja-v1.0 transcription (`transcribe/` worker) of chunks packed from those regions, shaped into the WhisperX JSON format
 3. LLM sentence re-segmentation — rewrites `{stem}.json`/`{stem}.txt` into one-sentence-per-line units (disabled by default)
 4. gap_context — a vision LLM snapshots+describes long silent gaps (audio_silence spans) so summary/director can see what the transcript can't (disabled by default)
 5. summary — a larger LLM segments every video into line-range parts + summaries (and lists per-video misspelling-prone keywords) and writes one all-videos summary (project-wide)
@@ -31,7 +31,7 @@ composited from it.
 
 > **Naming convention:** Stages are identified only by their **functional /
 > config-section name** — there are no stage numbers anywhere. The canonical
-> identifiers are: `transcription:`, `audio_silence:`, `sentence_split:`,
+> identifiers are: `audio_silence:`, `transcription:`, `sentence_split:`,
 > `gap_context:`, `summary:`, `text_filter:`, `director:`, `guided_edit:`,
 > `intervals:`, `blender:`, `publish:`, `render:`.
 > Package dirs (`src/nagare_clip/<name>/`), `output/<name>/` subdirs, and
@@ -42,13 +42,6 @@ composited from it.
 
 `scripts/run_pipeline.sh` is a thin shim that execs `uv run python -m nagare_clip.pipeline "$@"` — the orchestration itself lives in the Python package `src/nagare_clip/pipeline/` (see [`docs/stages/pipeline.md`](docs/stages/pipeline.md)). Use `--from-stage <name>` to skip earlier stages and reuse their outputs.
 
-### transcription — WhisperX Transcription
-
-Speech-to-text with word-level alignment. Runs in a single Docker container for all source files to avoid model reload overhead.
-
-- **Inputs:** source video files (mp4/mkv/mov/avi/webm)
-- **Outputs:** `{stem}.json` (word timings), `{stem}.txt` (plain text)
-
 ### audio_silence — Audio-Silence (Jump-Cut) Detection
 
 Runs Silero VAD v6 through the `transcribe/` worker subproject (`python -m nagare_transcribe vad`, one process for all sources, no Docker); the speech regions are written to `{stem}_vad.json` and `audio_silence.run.run_audio_silence()` takes their complement (gaps shorter than `audio_silence.min_silence`) as the editable `{stem}_cuts.txt`, recording the media duration. Always on (`audio_silence.enabled`/`.noise` are removed config keys). The cut list is read by `sentence_split` (force-split), `gap_context` (gap selection) and `intervals` (the exclude union), so deleting a line affects all three. See [`docs/stages/audio_silence.md`](docs/stages/audio_silence.md).
@@ -56,9 +49,16 @@ Runs Silero VAD v6 through the `transcribe/` worker subproject (`python -m nagar
 - **Inputs:** source video file
 - **Outputs:** `{stem}_vad.json`, `{stem}_cuts.txt` (one `START - END` silent span per line; delete a line to keep that span)
 
+### transcription — Haas-ja Transcription
+
+Runs after `audio_silence`. Haas-ja-v1.0 (third-intelligence/Haas-ASR, NeMo TDT; needs a CUDA GPU) transcribes **chunks packed from the audio_silence VAD speech regions**: `transcription.chunks.pack_regions()` merges consecutive regions greedily while the chunk spans at most `transcription.max_chunk_seconds` (30 s), every chunk starting at a region start. The `transcribe/` worker (`python -m nagare_transcribe asr`, one process for all sources, no Docker) returns raw token timings; `transcription.whisperx_json.build_whisperx_json()` shapes them into the **WhisperX JSON format** so every downstream stage is unchanged: one segment per VAD region, `words` one entry per non-whitespace character (intervals indexes `words` by character position), `{stem}.txt` one segment per line. WhisperX itself is no longer run. Resuming at `transcription` needs `{stem}_vad.json` on disk. See [`docs/stages/transcription.md`](docs/stages/transcription.md).
+
+- **Inputs:** source video files (mp4/mkv/mov/avi/webm); `{stem}_vad.json` from audio_silence
+- **Outputs:** `{stem}.json` (word timings, WhisperX shape), `{stem}.txt` (plain text), the worker's raw `{stem}_haas.json`
+
 ### sentence_split — LLM Sentence Re-Segmentation
 
-An LLM (config `sentence_split:`, disabled by default) rewrites a WhisperX transcript into one-sentence-per-line units per source. The LLM returns **bunsetsu-index ranges**, not text, which the stage maps back to whole-word boundaries, so word timings are preserved and output text is verbatim by construction (guarded by a before/after `concat_word_text` check). Processing is windowed with a trailing-sentence carry over each seam, and each window degrades independently on LLM failure. When `force_split` is enabled (default), long silences from `{stem}_cuts.txt` become hard sentence boundaries — but only where the WhisperX word timings corroborate the silence with a real inter-word gap. Disabled → byte-identical copy-through of `output/transcription/{stem}.{json,txt}`.
+An LLM (config `sentence_split:`, disabled by default) rewrites a transcript into one-sentence-per-line units per source. The LLM returns **bunsetsu-index ranges**, not text, which the stage maps back to whole-word boundaries, so word timings are preserved and output text is verbatim by construction (guarded by a before/after `concat_word_text` check). Processing is windowed with a trailing-sentence carry over each seam, and each window degrades independently on LLM failure. When `force_split` is enabled (default), long silences from `{stem}_cuts.txt` become hard sentence boundaries — but only where the word timings corroborate the silence with a real inter-word gap. Disabled → byte-identical copy-through of `output/transcription/{stem}.{json,txt}`.
 
 See [`docs/stages/sentence_split.md`](docs/stages/sentence_split.md) for the re-segmentation core, windowing/carry-over mechanics, and the full force-split corroboration rule.
 
@@ -87,7 +87,7 @@ Produces `{stem}_edits.txt` for human review. When `text_filter.use_llm` is `fal
 
 A human (never the LLM filter, which runs before them) may also add markers, each parsed independently; see [`docs/stages/intervals.md`](docs/stages/intervals.md) for how the intervals stage resolves them:
 
-- `<keep>...</keep>` force-preserves its audio in the intervals stage. It may open on one line and close on a later one, spanning several WhisperX segments and the silences between them.
+- `<keep>...</keep>` force-preserves its audio in the intervals stage. It may open on one line and close on a later one, spanning several transcript segments and the silences between them.
 - `<speed factor="N.N">...</speed>` plays the region at that speed in the blender stage. It does **not** force-preserve audio — silence inside it is still cut, and the speed applies only to the surviving spoken parts. To keep the audio **and** speed it, nest the tags: `<keep><speed factor="N.N">…</speed></keep>`. Multi-line/nesting/authorship rules follow `<keep>`.
 - `<overlay text="..." duration="N.N"/>` is a **self-closing point marker** for an on-screen TEXT strip: where it sits is where the text appears, and `duration` is seconds on the **edited** timeline. There is no wrapping form and no maximum clamp — an end time derived from a closing tag's position is exactly the bug this replaced. Attribute order is fixed (`text` then `duration`); a non-positive duration or empty text is skipped with a warning; quotes inside `text="..."` are unsupported. It does not force-preserve audio, so the intervals stage **snaps** an anchor that fell on cut footage forward to the first surviving moment of its own line (`intervals.snap_overlay_starts`) and never clips `duration`; the overlay is skipped only when its line has no surviving footage. The marker must stay on one `_edits.txt` line (line N maps to segment N), so a line break in the caption travels escaped as `\n` (`escape_overlay_text()`/`unescape_overlay_text()` in `intervals/sync_json.py`); `check_edits()` reports any embedded newline in an edit line.
 - `<cut>...</cut>` is a deletion shorthand that desugars to `{{wrapped->}}` patches (`sync_json._expand_cut_tags`), so the resulting gap is cut by word-gap silence detection — meant for deletions longer than `intervals.silence_threshold`. Balance/nesting rules follow `<keep>`; don't overlap it with `<keep>/<speed>/<overlay>` on the same span.
@@ -113,9 +113,9 @@ Validate a hand-edited `_edits.txt` before resuming with `python -m nagare_clip.
 - **`keep`** width follows what is on screen — ONE keep over an on-screen event, never over talking. `director.max_keep_lines` (default 8, `0` = no limit) is the cap `write` enforces (`ops.keep_cap_problem()`), counting keeps that touch as one; `ops.keep_limit_note()` is the note `view` prints. `ops_from_dict()` is deliberately uncapped (a human who writes a wide keep means it).
 - **`edit`** is one exact patch on ONE speech line: `{"type": "edit", "lines": [n, n], "old": "<text as view shows it>", "new": "<replacement>"}` (`new` may be `""`). `parse_op` requires a single line, non-empty `old`, string `new`, neither holding `{{`, `}}`, `->`, `<`, `>` or a line break (`guided_edit.patch.forbidden_problem`). Single-line by decision: a patch cannot span lines and one `_edits.txt` line is one segment. The prose-`note` form is gone.
 
-**Timing.** Lines are annotated with duration + gap-to-next (`3: text [4.2s, gap 0.8s]`; a gap that would render 0.0s is omitted) from the video's WhisperX JSON (`format_numbered_transcript_timed`, `director/transcript.py`); untimed when the JSON is absent or its segment count mismatches. `load_segment_transcript` prices each line's silence as **what the `intervals` stage drops from it with no op** (`director.load.source_drops()` → `intervals.keep.dropped_ranges()`, the same chain `run_intervals` runs, with the project's `intervals:` section), so speech + silence is the line's footage and the speech figure is exactly what plays at 1x (`[12.9s speech, 62.9s silence]`). Every figure downstream — brackets, `speech_seconds`/`line_seconds`, default runtime, the preview and `timeline_runs()` — reads that one `silences` list.
+**Timing.** Lines are annotated with duration + gap-to-next (`3: text [4.2s, gap 0.8s]`; a gap that would render 0.0s is omitted) from the video's WhisperX-shaped JSON (`format_numbered_transcript_timed`, `director/transcript.py`); untimed when the JSON is absent or its segment count mismatches. `load_segment_transcript` prices each line's silence as **what the `intervals` stage drops from it with no op** (`director.load.source_drops()` → `intervals.keep.dropped_ranges()`, the same chain `run_intervals` runs, with the project's `intervals:` section), so speech + silence is the line's footage and the speech figure is exactly what plays at 1x (`[12.9s speech, 62.9s silence]`). Every figure downstream — brackets, `speech_seconds`/`line_seconds`, default runtime, the preview and `timeline_runs()` — reads that one `silences` list.
 
-**Context.** When `summary` is enabled, `director.context.project_context_block()` renders the overall summary and one line per `[k]` source with its whole-video summary — facts only. Described gaps from `gap_context` are anchored to the timed transcript and rendered as indented, un-numbered `    [silent gap: description]` lines (`DisplayView.render()`), so an op can never reference one — unless a numbered silence line claims them. **A source with no speech** (WhisperX `segments: []`) is one block of one silence line — its leading silence, `0.0` to the media end (`edit_lines.with_media_end()` from its `_cuts.txt`), carrying its gap descriptions (anchor 0, passed through though `seg_times` is empty); with no recorded media end the block has no line and renders `(no lines)`. Nothing on the view/dump/preview/write/checkpoint path assumes a source has a line.
+**Context.** When `summary` is enabled, `director.context.project_context_block()` renders the overall summary and one line per `[k]` source with its whole-video summary — facts only. Described gaps from `gap_context` are anchored to the timed transcript and rendered as indented, un-numbered `    [silent gap: description]` lines (`DisplayView.render()`), so an op can never reference one — unless a numbered silence line claims them. **A source with no speech** (`segments: []` in the transcript JSON) is one block of one silence line — its leading silence, `0.0` to the media end (`edit_lines.with_media_end()` from its `_cuts.txt`), carrying its gap descriptions (anchor 0, passed through though `seg_times` is empty); with no recorded media end the block has no line and renders `(no lines)`. Nothing on the view/dump/preview/write/checkpoint path assumes a source has a line.
 
 **Playback preview** (`director/preview.py`, pure, no LLM): `preview_segment()` takes one segment's inputs (edit lines, `seg_times`, silences, segment-relative anchored gaps, `first_line`, the parsed ops and the parser's `drops`, optionally `elsewhere_seconds`) and states, per op, what it will play: range as sent and as clipped (with which op took the lost lines); footage seconds → on-screen seconds beside the default seconds for the same lines (what a span *buys*, not only what it costs — showing only costs has pushed this stage off timelapses before); for keep/timelapse both boundary gaps (by `timing.gap_shown`) as "outside this op — dropped" with any `[silent gap: …]` describing that gap; for any span at `UNINTELLIGIBLE_FACTOR` (2.0x, the one threshold) or faster every line inside with its bracket figure and first 24 characters, the total speech as unintelligible, and the footage split into speech / gaps between lines / silence within lines; caption seconds (`timelapse.caption_duration`) and any other caption on screen at the same time (one Blender channel); for a cut the lines and seconds removed; then **what the segment looks like in order** (`timeline_runs()`): consecutive display lines grouped into runs by their fate — `1x`, `1x+silence` (a keep), `timelapse`/`speed` with the factor and caption, `cut` — each with its on-screen seconds and line range, a run ending wherever the governing OP changes, so the island of 1x footage between two timelapses is a run of its own. The runs sum to the runtime the footer prints (a test pins it). An overlay changes no runtime and rides the run it starts in. Then the parser's drops and `default → with these ops` for the segment. Overlap resolution is **not** re-modelled: `resolve_placements()` runs the real `expand_timelapse_ops()` and `guided_edit.apply.resolve_span_ops()` — the same `span_op_order()` (cuts last) and `place_span_op()` that `apply_ops()` calls — and a table test asserts both give identical ranges. A line is quoted with its bracket figure (`transcript.line_seconds()` / `timing.bracket_seconds()`, which fold a sub-second silence back in), while segment runtimes sum `speech_seconds()`, since the audio_silence cut removes that silence regardless. `director_tools.sh preview` prints it (below); it writes nothing. Markers already in the edit lines steer the clipping but are not played back.
 
@@ -149,7 +149,7 @@ An **`edit` op** is spliced as its exact patch (`guided_edit/patch.py::apply_edi
 
 ### intervals — Patch Application + Keep-Interval Computation
 
-Applies `{{old->new}}` patches from `_edits.txt`, syncs corrected text back into WhisperX JSON timing data, then runs NLP analysis (GiNZA/spaCy bunsetsu segmentation) to compute keep intervals. The audio_silence `_cuts.txt` ranges are unioned into the exclude set (via `cuts_txt`) before inversion, and `<keep>` ranges are subtracted from the excludes so the wrapped audio survives both silence sources. `<speed>` spans do **not** force-keep audio: they are written verbatim to a top-level `speed_ranges` array, and the blender stage splits keep intervals at their boundaries. `<overlay/>` markers go to a top-level `overlays` array as `{start, duration, text}` (no end time anywhere in the contract), with the start snapped once the keep intervals are final, and their text bunsetsu-spaced (reusing `caption.bunsetu_separator`) because Blender's TEXT strip only wraps at spaces. A final `merge_close_intervals` pass (`intervals.min_cut`, default 0.4s, `0` disables) absorbs any remaining gap between adjacent keep intervals shorter than the threshold — the only pass constraining gaps rather than intervals. Runs per source in-process. See [`docs/stages/intervals.md`](docs/stages/intervals.md) for the markers, margins and captions.
+Applies `{{old->new}}` patches from `_edits.txt`, syncs corrected text back into the transcript JSON timing data, then runs NLP analysis (GiNZA/spaCy bunsetsu segmentation) to compute keep intervals. The audio_silence `_cuts.txt` ranges are unioned into the exclude set (via `cuts_txt`) before inversion, and `<keep>` ranges are subtracted from the excludes so the wrapped audio survives both silence sources. `<speed>` spans do **not** force-keep audio: they are written verbatim to a top-level `speed_ranges` array, and the blender stage splits keep intervals at their boundaries. `<overlay/>` markers go to a top-level `overlays` array as `{start, duration, text}` (no end time anywhere in the contract), with the start snapped once the keep intervals are final, and their text bunsetsu-spaced (reusing `caption.bunsetu_separator`) because Blender's TEXT strip only wraps at spaces. A final `merge_close_intervals` pass (`intervals.min_cut`, default 0.4s, `0` disables) absorbs any remaining gap between adjacent keep intervals shorter than the threshold — the only pass constraining gaps rather than intervals. Runs per source in-process. See [`docs/stages/intervals.md`](docs/stages/intervals.md) for the markers, margins and captions.
 
 `intervals` is also the **single conversion point from lines to seconds**: it resolves the order (`director/order.json`, else shooting order) and writes `output/intervals/timeline.json` (`{"segments": [{stem, lines?, start, end}]}`, source seconds, playback order). Each segment owns the silent gap *preceding* its first line — unless the segment before ends `"b~"`, which puts that boundary at `max(end(b), start(b+1) − keep_pre_margin)` — and an unresolvable boundary degrades the **whole** manifest to shooting order. **The authority rule:** the director is the authority on the order up to and including `intervals`; `intervals/timeline.json` is the authority after it; nothing downstream of `intervals` re-derives a time from a line number, and nothing upstream reasons in seconds. See [`docs/stages/order.md`](docs/stages/order.md).
 
@@ -208,7 +208,7 @@ It is a stage rather than a flag so the loop "edit `publish.json`, `--from-stage
 
 ### Human Editing Workflow
 
-1. Run transcription–text_filter → audio_silence produces `{stem}_cuts.txt`, text_filter produces `{stem}_edits.txt`
+1. Run audio_silence–text_filter → audio_silence produces `{stem}_vad.json` and `{stem}_cuts.txt`, transcription produces `{stem}.json`/`.txt` (Haas), text_filter produces `{stem}_edits.txt`
 2. Human edits `_cuts.txt` (delete/adjust silent spans) and `_edits.txt` (`{{old->new}}` patches; optional `<keep>`, `<speed factor="N.N">`, `<overlay text="..." duration="N.N"/>`)
 3. Resume with `--from-stage intervals` → unions cuts, applies patches, syncs JSON, carves out `<keep>` ranges (not `<speed>`, which only annotates playback speed), computes intervals, runs Blender (with Speed Control effects for `<speed>` regions)
 
@@ -217,7 +217,7 @@ It is a stage rather than a flag so the loop "edit `publish.json`, `--from-stage
 - Dependency management uses uv + pyproject.toml.
 - LiteLLM is the LLM transport dependency: all provider access (OpenAI/Gemini/Anthropic/Ollama) goes through `nagare_clip.llm_client.call_llm` — do not add provider-specific HTTP clients.
 - Runtime NLP dependency is `ginza` + `ja_ginza` (spaCy-based).
-- Route media tooling (ffmpeg) through the existing whisperx Docker image; do not add host binaries or new Python audio deps. ImageMagick (`magick`, `render/thumbnail.py`) is a deliberate, documented exception: it runs on the **host**, like the `blender` stage already does, because the whisperx image has neither ImageMagick nor CJK fonts, and font slots resolve through host fontconfig (which is what makes a CJK font slot work at all).
+- Route media tooling (ffmpeg) through the existing whisperx Docker image (`gap_context` and `publish` still use it); do not add host binaries or new Python audio deps. Exception: the `transcribe/` worker subproject decodes audio with the **host** `ffmpeg` (`ffmpeg -nostdin -v error -i SRC -ac 1 -ar 16000 -f f32le -`) for Silero VAD and Haas; its heavy dependencies (torch, NeMo, haas-asr, silero-vad) live only in that uv project and the main package never imports them. ImageMagick (`magick`, `render/thumbnail.py`) is a deliberate, documented exception: it runs on the **host**, like the `blender` stage already does, because the whisperx image has neither ImageMagick nor CJK fonts, and font slots resolve through host fontconfig (which is what makes a CJK font slot work at all).
 - Preserve the interval JSON (`intervals/` package) as the human-editable contract for the Blender stage.
 - `_edits.txt` is the single human-editable record of every edit. `intervals` applies only what is in it (plus the audio_silence `_cuts.txt`, a detection result the human prunes). No stage may feed `intervals` an edit from another source; an edit the file cannot express is a format change to `_edits.txt`, not a side channel. Guarded by `tests/intervals/test_single_edit_record.py`.
 - The Blender stage must reference original media; do not re-encode/copy source media.
@@ -243,15 +243,19 @@ src/nagare_clip/          # Main Python package (src layout)
   pipeline/                   # pipeline orchestrator (replaces bash run_pipeline.sh)
     errors.py                 # PipelineError — user-facing orchestration failure
     sources.py                # SourceMedia; discover/resolve/stage source videos for Docker
-    external.py               # docker/blender command builders + run_command() — the only subprocesses
+    external.py               # transcribe-worker/docker/blender command builders + run_command() — the only subprocesses
     runner.py                 # Stage dataclass, PipelineContext, resolve_window(), run_stages() (windowing/skip-validation)
     stages.py                 # STAGE_NAMES + one adapter per stage + STAGES registry (owns per-stage LLM-report recorder lifecycle)
     cli.py                    # pipeline CLI: same flags as the old bash script; CLI > YAML > defaults via get_effective_config
     __main__.py                # python -m nagare_clip.pipeline entry point
-  audio_silence/              # audio_silence stage (audio-silence detection)
+  audio_silence/              # audio_silence stage (Silero VAD; runs first)
     vad.py                    # read_vad(), silences_from_speech() (pure)
     cuts_file.py              # write_cuts() / read_cuts() — editable cut-list format
     run.py                    # run_audio_silence() — consumes the `{stem}_vad.json` result
+  transcription/              # transcription stage (Haas-ja; main-package side, no torch)
+    chunks.py                 # pack_regions(): VAD regions -> chunks of at most max_chunk_seconds (pure)
+    whisperx_json.py          # build_whisperx_json()/transcript_text(): Haas tokens -> WhisperX-shaped JSON (pure)
+    run.py                    # asr_request() / finish_transcription(): worker request in, {stem}.json/.txt out
   sentence_split/             # sentence_split stage (LLM re-segmentation)
     segment.py                # pure: windowing, char/word map, rebuild_window_segments, verbatim check
     nlp.py                    # GiNZA bunsetsu extraction (lazy import)
@@ -295,7 +299,7 @@ src/nagare_clip/          # Main Python package (src layout)
     run.py                    # run_intervals() typed entry point (patch + intervals; cuts_txt)
     keep.py                   # compute_keep_intervals() (the whole keep chain) + dropped_ranges() (what the render drops; the director's brackets)
     check_edits.py            # Standalone _edits.txt integrity checker (reports ALL problems at once)
-    sync_json.py              # Sync corrected text back into WhisperX JSON
+    sync_json.py              # Sync corrected text back into the transcript JSON
     bunsetu.py                # Bunsetsu-level timing (GiNZA)
     speech.py                 # Speech span extraction
     intervals.py              # Interval manipulation
@@ -324,6 +328,9 @@ src/nagare_clip/          # Main Python package (src layout)
   render/                     # render stage (project-wide, after publish; never calls an LLM)
     thumbnail.py              # ThumbLine/ThumbSet contract; escape/validate/layout/build magick argv; render_sets()
     run.py                    # run_render() (publish.json -> render.json + render.md)
+transcribe/                   # separate uv subproject: Haas-ja ASR + Silero VAD worker (torch/NeMo pins); `python -m nagare_transcribe {vad,asr}`
+  src/nagare_transcribe/      # audio.py (host ffmpeg decode), vad.py, asr.py, __main__.py — a thin worker, no shaping logic
+  tests/                      # run with `make test-transcribe` (needs `uv sync --project transcribe`)
 scripts/
   run_pipeline.sh             # Shim: exec uv run python -m nagare_clip.pipeline "$@"
   director_tools.sh           # Shim: the agent-skill director tools (python -m nagare_clip.director.tools)
@@ -337,7 +344,8 @@ Makefile                      # Canonical dev commands (make help / check / vali
 tests/
   test_config.py              # Config module unit tests + example-config sync lint
   pipeline/                   # pipeline orchestrator tests: cli/external/runner/sources/stages
-  audio_silence/              # audio_silence (detect / cuts_file / run) unit tests
+  audio_silence/              # audio_silence (vad / cuts_file / run) unit tests
+  transcription/              # transcription (chunks / whisperx_json / run) unit tests
   sentence_split/             # sentence_split unit + run() tests
   gap_context/                # gap_context (snapshot / gaps / describe / context / run) unit tests
   text_filter/                # text-editing checkpoint unit tests
@@ -410,6 +418,7 @@ the [Documentation Policy](#documentation-policy)):
 
 - project brief (`project:` config → summary/text_filter/publish prompts, the director's `view`) → [`docs/stages/project_brief.md`](docs/stages/project_brief.md)
 - audio_silence → [`docs/stages/audio_silence.md`](docs/stages/audio_silence.md)
+- transcription (Haas chunking, token timestamps, the WhisperX-shaped JSON) → [`docs/stages/transcription.md`](docs/stages/transcription.md)
 - sentence_split (re-segmentation, windowing/carry-over, force-split) → [`docs/stages/sentence_split.md`](docs/stages/sentence_split.md)
 - gap_context (gap selection, frame sampling/extraction, vision-call contract, summary/director consumption) → [`docs/stages/gap_context.md`](docs/stages/gap_context.md)
 - text_filter (+ summary-stage filter context) → [`docs/stages/text_filter.md`](docs/stages/text_filter.md)

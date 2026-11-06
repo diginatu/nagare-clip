@@ -74,8 +74,8 @@ def read_media_duration(path: Path | None) -> float | None:
     """The media duration a cut list recorded, or ``None``.
 
     ``None`` for a missing file, one written before the duration was recorded,
-    one from a run with audio_silence disabled, or one whose comment a human
-    deleted — the callers then degrade explicitly rather than guess.
+    or one whose comment a human deleted — the callers then degrade explicitly
+    rather than guess.
     """
     if path is None:
         return None

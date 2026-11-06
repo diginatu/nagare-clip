@@ -6,8 +6,8 @@ The pipeline creates a rough-cut Blender project for human review and fine-tunin
 
 ## Pipeline Stages
 
-1. transcription: WhisperX in Docker -> transcript outputs (`json`, `srt`, `vtt`, etc.)
-2. audio_silence: Audio-silence (jump-cut) detection -> `_cuts.txt` editable cut list
+1. audio_silence: Silero VAD v6 speech regions (always on) -> `{stem}_vad.json` and the `_cuts.txt` editable cut list (the silences between the regions)
+2. transcription: Haas-ja-v1.0 on chunks packed from those speech regions -> `{stem}.json` (WhisperX-shaped word timings) + `{stem}.txt`
 3. sentence_split (optional): LLM re-segments the transcript into one-sentence-per-line units -> `output/sentence_split/{stem}.json` + `{stem}.txt`; disabled by default (byte-identical copy-through)
 4. gap_context (optional): a vision LLM snapshots+describes long silent gaps (from `_cuts.txt`) so summary/director can see what the transcript can't -> reviewable `output/gap_context/{stem}_gaps.json` + JPEG frames; disabled by default (no-op)
 5. summary (optional, project-wide): a larger LLM segments every video into line-range parts + summaries, a whole-video summary, and misspelling-prone keywords, and writes one all-videos summary -> reviewable `output/summary/summary.json`; the per-video summary and keywords are used by text_filter/director
@@ -22,7 +22,7 @@ Stages are referenced by name (`--from-stage <name>`); the sentence_split/gap_co
 
 ## Human Editing Workflow
 
-1. Run the transcription, audio_silence and text_filter stages: `./scripts/run_pipeline.sh`
+1. Run the audio_silence, transcription and text_filter stages: `./scripts/run_pipeline.sh`
 2. Edit `output/audio_silence/{stem}_cuts.txt` — delete a line to keep that span, or adjust the `START - END` times
 3. Edit `output/text_filter/{stem}_edits.txt` — add/modify `{{old->new}}` patch markers, wrap text in `<keep>...</keep>` to force-keep its audio, wrap text in `<speed factor="N.N">...</speed>` to play that region at the given speed in Blender (does not force-keep audio — nest inside `<keep>` to also keep it), insert `<overlay text="..." duration="N.N"/>` to display an on-screen TEXT strip for that many seconds (does not affect audio), or wrap text in `<cut>...</cut>` to delete it (larger deletions drop out of the timeline via silence detection)
 4. Resume: `./scripts/run_pipeline.sh --from-stage intervals --source myvideo.mp4`
@@ -325,8 +325,9 @@ alongside Langfuse — the two are independent sinks.
 ## Requirements
 
 - Linux
-- NVIDIA GPU + NVIDIA Container Toolkit
-- Docker + Docker Compose
+- NVIDIA GPU (CUDA) for the `transcription` stage (Haas-ja ASR); the VAD in `audio_silence` runs on CPU
+- `ffmpeg` on the host `PATH` (the `transcribe/` worker decodes audio with it)
+- Docker + Docker Compose with the NVIDIA Container Toolkit (still used by `gap_context` and `publish` for frame snapshots)
 - Blender available as `blender`
 - ImageMagick available as `magick` (only needed for `render.enabled`, i.e. when the `render` stage composites thumbnails)
 - Python 3.11+
@@ -338,7 +339,15 @@ Install [uv](https://docs.astral.sh/uv/getting-started/installation/), then:
 ```bash
 uv sync          # install runtime deps
 uv sync --dev    # install runtime + dev deps (includes pytest)
+uv sync --project transcribe   # the Haas ASR + Silero VAD worker environment (torch, NeMo; large)
 ```
+
+The `transcribe/` subproject is a separate uv environment that holds the heavy
+dependencies; the main package never imports it and the pipeline runs it as a
+subprocess (`uv run --project transcribe python -m nagare_transcribe {vad,asr}`).
+The first `transcription` run downloads the Haas-ja-v1.0 model from Hugging Face.
+See [`transcribe/README.md`](transcribe/README.md) and
+[`docs/stages/transcription.md`](docs/stages/transcription.md).
 
 Run tests:
 
@@ -380,16 +389,10 @@ Use a YAML config file to tune pipeline parameters (see `config.example.yml`):
 ./scripts/run_pipeline.sh --config my_project.yml
 ```
 
-Override the language (default is `ja`):
-
-```bash
-./scripts/run_pipeline.sh --language en
-```
-
 Re-run from a specific stage (skip expensive earlier stages when iterating on config):
 
 ```bash
-# Skip transcription, reuse WhisperX output, re-run silence detection + edits + intervals + Blender
+# Run everything (audio_silence is the first stage, so this is also the default)
 ./scripts/run_pipeline.sh --from-stage audio_silence --source myvideo.mp4
 
 # Skip through text_filter, apply silence cuts + text edits and regenerate intervals + Blender project
@@ -397,12 +400,6 @@ Re-run from a specific stage (skip expensive earlier stages when iterating on co
 
 # Skip through intervals, only regenerate the Blender project
 ./scripts/run_pipeline.sh --from-stage blender --source myvideo.mp4
-```
-
-Override the alignment model (e.g. to revert to the WhisperX built-in default for Japanese):
-
-```bash
-./scripts/run_pipeline.sh --align-model jonatasgrosman/wav2vec2-large-xlsr-53-japanese
 ```
 
 This produces outputs under `output/` (or your `--output-dir`), including:
@@ -560,7 +557,7 @@ blender:
 
 ### audio_silence: Audio-Silence Detection
 
-The audio_silence stage runs Silero VAD v6 (in the `transcribe/` worker) on the audio and writes an editable `{stem}_cuts.txt` cut list. Each non-comment line is a `START - END` silent span (seconds) that will be cut from the video; delete a line to keep that span, or adjust the times. A `# media duration: …s` comment records the video's length (from the VAD run); it is what a video with no speech ends at. The intervals stage unions these reviewed ranges into its keep-interval excludes. This is acoustic silence — distinct from `intervals.silence_threshold`, which is a WhisperX word-gap heuristic.
+The audio_silence stage runs Silero VAD v6 (in the `transcribe/` worker) on the audio and writes an editable `{stem}_cuts.txt` cut list. Each non-comment line is a `START - END` silent span (seconds) that will be cut from the video; delete a line to keep that span, or adjust the times. A `# media duration: …s` comment records the video's length (from the VAD run); it is what a video with no speech ends at. The intervals stage unions these reviewed ranges into its keep-interval excludes. This is acoustic silence — distinct from `intervals.silence_threshold`, which is a word-gap heuristic over the transcript's word timings.
 
 ```yaml
 audio_silence:
@@ -572,18 +569,18 @@ audio_silence:
 
 ### sentence_split: LLM Sentence Re-Segmentation (optional)
 
-The `sentence_split` stage rewrites the WhisperX transcript into one-sentence-per-line units before the text-editing checkpoint. It improves caption readability (each line maps to a complete sentence) and gives downstream LLM stages (director, guided_edit) cleaner line boundaries to reason about. Disabled by default — when `sentence_split.enabled` is `false`, the stage copies `output/transcription/{stem}.{json,txt}` byte-identically into `output/sentence_split/`, so all downstream behaviour is unchanged.
+The `sentence_split` stage rewrites the transcript into one-sentence-per-line units before the text-editing checkpoint. It improves caption readability (each line maps to a complete sentence) and gives downstream LLM stages (director, guided_edit) cleaner line boundaries to reason about. Disabled by default — when `sentence_split.enabled` is `false`, the stage copies `output/transcription/{stem}.{json,txt}` byte-identically into `output/sentence_split/`, so all downstream behaviour is unchanged.
 
-When enabled, the LLM receives a numbered list of GiNZA bunsetsu units (Japanese morpho-syntactic chunks) and returns contiguous bunsetsu-index ranges (`{"sentences":[[0,3],[4,7],…]}`) that map to one sentence each. The stage reconstructs new segments by slicing the original word list at those boundaries — words are only reassigned, never edited, so word timings are preserved and output text is verbatim. Processing is windowed (`sentence_split.window_segments`, default 20 segments per call — the batch size); each window falls back to the original segmentation independently on LLM failure. Windows carry their trailing sentence over the seam, so a sentence split across a window boundary is re-joined with its continuation in the next window (a single-sentence window keeps the boundary, bounding context growth).
+When enabled, the LLM receives a numbered list of GiNZA bunsetsu units (Japanese morpho-syntactic chunks) and returns contiguous bunsetsu-index ranges (`{"sentences":[[0,3],[4,7],…]}`) that map to one sentence each. The stage reconstructs new segments by slicing the original word list at those boundaries — words are only reassigned, never edited, so word timings are preserved and output text is verbatim. Processing is windowed (`sentence_split.window_segments`, default 200 segments per call — the batch size; Haas segments are VAD regions of about 2 s each); each window falls back to the original segmentation independently on LLM failure. Windows carry their trailing sentence over the seam, so a sentence split across a window boundary is re-joined with its continuation in the next window (a single-sentence window keeps the boundary, bounding context growth).
 
-**Force split at long silences.** When `force_split` is `true` (default), a long silence detected by the `audio_silence` stage becomes a hard sentence boundary: after the LLM segments a window, every output segment is deterministically split before the first word that starts past the silence's midpoint — but only when the word timings corroborate the silence with a real inter-word gap there. WhisperX often stretches one word across a pause; splitting next to such a word would chop off the sentence's first characters, so those ambiguous silences are skipped instead. Only cut spans at least `force_split_min_silence` seconds long (default 3.0) qualify — `audio_silence.min_silence` is tuned for short jump-cut pauses, which would over-split. The forced split reads the human-editable `output/audio_silence/{stem}_cuts.txt`, so deleting a cut line (to keep that span's audio) also stops it forcing a split, and it survives even a total LLM failure. It adds no extra LLM calls.
+**Force split at long silences.** When `force_split` is `true` (default), a long silence detected by the `audio_silence` stage becomes a hard sentence boundary: after the LLM segments a window, every output segment is deterministically split before the first word that starts past the silence's midpoint — but only when the word timings corroborate the silence with a real inter-word gap there. A word's timing can stretch across a pause; splitting next to such a word would chop off the sentence's first characters, so those ambiguous silences are skipped instead. Only cut spans at least `force_split_min_silence` seconds long (default 3.0) qualify — `audio_silence.min_silence` is tuned for short jump-cut pauses, which would over-split. The forced split reads the human-editable `output/audio_silence/{stem}_cuts.txt`, so deleting a cut line (to keep that span's audio) also stops it forcing a split, and it survives even a total LLM failure. It adds no extra LLM calls.
 
 ```yaml
 sentence_split:
   enabled: true
   provider: "ollama_chat"   # see "Choosing an LLM provider" above
   model: "gpt-oss:120b"
-  window_segments: 20       # segments per LLM window
+  window_segments: 200      # segments per LLM window
   force_split: true         # split sentences at long detected silences
   force_split_min_silence: 3.0   # seconds; only cut spans at least this long
 ```
@@ -592,7 +589,7 @@ Outputs land in `output/sentence_split/{stem}.json` and `output/sentence_split/{
 
 ### gap_context: Silent-Gap Visual Context (optional)
 
-The `gap_context` stage runs once per video, between `sentence_split` and `summary`. It looks at the audio_silence `{stem}_cuts.txt` for spans at least `gap_context.min_gap` seconds long, snapshots up to 3 JPEG frames per span (start+0.2s, midpoint, end-0.2s) via ffmpeg inside the whisperx Docker image, and asks a **vision-capable** LLM to describe what's on screen during each gap in one or two plain-text sentences. Disabled by default (`gap_context.enabled: false`) — no Docker calls, and the `summary`/`director` stages render byte-identical to before this feature.
+The `gap_context` stage runs once per video, between `sentence_split` and `summary`. It looks at the audio_silence `{stem}_cuts.txt` for spans at least `gap_context.min_gap` seconds long, snapshots up to 3 JPEG frames per span (start+0.2s, midpoint, end-0.2s) via ffmpeg inside the Docker image (`docker-compose.yml`), and asks a **vision-capable** LLM to describe what's on screen during each gap in one or two plain-text sentences. Disabled by default (`gap_context.enabled: false`) — no Docker calls, and the `summary`/`director` stages render byte-identical to before this feature.
 
 ```yaml
 gap_context:
@@ -628,7 +625,7 @@ text_filter:
 
 The LLM uses `{{old->new}}` inline patch syntax to mark corrections. Human editors can then review and modify the markers in `_edits.txt` before the intervals stage applies them.
 
-Human editors can also wrap a span in `<keep>...</keep>` to force-preserve the audio under that text. The intervals stage derives the time range from the first wrapped word's start to the last wrapped word's end and carves it out of both the word-gap silence and any overlapping `_cuts.txt` ranges. The marker may be opened on one line and closed on a later line, so a single `<keep>` block can span multiple WhisperX segments and preserve the silences between them. The marker is added after the LLM filter has produced `_edits.txt`, so the LLM never sees it.
+Human editors can also wrap a span in `<keep>...</keep>` to force-preserve the audio under that text. The intervals stage derives the time range from the first wrapped word's start to the last wrapped word's end and carves it out of both the word-gap silence and any overlapping `_cuts.txt` ranges. The marker may be opened on one line and closed on a later line, so a single `<keep>` block can span multiple transcript segments and preserve the silences between them. The marker is added after the LLM filter has produced `_edits.txt`, so the LLM never sees it.
 
 `<speed factor="N.N">...</speed>` is a companion marker carrying a playback-speed annotation. Unlike `<keep>`, it does **not** force-keep audio — its span does not carve silence out of the excludes, so silence inside it is still cut and the speed applies only to the surviving spoken parts (nest inside `<keep>` to preserve the audio too). The intervals stage records each marked span as an entry in a top-level `speed_ranges` array (`{start, end, factor}`) in `_intervals.json`, independent of `keep_intervals`. The blender stage splits keep intervals at those boundaries, so a `<speed>` span may cover an arbitrary sub-range of a keep interval (or span several), and adds a Blender VSE Speed Control effect strip over each sped-up sub-range so it plays at the requested speed in the final `.blend`. A `speed_ranges` entry that falls entirely on cut content simply matches no surviving interval and is ignored.
 
@@ -668,36 +665,31 @@ without the extra context.
 Options:
 - `--source FILE` — source video file (may be repeated for multiple sources); when omitted, all videos in `--input-videos-dir` are processed alphabetically.
 - `--config FILE` — path to a YAML config file; config values fill in between CLI overrides and built-in defaults. Repeatable: files are deep-merged left to right, later files win (see [Layering several config files](#layering-several-config-files)).
-- `--language LANG` — ISO 639-1 language code passed to WhisperX (default: `ja`). Also settable via `transcription.language` in config.
-- `--from-stage NAME` — start from stage `NAME`, reusing earlier stage outputs. `NAME` is a stage name: `transcription`, `audio_silence`, `sentence_split`, `gap_context`, `summary`, `text_filter`, `director`, `guided_edit`, `intervals`, `blender`, `publish`, `render`. Also settable via `pipeline.from_stage` in config.
+- `--from-stage NAME` — start from stage `NAME`, reusing earlier stage outputs. `NAME` is a stage name: `audio_silence`, `transcription`, `sentence_split`, `gap_context`, `summary`, `text_filter`, `director`, `guided_edit`, `intervals`, `blender`, `publish`, `render`. Also settable via `pipeline.from_stage` in config.
 - `--to-stage NAME` — stop **after** stage `NAME` (inclusive); later stages are skipped. Same stage names as `--from-stage`, and must not precede it. Defaults to `publish` (run to the end). Also settable via `pipeline.to_stage` in config. Combine with `--from-stage` to run a window of stages, e.g. `--from-stage summary --to-stage director`.
 - Defaults: input videos under `src_video/`, outputs under `output/`.
 - If `--source` contains `/`, it is treated as the exact path; otherwise it is resolved inside `--input-videos-dir`.
 - `silence_threshold` and `min_keep` default to `1.5` and `1.0` (overridable via config).
 - `pre-margin`/`post-margin` extend keep intervals before/after by default `1.0s` and merge overlaps.
-- `--align-model` overrides the HuggingFace model used for WhisperX forced alignment. For Japanese (`ja`), defaults to `vumichien/wav2vec2-large-xlsr-japanese` which showed better alignment scores than the WhisperX built-in default (`jonatasgrosman/wav2vec2-large-xlsr-53-japanese`); for other languages the WhisperX built-in model is used.
+- The transcription language is fixed (Haas-ja-v1.0 is Japanese-only); `--language`, `--align-model` and the `transcription.language`/`align_model`/`compute_type` keys are removed.
 
 ## Stage Commands
 
-### transcription only (WhisperX)
+### transcription only (Haas-ja)
+
+There is no standalone CLI; it runs through the pipeline orchestrator and needs
+`{stem}_vad.json` from a previous `audio_silence` run on disk:
 
 ```bash
-docker compose run --rm --user "0:0" whisperx \
-  _ \
-  "myvideo.mp4" \
-  --output_dir /output \
-  --output_format all \
-  --language ja \
-  --compute_type float16 \
-  --batch_size 16
+./scripts/run_pipeline.sh --from-stage transcription --to-stage transcription \
+  --source myvideo.mp4 --config my_project.yml
 ```
 
 Notes:
 
-- Input files are mounted to `/app` via `${INPUT_VIDEOS_DIR:-src_video}:/app` (set env vars or rely on defaults).
-- Output files are mounted to `/output` via `${OUTPUT_DIR:-output}:/output`.
-- This image tag does not accept `--word_timestamps`.
-- No diarization flags are used.
+- One `transcribe/` worker process handles all sources (Haas warm-up takes several seconds); it needs a CUDA GPU.
+- Output is `{stem}.json` in the WhisperX JSON shape (one segment per VAD speech region, one `words` entry per non-whitespace character) plus `{stem}.txt`.
+- The chunking and timestamp details are in [`docs/stages/transcription.md`](docs/stages/transcription.md).
 
 ### audio_silence only (audio-silence detection)
 
@@ -744,7 +736,7 @@ The remaining intervals knobs (`silence_threshold`, `min_keep`,
 CLI flags — set them under `intervals:`/`intervals.caption:` in your config
 file (see `config.example.yml`).
 
-Keep-interval silence detection uses WhisperX word timings (`word.start`/`word.end`) with a per-word max-span cap (0.6s) so inflated token ends do not mask real pauses. Bunsetsu timing uses `ginza.bunsetu_spans(doc)` (GiNZA/spaCy) so particles and auxiliaries are attached to the preceding content word, producing natural subtitle line-break units. It detects large intra-bunsetsu character gaps (> 0.6s) caused by WhisperX misalignment and snaps the bunsetsu start forward to the later character cluster so silence is not hidden inside a single bunsetsu. Caption chunks use bunsetsu-level timing (`end = min(start+0.02s, next_bunsetu_start)`) and are split on detected silence gaps and keep-boundary crossings. Captions are preserved as transcript chunks and the interval stage expands keep intervals to include caption spans so subtitle text is not dropped at the Blender stage, then re-applies minimum keep duration (`min_keep`) to avoid tiny strips.
+Keep-interval silence detection uses the transcript's word timings (`word.start`/`word.end`) with a per-word max-span cap (0.6s) so inflated token ends do not mask real pauses. Bunsetsu timing uses `ginza.bunsetu_spans(doc)` (GiNZA/spaCy) so particles and auxiliaries are attached to the preceding content word, producing natural subtitle line-break units. It detects large intra-bunsetsu character gaps (> 0.6s) caused by timing misalignment and snaps the bunsetsu start forward to the later character cluster so silence is not hidden inside a single bunsetsu. Caption chunks use bunsetsu-level timing (`end = min(start+0.02s, next_bunsetu_start)`) and are split on detected silence gaps and keep-boundary crossings. Captions are preserved as transcript chunks and the interval stage expands keep intervals to include caption spans so subtitle text is not dropped at the Blender stage, then re-applies minimum keep duration (`min_keep`) to avoid tiny strips.
 
 ### blender only (Blender VSE project)
 
@@ -796,8 +788,7 @@ in the file you are already reading. See
 
 ## Operational Notes
 
-- `scripts/run_pipeline.sh` currently runs WhisperX as root (`--user "0:0"`) for compatibility with this image/runtime.
-- As a result, transcription output files can be root-owned on host.
+- `gap_context` and `publish` run ffmpeg as root in the Docker image (`--user "0:0"`), so frame files under `output/` can be root-owned on host.
 - If needed, fix ownership after run:
 
 ```bash

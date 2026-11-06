@@ -145,7 +145,7 @@ guided_edit wraps the raw characters `old` reads as in one `{{old->new}}`
 patch (`guided_edit/patch.py::apply_edit`).
 
 - **Single-line, by decision.** A `{{old->new}}` patch cannot span lines, and
-  one `_edits.txt` line is one WhisperX segment; a change across two lines is
+  one `_edits.txt` line is one transcript segment; a change across two lines is
   two edit ops.
 - **"As the director sees it"** is `transcript.clean_for_display` of the line:
   patches applied, marker tags stripped. `DisplayLine.raw` carries the raw

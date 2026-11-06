@@ -26,23 +26,23 @@ record of every edit (the old time-resolved side channel, `op_times.py` +
   addressed as `"0~"` (`gap_spans()` key `0`; a `Slot` with `speech_line` `0`).
   Only a source's TRUE start has one: a segment of a split source starting at
   line `a > 1` is still addressed by `"(a-1)~"`.
-- **A source with no speech** (WhisperX `segments: []`, an empty
+- **A source with no speech** (`segments: []` in the transcript JSON, an empty
   `_edits.txt`) is exactly one leading silence line: `0.0` to the **media
-  end**. WhisperX's JSON carries no duration, so audio_silence records
-  ffmpeg's own `Duration:` in `_cuts.txt` as a `# media duration: 42.500s`
+  end**. The transcript JSON carries no duration, so audio_silence records
+  the media duration its VAD run measured in `_cuts.txt` as a `# media duration: 42.500s`
   comment (`cuts_file.read_media_duration()`), and every reader that needs it
   (`run_intervals`, guided_edit, the director's loader, `check_edits
   --cuts-txt`) puts it on the JSON as its `duration` key through
   `edit_lines.with_media_end()` — which touches a source with no segments
   only, so a speech source's timeline still ends where its words do. No
-  recorded duration (audio_silence disabled, a cut list written before this,
+  recorded duration (a cut list written before this was recorded,
   the comment deleted) → no leading silence line and 0 s of footage, never a
   guess. `compute_keep_intervals` treats the whole of such a source as its
   leading silence: dropped by default (`excludes (0, duration)`), played only
   under a `<keep>` — so `<keep>[silent 42.5s: …]</keep>` keeps all of it.
 
 - **One parser.** `nagare_clip.edit_lines.parse_edit_lines()` splits the file
-  into speech lines (one per WhisperX segment) and silence lines identified by
+  into speech lines (one per transcript segment) and silence lines identified by
   **position** (which speech lines they sit between). Every reader goes
   through it; a file with no silence line (text_filter's output, older
   guided_edit output) parses to exactly "line i == segment i".
@@ -87,7 +87,7 @@ record of every edit (the old time-resolved side channel, `op_times.py` +
 
 - `keep_pre_margin`/`keep_post_margin` (default 1.0s) expand keep intervals before merge; `caption.pre_margin`/`caption.post_margin` (default 0.0s) independently extend caption display time, clamped against neighbouring captions.
 - The keep chain itself (word-gap/leading/trailing silence, cut-list union, `<keep>` subtraction, `min_keep`, margins, caption coverage, `min_keep` enforcement, `min_cut`) lives in `intervals/keep.py::compute_keep_intervals()`; `run_intervals()` wraps it with the marker extraction and the overlay snap. `dropped_ranges()` is the same chain fed what the stage feeds it (edit lines synced, their `<keep>`s honoured, no director op) and returns the complement of the keep intervals — the director's line brackets read it, so a bracket prices exactly what renders. `tests/intervals/test_keep.py` pins the parity against a real `run_intervals()` run.
-- Silence detection caps WhisperX word spans at `intervals.bunsetu.silence_max_word_span` (0.6s) so inflated token ends don't hide pauses. `build_bunsetu_times` (`intervals/bunsetu.py`) uses `ginza.bunsetu_spans()` for natural subtitle break units, snapping a bunsetsu's start forward when an intra-bunsetsu character gap exceeds that threshold (WhisperX misalignment); the end-offset epsilon is `intervals.bunsetu.char_eps`.
+- Silence detection caps word spans at `intervals.bunsetu.silence_max_word_span` (0.6s) so inflated token ends don't hide pauses. `build_bunsetu_times` (`intervals/bunsetu.py`) uses `ginza.bunsetu_spans()` for natural subtitle break units, snapping a bunsetsu's start forward when an intra-bunsetsu character gap exceeds that threshold (timing misalignment); the end-offset epsilon is `intervals.bunsetu.char_eps`.
 - `intervals.min_cut` (default 0.4s) is the only pass that constrains the **gaps** rather than the intervals, and it runs **last** — after margins, caption expansion and `min_keep`. Every earlier pass only expands intervals, so last is the one position where the gap being measured is the final gap (run it before `min_keep` and that pass's expansion can open a fresh sub-threshold gap behind it). Any remaining gap shorter than `min_cut` is absorbed into the previous interval (`merge_close_intervals`, strict `<`, so a gap exactly at the threshold survives; absorption is transitive). Margins eating an exclude gap from both sides otherwise leave millisecond slivers — cuts that jump the picture while saving no runtime (real run: 80 such cuts across three sources, absorbed for +15.9s over 90min of kept footage). Captions are collected from the *pre*-merge intervals, so chunking is unaffected, and since merging only widens keeps the `ensure_keep_covers_captions` overlap invariant still holds. A deliberate sub-threshold deletion (a `<cut>` tag or `{{old->}}`) becomes audible again; that's consistent with the 1.0s keep margins already re-admitting a second of audio at every boundary. `0` disables, restoring the previous behaviour exactly.
 - Captions chunk on bunsetsu units (defaults: 12 bunsetsu, 4.0s max, 3 bunsetsu min, 1.5s min duration, 1.5s silence flush; joined by `caption.bunsetu_separator`, default `' '`, enabling Blender TEXT-strip word-wrap), are preserved as full transcript chunks (not pre-filtered by keep intervals) with keep intervals expanded to include them, then `intervals.min_keep` is re-applied so tiny keep strips merge/expand.
 

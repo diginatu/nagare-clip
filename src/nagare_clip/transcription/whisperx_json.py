@@ -1,6 +1,6 @@
 """Haas tokens -> WhisperX-shaped transcript JSON (pure).
 
-One segment per VAD region; ``words`` has one entry per character because the
+One segment per VAD region; ``words`` has one entry per non-whitespace character because the
 intervals stage indexes ``words`` by character position.
 """
 
