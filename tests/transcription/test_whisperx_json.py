@@ -59,3 +59,20 @@ def test_no_tokens_gives_empty_segments():
 def test_transcript_text():
     data = build_whisperx_json([tok("あ", 1.0, 1.1), tok("い", 5.0, 5.1)], REGIONS)
     assert transcript_text(data) == "あ\nい\n"
+
+
+def test_whitespace_is_dropped_and_time_split_over_remaining_chars():
+    data = build_whisperx_json([tok(" 今 a", 1.0, 1.4)], REGIONS)
+    seg = data["segments"][0]
+    assert seg["text"] == "今a"
+    assert [(w["word"], w["start"], w["end"]) for w in seg["words"]] == [
+        ("今", 1.0, 1.2),
+        ("a", 1.2, 1.4),
+    ]
+
+
+def test_whitespace_only_token_contributes_nothing():
+    data = build_whisperx_json([tok("　", 1.0, 1.1), tok(" ", 5.0, 5.1)], REGIONS)
+    assert data["segments"] == []
+    data = build_whisperx_json([tok("　", 1.0, 1.1), tok("今", 5.1, 5.3)], REGIONS)
+    assert [s["text"] for s in data["segments"]] == ["今"]

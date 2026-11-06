@@ -15,7 +15,10 @@ def _region_index(start: float, regions: list[tuple[float, float]]) -> int:
 
 
 def _char_words(token: dict) -> list[dict]:
-    text, start, end = token["text"], token["start"], token["end"]
+    start, end = token["start"], token["end"]
+    # Whitespace never becomes a word; the token's time is split evenly over
+    # the remaining (non-whitespace) characters only.
+    text = "".join(ch for ch in token["text"] if not ch.isspace())
     n = len(text)
     span = end - start
     return [
@@ -33,10 +36,11 @@ def build_whisperx_json(tokens: list[dict], regions: list[tuple[float, float]]) 
     per_region: dict[int, list[dict]] = {}
     if regions:
         for token in tokens:
-            if not token["text"]:
+            words = _char_words(token)
+            if not words:
                 continue
             idx = _region_index(token["start"], regions)
-            per_region.setdefault(idx, []).extend(_char_words(token))
+            per_region.setdefault(idx, []).extend(words)
     segments = []
     for idx in sorted(per_region):
         words = per_region[idx]
