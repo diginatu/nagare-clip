@@ -1,11 +1,9 @@
 """audio_silence stage: audio-silence (jump-cut) detection checkpoint.
 
-ffmpeg ``silencedetect`` runs inside the whisperx Docker image (driven by the
-pipeline orchestrator); this function consumes the captured stderr and writes
-a human-editable ``{stem}_cuts.txt`` (with ffmpeg's media duration recorded as
-a ``# media duration:`` comment). Without *raw_path* (or when
-``audio_silence.enabled`` is false) it writes a header-only file so the
-downstream union in the intervals stage becomes a no-op.
+Silero VAD runs in the ``transcribe/`` worker (driven by the pipeline
+orchestrator, which writes ``{stem}_vad.json``); this function turns the speech
+regions into a human-editable ``{stem}_cuts.txt`` (the silences between them,
+with the media duration recorded as a ``# media duration:`` comment).
 """
 
 from __future__ import annotations
@@ -14,21 +12,13 @@ import logging
 from pathlib import Path
 
 from nagare_clip.audio_silence.cuts_file import write_cuts
-from nagare_clip.audio_silence.detect import parse_media_duration, parse_silencedetect_output
+from nagare_clip.audio_silence.vad import read_vad, silences_from_speech
 
 
-def run_audio_silence(output: Path, cfg: dict, *, raw_path: Path | None = None) -> None:
-    a = cfg["audio_silence"]
-    if not a["enabled"] or raw_path is None:
-        reason = "disabled" if not a["enabled"] else "no ffmpeg output provided"
-        logging.info("audio_silence: audio-silence %s, writing empty cut list", reason)
-        write_cuts(output, [])
-        logging.info("audio_silence: wrote %s", output)
-        return
-
-    stderr = raw_path.read_text(encoding="utf-8")
-    ranges = parse_silencedetect_output(stderr)
+def run_audio_silence(output: Path, cfg: dict, *, vad_path: Path) -> None:
+    duration, speech = read_vad(vad_path)
+    ranges = silences_from_speech(speech, duration, cfg["audio_silence"]["min_silence"])
     # The media's own length, recorded alongside: a source with no speech has
     # no other place the pipeline could learn where it ends.
-    write_cuts(output, ranges, duration=parse_media_duration(stderr))
-    logging.info("audio_silence: detected %d silence range(s), wrote %s", len(ranges), output)
+    write_cuts(output, ranges, duration=duration)
+    logging.info("audio_silence: %d silence range(s), wrote %s", len(ranges), output)

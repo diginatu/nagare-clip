@@ -1,41 +1,38 @@
 """Tests for the audio_silence stage run() function."""
 
+import json
+
+import pytest
 import yaml
 
-from nagare_clip.audio_silence.cuts_file import read_cuts
+from nagare_clip.audio_silence.cuts_file import read_cuts, read_media_duration
 from nagare_clip.audio_silence.run import run_audio_silence
 from nagare_clip.config import get_effective_config
 
-_RAW = """\
-    Duration: 00:00:20.00, start: 0.000000
-[silencedetect @ 0x55] silence_start: 2.5
-[silencedetect @ 0x55] silence_end: 4.0 | silence_duration: 1.5
-[silencedetect @ 0x55] silence_start: 18.0
-"""
+
+def _vad(tmp_path, duration=6.0, speech=((1.0, 2.0), (2.2, 5.0))):
+    p = tmp_path / "clip_vad.json"
+    p.write_text(json.dumps({"duration": duration, "speech": [list(s) for s in speech]}))
+    return p
 
 
-def test_without_raw_writes_header_only(tmp_path):
+def test_run_writes_silences_and_duration(tmp_path):
     out = tmp_path / "clip_cuts.txt"
-    run_audio_silence(out, get_effective_config(None, {}))
-    assert out.exists()
-    assert out.read_text(encoding="utf-8").lstrip().startswith("#")
+    run_audio_silence(out, get_effective_config(None, {}), vad_path=_vad(tmp_path))
+    assert read_media_duration(out) == 6.0
+    assert read_cuts(out) == [(0.0, 1.0), (5.0, 6.0)]
+
+
+def test_min_silence_comes_from_cfg(tmp_path):
+    out = tmp_path / "clip_cuts.txt"
+    cfg = get_effective_config(None, {"audio_silence": {"min_silence": 1.5}})
+    run_audio_silence(out, cfg, vad_path=_vad(tmp_path))
     assert read_cuts(out) == []
 
 
-def test_with_raw_writes_cut_ranges(tmp_path):
-    raw = tmp_path / "sd.log"
-    raw.write_text(_RAW, encoding="utf-8")
-    out = tmp_path / "clip_cuts.txt"
-    run_audio_silence(out, get_effective_config(None, {}), raw_path=raw)
-    assert read_cuts(out) == [(2.5, 4.0), (18.0, 20.0)]
-
-
-def test_disabled_writes_header_only_even_with_raw(tmp_path):
-    raw = tmp_path / "sd.log"
-    raw.write_text(_RAW, encoding="utf-8")
-    cfg_file = tmp_path / "config.yml"
-    cfg_file.write_text(yaml.safe_dump({"audio_silence": {"enabled": False}}), encoding="utf-8")
-    out = tmp_path / "clip_cuts.txt"
-    cfg = get_effective_config(cfg_file, {})
-    run_audio_silence(out, cfg, raw_path=raw)
-    assert read_cuts(out) == []
+def test_config_rejects_removed_audio_silence_keys(tmp_path):
+    f = tmp_path / "c.yml"
+    f.write_text(yaml.safe_dump({"audio_silence": {"noise": -30, "enabled": False}}))
+    with pytest.raises(ValueError) as e:
+        get_effective_config(f, {})
+    assert "audio_silence.noise" in str(e.value) and "audio_silence.enabled" in str(e.value)

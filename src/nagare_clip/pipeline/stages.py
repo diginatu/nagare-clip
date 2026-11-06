@@ -50,8 +50,8 @@ from nagare_clip.order_note import format_order_note
 from nagare_clip.pipeline.errors import PipelineError, PipelineStop
 from nagare_clip.pipeline.external import (
     build_blender_cmd,
-    build_silencedetect_cmd,
     build_snapshot_batch_cmd,
+    build_transcribe_cmd,
     build_transcription_cmd,
     run_command,
     run_magick,
@@ -128,19 +128,27 @@ def _transcription_required(ctx: PipelineContext) -> list[Path]:
 def _audio_silence_run(ctx: PipelineContext) -> None:
     a = ctx.cfg["audio_silence"]
     d = ctx.stage_dir("audio_silence")
+    d.mkdir(parents=True, exist_ok=True)
+    request = d / "vad_request.json"
+    request.write_text(
+        json.dumps(
+            {
+                "params": {
+                    k: a[k] for k in ("threshold", "min_speech", "min_silence", "speech_pad")
+                },
+                "sources": [
+                    {"path": str(src.abs_path), "out": str(d / f"{src.stem}_vad.json")}
+                    for src in ctx.sources
+                ],
+            },
+            indent=2,
+        ),
+        encoding="utf-8",
+    )
+    print(f"[audio_silence] Silero VAD: {len(ctx.sources)} source(s)")
+    run_command(build_transcribe_cmd(ctx.project_root, "vad", request))
     for src in ctx.sources:
-        print(f"[audio_silence] Detection: {src.stem}")
-        raw_path = None
-        if a["enabled"]:
-            raw_path = d / f"{src.stem}_silencedetect.log"
-            run_command(
-                build_silencedetect_cmd(
-                    ctx.project_root, src.relative, a["noise"], a["min_silence"]
-                ),
-                env_extra=_docker_env(ctx),
-                stderr_to=raw_path,
-            )
-        run_audio_silence(d / f"{src.stem}_cuts.txt", ctx.cfg, raw_path=raw_path)
+        run_audio_silence(d / f"{src.stem}_cuts.txt", ctx.cfg, vad_path=d / f"{src.stem}_vad.json")
 
 
 def _audio_silence_required(ctx: PipelineContext) -> list[Path]:

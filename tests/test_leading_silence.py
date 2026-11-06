@@ -169,15 +169,11 @@ def test_the_cut_list_records_the_media_duration_as_a_comment(tmp_path):
     assert read_media_duration(tmp_path / "missing.txt") is None
 
 
-def test_audio_silence_takes_the_duration_from_ffmpegs_own_line(tmp_path):
-    raw = tmp_path / "raw.log"
-    raw.write_text(
-        "  Duration: 00:01:02.50, start: 0.000000, bitrate: 1 kb/s\n"
-        "[silencedetect @ 0x1] silence_start: 0\n",
-        encoding="utf-8",
-    )
+def test_audio_silence_takes_the_duration_from_the_vad_result(tmp_path):
+    vad = tmp_path / "c_vad.json"
+    vad.write_text('{"duration": 62.5, "speech": []}', encoding="utf-8")
     out = tmp_path / "c_cuts.txt"
-    run_audio_silence(out, {"audio_silence": {"enabled": True}}, raw_path=raw)
+    run_audio_silence(out, {"audio_silence": {"min_silence": 0.5}}, vad_path=vad)
     assert read_media_duration(out) == 62.5
     assert read_cuts(out) == [(0.0, 62.5)]
 

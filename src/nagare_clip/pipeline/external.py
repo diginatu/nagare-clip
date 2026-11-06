@@ -1,7 +1,7 @@
 """External-process command construction and execution.
 
 Only two genuine process boundaries remain in the pipeline: the whisperx
-Docker image (WhisperX transcription and ffmpeg silencedetect) and headless
+Docker image (WhisperX transcription), the ``transcribe/`` worker and headless
 Blender. Command lines are built by pure functions so they are testable
 without Docker or Blender installed.
 """
@@ -63,23 +63,18 @@ def build_transcription_cmd(project_root: Path, relatives: list[str], cfg: dict)
     return cmd
 
 
-def build_silencedetect_cmd(
-    project_root: Path, relative: str, noise: float, min_silence: float
-) -> list[str]:
+def build_transcribe_cmd(project_root: Path, command: str, request: Path) -> list[str]:
+    """The ``transcribe/`` worker subproject: ``vad`` or ``transcribe`` on a request file."""
     return [
-        *_compose_prefix(project_root),
-        "--entrypoint",
-        "ffmpeg",
-        "whisperx",
-        "-hide_banner",
-        "-nostats",
-        "-i",
-        relative,
-        "-af",
-        f"silencedetect=noise={noise}dB:d={min_silence}",
-        "-f",
-        "null",
-        "-",
+        "uv",
+        "run",
+        "--project",
+        str(project_root / "transcribe"),
+        "python",
+        "-m",
+        "nagare_transcribe",
+        command,
+        str(request),
     ]
 
 

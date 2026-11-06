@@ -837,3 +837,42 @@ def test_gap_context_docker_failure_error_names_the_reason(gap_ctx, monkeypatch)
         stage.run(gap_ctx)
     assert "exit status 125" in str(exc.value)
     assert "No such image: whisperx" in str(exc.value)
+
+
+def test_audio_silence_stage_one_vad_call_for_all_sources(tmp_path, monkeypatch):
+    from nagare_clip.audio_silence.cuts_file import read_cuts
+
+    ctx = _ctx(tmp_path, stems=("a", "b"))
+    calls = []
+
+    def fake_run(cmd, **kw):
+        calls.append((cmd, kw))
+        req = json.loads(open(cmd[-1]).read())
+        for s in req["sources"]:
+            with open(s["out"], "w") as f:
+                json.dump({"duration": 6.0, "speech": [[1.0, 2.0], [2.2, 5.0]]}, f)
+
+    monkeypatch.setattr(st, "run_command", fake_run)
+    st._audio_silence_run(ctx)
+
+    assert len(calls) == 1
+    d = tmp_path / "out" / "audio_silence"
+    cmd, kw = calls[0]
+    assert cmd == [
+        "uv", "run", "--project", str(tmp_path / "transcribe"), "python", "-m",
+        "nagare_transcribe", "vad", str(d / "vad_request.json"),
+    ]  # fmt: skip
+    assert "env_extra" not in kw
+    req = json.loads((d / "vad_request.json").read_text())
+    a = ctx.cfg["audio_silence"]
+    assert req["params"] == {
+        "threshold": a["threshold"],
+        "min_speech": a["min_speech"],
+        "min_silence": a["min_silence"],
+        "speech_pad": a["speech_pad"],
+    }
+    assert req["sources"] == [
+        {"path": str(s.abs_path), "out": str(d / f"{s.stem}_vad.json")} for s in ctx.sources
+    ]
+    for stem in ("a", "b"):
+        assert read_cuts(d / f"{stem}_cuts.txt") == [(0.0, 1.0), (5.0, 6.0)]

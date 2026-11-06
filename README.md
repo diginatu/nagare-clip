@@ -560,13 +560,14 @@ blender:
 
 ### audio_silence: Audio-Silence Detection
 
-The audio_silence stage runs ffmpeg `silencedetect` (inside the whisperx Docker image) on the waveform and writes an editable `{stem}_cuts.txt` cut list. Each non-comment line is a `START - END` silent span (seconds) that will be cut from the video; delete a line to keep that span, or adjust the times. A `# media duration: …s` comment records the video's length (ffmpeg's own); it is what a video with no speech ends at. The intervals stage unions these reviewed ranges into its keep-interval excludes. This is acoustic silence — distinct from `intervals.silence_threshold`, which is a WhisperX word-gap heuristic.
+The audio_silence stage runs Silero VAD v6 (in the `transcribe/` worker) on the audio and writes an editable `{stem}_cuts.txt` cut list. Each non-comment line is a `START - END` silent span (seconds) that will be cut from the video; delete a line to keep that span, or adjust the times. A `# media duration: …s` comment records the video's length (from the VAD run); it is what a video with no speech ends at. The intervals stage unions these reviewed ranges into its keep-interval excludes. This is acoustic silence — distinct from `intervals.silence_threshold`, which is a WhisperX word-gap heuristic.
 
 ```yaml
 audio_silence:
-  enabled: true       # false = write an empty cut list (no audio cuts applied)
-  noise: -30.0        # ffmpeg silencedetect noise threshold, in dB
-  min_silence: 0.8    # minimum silence duration to report, seconds
+  threshold: 0.5      # Silero VAD speech probability threshold
+  min_speech: 0.25    # shortest speech region kept, seconds
+  min_silence: 0.5    # shortest silence between speech regions that is cut, seconds
+  speech_pad: 0.2     # padding around each speech region, seconds
 ```
 
 ### sentence_split: LLM Sentence Re-Segmentation (optional)
@@ -701,8 +702,8 @@ Notes:
 ### audio_silence only (audio-silence detection)
 
 There is no standalone CLI for *this* stage — it runs through the pipeline
-orchestrator, like every stage in this repo. Run just this stage with `--from-stage`/`--to-stage` (it drives the ffmpeg
-`silencedetect` Docker call and parses its stderr into `{stem}_cuts.txt`
+orchestrator, like every stage in this repo. Run just this stage with `--from-stage`/`--to-stage` (it drives the Silero VAD
+worker call and turns its `{stem}_vad.json` into `{stem}_cuts.txt`
 internally):
 
 ```bash

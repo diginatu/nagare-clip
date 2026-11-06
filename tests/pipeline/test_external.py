@@ -5,7 +5,7 @@ from pathlib import Path
 from nagare_clip.config import get_effective_config
 from nagare_clip.pipeline.external import (
     build_blender_cmd,
-    build_silencedetect_cmd,
+    build_transcribe_cmd,
     build_transcription_cmd,
     effective_align_model,
     run_command,
@@ -67,29 +67,18 @@ def test_build_transcription_cmd_omits_empty_align_model():
     assert "--align_model" not in cmd
 
 
-def test_build_silencedetect_cmd():
-    cmd = build_silencedetect_cmd(Path("/proj"), "a.mp4", -30.0, 0.8)
+def test_build_transcribe_cmd():
+    cmd = build_transcribe_cmd(Path("/proj"), "vad", Path("/out/req.json"))
     assert cmd == [
-        "docker",
-        "compose",
-        "-f",
-        "/proj/docker-compose.yml",
+        "uv",
         "run",
-        "--rm",
-        "--user",
-        "0:0",
-        "--entrypoint",
-        "ffmpeg",
-        "whisperx",
-        "-hide_banner",
-        "-nostats",
-        "-i",
-        "a.mp4",
-        "-af",
-        "silencedetect=noise=-30.0dB:d=0.8",
-        "-f",
-        "null",
-        "-",
+        "--project",
+        "/proj/transcribe",
+        "python",
+        "-m",
+        "nagare_transcribe",
+        "vad",
+        "/out/req.json",
     ]
 
 

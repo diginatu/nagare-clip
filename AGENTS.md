@@ -7,7 +7,7 @@ Agent guidance for this repository.
 Maintain and improve a multi-stage rough-cut pipeline:
 
 1. WhisperX transcription in Docker
-2. Audio-silence (jump-cut) detection — ffmpeg `silencedetect`, editable cut list
+2. Audio-silence (jump-cut) detection — Silero VAD v6, editable cut list
 3. LLM sentence re-segmentation — rewrites `{stem}.json`/`{stem}.txt` into one-sentence-per-line units (disabled by default)
 4. gap_context — a vision LLM snapshots+describes long silent gaps (audio_silence spans) so summary/director can see what the transcript can't (disabled by default)
 5. summary — a larger LLM segments every video into line-range parts + summaries (and lists per-video misspelling-prone keywords) and writes one all-videos summary (project-wide)
@@ -51,10 +51,10 @@ Speech-to-text with word-level alignment. Runs in a single Docker container for 
 
 ### audio_silence — Audio-Silence (Jump-Cut) Detection
 
-Runs ffmpeg `silencedetect` on the waveform inside the whisperx Docker image (mirrors the transcription stage — no host/Python ffmpeg dependency). The orchestrator captures stderr to a log file and passes it to `audio_silence.run.run_audio_silence()` as `raw_path`, which parses it into an editable `{stem}_cuts.txt`, with ffmpeg's media duration recorded as a `# media duration: …s` comment (`cuts_file.read_media_duration()`) — the pipeline's one record of a source's length, which a source with no speech ends at (its one leading silence line; see intervals below). Disabled (or no captured output) → header-only file, so the downstream union is a no-op (and a source with no speech has no known length). The cut list is read by `sentence_split` (force-split), `gap_context` (gap selection) and `intervals` (the exclude union), so deleting a line affects all three. See [`docs/stages/audio_silence.md`](docs/stages/audio_silence.md).
+Runs Silero VAD v6 through the `transcribe/` worker subproject (`python -m nagare_transcribe vad`, one process for all sources, no Docker); the speech regions are written to `{stem}_vad.json` and `audio_silence.run.run_audio_silence()` takes their complement (gaps shorter than `audio_silence.min_silence`) as the editable `{stem}_cuts.txt`, recording the media duration. Always on (`audio_silence.enabled`/`.noise` are removed config keys). The cut list is read by `sentence_split` (force-split), `gap_context` (gap selection) and `intervals` (the exclude union), so deleting a line affects all three. See [`docs/stages/audio_silence.md`](docs/stages/audio_silence.md).
 
 - **Inputs:** source video file
-- **Outputs:** `{stem}_cuts.txt` (one `START - END` silent span per line; delete a line to keep that span)
+- **Outputs:** `{stem}_vad.json`, `{stem}_cuts.txt` (one `START - END` silent span per line; delete a line to keep that span)
 
 ### sentence_split — LLM Sentence Re-Segmentation
 
@@ -249,7 +249,7 @@ src/nagare_clip/          # Main Python package (src layout)
     cli.py                    # pipeline CLI: same flags as the old bash script; CLI > YAML > defaults via get_effective_config
     __main__.py                # python -m nagare_clip.pipeline entry point
   audio_silence/              # audio_silence stage (audio-silence detection)
-    detect.py                 # parse_silencedetect_output() (pure)
+    vad.py                    # read_vad(), silences_from_speech() (pure)
     cuts_file.py              # write_cuts() / read_cuts() — editable cut-list format
     run.py                    # run_audio_silence() — consumes captured ffmpeg stderr
   sentence_split/             # sentence_split stage (LLM re-segmentation)

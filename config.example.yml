@@ -42,14 +42,16 @@ transcription:
   language: ja   # ISO 639-1 language code passed to WhisperX (e.g. ja, en)
   # align_model: vumichien/wav2vec2-large-xlsr-japanese
 
-# audio_silence stage: audio-silence (jump-cut) detection.
-# Runs ffmpeg silencedetect on the waveform and writes an editable
-# {stem}_cuts.txt checkpoint. NOTE: this is acoustic silence, distinct
-# from intervals.silence_threshold (which is a WhisperX word-gap heuristic).
+# audio_silence stage: Silero VAD v6, run before transcription.
+# Writes an editable {stem}_cuts.txt checkpoint (the silences between speech
+# regions); the speech regions also define the transcription chunks. NOTE: this
+# is acoustic silence, distinct from intervals.silence_threshold (which is a
+# word-gap heuristic).
 audio_silence:
-  enabled: true   # false = write an empty cut list (no audio cuts applied)
-  noise: -30.0   # ffmpeg silencedetect noise threshold, in dB
-  min_silence: 0.8   # ffmpeg silencedetect minimum silence duration, seconds
+  threshold: 0.5   # Silero VAD speech probability threshold
+  min_speech: 0.25   # Shortest speech region kept, seconds
+  min_silence: 0.5   # Shortest silence between speech regions that is cut, seconds
+  speech_pad: 0.2   # Padding added around each speech region, seconds
 
 # sentence_split stage: runs per source between audio_silence and text_filter.
 # An LLM re-segments the WhisperX transcript into one-sentence-per-line units

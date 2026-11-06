@@ -303,18 +303,18 @@ class TranscriptionConfig(BaseModel):
 class AudioSilenceConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
     section_comment: ClassVar[str] = (
-        "audio_silence stage: audio-silence (jump-cut) detection.\n"
-        "Runs ffmpeg silencedetect on the waveform and writes an editable\n"
-        "{stem}_cuts.txt checkpoint. NOTE: this is acoustic silence, distinct\n"
-        "from intervals.silence_threshold (which is a WhisperX word-gap heuristic)."
+        "audio_silence stage: Silero VAD v6, run before transcription.\n"
+        "Writes an editable {stem}_cuts.txt checkpoint (the silences between speech\n"
+        "regions); the speech regions also define the transcription chunks. NOTE: this\n"
+        "is acoustic silence, distinct from intervals.silence_threshold (which is a\n"
+        "word-gap heuristic)."
     )
-    enabled: bool = Field(
-        True, description="false = write an empty cut list (no audio cuts applied)"
-    )
-    noise: float = Field(-30.0, description="ffmpeg silencedetect noise threshold, in dB")
+    threshold: float = Field(0.5, description="Silero VAD speech probability threshold")
+    min_speech: float = Field(0.25, description="Shortest speech region kept, seconds")
     min_silence: float = Field(
-        0.8, description="ffmpeg silencedetect minimum silence duration, seconds"
+        0.5, description="Shortest silence between speech regions that is cut, seconds"
     )
+    speech_pad: float = Field(0.2, description="Padding added around each speech region, seconds")
 
 
 class SentenceSplitConfig(BaseModel):
@@ -1196,6 +1196,11 @@ REMOVED_KEYS: dict[str, tuple[frozenset[str] | None, str]] = {
             }
         ),
         "the LLM director is gone: the nagare-director agent skill writes the director files",
+    ),
+    "audio_silence": (
+        frozenset({"noise", "enabled"}),
+        "audio_silence always runs Silero VAD (delete a _cuts.txt line to keep a silence); "
+        "tune audio_silence.threshold",
     ),
     "guided_edit": (
         None,
