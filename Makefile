@@ -2,7 +2,7 @@
 # All Python tooling goes through `uv run` per the project convention.
 
 .DEFAULT_GOAL := help
-.PHONY: help install test lint format format-check validate check config-example apm
+.PHONY: help install test lint format format-check validate check config-example apm test-transcribe
 
 help: ## Show this help
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) \
@@ -14,14 +14,17 @@ install: ## Sync all (incl. dev) dependencies
 test: ## Run the test suite
 	uv run pytest -q
 
+test-transcribe: ## Subproject tests (needs uv sync --project transcribe)
+	uv run --project transcribe pytest transcribe/tests -q
+
 lint: ## Lint with ruff
-	uv run ruff check src tests
+	uv run ruff check src tests transcribe
 
 format: ## Auto-format with ruff
-	uv run ruff format src tests
+	uv run ruff format src tests transcribe
 
 format-check: ## Verify formatting without modifying files
-	uv run ruff format --check src tests
+	uv run ruff format --check src tests transcribe
 
 validate: ## Fast structural checks (docker compose, py_compile, shell syntax)
 	docker compose config --services >/dev/null
