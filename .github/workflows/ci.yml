@@ -24,10 +24,10 @@ jobs:
         run: uv sync --dev
 
       - name: Lint (ruff)
-        run: uv run ruff check src tests
+        run: uv run ruff check src tests transcribe
 
       - name: Format check (ruff)
-        run: uv run ruff format --check src tests
+        run: uv run ruff format --check src tests transcribe
 
       - name: Shell syntax check
         run: for f in scripts/*.sh; do bash -n "$f" || exit 1; done

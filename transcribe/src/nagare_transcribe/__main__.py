@@ -5,7 +5,7 @@ import json
 from pathlib import Path
 
 from . import asr
-from .audio import decode_audio
+from .audio import SAMPLE_RATE, decode_audio
 
 
 def _write(path: str, data: dict) -> None:
@@ -23,7 +23,7 @@ def run_vad(req: dict) -> None:
         _write(
             src["out"],
             {
-                "duration": round(len(audio) / 16000, 3),
+                "duration": round(len(audio) / SAMPLE_RATE, 3),
                 "speech": [[round(a, 3), round(b, 3)] for a, b in regions],
             },
         )

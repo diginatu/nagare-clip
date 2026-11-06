@@ -54,6 +54,6 @@ def transcribe_chunks(model, audio, chunks, batch_size) -> list[dict]:
     ]
     hyps = model.transcribe(slices, batch_size=batch_size, timestamps=True, verbose=False)
     tokens: list[dict] = []
-    for (a, _), h in zip(chunks, hyps):
+    for (a, _), h in zip(chunks, hyps, strict=True):
         tokens.extend(tokens_from_hypothesis(h, a))
     return tokens

@@ -76,3 +76,20 @@ def test_whitespace_only_token_contributes_nothing():
     assert data["segments"] == []
     data = build_whisperx_json([tok("　", 1.0, 1.1), tok("今", 5.1, 5.3)], REGIONS)
     assert [s["text"] for s in data["segments"]] == ["今"]
+
+
+def test_many_regions_assignment():
+    regions = [(10.0 * i, 10.0 * i + 4.0) for i in range(1000)]
+    toks = [
+        tok("あ", 5000.5, 5000.6),  # inside region 500
+        tok("い", 7.5, 7.6),  # gap 4..10: nearer region 1 (10)
+        tok("う", 1.5, 1.6),  # gap 4..10 of region 0: nearer region 0 (end 4? 2.5 vs 8.5)
+        tok("え", 7.0, 7.1),  # exact tie between region 0 end 4 and ... (3 vs 3) -> earlier
+        tok("お", 9999.0, 9999.1),  # past the last region
+    ]
+    data = build_whisperx_json(toks, regions)
+    got = {s["text"]: s["start"] for s in data["segments"]}
+    by_seg = {s["words"][0]["word"]: i for i, s in enumerate(data["segments"])}
+    assert [s["text"] for s in data["segments"]] == ["うえ", "い", "あ", "お"]
+    assert got["うえ"] == 1.5 and got["い"] == 7.5
+    assert by_seg["あ"] == 2 and by_seg["お"] == 3

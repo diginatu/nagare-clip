@@ -54,3 +54,15 @@ def test_transcribe_chunks_passes_timestamps_and_offsets():
     assert seen["kw"]["timestamps"] is True and seen["kw"]["batch_size"] == 8
     assert seen["lens"] == [32000, 48000]
     assert [t["start"] for t in toks] == [0.5, 10.5]
+
+
+def test_transcribe_chunks_rejects_hypothesis_count_mismatch():
+    import pytest
+
+    class Model:
+        def transcribe(self, slices, **kw):
+            return [_hyp([{"char": ["あ"], "start": 0.0, "end": 0.1}]) for _ in slices[:-1]]
+
+    audio = np.zeros(16000 * 10, np.float32)
+    with pytest.raises(ValueError):
+        asr.transcribe_chunks(Model(), audio, [(0.0, 1.0), (2.0, 3.0)], 2)

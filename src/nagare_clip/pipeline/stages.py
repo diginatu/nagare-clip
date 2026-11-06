@@ -119,7 +119,7 @@ def _transcription_run(ctx: PipelineContext) -> None:
     )
     print(f"[transcription] Haas: {' '.join(s.relative for s in ctx.sources)}")
     run_command(build_transcribe_cmd(ctx.project_root, "asr", request))
-    for src, vad, out in zip(ctx.sources, (t[1] for t in triples), (t[2] for t in triples)):
+    for src, (_, vad, out) in zip(ctx.sources, triples, strict=True):
         finish_transcription(out, vad, d / f"{src.stem}.json", d / f"{src.stem}.txt")
 
 

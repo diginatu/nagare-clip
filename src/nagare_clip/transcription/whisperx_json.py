@@ -4,14 +4,23 @@ One segment per VAD region; ``words`` has one entry per non-whitespace character
 intervals stage indexes ``words`` by character position.
 """
 
+from bisect import bisect_left
+
 
 def _region_index(start: float, regions: list[tuple[float, float]]) -> int:
-    best, best_dist = 0, None
-    for i, (rs, re_) in enumerate(regions):
-        dist = 0.0 if rs <= start <= re_ else min(abs(start - rs), abs(start - re_))
-        if best_dist is None or dist < best_dist:  # strict: ties keep the earlier
-            best, best_dist = i, dist
-    return best
+    """Region holding ``start``; in a gap, the nearer edge; a tie keeps the earlier.
+
+    ``regions`` are sorted and non-overlapping (VAD output), so only the two
+    neighbours of ``start`` can win.
+    """
+    starts = [rs for rs, _ in regions]
+    i = bisect_left(starts, start)  # regions[:i] start strictly before ``start``
+    if i == 0:
+        return 0
+    left_dist = max(0.0, start - regions[i - 1][1])
+    if i == len(regions):
+        return i - 1
+    return i - 1 if left_dist <= regions[i][0] - start else i
 
 
 def _char_words(token: dict) -> list[dict]:
