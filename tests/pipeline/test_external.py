@@ -347,3 +347,25 @@ def test_run_command_failure_carries_the_reason():
             capture_stderr=True,
         )
     assert "boom" in (exc.value.stderr or "")
+
+
+def test_build_whisper_cmd():
+    from nagare_clip.pipeline.external import _compose_prefix, build_whisper_cmd
+    from nagare_clip.whisper import worker
+
+    argv, script = build_whisper_cmd(Path("/proj"), "/output/whisper/req.json")
+    assert argv == [
+        *_compose_prefix(Path("/proj")),
+        "-T",
+        "--entrypoint",
+        "python",
+        "whisperx",
+        "-",
+        "/output/whisper/req.json",
+    ]
+    assert script == Path(worker.__file__).read_text(encoding="utf-8")
+
+
+def test_compose_has_no_cache_volume():
+    compose = Path(__file__).resolve().parents[2] / "docker-compose.yml"
+    assert "/.cache" not in compose.read_text(encoding="utf-8")

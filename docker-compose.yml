@@ -5,7 +5,6 @@ services:
     volumes:
       - ${INPUT_VIDEOS_DIR:-./src_video}:/app
       - ${OUTPUT_DIR:-./output}:/output
-      - ./cache:/.cache
     command: []
     deploy:
       resources:

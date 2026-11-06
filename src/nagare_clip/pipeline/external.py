@@ -120,6 +120,28 @@ def build_snapshot_batch_cmd(
     return ShellBatch(argv=argv, script=script)
 
 
+def build_whisper_cmd(project_root: Path, request_container_path: str) -> tuple[list[str], str]:
+    """The faster-whisper worker via ONE whisperx container.
+
+    Returns ``(argv, script)``; pass the script as ``run_command``'s
+    ``stdin_text`` (``-T``: no TTY, ``python -`` reads it) -- same reasoning as
+    `ShellBatch`: nothing on disk, no argv limit.
+    """
+    script = (Path(__file__).resolve().parent.parent / "whisper" / "worker.py").read_text(
+        encoding="utf-8"
+    )
+    argv = [
+        *_compose_prefix(project_root),
+        "-T",
+        "--entrypoint",
+        "python",
+        "whisperx",
+        "-",
+        request_container_path,
+    ]
+    return argv, script
+
+
 def build_blender_cmd(
     project_root: Path,
     source_paths: list[Path],
