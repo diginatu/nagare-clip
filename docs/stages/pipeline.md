@@ -62,7 +62,7 @@ runtime behavior.
   when skipping ..."). Any stage exception other than `PipelineError`/`PipelineStop` is
   wrapped as `PipelineError(f"[{stage.name}] failed: {exc}")` so the CLI's
   top-level handler is the only place that prints and exits non-zero.
-- `stages.py` — `STAGE_NAMES` (the twelve canonical stage names, in order) and
+- `stages.py` — `STAGE_NAMES` (the thirteen canonical stage names, in order) and
   `STAGES` (the `Stage` registry consumed by `runner.run_stages`). One adapter
   function per stage translates `PipelineContext` into that stage's typed
   `run()` call (`run_audio_silence`, `run_sentence_split`, `run_gap_context`,
@@ -76,7 +76,13 @@ runtime behavior.
   into the WhisperX-compatible `{stem}.json`/`.txt`. `audio_silence` runs
   **first** (its speech regions define the transcription chunks, packed to
   `transcription.max_chunk_seconds`); resuming at `transcription` requires
-  `{stem}_vad.json` on disk. `summary`, `director`, `blender` and `publish`
+  `{stem}_vad.json` on disk. `whisper` (disabled → prints a skip line, no
+  Docker call) writes `output/whisper/whisper_request.json` from each
+  `{stem}_haas.json`'s `chunks` and makes ONE `build_whisper_cmd` call
+  (`run_command(argv, env_extra=_docker_env(ctx), stdin_text=script)`);
+  its `required_outputs` are `{stem}_whisper.json` only when enabled and the
+  run starts at or before `text_filter`, and `text_filter` loads hints only
+  when `whisper.enabled` (see [`whisper.md`](whisper.md)). `summary`, `director`, `blender` and `publish`
   run once per pipeline invocation; `sentence_split`, `gap_context`,
   `text_filter`, `guided_edit` and `intervals` loop per source inside their
   adapter. `publish` runs once
@@ -183,7 +189,7 @@ The checks run where the run actually continues — **resuming with
 ## Output layout
 
 Output dirs are one per stage by name, created up front by `cli.main()`:
-`output/audio_silence|transcription|sentence_split|gap_context|summary|text_filter|director|guided_edit|intervals|blender|publish|render/`.
+`output/audio_silence|transcription|whisper|sentence_split|gap_context|summary|text_filter|director|guided_edit|intervals|blender|publish|render/`.
 `sentence_split`/`gap_context`/`summary`/`guided_edit`/`publish` all still run
 unconditionally (cheap no-ops when their stage is disabled in config), exactly
 as under the bash orchestrator — see [AGENTS.md](../../AGENTS.md#pipeline-overview)

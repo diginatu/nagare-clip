@@ -31,7 +31,7 @@ composited from it.
 
 > **Naming convention:** Stages are identified only by their **functional /
 > config-section name** — there are no stage numbers anywhere. The canonical
-> identifiers are: `audio_silence:`, `transcription:`, `sentence_split:`,
+> identifiers are: `audio_silence:`, `transcription:`, `whisper:`, `sentence_split:`,
 > `gap_context:`, `summary:`, `text_filter:`, `director:`, `guided_edit:`,
 > `intervals:`, `blender:`, `publish:`, `render:`.
 > Package dirs (`src/nagare_clip/<name>/`), `output/<name>/` subdirs, and
@@ -55,6 +55,13 @@ Runs after `audio_silence`. Haas-ja-v1.0 (third-intelligence/Haas-ASR, NeMo TDT;
 
 - **Inputs:** source video files (mp4/mkv/mov/avi/webm); `{stem}_vad.json` from audio_silence
 - **Outputs:** `{stem}.json` (word timings, WhisperX shape), `{stem}.txt` (plain text), the worker's raw `{stem}_haas.json`
+
+### whisper — Whisper Hints (optional)
+
+Runs right after `transcription` (config `whisper:`, disabled by default; language fixed to `ja`). A second recognizer, faster-whisper (default `large-v3`), re-transcribes the **same chunks Haas used** (`{stem}_haas.json` → `"chunks"`) in ONE `docker compose run -T --entrypoint python whisperx - <request>` for all sources, in the existing `whisperx` image; the worker script (`src/nagare_clip/whisper/worker.py`, never importing `nagare_clip`) goes on stdin. Haas stays the transcript: `whisper.hints.load_line_hints()` aligns each line with Whisper's reading, and `text_filter` shows a differing reading to its LLM as a reference only (never truth; Whisper drops fillers and sometimes hallucinates). Disabled → no Docker call, no output, and text_filter uses no hints even if old `{stem}_whisper.json` files exist. `_text_filter_run` ignores hints whose count differs from the `.txt` line count (warning). See [`docs/stages/whisper.md`](docs/stages/whisper.md).
+
+- **Inputs:** source video files; `{stem}_haas.json` (transcription)
+- **Outputs:** `output/whisper/whisper_request.json`, `{stem}_whisper.json` (`{"chunks": [[s, e], ...], "texts": [...]}`)
 
 ### sentence_split — LLM Sentence Re-Segmentation
 
@@ -256,6 +263,9 @@ src/nagare_clip/          # Main Python package (src layout)
     chunks.py                 # pack_regions(): VAD regions -> chunks of at most max_chunk_seconds (pure)
     whisperx_json.py          # build_whisperx_json()/transcript_text(): Haas tokens -> WhisperX-shaped JSON (pure)
     run.py                    # asr_request() / finish_transcription(): worker request in, {stem}.json/.txt out
+  whisper/                    # whisper stage (faster-whisper hints for text_filter)
+    worker.py                 # standalone worker run in the whisperx image (stdin; never imports nagare_clip)
+    hints.py                  # load_line_hints()/line_hints(): one Whisper hint per transcript line (pure)
   sentence_split/             # sentence_split stage (LLM re-segmentation)
     segment.py                # pure: windowing, char/word map, rebuild_window_segments, verbatim check
     nlp.py                    # GiNZA bunsetsu extraction (lazy import)
@@ -348,6 +358,7 @@ tests/
   transcription/              # transcription (chunks / whisperx_json / run) unit tests
   sentence_split/             # sentence_split unit + run() tests
   gap_context/                # gap_context (snapshot / gaps / describe / context / run) unit tests
+  whisper/                    # whisper hints / worker unit tests
   text_filter/                # text-editing checkpoint unit tests
   summary/                    # summary segment/build + run() tests
   director/                   # director ops/checks/view/preview + agent-skill tools tests
@@ -418,6 +429,7 @@ the [Documentation Policy](#documentation-policy)):
 
 - project brief (`project:` config → summary/text_filter/publish prompts, the director's `view`) → [`docs/stages/project_brief.md`](docs/stages/project_brief.md)
 - audio_silence → [`docs/stages/audio_silence.md`](docs/stages/audio_silence.md)
+- whisper (second recognizer, hints for text_filter) → [`docs/stages/whisper.md`](docs/stages/whisper.md)
 - transcription (Haas chunking, token timestamps, the WhisperX-shaped JSON) → [`docs/stages/transcription.md`](docs/stages/transcription.md)
 - sentence_split (re-segmentation, windowing/carry-over, force-split) → [`docs/stages/sentence_split.md`](docs/stages/sentence_split.md)
 - gap_context (gap selection, frame sampling/extraction, vision-call contract, summary/director consumption) → [`docs/stages/gap_context.md`](docs/stages/gap_context.md)

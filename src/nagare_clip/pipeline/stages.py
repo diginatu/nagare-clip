@@ -52,6 +52,7 @@ from nagare_clip.pipeline.external import (
     build_blender_cmd,
     build_snapshot_batch_cmd,
     build_transcribe_cmd,
+    build_whisper_cmd,
     run_command,
     run_magick,
 )
@@ -73,10 +74,12 @@ from nagare_clip.summary.run import run_summary
 from nagare_clip.text_filter.run import run_text_filter
 from nagare_clip.timing import segment_times
 from nagare_clip.transcription.run import asr_request, finish_transcription
+from nagare_clip.whisper.hints import load_line_hints
 
 STAGE_NAMES = [
     "audio_silence",
     "transcription",
+    "whisper",
     "sentence_split",
     "gap_context",
     "summary",
@@ -168,6 +171,55 @@ def _audio_silence_required(ctx: PipelineContext) -> list[Path]:
     if ctx.from_index <= STAGE_NAMES.index("transcription"):
         out += [d / f"{s}_vad.json" for s in ctx.stems]
     return out
+
+
+# --- whisper -----------------------------------------------------------------
+
+
+def _whisper_run(ctx: PipelineContext) -> None:
+    w = ctx.cfg["whisper"]
+    if not w["enabled"]:
+        print("[whisper] skipped (whisper.enabled is false)")
+        return
+    d = ctx.stage_dir("whisper")
+    tdir = ctx.stage_dir("transcription")
+    d.mkdir(parents=True, exist_ok=True)
+    sources = []
+    for src in ctx.sources:
+        haas = json.loads((tdir / f"{src.stem}_haas.json").read_text(encoding="utf-8"))
+        sources.append(
+            {
+                "path": f"/app/{src.relative}",
+                "out": f"/output/whisper/{src.stem}_whisper.json",
+                "chunks": haas["chunks"],
+            }
+        )
+    request = d / "whisper_request.json"
+    request.write_text(
+        json.dumps(
+            {
+                "model": w["model"],
+                "batch_size": w["batch_size"],
+                "beam_size": w["beam_size"],
+                "sources": sources,
+            },
+            indent=2,
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+    print(f"[whisper] {w['model']}: {' '.join(s.relative for s in ctx.sources)}")
+    argv, script = build_whisper_cmd(ctx.project_root, "/output/whisper/whisper_request.json")
+    run_command(argv, env_extra=_docker_env(ctx), stdin_text=script)
+
+
+def _whisper_required(ctx: PipelineContext) -> list[Path]:
+    if not ctx.cfg["whisper"]["enabled"]:
+        return []
+    if ctx.from_index > STAGE_NAMES.index("text_filter"):
+        return []
+    d = ctx.stage_dir("whisper")
+    return [d / f"{s}_whisper.json" for s in ctx.stems]
 
 
 # --- sentence_split ----------------------------------------------------------
@@ -398,12 +450,28 @@ def _text_filter_run(ctx: PipelineContext) -> None:
         odir = ctx.stage_dir("text_filter")
         for src in ctx.sources:
             print(f"[text_filter] Text editing checkpoint: {src.stem}")
+            hints = None
+            if ctx.cfg["whisper"]["enabled"]:
+                hints = load_line_hints(
+                    sdir / f"{src.stem}.json",
+                    ctx.stage_dir("whisper") / f"{src.stem}_whisper.json",
+                )
+                n_lines = len((sdir / f"{src.stem}.txt").read_text(encoding="utf-8").splitlines())
+                if hints is not None and len(hints) != n_lines:
+                    logging.warning(
+                        "whisper hints for %s: %d hints vs %d lines; ignoring hints",
+                        src.stem,
+                        len(hints),
+                        n_lines,
+                    )
+                    hints = None
             run_text_filter(
                 sdir / f"{src.stem}.txt",
                 odir / f"{src.stem}_edits.txt",
                 ctx.cfg,
                 summary_json=ctx.stage_dir("summary") / "summary.json",
                 recorder=rec,
+                hints=hints,
             )
     finally:
         rec.rebuild_index()
@@ -904,6 +972,7 @@ def _render_required(ctx: PipelineContext) -> list[Path]:
 STAGES = [
     Stage("audio_silence", _audio_silence_run, _audio_silence_required),
     Stage("transcription", _transcription_run, _transcription_required),
+    Stage("whisper", _whisper_run, _whisper_required),
     Stage("sentence_split", _sentence_split_run, _sentence_split_required),
     Stage("gap_context", _gap_context_run, _gap_context_required),
     Stage("summary", _summary_run, _summary_required),

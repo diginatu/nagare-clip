@@ -303,6 +303,22 @@ class TranscriptionConfig(BaseModel):
     )
 
 
+class WhisperConfig(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    section_comment: ClassVar[str] = (
+        "whisper stage: a second recognizer (faster-whisper) over the same chunks Haas\n"
+        "used, run after transcription. Its reading of each line is shown to text_filter's\n"
+        "LLM as a reference only; Haas stays the transcript. Language is fixed to ja.\n"
+        "Disabled = no Docker call and text_filter uses no hints."
+    )
+    enabled: bool = Field(False, description="Run the Whisper hint pass")
+    model: str = Field(
+        "large-v3", description="faster-whisper model baked in the whisperx image (Systran)"
+    )
+    batch_size: int = Field(8, description="Chunks per batched decode")
+    beam_size: int = Field(5, description="Beam search width")
+
+
 class AudioSilenceConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
     section_comment: ClassVar[str] = (
@@ -1031,6 +1047,7 @@ class NagareClipConfig(BaseModel):
     project: ProjectConfig = Field(default_factory=ProjectConfig)
     transcription: TranscriptionConfig = Field(default_factory=TranscriptionConfig)
     audio_silence: AudioSilenceConfig = Field(default_factory=AudioSilenceConfig)
+    whisper: WhisperConfig = Field(default_factory=WhisperConfig)
     sentence_split: SentenceSplitConfig = Field(default_factory=SentenceSplitConfig)
     gap_context: GapContextConfig = Field(default_factory=GapContextConfig)
     summary: SummaryConfig = Field(default_factory=SummaryConfig)

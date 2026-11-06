@@ -54,6 +54,16 @@ audio_silence:
   min_silence: 0.5   # Shortest silence between speech regions that is cut, seconds
   speech_pad: 0.2   # Padding added around each speech region, seconds
 
+# whisper stage: a second recognizer (faster-whisper) over the same chunks Haas
+# used, run after transcription. Its reading of each line is shown to text_filter's
+# LLM as a reference only; Haas stays the transcript. Language is fixed to ja.
+# Disabled = no Docker call and text_filter uses no hints.
+whisper:
+  enabled: false   # Run the Whisper hint pass
+  model: "large-v3"   # faster-whisper model baked in the whisperx image (Systran)
+  batch_size: 8   # Chunks per batched decode
+  beam_size: 5   # Beam search width
+
 # sentence_split stage: runs per source between audio_silence and text_filter.
 # An LLM re-segments the WhisperX transcript into one-sentence-per-line units
 # (rewriting {stem}.json and {stem}.txt). Disabled by default = byte-identical

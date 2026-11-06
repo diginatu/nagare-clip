@@ -798,3 +798,8 @@ def test_transcription_defaults():
 
 def test_window_segments_default_200():
     assert get_effective_config(None)["sentence_split"]["window_segments"] == 200
+
+
+def test_whisper_config_defaults():
+    w = get_effective_config(None, {})["whisper"]
+    assert w == {"enabled": False, "model": "large-v3", "batch_size": 8, "beam_size": 5}

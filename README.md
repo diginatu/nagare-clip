@@ -8,6 +8,7 @@ The pipeline creates a rough-cut Blender project for human review and fine-tunin
 
 1. audio_silence: Silero VAD v6 speech regions (always on) -> `{stem}_vad.json` and the `_cuts.txt` editable cut list (the silences between the regions)
 2. transcription: Haas-ja-v1.0 on chunks packed from those speech regions -> `{stem}.json` (WhisperX-shaped word timings) + `{stem}.txt`
+2b. whisper (optional): faster-whisper large-v3 re-transcribes the same chunks in the `whisperx` Docker image -> `output/whisper/{stem}_whisper.json`; used only as per-line reference hints for text_filter's LLM (Haas stays the transcript); disabled by default
 3. sentence_split (optional): LLM re-segments the transcript into one-sentence-per-line units -> `output/sentence_split/{stem}.json` + `{stem}.txt`; disabled by default (byte-identical copy-through)
 4. gap_context (optional): a vision LLM snapshots+describes long silent gaps (from `_cuts.txt`) so summary/director can see what the transcript can't -> reviewable `output/gap_context/{stem}_gaps.json` + JPEG frames; disabled by default (no-op)
 5. summary (optional, project-wide): a larger LLM segments every video into line-range parts + summaries, a whole-video summary, and misspelling-prone keywords, and writes one all-videos summary -> reviewable `output/summary/summary.json`; the per-video summary and keywords are used by text_filter/director
@@ -327,7 +328,7 @@ alongside Langfuse — the two are independent sinks.
 - Linux
 - NVIDIA GPU (CUDA) for the `transcription` stage (Haas-ja ASR); the VAD in `audio_silence` runs on CPU
 - `ffmpeg` on the host `PATH` (the `transcribe/` worker decodes audio with it)
-- Docker + Docker Compose with the NVIDIA Container Toolkit (still used by `gap_context` and `publish` for frame snapshots)
+- Docker + Docker Compose with the NVIDIA Container Toolkit (used by `gap_context` and `publish` for frame snapshots, and by `whisper` for faster-whisper on the GPU)
 - Blender available as `blender`
 - ImageMagick available as `magick` (only needed for `render.enabled`, i.e. when the `render` stage composites thumbnails)
 - Python 3.11+
@@ -508,7 +509,7 @@ project:
 
 `previous_summary` is how a series carries over: point it at the earlier project's `output/summary/summary.json` and the director learns what "これ" refers to when the cut opens mid-story. A missing or unreadable file just drops that one line (logged), leaving the rest of the brief intact. `target_duration` and `tone` are what let `director` plan for the runtime you want and deviate from its default ~1-overlay-per-3-5-minutes density. The mechanical stages (`gap_context`, `sentence_split`, `guided_edit`) are deliberately not briefed.
 
-The config file covers all sections, each named after its stage: `general`, `project`, `transcription`, `audio_silence`, `sentence_split`, `gap_context`, `text_filter`, `summary`, `director`, `intervals`, `blender`, `publish`, `render`, `cut_report`, `pipeline`. The old `plan:`/`plan_revise:` sections, every `guided_edit:` key and the LLM director's keys are rejected with a message naming them (see *Migrating a config from the LLM director*). See `config.example.yml` for the full list of keys and their defaults.
+The config file covers all sections, each named after its stage: `general`, `project`, `transcription`, `audio_silence`, `whisper`, `sentence_split`, `gap_context`, `text_filter`, `summary`, `director`, `intervals`, `blender`, `publish`, `render`, `cut_report`, `pipeline`. The old `plan:`/`plan_revise:` sections, every `guided_edit:` key and the LLM director's keys are rejected with a message naming them (see *Migrating a config from the LLM director*). See `config.example.yml` for the full list of keys and their defaults.
 
 ### Choosing an LLM provider
 
@@ -554,6 +555,15 @@ blender:
 - **`fps`** written without `fps_base` resets `fps_base` to `1.0`. The scene otherwise carries the first source's pulldown (`1.001` for 29.97), and `fps: 30` would quietly stay 29.97. Overriding it also changes every frame computation the stage does, so the cut lands where the new rate puts it.
 - Keys are applied **in the order you write them**, which matters where one setting widens another's choices. On Blender 5.x, `image_settings.file_format` offers only still-image formats until `media_type: VIDEO` is set — so `media_type` has to come first, or you get `enum "FFMPEG" not found`.
 - An **unknown key** is logged and skipped. An **invalid value** — a misspelt enum member such as `codec: H246` — is a hard error, because rendering with a codec other than the one you asked for is a defect you would only find by playing the file.
+
+### whisper: Whisper Hints
+
+Optional (`whisper.enabled: true`, default `false`). Haas-ja stays the transcript, but a second recognizer sometimes hears what Haas misses (on a 120 s clip Haas wrote 「散乱感」/「水が」 where Whisper had 「産卵管」/「水位が」). The `whisper` stage runs faster-whisper (`whisper.model`, default `large-v3`, already baked into the `whisperx` image; `batch_size` 8, `beam_size` 5, language fixed to Japanese) over the same chunks in one Docker run, and `text_filter` shows its reading of each line to the LLM as a **reference only**; the LLM still emits `{{old->new}}` patches on the Haas line. Needs `text_filter.use_llm`. Caveats measured: Whisper drops fillers, normalises colloquial forms (流してる→流している), inserts stray spaces and hallucinated once (えっと→越冬), so hints are never truth. Disabled = no Docker call and no hints. Details: [`docs/stages/whisper.md`](docs/stages/whisper.md).
+
+```yaml
+whisper:
+  enabled: true
+```
 
 ### audio_silence: Audio-Silence Detection
 
@@ -665,7 +675,7 @@ without the extra context.
 Options:
 - `--source FILE` — source video file (may be repeated for multiple sources); when omitted, all videos in `--input-videos-dir` are processed alphabetically.
 - `--config FILE` — path to a YAML config file; config values fill in between CLI overrides and built-in defaults. Repeatable: files are deep-merged left to right, later files win (see [Layering several config files](#layering-several-config-files)).
-- `--from-stage NAME` — start from stage `NAME`, reusing earlier stage outputs. `NAME` is a stage name: `audio_silence`, `transcription`, `sentence_split`, `gap_context`, `summary`, `text_filter`, `director`, `guided_edit`, `intervals`, `blender`, `publish`, `render`. Also settable via `pipeline.from_stage` in config.
+- `--from-stage NAME` — start from stage `NAME`, reusing earlier stage outputs. `NAME` is a stage name: `audio_silence`, `transcription`, `whisper`, `sentence_split`, `gap_context`, `summary`, `text_filter`, `director`, `guided_edit`, `intervals`, `blender`, `publish`, `render`. Also settable via `pipeline.from_stage` in config.
 - `--to-stage NAME` — stop **after** stage `NAME` (inclusive); later stages are skipped. Same stage names as `--from-stage`, and must not precede it. Defaults to `publish` (run to the end). Also settable via `pipeline.to_stage` in config. Combine with `--from-stage` to run a window of stages, e.g. `--from-stage summary --to-stage director`.
 - Defaults: input videos under `src_video/`, outputs under `output/`.
 - If `--source` contains `/`, it is treated as the exact path; otherwise it is resolved inside `--input-videos-dir`.
@@ -792,5 +802,5 @@ in the file you are already reading. See
 - If needed, fix ownership after run:
 
 ```bash
-sudo chown -R "$(id -u):$(id -g)" output cache
+sudo chown -R "$(id -u):$(id -g)" output
 ```

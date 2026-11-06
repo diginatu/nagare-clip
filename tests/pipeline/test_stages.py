@@ -48,6 +48,7 @@ def test_stage_names_canonical_order():
     assert st.STAGE_NAMES == [
         "audio_silence",
         "transcription",
+        "whisper",
         "sentence_split",
         "gap_context",
         "summary",
@@ -156,7 +157,7 @@ def test_text_filter_adapter_passes_summary_json(tmp_path, monkeypatch):
     monkeypatch.setattr(
         st,
         "run_text_filter",
-        lambda txt, out, cfg, *, summary_json=None, recorder=None: seen.append(
+        lambda txt, out, cfg, *, summary_json=None, recorder=None, hints=None: seen.append(
             (txt, out, summary_json)
         ),
     )
@@ -863,7 +864,7 @@ def test_audio_silence_stage_one_vad_call_for_all_sources(tmp_path, monkeypatch)
 
 
 def test_stage_order_audio_silence_first():
-    assert st.STAGE_NAMES[:3] == ["audio_silence", "transcription", "sentence_split"]
+    assert st.STAGE_NAMES[:3] == ["audio_silence", "transcription", "whisper"]
 
 
 def test_transcription_stage_one_asr_call_for_all_sources(tmp_path, monkeypatch):
@@ -920,3 +921,110 @@ def test_from_stage_transcription_requires_vad_json(tmp_path):
     assert d / "a_vad.json" in by_name["audio_silence"].required_outputs(at)
     after = _ctx(tmp_path, from_index=st.STAGE_NAMES.index("sentence_split"))
     assert d / "a_vad.json" not in by_name["audio_silence"].required_outputs(after)
+
+
+# --- whisper -----------------------------------------------------------------
+
+
+def _whisper_cfg(enabled=True):
+    return get_effective_config(None, {"whisper": {"enabled": enabled}})
+
+
+def test_stage_order_has_whisper_after_transcription():
+    i = st.STAGE_NAMES.index("transcription")
+    assert st.STAGE_NAMES[i + 1] == "whisper"
+    assert st.STAGE_NAMES[i + 2] == "sentence_split"
+
+
+def test_whisper_disabled_no_docker_call(tmp_path, monkeypatch, capsys):
+    ctx = _ctx(tmp_path)
+    monkeypatch.setattr(st, "run_command", lambda *a, **k: pytest.fail("docker called"))
+    st._whisper_run(ctx)
+    assert "skip" in capsys.readouterr().out.lower()
+    assert not (tmp_path / "out" / "whisper").exists()
+
+
+def test_whisper_stage_one_docker_call_for_all_sources(tmp_path, monkeypatch):
+    ctx = _ctx(tmp_path, cfg=_whisper_cfg(), stems=("a", "b"))
+    tdir = tmp_path / "out" / "transcription"
+    tdir.mkdir(parents=True)
+    (tdir / "a_haas.json").write_text(json.dumps({"chunks": [[0.0, 2.0], [3.0, 5.5]]}))
+    (tdir / "b_haas.json").write_text(json.dumps({"chunks": []}))
+    calls = []
+    monkeypatch.setattr(st, "run_command", lambda cmd, **kw: calls.append((cmd, kw)))
+    st._whisper_run(ctx)
+
+    assert len(calls) == 1
+    cmd, kw = calls[0]
+    assert cmd[-2:] == ["-", "/output/whisper/whisper_request.json"]
+    assert "--entrypoint" in cmd and "python" in cmd
+    assert kw["env_extra"] == st._docker_env(ctx)
+    assert "faster_whisper" in kw["stdin_text"]
+    req = json.loads((tmp_path / "out" / "whisper" / "whisper_request.json").read_text())
+    assert req == {
+        "model": "large-v3",
+        "batch_size": 8,
+        "beam_size": 5,
+        "sources": [
+            {
+                "path": "/app/a.mp4",
+                "out": "/output/whisper/a_whisper.json",
+                "chunks": [[0.0, 2.0], [3.0, 5.5]],
+            },
+            {"path": "/app/b.mp4", "out": "/output/whisper/b_whisper.json", "chunks": []},
+        ],
+    }
+
+
+def test_whisper_required_only_when_enabled(tmp_path):
+    w = next(s for s in st.STAGES if s.name == "whisper")
+    tf = st.STAGE_NAMES.index("text_filter")
+    off = _ctx(tmp_path, from_index=tf)
+    assert w.required_outputs(off) == []
+    on = _ctx(tmp_path, cfg=_whisper_cfg(), from_index=tf)
+    d = tmp_path / "out" / "whisper"
+    assert w.required_outputs(on) == [d / "a_whisper.json", d / "b_whisper.json"]
+    after = _ctx(tmp_path, cfg=_whisper_cfg(), from_index=tf + 1)
+    assert w.required_outputs(after) == []
+
+
+def _tf_setup(tmp_path, monkeypatch, cfg, lines=2):
+    seen = []
+    monkeypatch.setattr(st, "recorder_from_config", lambda *a, **k: _NullRec())
+    monkeypatch.setattr(
+        st,
+        "run_text_filter",
+        lambda txt, out, cfg, *, summary_json=None, recorder=None, hints=None: seen.append(hints),
+    )
+    out = tmp_path / "out"
+    (out / "sentence_split").mkdir(parents=True)
+    (out / "whisper").mkdir(parents=True)
+    (out / "sentence_split" / "a.txt").write_text("\n".join(["x"] * lines) + "\n")
+    (out / "sentence_split" / "a.json").write_text("{}")
+    (out / "whisper" / "a_whisper.json").write_text("{}")
+    return seen
+
+
+def test_text_filter_ignores_stale_whisper_when_disabled(tmp_path, monkeypatch):
+    seen = _tf_setup(tmp_path, monkeypatch, None)
+    monkeypatch.setattr(st, "load_line_hints", lambda *a: pytest.fail("hints loaded"))
+    st._text_filter_run(_ctx(tmp_path, stems=("a",)))
+    assert seen == [None]
+
+
+def test_text_filter_passes_hints_when_enabled(tmp_path, monkeypatch):
+    seen = _tf_setup(tmp_path, monkeypatch, None)
+    args = []
+    monkeypatch.setattr(st, "load_line_hints", lambda *a: args.append(a) or ["h", None])
+    st._text_filter_run(_ctx(tmp_path, cfg=_whisper_cfg(), stems=("a",)))
+    out = tmp_path / "out"
+    assert seen == [["h", None]]
+    assert args == [(out / "sentence_split" / "a.json", out / "whisper" / "a_whisper.json")]
+
+
+def test_text_filter_drops_hints_on_line_count_mismatch(tmp_path, monkeypatch, caplog):
+    seen = _tf_setup(tmp_path, monkeypatch, None, lines=3)
+    monkeypatch.setattr(st, "load_line_hints", lambda *a: ["h", None])
+    st._text_filter_run(_ctx(tmp_path, cfg=_whisper_cfg(), stems=("a",)))
+    assert seen == [None]
+    assert "hint" in caplog.text.lower()
