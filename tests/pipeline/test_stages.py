@@ -46,8 +46,8 @@ def gap_ctx(tmp_path):
 
 def test_stage_names_canonical_order():
     assert st.STAGE_NAMES == [
-        "transcription",
         "audio_silence",
+        "transcription",
         "sentence_split",
         "gap_context",
         "summary",
@@ -64,12 +64,12 @@ def test_stage_names_canonical_order():
 
 def test_transcription_required_only_when_sentence_split_runs(tmp_path):
     ctx = _ctx(tmp_path, from_index=st.STAGE_NAMES.index("sentence_split"))
-    req = st.STAGES[0].required_outputs(ctx)
+    req = st.STAGES[1].required_outputs(ctx)
     assert (tmp_path / "out" / "transcription" / "a.json") in req
     assert (tmp_path / "out" / "transcription" / "b.txt") in req
     # starting after sentence_split: transcription outputs not needed
     ctx2 = _ctx(tmp_path, from_index=st.STAGE_NAMES.index("text_filter"))
-    assert st.STAGES[0].required_outputs(ctx2) == []
+    assert st.STAGES[1].required_outputs(ctx2) == []
 
 
 def test_per_source_required_outputs(tmp_path):
@@ -213,22 +213,6 @@ def test_blender_adapter_builds_command(tmp_path, monkeypatch):
     assert cmd[0] == "blender"
     assert str(tmp_path / "a.mp4") in cmd  # ORIGINAL source path
     assert str(tmp_path / "out" / "blender" / "a_edited.blend") in cmd
-
-
-def test_transcription_adapter_env_and_cmd(tmp_path, monkeypatch):
-    captured = {}
-
-    def fake_run_command(cmd, *, env_extra=None, stderr_to=None):
-        captured["cmd"] = cmd
-        captured["env"] = env_extra
-
-    monkeypatch.setattr(st, "run_command", fake_run_command)
-    st.STAGES[0].run(_ctx(tmp_path, stems=("a",)))
-    assert captured["env"] == {
-        "INPUT_VIDEOS_DIR": str(tmp_path / "in"),
-        "OUTPUT_DIR": str(tmp_path / "out"),
-    }
-    assert "a.mp4" in captured["cmd"]
 
 
 def test_gap_context_is_between_sentence_split_and_summary():
@@ -876,3 +860,63 @@ def test_audio_silence_stage_one_vad_call_for_all_sources(tmp_path, monkeypatch)
     ]
     for stem in ("a", "b"):
         assert read_cuts(d / f"{stem}_cuts.txt") == [(0.0, 1.0), (5.0, 6.0)]
+
+
+def test_stage_order_audio_silence_first():
+    assert st.STAGE_NAMES[:3] == ["audio_silence", "transcription", "sentence_split"]
+
+
+def test_transcription_stage_one_asr_call_for_all_sources(tmp_path, monkeypatch):
+    ctx = _ctx(tmp_path, stems=("a", "b"))
+    adir = tmp_path / "out" / "audio_silence"
+    adir.mkdir(parents=True)
+    for stem in ("a", "b"):
+        (adir / f"{stem}_vad.json").write_text(
+            json.dumps({"duration": 10.0, "speech": [[1.0, 2.0], [2.5, 4.0]]})
+        )
+    calls = []
+
+    def fake_run(cmd, **kw):
+        calls.append((cmd, kw))
+        req = json.loads(open(cmd[-1]).read())
+        for s in req["sources"]:
+            with open(s["out"], "w") as f:
+                json.dump(
+                    {
+                        "chunks": s["chunks"],
+                        "tokens": [{"text": "あい", "start": 1.0, "end": 1.4}],
+                    },
+                    f,
+                )
+
+    monkeypatch.setattr(st, "run_command", fake_run)
+    st._transcription_run(ctx)
+
+    d = tmp_path / "out" / "transcription"
+    assert len(calls) == 1
+    cmd, kw = calls[0]
+    assert cmd == [
+        "uv", "run", "--project", str(tmp_path / "transcribe"), "python", "-m",
+        "nagare_transcribe", "asr", str(d / "asr_request.json"),
+    ]  # fmt: skip
+    assert "env_extra" not in kw
+    req = json.loads((d / "asr_request.json").read_text())
+    t = ctx.cfg["transcription"]
+    assert req["model"] == t["model"]
+    assert req["batch_size"] == t["batch_size"]
+    assert req["max_chunk_seconds"] == t["max_chunk_seconds"]
+    assert [s["path"] for s in req["sources"]] == [str(s.abs_path) for s in ctx.sources]
+    assert [s["out"] for s in req["sources"]] == [str(d / f"{s}_haas.json") for s in ("a", "b")]
+    for stem in ("a", "b"):
+        data = json.loads((d / f"{stem}.json").read_text())
+        assert data["segments"][0]["text"] == "あい"
+        assert (d / f"{stem}.txt").read_text().strip() == "あい"
+
+
+def test_from_stage_transcription_requires_vad_json(tmp_path):
+    by_name = {s.name: s for s in st.STAGES}
+    d = tmp_path / "out" / "audio_silence"
+    at = _ctx(tmp_path, from_index=st.STAGE_NAMES.index("transcription"))
+    assert d / "a_vad.json" in by_name["audio_silence"].required_outputs(at)
+    after = _ctx(tmp_path, from_index=st.STAGE_NAMES.index("sentence_split"))
+    assert d / "a_vad.json" not in by_name["audio_silence"].required_outputs(after)

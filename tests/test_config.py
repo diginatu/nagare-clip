@@ -282,20 +282,8 @@ class TestGetEffectiveConfig:
 
     def test_pipeline_stage_defaults_are_names(self):
         cfg = get_effective_config(None)
-        assert cfg["pipeline"]["from_stage"] == "transcription"
+        assert cfg["pipeline"]["from_stage"] == "audio_silence"
         assert cfg["pipeline"]["to_stage"] == "render"
-
-    def test_transcription_language_default(self):
-        cfg = get_effective_config(None)
-        assert cfg["transcription"]["language"] == "ja"
-
-    def test_transcription_language_config_override(self, tmp_path: Path):
-        cfg_file = tmp_path / "cfg.yml"
-        cfg_file.write_text(yaml.dump({"transcription": {"language": "en"}}))
-        cfg = get_effective_config(cfg_file)
-        assert cfg["transcription"]["language"] == "en"
-        # Other transcription defaults intact
-        assert cfg["transcription"]["compute_type"] == "float16"
 
     def test_retry_defaults_present(self):
         cfg = get_effective_config(None)
@@ -450,7 +438,7 @@ def test_sentence_split_defaults_present():
     cfg = get_effective_config(None, {})
     sp = cfg["sentence_split"]
     assert sp["enabled"] is False
-    assert sp["window_segments"] == 20
+    assert sp["window_segments"] == 200
     assert sp["max_retries"] == 2
     assert sp["response_format"] == "json"
     assert isinstance(sp["prompt"], str) and sp["prompt"]
@@ -787,3 +775,26 @@ def test_config_rejects_removed_audio_silence_keys(tmp_path):
     with pytest.raises(ValueError) as e:
         get_effective_config(f, {})
     assert "audio_silence.noise" in str(e.value) and "audio_silence.enabled" in str(e.value)
+
+
+def test_config_rejects_old_transcription_keys(tmp_path):
+    f = tmp_path / "c.yml"
+    f.write_text("transcription:\n  compute_type: int8\n  language: ja\n  align_model: x\n")
+    with pytest.raises(Exception) as e:
+        get_effective_config(f)
+    msg = str(e.value)
+    for k in ("compute_type", "language", "align_model"):
+        assert f"`transcription.{k}`" in msg
+
+
+def test_transcription_defaults():
+    t = get_effective_config(None)["transcription"]
+    assert t == {
+        "model": "third-intelligence/Haas-ja-v1.0",
+        "batch_size": 8,
+        "max_chunk_seconds": 30.0,
+    }
+
+
+def test_window_segments_default_200():
+    assert get_effective_config(None)["sentence_split"]["window_segments"] == 200

@@ -36,11 +36,12 @@ project: {}
   # story_so_far: "the previous episode built the rig; this one tests it"   # Series context the transcript never states
   # previous_summary: "../previous-project/output/summary/summary.json"   # Path to a previous project's summary.json; its overall summary is added to the brief
 
+# transcription stage: Haas-ja-v1.0 (Japanese), run after audio_silence on
+# chunks packed from its speech regions.
 transcription:
-  compute_type: float16
-  batch_size: 16
-  language: ja   # ISO 639-1 language code passed to WhisperX (e.g. ja, en)
-  # align_model: vumichien/wav2vec2-large-xlsr-japanese
+  model: "third-intelligence/Haas-ja-v1.0"   # Haas ASR model id
+  batch_size: 8   # Chunks per ASR batch
+  max_chunk_seconds: 30.0   # Consecutive speech regions are packed into chunks of at most this length
 
 # audio_silence stage: Silero VAD v6, run before transcription.
 # Writes an editable {stem}_cuts.txt checkpoint (the silences between speech
@@ -70,7 +71,7 @@ sentence_split:
   max_retries: 2   # Extra attempts on LLM error / invalid ranges (0 = single attempt)
   retry_temp_step: 0.2
   retry_temp_cap: 0.8
-  window_segments: 20   # Segments per LLM window (the batch size); a window carries its trailing sentence to the next
+  window_segments: 200   # Segments per LLM window (the batch size); a window carries its trailing sentence to the next
   force_split: true   # Force a sentence boundary at long audio_silence spans (post-enforced on LLM output; no extra LLM calls)
   force_split_min_silence: 3.0   # Seconds; only audio_silence cut spans at least this long force a split
   # prompt: "..."   # Bunsetsu-grouping prompt (has a sensible default)
@@ -374,5 +375,5 @@ cut_report:
 pipeline:
   input_videos_dir: src_video
   output_dir: output   # Root dir; stage outputs go to per-stage named subdirs
-  from_stage: transcription   # Start from this stage; reuses earlier stage outputs
+  from_stage: audio_silence   # Start from this stage; reuses earlier stage outputs
   to_stage: render   # Stop after this stage (inclusive). Must not precede from_stage

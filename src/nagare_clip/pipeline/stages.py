@@ -52,7 +52,6 @@ from nagare_clip.pipeline.external import (
     build_blender_cmd,
     build_snapshot_batch_cmd,
     build_transcribe_cmd,
-    build_transcription_cmd,
     run_command,
     run_magick,
 )
@@ -73,10 +72,11 @@ from nagare_clip.sentence_split.run import run_sentence_split
 from nagare_clip.summary.run import run_summary
 from nagare_clip.text_filter.run import run_text_filter
 from nagare_clip.timing import segment_times
+from nagare_clip.transcription.run import asr_request, finish_transcription
 
 STAGE_NAMES = [
-    "transcription",
     "audio_silence",
+    "transcription",
     "sentence_split",
     "gap_context",
     "summary",
@@ -105,12 +105,22 @@ def _recorder(ctx: PipelineContext, stage: str):
 
 
 def _transcription_run(ctx: PipelineContext) -> None:
-    rels = [s.relative for s in ctx.sources]
-    print(f"[transcription] WhisperX: {' '.join(rels)}")
-    run_command(
-        build_transcription_cmd(ctx.project_root, rels, ctx.cfg),
-        env_extra=_docker_env(ctx),
+    d = ctx.stage_dir("transcription")
+    adir = ctx.stage_dir("audio_silence")
+    d.mkdir(parents=True, exist_ok=True)
+    triples = [
+        (src.abs_path, adir / f"{src.stem}_vad.json", d / f"{src.stem}_haas.json")
+        for src in ctx.sources
+    ]
+    request = d / "asr_request.json"
+    request.write_text(
+        json.dumps(asr_request(triples, ctx.cfg), indent=2, ensure_ascii=False),
+        encoding="utf-8",
     )
+    print(f"[transcription] Haas: {' '.join(s.relative for s in ctx.sources)}")
+    run_command(build_transcribe_cmd(ctx.project_root, "asr", request))
+    for src, vad, out in zip(ctx.sources, (t[1] for t in triples), (t[2] for t in triples)):
+        finish_transcription(out, vad, d / f"{src.stem}.json", d / f"{src.stem}.txt")
 
 
 def _transcription_required(ctx: PipelineContext) -> list[Path]:
@@ -153,7 +163,11 @@ def _audio_silence_run(ctx: PipelineContext) -> None:
 
 def _audio_silence_required(ctx: PipelineContext) -> list[Path]:
     d = ctx.stage_dir("audio_silence")
-    return [d / f"{s}_cuts.txt" for s in ctx.stems]
+    out = [d / f"{s}_cuts.txt" for s in ctx.stems]
+    # transcription chunks come from the VAD regions, not from the editable cuts
+    if ctx.from_index <= STAGE_NAMES.index("transcription"):
+        out += [d / f"{s}_vad.json" for s in ctx.stems]
+    return out
 
 
 # --- sentence_split ----------------------------------------------------------
@@ -888,8 +902,8 @@ def _render_required(ctx: PipelineContext) -> list[Path]:
 
 
 STAGES = [
-    Stage("transcription", _transcription_run, _transcription_required),
     Stage("audio_silence", _audio_silence_run, _audio_silence_required),
+    Stage("transcription", _transcription_run, _transcription_required),
     Stage("sentence_split", _sentence_split_run, _sentence_split_required),
     Stage("gap_context", _gap_context_run, _gap_context_required),
     Stage("summary", _summary_run, _summary_required),

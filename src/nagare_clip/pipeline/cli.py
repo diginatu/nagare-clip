@@ -46,7 +46,6 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         default=None,
         help="Path to YAML config file (repeatable; merged left to right, later files win)",
     )
-    parser.add_argument("--language", default=None, help="WhisperX language code")
     parser.add_argument("--input-videos-dir", default=None, dest="input_videos_dir")
     parser.add_argument("--output-dir", default=None, dest="output_dir")
     parser.add_argument("--keep-pre-margin", type=float, default=None, dest="keep_pre_margin")
@@ -63,7 +62,6 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         dest="to_stage",
         help="Stop after this stage (inclusive)",
     )
-    parser.add_argument("--align-model", default=None, dest="align_model")
     return parser.parse_args(argv)
 
 
@@ -74,8 +72,6 @@ def build_cli_overrides(args: argparse.Namespace) -> dict:
         if value is not None:
             overrides.setdefault(section, {})[key] = value
 
-    put("transcription", "language", args.language)
-    put("transcription", "align_model", args.align_model)
     put("pipeline", "input_videos_dir", args.input_videos_dir)
     put("pipeline", "output_dir", args.output_dir)
     put("pipeline", "from_stage", args.from_stage)

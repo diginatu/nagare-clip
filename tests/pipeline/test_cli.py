@@ -10,10 +10,6 @@ from nagare_clip.pipeline import cli
 def test_build_cli_overrides_mapping():
     args = cli.parse_args(
         [
-            "--language",
-            "en",
-            "--align-model",
-            "m/x",
             "--input-videos-dir",
             "vids",
             "--output-dir",
@@ -29,7 +25,6 @@ def test_build_cli_overrides_mapping():
         ]
     )
     assert cli.build_cli_overrides(args) == {
-        "transcription": {"language": "en", "align_model": "m/x"},
         "pipeline": {
             "input_videos_dir": "vids",
             "output_dir": "out2",

@@ -6,8 +6,6 @@ from nagare_clip.config import get_effective_config
 from nagare_clip.pipeline.external import (
     build_blender_cmd,
     build_transcribe_cmd,
-    build_transcription_cmd,
-    effective_align_model,
     run_command,
 )
 
@@ -16,59 +14,8 @@ def _cfg(overrides=None):
     return get_effective_config(None, overrides or {})
 
 
-def test_effective_align_model_ja_default():
-    assert effective_align_model(_cfg()) == "vumichien/wav2vec2-large-xlsr-japanese"
-
-
-def test_effective_align_model_explicit_wins():
-    cfg = _cfg({"transcription": {"align_model": "my/model"}})
-    assert effective_align_model(cfg) == "my/model"
-
-
-def test_effective_align_model_non_ja_empty():
-    assert effective_align_model(_cfg({"transcription": {"language": "en"}})) == ""
-
-
-def test_build_transcription_cmd():
-    root = Path("/proj")
-    cmd = build_transcription_cmd(root, ["a.mp4", "b.mp4"], _cfg())
-    assert cmd == [
-        "docker",
-        "compose",
-        "-f",
-        "/proj/docker-compose.yml",
-        "run",
-        "--rm",
-        "--user",
-        "0:0",
-        "whisperx",
-        "_",
-        "a.mp4",
-        "b.mp4",
-        "--output_dir",
-        "/output/transcription",
-        "--output_format",
-        "all",
-        "--language",
-        "ja",
-        "--compute_type",
-        "float16",
-        "--batch_size",
-        "16",
-        "--align_model",
-        "vumichien/wav2vec2-large-xlsr-japanese",
-    ]
-
-
-def test_build_transcription_cmd_omits_empty_align_model():
-    cmd = build_transcription_cmd(
-        Path("/proj"), ["a.mp4"], _cfg({"transcription": {"language": "en"}})
-    )
-    assert "--align_model" not in cmd
-
-
 def test_build_transcribe_cmd():
-    cmd = build_transcribe_cmd(Path("/proj"), "vad", Path("/out/req.json"))
+    cmd = build_transcribe_cmd(Path("/proj"), "asr", Path("/out/req.json"))
     assert cmd == [
         "uv",
         "run",
@@ -77,7 +24,7 @@ def test_build_transcribe_cmd():
         "python",
         "-m",
         "nagare_transcribe",
-        "vad",
+        "asr",
         "/out/req.json",
     ]
 

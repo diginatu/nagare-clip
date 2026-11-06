@@ -292,12 +292,15 @@ class ProjectConfig(BaseModel):
 
 class TranscriptionConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
-    compute_type: str = Field("float16")
-    batch_size: int = Field(16)
-    language: str = Field(
-        "ja", description="ISO 639-1 language code passed to WhisperX (e.g. ja, en)"
+    section_comment: ClassVar[str] = (
+        "transcription stage: Haas-ja-v1.0 (Japanese), run after audio_silence on\n"
+        "chunks packed from its speech regions."
     )
-    align_model: str = _commented("", sample="vumichien/wav2vec2-large-xlsr-japanese")
+    model: str = Field("third-intelligence/Haas-ja-v1.0", description="Haas ASR model id")
+    batch_size: int = Field(8, description="Chunks per ASR batch")
+    max_chunk_seconds: float = Field(
+        30.0, description="Consecutive speech regions are packed into chunks of at most this length"
+    )
 
 
 class AudioSilenceConfig(BaseModel):
@@ -348,7 +351,7 @@ class SentenceSplitConfig(BaseModel):
     retry_temp_step: float = Field(0.2)
     retry_temp_cap: float = Field(0.8)
     window_segments: int = Field(
-        20,
+        200,
         description="Segments per LLM window (the batch size); a window carries its trailing sentence to the next",
     )
     force_split: bool = Field(
@@ -1010,7 +1013,7 @@ class PipelineConfig(BaseModel):
         "output", description="Root dir; stage outputs go to per-stage named subdirs"
     )
     from_stage: str = Field(
-        "transcription", description="Start from this stage; reuses earlier stage outputs"
+        "audio_silence", description="Start from this stage; reuses earlier stage outputs"
     )
     to_stage: str = Field(
         "render", description="Stop after this stage (inclusive). Must not precede from_stage"
@@ -1201,6 +1204,10 @@ REMOVED_KEYS: dict[str, tuple[frozenset[str] | None, str]] = {
         frozenset({"noise", "enabled"}),
         "audio_silence always runs Silero VAD (delete a _cuts.txt line to keep a silence); "
         "tune audio_silence.threshold",
+    ),
+    "transcription": (
+        frozenset({"compute_type", "language", "align_model"}),
+        "transcription runs Haas-ja-v1.0 (Japanese only)",
     ),
     "guided_edit": (
         None,

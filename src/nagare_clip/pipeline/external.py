@@ -1,8 +1,8 @@
 """External-process command construction and execution.
 
-Only two genuine process boundaries remain in the pipeline: the whisperx
-Docker image (WhisperX transcription), the ``transcribe/`` worker and headless
-Blender. Command lines are built by pure functions so they are testable
+The genuine process boundaries of the pipeline: the whisperx Docker image
+(ffmpeg snapshots), the ``transcribe/`` worker (Silero VAD, Haas ASR) and
+headless Blender. Command lines are built by pure functions so they are testable
 without Docker or Blender installed.
 """
 
@@ -14,16 +14,6 @@ import subprocess
 from collections.abc import Sequence
 from pathlib import Path
 from typing import NamedTuple
-
-JA_DEFAULT_ALIGN_MODEL = "vumichien/wav2vec2-large-xlsr-japanese"
-
-
-def effective_align_model(cfg: dict) -> str:
-    """Configured align model, else the Japanese default, else empty."""
-    t = cfg["transcription"]
-    if t["align_model"]:
-        return t["align_model"]
-    return JA_DEFAULT_ALIGN_MODEL if t["language"] == "ja" else ""
 
 
 def _compose_prefix(project_root: Path) -> list[str]:
@@ -39,32 +29,8 @@ def _compose_prefix(project_root: Path) -> list[str]:
     ]
 
 
-def build_transcription_cmd(project_root: Path, relatives: list[str], cfg: dict) -> list[str]:
-    t = cfg["transcription"]
-    cmd = [
-        *_compose_prefix(project_root),
-        "whisperx",
-        "_",
-        *relatives,
-        "--output_dir",
-        "/output/transcription",
-        "--output_format",
-        "all",
-        "--language",
-        t["language"],
-        "--compute_type",
-        t["compute_type"],
-        "--batch_size",
-        str(t["batch_size"]),
-    ]
-    align = effective_align_model(cfg)
-    if align:
-        cmd += ["--align_model", align]
-    return cmd
-
-
 def build_transcribe_cmd(project_root: Path, command: str, request: Path) -> list[str]:
-    """The ``transcribe/`` worker subproject: ``vad`` or ``transcribe`` on a request file."""
+    """The ``transcribe/`` worker subproject: ``vad`` or ``asr`` on a request file."""
     return [
         "uv",
         "run",

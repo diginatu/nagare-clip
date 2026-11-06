@@ -23,16 +23,16 @@ runtime behavior.
   list the CLI unlinks after the run) — but `SourceMedia.abs_path` always keeps
   the *original* path, so the blender stage still references original media,
   never the staged copy.
-- `external.py` — the only two subprocess boundaries in the whole pipeline:
-  the whisperx Docker image (WhisperX transcription, ffmpeg `silencedetect`,
-  and the gap_context stage's frame snapshots) and headless Blender.
-  `build_transcription_cmd()`, `build_silencedetect_cmd()`,
-  `build_snapshot_batch_cmd()`, and `build_blender_cmd()` are pure functions
+- `external.py` — the subprocess boundaries of the pipeline: the `transcribe/`
+  uv subproject (Silero VAD for audio_silence, Haas-ja ASR for transcription;
+  no Docker), the whisperx Docker image (the gap_context/publish frame
+  snapshots) and headless Blender.
+  `build_transcribe_cmd()`, `build_snapshot_batch_cmd()`, and
+  `build_blender_cmd()` are pure functions
   returning command lines (testable without Docker/Blender installed;
   `build_snapshot_batch_cmd()` returns a `ShellBatch(argv, script)`);
   `run_command()` actually runs one via `subprocess.run(..., check=True)`,
-  optionally merging extra env vars, redirecting stderr to a file (used to
-  capture `silencedetect`'s stderr for the audio_silence stage), feeding
+  optionally merging extra env vars, optionally redirecting stderr to a file, feeding
   `stdin_text`, or keeping stderr (`capture_stderr`) so a
   `CalledProcessError` carries it for the caller's warning.
   `build_snapshot_batch_cmd()` renders every gap-context frame job (across
@@ -68,10 +68,16 @@ runtime behavior.
   `run()` call (`run_audio_silence`, `run_sentence_split`, `run_gap_context`,
   `run_summary`, `run_text_filter`, `run_guided_edit`, `run_intervals`,
   `run_publish`) or an external command
-  (`transcription`, `blender`); `director` is a checkpoint (below).
-  `transcription`, `summary`, `director`, `blender`
-  and `publish` run once per pipeline invocation; `audio_silence`,
-  `sentence_split`, `gap_context`, `text_filter`, `guided_edit`,
+  (`blender`); `director` is a checkpoint (below). `audio_silence` and
+  `transcription` each make ONE `transcribe/` worker call for all sources
+  (`vad` then `asr`, request files `vad_request.json` / `asr_request.json`)
+  and then loop per source in-process: `run_audio_silence` writes `_cuts.txt`
+  from `{stem}_vad.json`; `finish_transcription` shapes `{stem}_haas.json`
+  into the WhisperX-compatible `{stem}.json`/`.txt`. `audio_silence` runs
+  **first** (its speech regions define the transcription chunks, packed to
+  `transcription.max_chunk_seconds`); resuming at `transcription` requires
+  `{stem}_vad.json` on disk. `summary`, `director`, `blender`
+  and `publish` run once per pipeline invocation; `sentence_split`, `gap_context`, `text_filter`, `guided_edit`,
   and `intervals` loop per source inside their adapter. `publish` runs once
   but still reads per-source material (its frame shortlist and caption list),
   which it gathers in the adapter before a single batched Docker call — the
@@ -176,7 +182,7 @@ The checks run where the run actually continues — **resuming with
 ## Output layout
 
 Output dirs are one per stage by name, created up front by `cli.main()`:
-`output/transcription|audio_silence|sentence_split|gap_context|summary|text_filter|director|guided_edit|intervals|blender|publish|render/`.
+`output/audio_silence|transcription|sentence_split|gap_context|summary|text_filter|director|guided_edit|intervals|blender|publish|render/`.
 `sentence_split`/`gap_context`/`summary`/`guided_edit`/`publish` all still run
 unconditionally (cheap no-ops when their stage is disabled in config), exactly
 as under the bash orchestrator — see [AGENTS.md](../../AGENTS.md#pipeline-overview)
