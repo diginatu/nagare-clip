@@ -62,3 +62,35 @@ def test_load_roundtrip_and_bad_counts(tmp_path):
     assert load_line_hints(a, b) == ["あX"]
     b.write_text(json.dumps({"chunks": [[0, 2]], "texts": []}))
     assert load_line_hints(a, b) is None
+
+
+def test_word_without_start_uses_previous_start():
+    s = seg("あいうえ", 0)
+    del s["words"][1]["start"]
+    del s["words"][0]["start"]  # falls back to segment start
+    assert line_hints([s], [(0, 2), (2, 4)], ["あい", "うX"]) == ["あいうX"]
+
+
+def test_multi_char_word_entry_is_expanded():
+    s = {
+        "text": "あいう",
+        "start": 0,
+        "end": 3,
+        "words": [{"word": "あい", "start": 0}, {"word": " う", "start": 2}],
+    }
+    assert line_hints([s, seg("えお", 3)], [(0, 5)], ["あいうXえお"]) == ["あいうX", None]
+
+
+def test_unequal_replace_block_covers_whole_span():
+    segs = [seg("あい", 0), seg("うえ", 2)]
+    hints = line_hints(segs, [(0, 4)], ["あXYZえ"])
+    assert "".join(h or "" for h in hints) != ""
+    assert hints[0] is not None and hints[1] is not None
+
+
+def test_load_malformed_segments_returns_none(tmp_path):
+    a = tmp_path / "a.json"
+    b = tmp_path / "b.json"
+    a.write_text(json.dumps({"segments": [{"text": "あ", "words": [5]}]}))
+    b.write_text(json.dumps({"chunks": [[0, 2]], "texts": ["あ"]}))
+    assert load_line_hints(a, b) is None

@@ -55,8 +55,15 @@ def line_hints(
     # chunk -> [(line, char)] in order
     per_chunk: list[list[tuple[int, str]]] = [[] for _ in chunks]
     for li, segment in enumerate(segments):
+        prev = segment.get("start")
         for w in segment.get("words") or []:
-            per_chunk[_nearest_chunk(float(w["start"]), chunks)].append((li, w["word"]))
+            start = w.get("start")
+            if start is None:
+                start = prev if prev is not None else 0.0
+            start = float(start)
+            prev = start
+            for ch in _WS.sub("", str(w.get("word", ""))):
+                per_chunk[_nearest_chunk(start, chunks)].append((li, ch))
 
     pieces: list[list[str]] = [[] for _ in range(n)]
     for ci, chars in enumerate(per_chunk):
@@ -104,4 +111,8 @@ def load_line_hints(segments_json: Path, whisper_json: Path) -> list[str | None]
     if len(chunks) != len(texts):
         logger.warning("whisper hints unavailable: %d chunks vs %d texts", len(chunks), len(texts))
         return None
-    return line_hints(segments, chunks, texts)
+    try:
+        return line_hints(segments, chunks, texts)
+    except (KeyError, TypeError, ValueError, AttributeError) as exc:
+        logger.warning("whisper hints unavailable (malformed segments %s): %s", segments_json, exc)
+        return None
