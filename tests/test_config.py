@@ -779,3 +779,11 @@ def test_a_removed_stage_section_fails_naming_what_replaced_it(tmp_path: Path, s
     msg = str(e.value)
     assert f"`{section}:`" in msg and "director" in msg
     assert "extra" not in msg.lower()
+
+
+def test_config_rejects_removed_audio_silence_keys(tmp_path):
+    f = tmp_path / "c.yml"
+    f.write_text(yaml.safe_dump({"audio_silence": {"noise": -30, "enabled": False}}))
+    with pytest.raises(ValueError) as e:
+        get_effective_config(f, {})
+    assert "audio_silence.noise" in str(e.value) and "audio_silence.enabled" in str(e.value)

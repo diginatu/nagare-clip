@@ -2,9 +2,6 @@
 
 import json
 
-import pytest
-import yaml
-
 from nagare_clip.audio_silence.cuts_file import read_cuts, read_media_duration
 from nagare_clip.audio_silence.run import run_audio_silence
 from nagare_clip.config import get_effective_config
@@ -28,11 +25,3 @@ def test_min_silence_comes_from_cfg(tmp_path):
     cfg = get_effective_config(None, {"audio_silence": {"min_silence": 1.5}})
     run_audio_silence(out, cfg, vad_path=_vad(tmp_path))
     assert read_cuts(out) == []
-
-
-def test_config_rejects_removed_audio_silence_keys(tmp_path):
-    f = tmp_path / "c.yml"
-    f.write_text(yaml.safe_dump({"audio_silence": {"noise": -30, "enabled": False}}))
-    with pytest.raises(ValueError) as e:
-        get_effective_config(f, {})
-    assert "audio_silence.noise" in str(e.value) and "audio_silence.enabled" in str(e.value)

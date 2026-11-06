@@ -251,7 +251,7 @@ src/nagare_clip/          # Main Python package (src layout)
   audio_silence/              # audio_silence stage (audio-silence detection)
     vad.py                    # read_vad(), silences_from_speech() (pure)
     cuts_file.py              # write_cuts() / read_cuts() — editable cut-list format
-    run.py                    # run_audio_silence() — consumes captured ffmpeg stderr
+    run.py                    # run_audio_silence() — consumes the `{stem}_vad.json` result
   sentence_split/             # sentence_split stage (LLM re-segmentation)
     segment.py                # pure: windowing, char/word map, rebuild_window_segments, verbatim check
     nlp.py                    # GiNZA bunsetsu extraction (lazy import)
