@@ -76,7 +76,9 @@ runtime behavior.
   into the WhisperX-compatible `{stem}.json`/`.txt`. `audio_silence` runs
   **first** (its speech regions define the transcription chunks, packed to
   `transcription.max_chunk_seconds`); resuming at `transcription` requires
-  `{stem}_vad.json` on disk. `whisper` (disabled → prints a skip line, no
+  `{stem}_vad.json` on disk. `sentence_split` reads only the transcription
+  `{stem}.json`/`.txt` (not `_cuts.txt`): it splits lines longer than
+  `sentence_split.max_line_seconds`, one LLM call per long line. `whisper` (disabled → prints a skip line, no
   Docker call) writes `output/whisper/whisper_request.json` from each
   `{stem}_haas.json`'s `chunks` and makes ONE `build_whisper_cmd` call
   (`run_command(argv, env_extra=_docker_env(ctx), stdin_text=script)`);

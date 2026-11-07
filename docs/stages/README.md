@@ -10,7 +10,7 @@ the hard constraints live in the top-level [`AGENTS.md`](../../AGENTS.md).
 | Project editorial brief injected into summary/text_filter/publish prompts (and printed by the director's `view`) | [project_brief.md](project_brief.md) |
 | Audio-silence detection | [audio_silence.md](audio_silence.md) |
 | Whisper hints: second recognizer feeding text_filter | [whisper.md](whisper.md) |
-| Sentence re-segmentation, windowing/carry-over, force-split | [sentence_split.md](sentence_split.md) |
+| sentence_split: splitting lines longer than `max_line_seconds` | [sentence_split.md](sentence_split.md) |
 | Silent-gap visual context (vision LLM, summary/director-view consumption) | [gap_context.md](gap_context.md) |
 | Text filter + summary-stage filter context | [text_filter.md](text_filter.md) |
 | Intervals: `<keep>`/`<speed>`/`<overlay/>`/`<cut>` markers, margins, captions | [intervals.md](intervals.md) |

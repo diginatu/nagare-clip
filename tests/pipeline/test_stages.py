@@ -107,26 +107,27 @@ def test_sentence_split_adapter_clears_recorder_once(tmp_path, monkeypatch):
     assert calls == ["clear", "run", "run", "rebuild"]
 
 
-def test_sentence_split_adapter_passes_cuts_path(tmp_path, monkeypatch):
+def test_sentence_split_adapter_passes_no_cuts_path(tmp_path, monkeypatch):
     seen = []
     monkeypatch.setattr(st, "recorder_from_config", lambda *a, **k: _NullRec())
     monkeypatch.setattr(
         st,
         "run_sentence_split",
-        lambda ji, ti, oj, ot, cfg, *, stem="", recorder=None, cuts_txt=None: seen.append(
-            (ji, oj, cuts_txt)
-        ),
+        lambda ji, ti, oj, ot, cfg, **kw: seen.append((ji, ti, oj, ot, kw)),
     )
     by_name = {s.name: s for s in st.STAGES}
     by_name["sentence_split"].run(_ctx(tmp_path, stems=("a",)))
     out = tmp_path / "out"
-    assert seen == [
-        (
-            out / "transcription" / "a.json",
-            out / "sentence_split" / "a.json",
-            out / "audio_silence" / "a_cuts.txt",
-        )
-    ]
+    assert len(seen) == 1
+    ji, ti, oj, ot, kw = seen[0]
+    assert (ji, ti, oj, ot) == (
+        out / "transcription" / "a.json",
+        out / "transcription" / "a.txt",
+        out / "sentence_split" / "a.json",
+        out / "sentence_split" / "a.txt",
+    )
+    assert "cuts_txt" not in kw
+    assert set(kw) == {"stem", "recorder"}
 
 
 def test_summary_adapter_reads_sentence_split_txts(tmp_path, monkeypatch):

@@ -246,9 +246,8 @@ def _sentence_split_run(ctx: PipelineContext) -> None:
     try:
         tdir = ctx.stage_dir("transcription")
         odir = ctx.stage_dir("sentence_split")
-        adir = ctx.stage_dir("audio_silence")
         for src in ctx.sources:
-            print(f"[sentence_split] Sentence re-segmentation: {src.stem}")
+            print(f"[sentence_split] Splitting long lines: {src.stem}")
             run_sentence_split(
                 tdir / f"{src.stem}.json",
                 tdir / f"{src.stem}.txt",
@@ -257,7 +256,6 @@ def _sentence_split_run(ctx: PipelineContext) -> None:
                 ctx.cfg,
                 stem=src.stem,
                 recorder=rec,
-                cuts_txt=adir / f"{src.stem}_cuts.txt",
             )
     finally:
         rec.rebuild_index()

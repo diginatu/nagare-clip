@@ -19,7 +19,7 @@ byte-identical to before this stage existed.
 seconds long (config `gap_context.min_gap`, default 3.0s), sorted by start.
 The pipeline adapter (`pipeline/stages.py::_gap_context_run`) feeds it
 `read_cuts(audio_silence/{stem}_cuts.txt)` — the same human-editable cut list
-`sentence_split`'s force-split reads. Because it's the same file, **deleting a
+`intervals` unions into its excludes. Because it's the same file, **deleting a
 line from `_cuts.txt` both keeps that span's audio *and* removes it from
 gap-context snapshotting** — there is nothing separate to edit.
 
@@ -466,9 +466,7 @@ fits well inside the limit, precisely because nobody is talking through it.
 (default `qwen2.5vl:7b` — must be a **vision-capable** model)/`api_key`/
 `temperature`/`reasoning_effort`/`timeout`/`max_retries`/`retry_temp_step`/
 `retry_temp_cap` follow the same shape as every other LLM stage block.
-Stage-specific: `min_gap` (seconds, default 3.0 — same default as
-`sentence_split.force_split_min_silence`, though the two are independent
-knobs over the same `_cuts.txt`), `frame_width` (px, default 960, passed
+Stage-specific: `min_gap` (seconds, default 3.0), `frame_width` (px, default 960, passed
 straight to ffmpeg's `scale` filter), and `static_ssim` (default `0.96`, `0`
 disables — the pixel-static prefilter threshold; see the section above).
 `prompt` is `_commented` (has a

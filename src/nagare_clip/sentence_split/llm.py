@@ -66,18 +66,18 @@ def parse_ranges(response: str, num_bunsetsu: int) -> list[tuple[int, int]] | No
     return ranges
 
 
-def split_window(
+def split_line(
     bunsetsu: list[tuple[int, int, str]],
     cfg: dict[str, Any],
     *,
     call_llm: CallLLM = _call_llm,
     recorder: Recorder = NULL_RECORDER,
-    unit: str = "window",
+    unit: str = "line",
 ) -> list[tuple[int, int]] | None:
-    """Return validated sentence ranges, or ``None`` to keep original segments.
+    """Return validated sentence ranges for one line, or ``None`` to keep it.
 
     Retries (``max_retries``) on LLM exception or invalid ranges, nudging
-    temperature each attempt.  A 0/1-bunsetsu window needs no LLM call.
+    temperature each attempt.  A 0/1-bunsetsu line needs no LLM call.
     """
     num = len(bunsetsu)
     if num == 0:
@@ -137,5 +137,5 @@ def split_window(
         recorder.flush_unit(unit, outcome=OK, reason="")
         return ranges
     recorder.flush_unit(unit, outcome=LLM_ERROR, reason=f"all {attempts} attempt(s) failed")
-    logger.warning("sentence_split: all %d attempt(s) failed; keeping original window", attempts)
+    logger.warning("sentence_split: all %d attempt(s) failed; keeping the original line", attempts)
     return None

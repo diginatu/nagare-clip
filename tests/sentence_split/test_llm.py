@@ -1,7 +1,7 @@
 from nagare_clip.sentence_split.llm import (
     build_messages,
     parse_ranges,
-    split_window,
+    split_line,
 )
 
 BUNSETSU = [(0, 2, "あい"), (2, 4, "うえ"), (4, 6, "おか")]
@@ -26,26 +26,26 @@ def test_parse_ranges_rejects_gaps_and_bad_coverage():
     assert parse_ranges('{"nope":[]}', 3) is None
 
 
-def test_split_window_returns_ranges_on_valid_response():
+def test_split_line_returns_ranges_on_valid_response():
     def fake(messages, cfg):
         return '{"sentences":[[0,1],[2,2]]}'
 
-    assert split_window(BUNSETSU, {"max_retries": 0}, call_llm=fake) == [(0, 1), (2, 2)]
+    assert split_line(BUNSETSU, {"max_retries": 0}, call_llm=fake) == [(0, 1), (2, 2)]
 
 
-def test_split_window_degrades_to_none_after_failures():
+def test_split_line_degrades_to_none_after_failures():
     calls = []
 
     def boom(messages, cfg):
         calls.append(1)
         raise RuntimeError("no server")
 
-    assert split_window(BUNSETSU, {"max_retries": 1}, call_llm=boom) is None
+    assert split_line(BUNSETSU, {"max_retries": 1}, call_llm=boom) is None
     assert len(calls) == 2  # first try + one retry
 
 
-def test_split_window_single_bunsetsu_no_call():
+def test_split_line_single_bunsetsu_no_call():
     def fail(messages, cfg):
         raise AssertionError("should not be called")
 
-    assert split_window([(0, 2, "あい")], {}, call_llm=fail) == [(0, 0)]
+    assert split_line([(0, 2, "あい")], {}, call_llm=fail) == [(0, 0)]

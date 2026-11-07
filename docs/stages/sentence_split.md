@@ -1,26 +1,60 @@
 # sentence_split — runtime notes
 
-See the [stage overview in AGENTS.md](../../AGENTS.md#sentence_split--llm-sentence-re-segmentation).
+See the [stage overview in AGENTS.md](../../AGENTS.md#sentence_split--split-long-lines).
 
-## Re-segmentation core (verbatim by construction)
+## What it does
 
-- The LLM returns **bunsetsu-index ranges** (`{"sentences":[[a,b],…]}`), not text: each range is a contiguous span of GiNZA bunsetsu units forming one sentence. `segment.rebuild_window_segments()` slices the original word list at bunsetsu char boundaries, snapped to whole-word boundaries via `char2word` (never splitting a word), and assembles new segments from the existing word objects — so word timings are preserved and output text is verbatim.
-- A final `concat_word_text` check (before/after) guards against any boundary-rounding discrepancy; if it fails, the original segmentation is kept for that window. This global invariant is the ultimate guard behind every code path below.
+Since transcription breaks lines only where `audio_silence` cuts, a transcript line
+(`{stem}.json` segment / `.txt` line) is exactly one speech span between two cuts. Those
+VAD-made boundaries are kept: sentence_split **never merges lines and never touches a short
+one**. It only splits a line that runs longer than `sentence_split.max_line_seconds`
+(default `8.0`) because the speaker never paused for `audio_silence.min_silence`.
 
-## Windowing & carry-over
+- **Which lines.** `run.is_long_line()`: a segment with numeric `start`/`end` and
+  `end - start > max_line_seconds` (strictly greater — a line of exactly the threshold
+  stays). A segment without numeric times (or with a boolean) is never long. Every other
+  segment is copied as **the same dict** (not rebuilt) and is never sent to the LLM.
+- **One LLM call per long line**, in order, with no neighbouring-line context
+  (`run.split_long_lines()` → `llm.split_line()`). The user content is that line's GiNZA
+  bunsetsu units numbered from 0 (`llm.build_messages`, `0:surface 1:surface …`); the reply
+  is `{"sentences": [[a, b], ...]}`, validated by `llm.parse_ranges` (contiguous, in order,
+  covering every unit once). A line with fewer than two bunsetsu is not sent. Retries follow
+  `max_retries`/`retry_temp_step`/`retry_temp_cap` like every LLM stage.
+- **LLM report.** One unit per long line, `"{stem} line N"` (N is the 1-based line number in
+  the transcription `.txt`).
+- GiNZA is loaded only when at least one line is long (`run_sentence_split`), so a run where
+  no line is long makes no LLM call, loads no model, and writes output equal in content to
+  its input.
 
-- Processing is windowed (`sentence_split.window_segments`, default 200 segments per LLM call — the batch size; it was 20 for WhisperX's ~25 s segments, but Haas segments are VAD regions averaging ~2 s, so 200 keeps a window at about the same span of time) so long transcripts fit in context. Each window degrades independently on LLM failure, returning the original window segments unchanged.
-- Windows are non-overlapping but **carry the trailing sentence over the seam**: all sentences of a window except the last are emitted, and the last (possibly incomplete) sentence's words are prepended to the next window (`resegment_json`), so a sentence straddling a window boundary is re-grouped with its continuation instead of being split at the seam.
-- A **single-sentence window** is the exception: it emits as-is and resets the carry (run-on guard, bounding context growth), so a sentence longer than a full window still splits at the seam.
-- On **degrade**, any carried-in sentence is flushed as a finalized segment *before* falling back to the window's original segments, so carry-over never loses words.
-- Disabled → byte-identical copy-through of `output/transcription/{stem}.{json,txt}`.
+## Rebuild (verbatim by construction)
 
-## Force split at long silences
+- The LLM returns **bunsetsu-index ranges**, not text. `segment.rebuild_segments()` slices the
+  line's own word list at bunsetsu char boundaries, snapped to whole-word boundaries via
+  `char_to_word_index` (never splitting a word), and builds each piece from the existing
+  word objects with `segment_from_words` — so word timings are preserved and the text is
+  verbatim.
+- A `concat_word_text` before/after check for that line guards against any boundary-rounding
+  discrepancy.
+- **Every failure keeps the original line** (the same dict): LLM error after all retries or
+  invalid ranges (recorded in the LLM report), a verbatim mismatch (logged), or a single range
+  / a rebuild that yields one piece (the line is one sentence — a valid answer).
+- When some line was split, the output's `word_segments` is rebuilt from the new segments;
+  when none was, the input dict is written back unchanged.
 
-Config `force_split` (default `true`), `force_split_min_silence` (default 3.0s — deliberately higher than `audio_silence.min_silence`, which targets short jump-cut pauses).
+## Removed
 
-- The audio_silence `{stem}_cuts.txt` is read (`read_cuts`); spans `>= force_split_min_silence` become hard sentence boundaries. Threshold filtering happens **once** in `run_sentence_split` (`_forced_silences`), so the pure `split_segment_at_silences` receives only already-qualifying spans.
-- `resegment_json` post-splits **every** emitted segment — LLM-rebuilt, carry-flush, and degrade-fallback — via `segment.split_segment_at_silences()`.
-- **Corroboration rule:** the split cuts before the first word whose start-time (inheriting the last known time for untimed words) is `>=` the silence midpoint, **only when the previous word's end-time is `<=` that midpoint** — i.e. a genuine inter-word gap brackets the midpoint. A word's timing can stretch across an entire pause (its end abutting the next word); the midpoint then falls *inside* that word, which sentence it belongs to is undecidable from timing, and splitting anyway would chop the sentence's first characters off. Such silences are skipped — a false negative over a wrong split. (Real-project testing: 116 of 199 long silences fell inside a stretched word; a gap-only detector without the cuts file found only 3 of 199, since the same stretching hides the gaps.)
-- **Pure post-enforcement:** window contents and the LLM call count are byte-identical to before (`silences=[]` is a regression-guarded no-op), the split survives total LLM failure, and because it runs *before* the carry decision, carry-over can never drag words across a silence.
-- Since the cuts file is human-editable, deleting a line (keeping that span's audio) also stops it forcing a split.
+Windowing (`window_segments`), the trailing-sentence carry over window seams, the
+single-sentence-window rule, and the force split at long silences (`force_split`,
+`force_split_min_silence`) are gone: every cut is already a line boundary, so the forced split
+could no longer do anything, and the merge-then-resegment approach was replaced by
+splitting long lines only. The three keys are in `config.REMOVED_KEYS`, so a config that sets
+any of them fails loading naming each path. sentence_split no longer reads
+`{stem}_cuts.txt` (`run_sentence_split` has no `cuts_txt` parameter).
+
+Out of scope: choosing split points from word-gap timing (Haas token timings are too coarse),
+recursively splitting a piece still over the threshold.
+
+## Disabled
+
+Disabled (`sentence_split.enabled: false`, the default) → byte-identical copy-through of
+`output/transcription/{stem}.{json,txt}`.

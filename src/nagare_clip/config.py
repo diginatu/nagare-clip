@@ -36,16 +36,18 @@ from pydantic import BaseModel, ConfigDict, Field
 # ---------------------------------------------------------------------------
 
 SENTENCE_SPLIT_PROMPT = (
-    "You split a Japanese transcript into sentence units. The transcript "
+    "You split ONE line of a Japanese transcript into sentences. The line "
     "has little or no punctuation.\n"
-    "The input is a sequence of bunsetsu (Japanese phrase units) numbered "
-    "from 0, given as `index:surface` tokens.\n"
-    "Group consecutive bunsetsu into natural sentences, and represent each "
-    "sentence as [first bunsetsu index, last bunsetsu index].\n"
+    "The input is that line split into bunsetsu (Japanese phrase units), "
+    "numbered from 0 and given as `index:surface` tokens.\n"
+    "Split the line only at natural sentence or clause boundaries, so that "
+    "each piece reads on its own. Represent each piece as "
+    "[first bunsetsu index, last bunsetsu index].\n"
     "Rules:\n"
-    "- Ranges must be contiguous and cover every bunsetsu (0..N-1) with no "
-    "gaps or overlaps.\n"
-    "- Do not change the order or content of the bunsetsu.\n"
+    "- The ranges must cover every bunsetsu (0..N-1) exactly once, in order, "
+    "with no gaps or overlaps.\n"
+    "- Never reorder or drop a bunsetsu.\n"
+    "- If the line is one sentence, return a single range covering it all.\n"
     '- Output ONLY JSON: {"sentences":[[0,3],[4,7],...]}'
 )
 
@@ -338,12 +340,13 @@ class AudioSilenceConfig(BaseModel):
 class SentenceSplitConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
     section_comment: ClassVar[str] = (
-        "sentence_split stage: runs per source between audio_silence and text_filter.\n"
-        "An LLM re-segments the WhisperX transcript into one-sentence-per-line units\n"
-        "(rewriting {stem}.json and {stem}.txt). Disabled by default = byte-identical\n"
+        "sentence_split stage: runs per source between transcription and gap_context.\n"
+        "An LLM splits each transcript line longer than max_line_seconds at natural\n"
+        "sentence boundaries (rewriting {stem}.json and {stem}.txt); shorter lines are\n"
+        "kept and lines are never merged. Disabled by default = byte-identical\n"
         "copy-through (no behaviour change)."
     )
-    enabled: bool = Field(False, description="Enable LLM sentence re-segmentation")
+    enabled: bool = Field(False, description="Enable LLM splitting of long lines")
     provider: str = Field(
         "ollama_chat",
         description="LiteLLM provider prefix: ollama_chat | openai | gemini | anthropic",
@@ -365,22 +368,14 @@ class SentenceSplitConfig(BaseModel):
     )
     retry_temp_step: float = Field(0.2)
     retry_temp_cap: float = Field(0.8)
-    window_segments: int = Field(
-        200,
-        description="Segments per LLM window (the batch size); a window carries its trailing sentence to the next",
-    )
-    force_split: bool = Field(
-        True,
-        description="Force a sentence boundary at long audio_silence spans (post-enforced on LLM output; no extra LLM calls)",
-    )
-    force_split_min_silence: float = Field(
-        3.0,
-        description="Seconds; only audio_silence cut spans at least this long force a split",
+    max_line_seconds: float = Field(
+        8.0,
+        description="Seconds; only a line longer than this is sent to the LLM to be split (shorter lines are kept as they are)",
     )
     prompt: str = _commented(
         SENTENCE_SPLIT_PROMPT,
         sample='"..."',
-        description="Bunsetsu-grouping prompt (has a sensible default)",
+        description="Line-splitting prompt (has a sensible default)",
     )
 
 
@@ -1224,6 +1219,11 @@ REMOVED_KEYS: dict[str, tuple[frozenset[str] | None, str]] = {
     "transcription": (
         frozenset({"compute_type", "language", "align_model"}),
         "transcription runs Haas-ja-v1.0 (Japanese only)",
+    ),
+    "sentence_split": (
+        frozenset({"window_segments", "force_split", "force_split_min_silence"}),
+        "sentence_split now splits only lines longer than sentence_split.max_line_seconds; "
+        "every audio_silence cut is already a line boundary",
     ),
     "guided_edit": (
         None,

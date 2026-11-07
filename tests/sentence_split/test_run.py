@@ -1,393 +1,321 @@
+import copy
+import inspect
 import json
 
 from nagare_clip.sentence_split import run as ss_run
-from nagare_clip.sentence_split.segment import concat_word_text
+from nagare_clip.sentence_split.segment import concat_word_text, segment_from_words
 
 
-def _seg(text, t0):
+def _seg(text, t0, step=1.0):
+    """A segment of one-character words, each ``step`` seconds long."""
     return {
         "start": float(t0),
-        "end": float(t0 + len(text)),
+        "end": float(t0 + step * len(text)),
         "text": text,
         "words": [
-            {"word": ch, "start": float(t0 + i), "end": float(t0 + i + 1), "score": 1.0}
+            {
+                "word": ch,
+                "start": float(t0 + i * step),
+                "end": float(t0 + (i + 1) * step),
+                "score": 1.0,
+            }
             for i, ch in enumerate(text)
         ],
     }
 
 
-def _data():
-    # two WhisperX segments that together form two sentences, with a real 3s
-    # word gap between them (お ends 5.0, か starts 8.0)
-    return {"language": "ja", "segments": [_seg("あいうえお", 0), _seg("かきくけこ", 8)]}
-
-
-def test_resegment_rebuilds_and_preserves_text(monkeypatch):
-    data = _data()
-
-    # Stub bunsetsu + LLM so the test is deterministic (no GiNZA/model needed).
+def _char_bunsetsu(monkeypatch):
+    # One bunsetsu per character: deterministic, no GiNZA model needed.
     monkeypatch.setattr(
         ss_run, "bunsetsu_units", lambda text, nlp: [(i, i + 1, ch) for i, ch in enumerate(text)]
     )
-    monkeypatch.setattr(
-        ss_run, "split_window", lambda bunsetsu, cfg, **kw: [(0, 2), (3, len(bunsetsu) - 1)]
-    )
 
-    sp_cfg = {"enabled": True, "window_segments": 20}
-    out = ss_run.resegment_json(data, sp_cfg, nlp=None, recorder=ss_run.NULL_RECORDER, stem="x")
-    # 10 chars, split after index 2 -> 2 new segments, text fully preserved
+
+class FakeLLM:
+    """Counts calls and answers with a fixed response (or raises)."""
+
+    def __init__(self, response='{"sentences":[[0,2],[3,9]]}', error=None):
+        self.response = response
+        self.error = error
+        self.calls = []
+
+    def __call__(self, messages, cfg):
+        self.calls.append(messages[1]["content"])
+        if self.error:
+            raise self.error
+        return self.response(messages) if callable(self.response) else self.response
+
+
+def _cfg(**kw):
+    return {"enabled": True, "max_line_seconds": 8.0, "max_retries": 0, **kw}
+
+
+def _split(data, llm, **cfg):
+    return ss_run.split_long_lines(data, _cfg(**cfg), nlp=None, stem="x", call_llm=llm)
+
+
+# --- 1. short lines are untouched and never sent ------------------------------
+
+
+def test_short_lines_untouched_and_no_llm_call(monkeypatch):
+    _char_bunsetsu(monkeypatch)
+    data = {"language": "ja", "segments": [_seg("あいうえお", 0), _seg("かきく", 6)]}
+    before = copy.deepcopy(data)
+    llm = FakeLLM()
+    out = _split(data, llm)
+    assert llm.calls == []
+    assert out["segments"][0] is data["segments"][0]
+    assert out["segments"][1] is data["segments"][1]
+    assert out == before
+
+
+# --- 2. threshold boundary ------------------------------------------------------
+
+
+def test_duration_equal_to_threshold_is_not_split(monkeypatch):
+    _char_bunsetsu(monkeypatch)
+    data = {"language": "ja", "segments": [_seg("あいうえおかきくけこ", 0, step=0.8)]}  # 8.0s
+    llm = FakeLLM()
+    out = _split(data, llm)
+    assert llm.calls == []
+    assert [s["text"] for s in out["segments"]] == ["あいうえおかきくけこ"]
+
+
+def test_duration_just_over_threshold_is_split(monkeypatch):
+    _char_bunsetsu(monkeypatch)
+    seg = _seg("あいうえおかきくけこ", 0, step=0.8)
+    seg["end"] = 8.01
+    data = {"language": "ja", "segments": [seg]}
+    llm = FakeLLM()
+    out = _split(data, llm)
+    assert len(llm.calls) == 1
     assert [s["text"] for s in out["segments"]] == ["あいう", "えおかきくけこ"]
-    assert concat_word_text(out["segments"]) == "あいうえおかきくけこ"
+
+
+def test_threshold_comes_from_config(monkeypatch):
+    _char_bunsetsu(monkeypatch)
+    data = {"language": "ja", "segments": [_seg("あいうえおかきくけこ", 0)]}  # 10s
+    llm = FakeLLM()
+    out = _split(data, llm, max_line_seconds=12.0)
+    assert llm.calls == []
+    assert out["segments"][0] is data["segments"][0]
+
+
+# --- 3. a long line is split into pieces of its own words ------------------------
+
+
+def test_long_line_split_keeps_words_order_and_neighbours(monkeypatch):
+    _char_bunsetsu(monkeypatch)
+    before, long_, after = _seg("さし", 0), _seg("あいうえおかきくけこ", 3), _seg("すせ", 14)
+    data = {"language": "ja", "segments": [before, long_, after]}
+    llm = FakeLLM()
+    out = _split(data, llm)
+    texts = [s["text"] for s in out["segments"]]
+    assert texts == ["さし", "あいう", "えおかきくけこ", "すせ"]
+    assert out["segments"][0] is before
+    assert out["segments"][-1] is after
+    # the pieces hold the original word objects, in order
+    piece_words = out["segments"][1]["words"] + out["segments"][2]["words"]
+    assert len(piece_words) == len(long_["words"])
+    assert all(a is b for a, b in zip(piece_words, long_["words"]))
+    assert out["segments"][1]["start"] == 3.0 and out["segments"][1]["end"] == 6.0
+    assert out["segments"][2]["start"] == 6.0 and out["segments"][2]["end"] == 13.0
+    assert concat_word_text(out["segments"]) == concat_word_text(data["segments"])
     assert out["word_segments"] == [w for s in out["segments"] for w in s["words"]]
+    # the LLM saw only the long line, numbered by bunsetsu
+    assert llm.calls == [" ".join(f"{i}:{ch}" for i, ch in enumerate("あいうえおかきくけこ"))]
 
 
-def test_resegment_force_splits_llm_output_at_silence(monkeypatch):
-    # LLM groups everything into one sentence, but a silence in the word gap
-    # (midpoint 6.5 -> first word start>=6.5 is "か" at 8.0, prev end 5.0)
-    # forces a split.
-    data = _data()
+# --- 4. failures keep the line ---------------------------------------------------
+
+
+def test_llm_failure_keeps_line(monkeypatch):
+    _char_bunsetsu(monkeypatch)
+    data = {"language": "ja", "segments": [_seg("あいうえおかきくけこ", 0)]}
+    llm = FakeLLM(error=RuntimeError("no server"))
+    out = _split(data, llm, max_retries=1)
+    assert len(llm.calls) == 2
+    assert out["segments"][0] is data["segments"][0]
+
+
+def test_invalid_ranges_keep_line(monkeypatch):
+    _char_bunsetsu(monkeypatch)
+    data = {"language": "ja", "segments": [_seg("あいうえおかきくけこ", 0)]}
+    llm = FakeLLM(response='{"sentences":[[0,2],[4,9]]}')  # gap at 3
+    out = _split(data, llm)
+    assert out["segments"] == data["segments"]
+    assert out["segments"][0] is data["segments"][0]
+
+
+def test_single_range_keeps_line(monkeypatch):
+    _char_bunsetsu(monkeypatch)
+    one, two = _seg("あいうえおかきくけこ", 0), _seg("たちつてとなにぬねの", 11)
+    data = {"language": "ja", "segments": [one, two]}
+
+    def answer(messages):
+        if messages[1]["content"].startswith("0:あ"):
+            return '{"sentences":[[0,9]]}'  # one sentence: keep the line
+        return '{"sentences":[[0,2],[3,9]]}'
+
+    llm = FakeLLM(response=answer)
+    out = _split(data, llm)
+    assert len(llm.calls) == 2
+    assert out["segments"][0] is one
+    assert [s["text"] for s in out["segments"]] == [
+        "あいうえおかきくけこ",
+        "たちつ",
+        "てとなにぬねの",
+    ]
+
+
+def test_verbatim_mismatch_keeps_line(monkeypatch):
+    _char_bunsetsu(monkeypatch)
+    data = {"language": "ja", "segments": [_seg("あいうえおかきくけこ", 0)]}
+    # a rebuild that loses a word must never reach the output
     monkeypatch.setattr(
-        ss_run, "bunsetsu_units", lambda text, nlp: [(i, i + 1, ch) for i, ch in enumerate(text)]
+        ss_run,
+        "rebuild_segments",
+        lambda words, bunsetsu, ranges, c2w: [
+            segment_from_words(words[:3]),
+            segment_from_words(words[4:]),
+        ],
     )
-    monkeypatch.setattr(
-        ss_run, "split_window", lambda bunsetsu, cfg, **kw: [(0, len(bunsetsu) - 1)]
-    )
-    out = ss_run.resegment_json(
-        data,
-        {"enabled": True, "window_segments": 20},
-        nlp=None,
-        recorder=ss_run.NULL_RECORDER,
-        stem="x",
-        silences=[(5.0, 8.0)],
-    )
-    assert [s["text"] for s in out["segments"]] == ["あいうえお", "かきくけこ"]
-    assert concat_word_text(out["segments"]) == "あいうえおかきくけこ"
+    out = _split(data, FakeLLM())
+    assert out["segments"][0] is data["segments"][0]
 
 
-def test_resegment_force_splits_degraded_fallback(monkeypatch):
-    # Even when every window degrades (None), the forced split still applies to
-    # the fallback original segments. Seg1 has an internal 3s word gap (う ends
-    # 3.0, え starts 6.0) that silence midpoint 4.5 corroborates.
-    seg1 = {
-        "start": 0.0,
-        "end": 8.0,
-        "text": "あいうえお",
-        "words": [
-            {"word": "あ", "start": 0.0, "end": 1.0, "score": 1.0},
-            {"word": "い", "start": 1.0, "end": 2.0, "score": 1.0},
-            {"word": "う", "start": 2.0, "end": 3.0, "score": 1.0},
-            {"word": "え", "start": 6.0, "end": 7.0, "score": 1.0},
-            {"word": "お", "start": 7.0, "end": 8.0, "score": 1.0},
+# --- 5. fewer than two bunsetsu ---------------------------------------------------
+
+
+def test_long_line_with_one_bunsetsu_not_sent(monkeypatch):
+    monkeypatch.setattr(ss_run, "bunsetsu_units", lambda text, nlp: [(0, len(text), text)])
+    data = {"language": "ja", "segments": [_seg("あいうえおかきくけこ", 0)]}
+    llm = FakeLLM()
+    out = _split(data, llm)
+    assert llm.calls == []
+    assert out["segments"][0] is data["segments"][0]
+
+
+# --- 6. untimed segments -----------------------------------------------------------
+
+
+def test_segment_without_numeric_times_untouched(monkeypatch):
+    _char_bunsetsu(monkeypatch)
+    no_start = _seg("あいうえおかきくけこ", 0)
+    del no_start["start"]
+    str_end = _seg("あいうえおかきくけこ", 0)
+    str_end["end"] = "99"
+    data = {"language": "ja", "segments": [no_start, str_end]}
+    llm = FakeLLM()
+    out = _split(data, llm)
+    assert llm.calls == []
+    assert out["segments"][0] is no_start and out["segments"][1] is str_end
+
+
+# --- 8. several long lines ------------------------------------------------------------
+
+
+def test_each_long_line_gets_one_call_in_order(monkeypatch):
+    _char_bunsetsu(monkeypatch)
+    data = {
+        "language": "ja",
+        "segments": [
+            _seg("あいうえおかきくけこ", 0),
+            _seg("さし", 11),
+            _seg("たちつてとなにぬねの", 14),
         ],
     }
-    data = {"language": "ja", "segments": [seg1, _seg("かきくけこ", 10)]}
-    monkeypatch.setattr(
-        ss_run, "bunsetsu_units", lambda text, nlp: [(i, i + 1, ch) for i, ch in enumerate(text)]
-    )
-    monkeypatch.setattr(ss_run, "split_window", lambda bunsetsu, cfg, **kw: None)
-    out = ss_run.resegment_json(
-        data,
-        {"enabled": True, "window_segments": 20},
-        nlp=None,
-        recorder=ss_run.NULL_RECORDER,
-        stem="x",
-        silences=[(3.05, 5.95)],
-    )
-    assert [s["text"] for s in out["segments"]] == ["あいう", "えお", "かきくけこ"]
-    assert concat_word_text(out["segments"]) == "あいうえおかきくけこ"
+    llm = FakeLLM()
+    out = _split(data, llm)
+    assert [c.split(" ")[0] for c in llm.calls] == ["0:あ", "0:た"]
+    assert [s["text"] for s in out["segments"]] == [
+        "あいう",
+        "えおかきくけこ",
+        "さし",
+        "たちつ",
+        "てとなにぬねの",
+    ]
 
 
-def test_resegment_no_silences_is_unchanged(monkeypatch):
-    # Regression guard: silences=[] (and the default) must match today exactly.
-    data = _data()
-    monkeypatch.setattr(
-        ss_run, "bunsetsu_units", lambda text, nlp: [(i, i + 1, ch) for i, ch in enumerate(text)]
-    )
-    monkeypatch.setattr(
-        ss_run, "split_window", lambda bunsetsu, cfg, **kw: [(0, 2), (3, len(bunsetsu) - 1)]
-    )
-    cfg = {"enabled": True, "window_segments": 20}
-    baseline = ss_run.resegment_json(
-        _data(), cfg, nlp=None, recorder=ss_run.NULL_RECORDER, stem="x"
-    )
-    out = ss_run.resegment_json(
-        data, cfg, nlp=None, recorder=ss_run.NULL_RECORDER, stem="x", silences=[]
-    )
-    assert [s["text"] for s in out["segments"]] == [s["text"] for s in baseline["segments"]]
-    assert [s["text"] for s in out["segments"]] == ["あいう", "えおかきくけこ"]
+def test_recorder_unit_per_long_line(monkeypatch):
+    _char_bunsetsu(monkeypatch)
+    units = []
+
+    class Rec:
+        stage = "sentence_split"
+
+        def begin(self, unit):
+            units.append(unit)
+
+        def attempt(self, **kw):
+            pass
+
+        def flush_unit(self, unit, **kw):
+            pass
+
+    data = {
+        "language": "ja",
+        "segments": [
+            _seg("さし", 0),
+            _seg("あいうえおかきくけこ", 3),
+            _seg("たちつてとなにぬねの", 14),
+        ],
+    }
+    ss_run.split_long_lines(data, _cfg(), nlp=None, stem="x", call_llm=FakeLLM(), recorder=Rec())
+    assert units == ["x line 2", "x line 3"]
 
 
-def test_resegment_degraded_window_keeps_original(monkeypatch):
-    data = _data()
-    monkeypatch.setattr(
-        ss_run, "bunsetsu_units", lambda text, nlp: [(i, i + 1, ch) for i, ch in enumerate(text)]
-    )
-    monkeypatch.setattr(ss_run, "split_window", lambda bunsetsu, cfg, **kw: None)
-    out = ss_run.resegment_json(
-        data,
-        {"enabled": True, "window_segments": 20},
-        nlp=None,
-        recorder=ss_run.NULL_RECORDER,
-        stem="x",
-    )
-    assert [s["text"] for s in out["segments"]] == ["あいうえお", "かきくけこ"]
+# --- run_sentence_split -------------------------------------------------------------
 
 
-def _stub_bunsetsu(monkeypatch):
-    monkeypatch.setattr(
-        ss_run, "bunsetsu_units", lambda text, nlp: [(i, i + 1, ch) for i, ch in enumerate(text)]
-    )
-
-
-def _surface(bunsetsu):
-    return "".join(s for _, _, s in bunsetsu)
-
-
-def test_carry_over_merges_sentence_across_window_boundary(monkeypatch):
-    # window_segments=2 -> win1=[あい, うえ], win2=[お].  The sentence うえお
-    # straddles the seam; carry-over must rejoin it.
-    data = {"language": "ja", "segments": [_seg("あい", 0), _seg("うえ", 2), _seg("お", 4)]}
-    _stub_bunsetsu(monkeypatch)
-
-    def split(bunsetsu, cfg, **kw):
-        s = _surface(bunsetsu)
-        if s == "あいうえ":
-            return [(0, 1), (2, 3)]  # あい | うえ  -> carry うえ
-        if s == "うえお":
-            return [(0, 2)]  # うえお as one sentence
-        raise AssertionError(f"unexpected surface {s!r}")
-
-    monkeypatch.setattr(ss_run, "split_window", split)
-    out = ss_run.resegment_json(
-        data,
-        {"enabled": True, "window_segments": 2},
-        nlp=None,
-        recorder=ss_run.NULL_RECORDER,
-        stem="x",
-    )
-    assert [s["text"] for s in out["segments"]] == ["あい", "うえお"]
-    assert concat_word_text(out["segments"]) == "あいうえお"
-
-
-def test_single_sentence_window_is_not_carried(monkeypatch):
-    # window_segments=1; each window comes back as one sentence -> no carry,
-    # the boundary is accepted as a real break (run-on guard).
-    data = {"language": "ja", "segments": [_seg("あい", 0), _seg("うえ", 2)]}
-    _stub_bunsetsu(monkeypatch)
-
-    def split(bunsetsu, cfg, **kw):
-        s = _surface(bunsetsu)
-        if s in ("あい", "うえ"):
-            return [(0, 1)]
-        if s == "あいうえ":  # only reached if the guard is wrongly removed
-            return [(0, 3)]
-        raise AssertionError(f"unexpected surface {s!r}")
-
-    monkeypatch.setattr(ss_run, "split_window", split)
-    out = ss_run.resegment_json(
-        data,
-        {"enabled": True, "window_segments": 1},
-        nlp=None,
-        recorder=ss_run.NULL_RECORDER,
-        stem="x",
-    )
-    assert [s["text"] for s in out["segments"]] == ["あい", "うえ"]
-    assert concat_word_text(out["segments"]) == "あいうえ"
-
-
-def test_degraded_window_flushes_carried_sentence(monkeypatch):
-    # win1 re-splits across the seg boundary (あ | いうえ) and carries いうえ;
-    # win2 degrades (None) and must flush the carried sentence, not drop it.
-    data = {"language": "ja", "segments": [_seg("あい", 0), _seg("うえ", 2), _seg("お", 4)]}
-    _stub_bunsetsu(monkeypatch)
-
-    def split(bunsetsu, cfg, **kw):
-        if _surface(bunsetsu) == "あいうえ":
-            return [(0, 0), (1, 3)]  # あ | いうえ -> carry いうえ
-        return None  # win2 degrades
-
-    monkeypatch.setattr(ss_run, "split_window", split)
-    out = ss_run.resegment_json(
-        data,
-        {"enabled": True, "window_segments": 2},
-        nlp=None,
-        recorder=ss_run.NULL_RECORDER,
-        stem="x",
-    )
-    assert [s["text"] for s in out["segments"]] == ["あ", "いうえ", "お"]
-    assert concat_word_text(out["segments"]) == "あいうえお"
-
-
-def test_enabled_resegmentation_writes_new_json_and_txt(tmp_path, monkeypatch):
-    data = _data()
+def _write_inputs(tmp_path, data, txt):
     in_json = tmp_path / "in.json"
     in_txt = tmp_path / "in.txt"
     in_json.write_text(json.dumps(data, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
-    in_txt.write_text("あいうえお\nかきくけこ\n", encoding="utf-8")
-    out_json = tmp_path / "out.json"
-    out_txt = tmp_path / "out.txt"
-
-    monkeypatch.setattr(ss_run, "load_nlp", lambda: None)
-    monkeypatch.setattr(
-        ss_run, "bunsetsu_units", lambda text, nlp: [(i, i + 1, ch) for i, ch in enumerate(text)]
-    )
-    monkeypatch.setattr(
-        ss_run, "split_window", lambda bunsetsu, cfg, **kw: [(0, 2), (3, len(bunsetsu) - 1)]
-    )
-
-    ss_run.run_sentence_split(
-        in_json,
-        in_txt,
-        out_json,
-        out_txt,
-        {"sentence_split": {"enabled": True, "window_segments": 20}},
-        stem="x",
-    )
-
-    new_data = json.loads(out_json.read_text(encoding="utf-8"))
-    assert [s["text"] for s in new_data["segments"]] == ["あいう", "えおかきくけこ"]
-    assert out_txt.read_text(encoding="utf-8") == "あいう\nえおかきくけこ\n"
-
-
-def _write_inputs(tmp_path):
-    in_json = tmp_path / "in.json"
-    in_txt = tmp_path / "in.txt"
-    in_json.write_text(json.dumps(_data(), ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
-    in_txt.write_text("あいうえお\nかきくけこ\n", encoding="utf-8")
+    in_txt.write_text(txt, encoding="utf-8")
     return in_json, in_txt
 
 
-def _stub_llm_single_sentence(monkeypatch):
-    # LLM groups every window into a single sentence, so any split in the output
-    # can only come from the forced silence split.
+def test_run_writes_split_json_and_txt(tmp_path, monkeypatch):
+    data = {"language": "ja", "segments": [_seg("さし", 0), _seg("あいうえおかきくけこ", 3)]}
+    in_json, in_txt = _write_inputs(tmp_path, data, "さし\nあいうえおかきくけこ\n")
+    out_json, out_txt = tmp_path / "out.json", tmp_path / "out.txt"
     monkeypatch.setattr(ss_run, "load_nlp", lambda: None)
+    _char_bunsetsu(monkeypatch)
     monkeypatch.setattr(
-        ss_run, "bunsetsu_units", lambda text, nlp: [(i, i + 1, ch) for i, ch in enumerate(text)]
+        ss_run, "split_line", lambda bunsetsu, cfg, **kw: [(0, 2), (3, len(bunsetsu) - 1)]
     )
-    monkeypatch.setattr(
-        ss_run, "split_window", lambda bunsetsu, cfg, **kw: [(0, len(bunsetsu) - 1)]
-    )
-
-
-def test_run_force_splits_at_qualifying_cut(tmp_path, monkeypatch):
-    in_json, in_txt = _write_inputs(tmp_path)
-    out_json, out_txt = tmp_path / "out.json", tmp_path / "out.txt"
-    _stub_llm_single_sentence(monkeypatch)
-
-    from nagare_clip.audio_silence.cuts_file import write_cuts
-
-    cuts = tmp_path / "in_cuts.txt"
-    write_cuts(cuts, [(5.0, 8.0)])  # 3.0s span in the word gap, midpoint 6.5
-
     ss_run.run_sentence_split(
-        in_json,
-        in_txt,
-        out_json,
-        out_txt,
-        {
-            "sentence_split": {
-                "enabled": True,
-                "window_segments": 20,
-                "force_split": True,
-                "force_split_min_silence": 0.5,
-            }
-        },
-        stem="x",
-        cuts_txt=cuts,
+        in_json, in_txt, out_json, out_txt, {"sentence_split": _cfg()}, stem="x"
     )
-    assert out_txt.read_text(encoding="utf-8") == "あいうえお\nかきくけこ\n"
+    new = json.loads(out_json.read_text(encoding="utf-8"))
+    assert [s["text"] for s in new["segments"]] == ["さし", "あいう", "えおかきくけこ"]
+    assert out_txt.read_text(encoding="utf-8") == "さし\nあいう\nえおかきくけこ\n"
 
 
-def test_run_ignores_sub_threshold_cut(tmp_path, monkeypatch):
-    in_json, in_txt = _write_inputs(tmp_path)
+def test_run_with_no_long_line_writes_equal_content_without_nlp(tmp_path, monkeypatch):
+    data = {"language": "ja", "segments": [_seg("さし", 0), _seg("あい", 3)]}
+    in_json, in_txt = _write_inputs(tmp_path, data, "さし\nあい\n")
     out_json, out_txt = tmp_path / "out.json", tmp_path / "out.txt"
-    _stub_llm_single_sentence(monkeypatch)
 
-    from nagare_clip.audio_silence.cuts_file import write_cuts
+    def no_nlp():
+        raise AssertionError("GiNZA must not load when no line is long")
 
-    cuts = tmp_path / "in_cuts.txt"
-    # 2.0s span in the word gap (would split if it qualified), below the
-    # 3.0s threshold
-    write_cuts(cuts, [(5.5, 7.5)])
-
+    monkeypatch.setattr(ss_run, "load_nlp", no_nlp)
     ss_run.run_sentence_split(
-        in_json,
-        in_txt,
-        out_json,
-        out_txt,
-        {
-            "sentence_split": {
-                "enabled": True,
-                "window_segments": 20,
-                "force_split": True,
-                "force_split_min_silence": 3.0,
-            }
-        },
-        stem="x",
-        cuts_txt=cuts,
+        in_json, in_txt, out_json, out_txt, {"sentence_split": _cfg()}, stem="x"
     )
-    # No qualifying silence -> LLM's single sentence stands.
-    assert out_txt.read_text(encoding="utf-8") == "あいうえおかきくけこ\n"
+    assert json.loads(out_json.read_text(encoding="utf-8")) == data
+    assert out_txt.read_text(encoding="utf-8") == "さし\nあい\n"
 
 
-def test_run_force_split_disabled_ignores_cuts(tmp_path, monkeypatch):
-    in_json, in_txt = _write_inputs(tmp_path)
-    out_json, out_txt = tmp_path / "out.json", tmp_path / "out.txt"
-    _stub_llm_single_sentence(monkeypatch)
-
-    from nagare_clip.audio_silence.cuts_file import write_cuts
-
-    cuts = tmp_path / "in_cuts.txt"
-    write_cuts(cuts, [(5.0, 8.0)])  # would split if force_split were honored
-
-    ss_run.run_sentence_split(
-        in_json,
-        in_txt,
-        out_json,
-        out_txt,
-        {
-            "sentence_split": {
-                "enabled": True,
-                "window_segments": 20,
-                "force_split": False,
-                "force_split_min_silence": 0.5,
-            }
-        },
-        stem="x",
-        cuts_txt=cuts,
-    )
-    assert out_txt.read_text(encoding="utf-8") == "あいうえおかきくけこ\n"
-
-
-def test_run_missing_cuts_file_is_noop(tmp_path, monkeypatch):
-    in_json, in_txt = _write_inputs(tmp_path)
-    out_json, out_txt = tmp_path / "out.json", tmp_path / "out.txt"
-    _stub_llm_single_sentence(monkeypatch)
-
-    ss_run.run_sentence_split(
-        in_json,
-        in_txt,
-        out_json,
-        out_txt,
-        {
-            "sentence_split": {
-                "enabled": True,
-                "window_segments": 20,
-                "force_split": True,
-                "force_split_min_silence": 0.5,
-            }
-        },
-        stem="x",
-        cuts_txt=tmp_path / "does_not_exist_cuts.txt",
-    )
-    assert out_txt.read_text(encoding="utf-8") == "あいうえおかきくけこ\n"
+def test_run_takes_no_cuts_txt():
+    assert "cuts_txt" not in inspect.signature(ss_run.run_sentence_split).parameters
 
 
 def test_disabled_copy_through_byte_identical(tmp_path):
-    in_json = tmp_path / "in.json"
-    in_txt = tmp_path / "in.txt"
-    in_json.write_text(json.dumps(_data(), ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
-    in_txt.write_text("あいうえお\nかきくけこ\n", encoding="utf-8")
+    data = {"language": "ja", "segments": [_seg("あいうえおかきくけこ", 0)]}
+    in_json, in_txt = _write_inputs(tmp_path, data, "あいうえおかきくけこ\n")
     out_json = tmp_path / "out.json"
     out_txt = tmp_path / "out.txt"
 

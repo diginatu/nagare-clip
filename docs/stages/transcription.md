@@ -77,9 +77,9 @@ The remaining timing error at a chunk start is bounded by `audio_silence.speech_
 - Segment `text` is `"".join(word)` with no whitespace; `{stem}.txt` is one segment
   text per line.
 
-Because segments are speech spans (about 2 s on average, against WhisperX's ~25 s),
-`sentence_split.window_segments` defaults to 200 (see
-[`sentence_split.md`](sentence_split.md)).
+Because a segment is a whole speech span, one can run long when the speaker never pauses
+for `min_silence`; `sentence_split` (when enabled) splits only the lines longer than
+`sentence_split.max_line_seconds` (see [`sentence_split.md`](sentence_split.md)).
 
 ## Config
 

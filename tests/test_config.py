@@ -438,7 +438,7 @@ def test_sentence_split_defaults_present():
     cfg = get_effective_config(None, {})
     sp = cfg["sentence_split"]
     assert sp["enabled"] is False
-    assert sp["window_segments"] == 200
+    assert sp["max_line_seconds"] == 8.0
     assert sp["max_retries"] == 2
     assert sp["response_format"] == "json"
     assert isinstance(sp["prompt"], str) and sp["prompt"]
@@ -796,8 +796,36 @@ def test_transcription_defaults():
     }
 
 
-def test_window_segments_default_200():
-    assert get_effective_config(None)["sentence_split"]["window_segments"] == 200
+def test_max_line_seconds_default_8():
+    sp = get_effective_config(None)["sentence_split"]
+    assert sp["max_line_seconds"] == 8.0
+    for gone in ("window_segments", "force_split", "force_split_min_silence"):
+        assert gone not in sp
+
+
+@pytest.mark.parametrize(
+    "line", ["window_segments: 200", "force_split: true", "force_split_min_silence: 3.0"]
+)
+def test_config_rejects_removed_sentence_split_key(tmp_path, line):
+    f = tmp_path / "c.yml"
+    f.write_text(f"sentence_split:\n  {line}\n")
+    with pytest.raises(ValueError) as e:
+        get_effective_config(f)
+    assert f"`sentence_split.{line.split(':')[0]}`" in str(e.value)
+
+
+def test_config_rejects_all_removed_sentence_split_keys_at_once(tmp_path):
+    f = tmp_path / "c.yml"
+    f.write_text(
+        "sentence_split:\n  window_segments: 20\n  force_split: false\n"
+        "  force_split_min_silence: 1.0\n  max_line_seconds: 6.0\n"
+    )
+    with pytest.raises(ValueError) as e:
+        get_effective_config(f)
+    msg = str(e.value)
+    for k in ("window_segments", "force_split", "force_split_min_silence"):
+        assert f"`sentence_split.{k}`" in msg
+    assert "`sentence_split.max_line_seconds`" not in msg
 
 
 def test_whisper_config_defaults():

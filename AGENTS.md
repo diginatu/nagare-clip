@@ -8,7 +8,7 @@ Maintain and improve a multi-stage rough-cut pipeline:
 
 1. Audio-silence (jump-cut) detection — Silero VAD v6 in the `transcribe/` worker, always on and **first**; editable cut list, and its speech regions define the transcription chunks
 2. Haas-ja-v1.0 transcription (`transcribe/` worker) of chunks packed from those regions, shaped into the WhisperX JSON format
-3. LLM sentence re-segmentation — rewrites `{stem}.json`/`{stem}.txt` into one-sentence-per-line units (disabled by default)
+3. LLM long-line splitting — splits each transcript line longer than `sentence_split.max_line_seconds` at sentence boundaries, rewriting `{stem}.json`/`{stem}.txt`; never merges, never touches a short line (disabled by default)
 4. gap_context — a vision LLM snapshots+describes long silent gaps (audio_silence spans) so summary/director can see what the transcript can't (disabled by default)
 5. summary — a larger LLM segments every video into line-range parts + summaries (and lists per-video misspelling-prone keywords) and writes one all-videos summary (project-wide)
 6. Text editing checkpoint — copies `.txt` or runs LLM filter with `{{old->new}}` markers, optionally primed with the summary stage's summaries/keywords
@@ -44,7 +44,7 @@ composited from it.
 
 ### audio_silence — Audio-Silence (Jump-Cut) Detection
 
-Runs Silero VAD v6 through the `transcribe/` worker subproject (`python -m nagare_transcribe vad`, one process for all sources, no Docker); the speech regions are written to `{stem}_vad.json` and `audio_silence.run.run_audio_silence()` takes their complement (gaps shorter than `audio_silence.min_silence`) as the editable `{stem}_cuts.txt`, recording the media duration. `min_silence` also sets line granularity: transcription joins VAD regions closer than it, so transcript lines break only at cuts. Always on (`audio_silence.enabled`/`.noise` are removed config keys). The cut list is read by `sentence_split` (force-split), `gap_context` (gap selection) and `intervals` (the exclude union), so deleting a line affects all three. See [`docs/stages/audio_silence.md`](docs/stages/audio_silence.md).
+Runs Silero VAD v6 through the `transcribe/` worker subproject (`python -m nagare_transcribe vad`, one process for all sources, no Docker); the speech regions are written to `{stem}_vad.json` and `audio_silence.run.run_audio_silence()` takes their complement (gaps shorter than `audio_silence.min_silence`) as the editable `{stem}_cuts.txt`, recording the media duration. `min_silence` also sets line granularity: transcription joins VAD regions closer than it, so transcript lines break only at cuts. Always on (`audio_silence.enabled`/`.noise` are removed config keys). The cut list is read by `gap_context` (gap selection) and `intervals` (the exclude union), so deleting a line affects both. See [`docs/stages/audio_silence.md`](docs/stages/audio_silence.md).
 
 - **Inputs:** source video file
 - **Outputs:** `{stem}_vad.json`, `{stem}_cuts.txt` (one `START - END` silent span per line; delete a line to keep that span)
@@ -63,14 +63,14 @@ Runs right after `transcription` (config `whisper:`, disabled by default; langua
 - **Inputs:** source video files; `{stem}_haas.json` (transcription)
 - **Outputs:** `output/whisper/whisper_request.json`, `{stem}_whisper.json` (`{"chunks": [[s, e], ...], "texts": [...]}`)
 
-### sentence_split — LLM Sentence Re-Segmentation
+### sentence_split — Split Long Lines
 
-An LLM (config `sentence_split:`, disabled by default) rewrites a transcript into one-sentence-per-line units per source. The LLM returns **bunsetsu-index ranges**, not text, which the stage maps back to whole-word boundaries, so word timings are preserved and output text is verbatim by construction (guarded by a before/after `concat_word_text` check). Processing is windowed with a trailing-sentence carry over each seam, and each window degrades independently on LLM failure. When `force_split` is enabled (default), long silences from `{stem}_cuts.txt` become hard sentence boundaries — but only where the word timings corroborate the silence with a real inter-word gap. Disabled → byte-identical copy-through of `output/transcription/{stem}.{json,txt}`.
+A transcript line is one speech span between two audio_silence cuts, and those boundaries are kept: an LLM (config `sentence_split:`, disabled by default) splits **only** a line longer than `sentence_split.max_line_seconds` (default `8.0`; `end - start` strictly greater, numeric `start`/`end` required) — one call per long line, no neighbouring-line context, unit `"{stem} line N"` in the LLM report. Lines are never merged; a short or untimed line is the same dict in the output and never sent. The LLM returns **bunsetsu-index ranges** (`{"sentences": [[a,b],...]}`, validated by `llm.parse_ranges`), not text, which `segment.rebuild_segments()` maps back to whole-word boundaries of that line's own words, so word timings are preserved and the text is verbatim (guarded by a before/after `concat_word_text` check per line). Any failure — LLM error after retries, invalid ranges, verbatim mismatch, or a single range (one sentence) — keeps the line; a line with fewer than 2 bunsetsu is not sent. GiNZA loads only when some line is long. Windowing, the carry over window seams and the force split at long silences are **removed** (`window_segments`, `force_split`, `force_split_min_silence` are in `config.REMOVED_KEYS`); the stage no longer reads `{stem}_cuts.txt`. Disabled → byte-identical copy-through of `output/transcription/{stem}.{json,txt}`.
 
-See [`docs/stages/sentence_split.md`](docs/stages/sentence_split.md) for the re-segmentation core, windowing/carry-over mechanics, and the full force-split corroboration rule.
+See [`docs/stages/sentence_split.md`](docs/stages/sentence_split.md).
 
-- **Inputs:** `{stem}.json` (word timings), `{stem}.txt` (plain text) from transcription; the audio_silence `{stem}_cuts.txt`, passed as `cuts_txt` (for force-split silences)
-- **Outputs:** re-segmented `{stem}.json` + `{stem}.txt` in `output/sentence_split/`
+- **Inputs:** `{stem}.json` (word timings), `{stem}.txt` (plain text) from transcription
+- **Outputs:** `{stem}.json` + `{stem}.txt` in `output/sentence_split/` (each line untouched or replaced by its pieces)
 
 ### gap_context — Silent-Gap Visual Context
 
@@ -266,8 +266,8 @@ src/nagare_clip/          # Main Python package (src layout)
   whisper/                    # whisper stage (faster-whisper hints for text_filter)
     worker.py                 # standalone worker run in the whisperx image (stdin; never imports nagare_clip)
     hints.py                  # load_line_hints()/line_hints(): one Whisper hint per transcript line (pure)
-  sentence_split/             # sentence_split stage (LLM re-segmentation)
-    segment.py                # pure: windowing, char/word map, rebuild_window_segments, verbatim check
+  sentence_split/             # sentence_split stage (LLM splitting of long lines)
+    segment.py                # pure: char/word map, rebuild_segments, verbatim check
     nlp.py                    # GiNZA bunsetsu extraction (lazy import)
     llm.py                    # prompt + bunsetsu-range parse/validate + retry/degrade
     run.py                    # run_sentence_split() (copy-through when disabled)
@@ -431,7 +431,7 @@ the [Documentation Policy](#documentation-policy)):
 - audio_silence → [`docs/stages/audio_silence.md`](docs/stages/audio_silence.md)
 - whisper (second recognizer, hints for text_filter) → [`docs/stages/whisper.md`](docs/stages/whisper.md)
 - transcription (Haas chunking, token timestamps, the WhisperX-shaped JSON) → [`docs/stages/transcription.md`](docs/stages/transcription.md)
-- sentence_split (re-segmentation, windowing/carry-over, force-split) → [`docs/stages/sentence_split.md`](docs/stages/sentence_split.md)
+- sentence_split (splitting lines longer than `max_line_seconds`) → [`docs/stages/sentence_split.md`](docs/stages/sentence_split.md)
 - gap_context (gap selection, frame sampling/extraction, vision-call contract, summary/director consumption) → [`docs/stages/gap_context.md`](docs/stages/gap_context.md)
 - text_filter (+ summary-stage filter context) → [`docs/stages/text_filter.md`](docs/stages/text_filter.md)
 - intervals (`<keep>`/`<speed>`/`<overlay/>`/`<cut>` markers, margins, captions) → [`docs/stages/intervals.md`](docs/stages/intervals.md)

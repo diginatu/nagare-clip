@@ -54,7 +54,7 @@ recomputing:
 | stage | calls | notes |
 |---|---|---|
 | transcription, audio_silence, intervals, blender | 0 | Docker/ffmpeg/Python only |
-| sentence_split | ~25 | scales with `window_segments` |
+| sentence_split | 1 per long line | only lines over `max_line_seconds`; 0 when none |
 | gap_context | ~50 vision calls | fewer when `static_ssim` prefilters |
 | summary | 1 per source + 1 | |
 | text_filter | ~55 | scales with `batch_size` |
