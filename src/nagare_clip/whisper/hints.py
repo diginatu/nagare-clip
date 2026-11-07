@@ -51,7 +51,7 @@ def line_hints(
 
     Each character joins the chunk containing its ``start`` (nearest if none).
     Per chunk the Haas characters are aligned with the Whisper text; a line's
-    hint is the Whisper span over its characters, an insertion going to the
+    hint is the Whisper span over its characters (punctuation and whitespace removed), an insertion going to the
     earlier line. A line spanning chunks concatenates its spans in order.
     """
     n = len(segments)
@@ -100,10 +100,9 @@ def line_hints(
             out.append(None)
             continue
         hint = "".join(pieces[li])
+        shown = _comparable(hint)
         out.append(
-            None
-            if _comparable(hint) == _comparable(text) and (hint or not _comparable(text))
-            else hint
+            None if shown == _comparable(text) and (hint or not _comparable(text)) else shown
         )
     return out
 

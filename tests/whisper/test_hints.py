@@ -113,9 +113,19 @@ def test_prolonged_sound_mark_is_not_punctuation():
     assert line_hints(segs, [(0, 5)], ["下がったねー"]) == ["下がったねー"]
 
 
-def test_real_difference_keeps_hint_verbatim_with_punctuation():
-    segs = [seg("散乱感出してる", 0)]
-    assert line_hints(segs, [(0, 7)], ["産卵管、出してる。"]) == ["産卵管、出してる。"]
+def test_real_difference_hint_has_punctuation_removed():
+    segs = [seg("あ、産卵感。", 0)]
+    assert line_hints(segs, [(0, 6)], ["あ、産卵管。"]) == ["あ産卵管"]
+
+
+def test_hint_keeps_prolonged_sound_mark_when_other_text_differs():
+    segs = [seg("散乱感ー", 0)]
+    assert line_hints(segs, [(0, 4)], ["産卵管ー"]) == ["産卵管ー"]
+
+
+def test_hint_has_whitespace_removed():
+    segs = [seg("散乱感", 0)]
+    assert line_hints(segs, [(0, 3)], ["産卵 管"]) == ["産卵管"]
 
 
 def test_empty_whisper_text_for_speech_line_stays_empty():
