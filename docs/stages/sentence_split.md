@@ -22,9 +22,10 @@ one**. It only splits a line that runs longer than `sentence_split.max_line_seco
   `max_retries`/`retry_temp_step`/`retry_temp_cap` like every LLM stage.
 - **LLM report.** One unit per long line, `"{stem} line N"` (N is the 1-based line number in
   the transcription `.txt`).
-- GiNZA is loaded only when at least one line is long (`run_sentence_split`), so a run where
-  no line is long makes no LLM call, loads no model, and writes output equal in content to
-  its input.
+- GiNZA is loaded only at the first long line (`split_long_lines` takes a `get_nlp` loader),
+  so a run where no line is long makes no LLM call and loads no model.
+- `max_line_seconds` is validated `> 0` (a zero or negative value would send every timed
+  line).
 
 ## Rebuild (verbatim by construction)
 
@@ -38,8 +39,11 @@ one**. It only splits a line that runs longer than `sentence_split.max_line_seco
 - **Every failure keeps the original line** (the same dict): LLM error after all retries or
   invalid ranges (recorded in the LLM report), a verbatim mismatch (logged), or a single range
   / a rebuild that yields one piece (the line is one sentence — a valid answer).
-- When some line was split, the output's `word_segments` is rebuilt from the new segments;
-  when none was, the input dict is written back unchanged.
+- When some line was split, the output's `word_segments` is rebuilt from the new segments.
+  When none was (`split_long_lines` returns the input dict itself), `run_sentence_split`
+  copies the transcription `{stem}.json`/`.txt` through **byte-identically**, like the
+  disabled path — re-serialising would turn a speechless source's empty `.txt` into `"\n"`,
+  which guided_edit/intervals then read as one empty speech line.
 
 ## Removed
 

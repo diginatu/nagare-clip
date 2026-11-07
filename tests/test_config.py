@@ -814,6 +814,12 @@ def test_config_rejects_removed_sentence_split_key(tmp_path, line):
     assert f"`sentence_split.{line.split(':')[0]}`" in str(e.value)
 
 
+@pytest.mark.parametrize("value", [0, -1.5])
+def test_max_line_seconds_must_be_positive(value):
+    with pytest.raises(ValidationError):
+        get_effective_config(None, {"sentence_split": {"max_line_seconds": value}})
+
+
 def test_config_rejects_all_removed_sentence_split_keys_at_once(tmp_path):
     f = tmp_path / "c.yml"
     f.write_text(

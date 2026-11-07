@@ -63,7 +63,7 @@ whisper:
   model: "large-v3"   # faster-whisper model baked in the whisperx image (Systran)
   beam_size: 5   # Beam search width
 
-# sentence_split stage: runs per source between transcription and gap_context.
+# sentence_split stage: runs per source after transcription/whisper.
 # An LLM splits each transcript line longer than max_line_seconds at natural
 # sentence boundaries (rewriting {stem}.json and {stem}.txt); shorter lines are
 # kept and lines are never merged. Disabled by default = byte-identical

@@ -340,7 +340,7 @@ class AudioSilenceConfig(BaseModel):
 class SentenceSplitConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
     section_comment: ClassVar[str] = (
-        "sentence_split stage: runs per source between transcription and gap_context.\n"
+        "sentence_split stage: runs per source after transcription/whisper.\n"
         "An LLM splits each transcript line longer than max_line_seconds at natural\n"
         "sentence boundaries (rewriting {stem}.json and {stem}.txt); shorter lines are\n"
         "kept and lines are never merged. Disabled by default = byte-identical\n"
@@ -370,6 +370,7 @@ class SentenceSplitConfig(BaseModel):
     retry_temp_cap: float = Field(0.8)
     max_line_seconds: float = Field(
         8.0,
+        gt=0,
         description="Seconds; only a line longer than this is sent to the LLM to be split (shorter lines are kept as they are)",
     )
     prompt: str = _commented(

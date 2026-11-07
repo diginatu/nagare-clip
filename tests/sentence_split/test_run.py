@@ -51,7 +51,7 @@ def _cfg(**kw):
 
 
 def _split(data, llm, **cfg):
-    return ss_run.split_long_lines(data, _cfg(**cfg), nlp=None, stem="x", call_llm=llm)
+    return ss_run.split_long_lines(data, _cfg(**cfg), get_nlp=lambda: None, stem="x", call_llm=llm)
 
 
 # --- 1. short lines are untouched and never sent ------------------------------
@@ -261,7 +261,9 @@ def test_recorder_unit_per_long_line(monkeypatch):
             _seg("たちつてとなにぬねの", 14),
         ],
     }
-    ss_run.split_long_lines(data, _cfg(), nlp=None, stem="x", call_llm=FakeLLM(), recorder=Rec())
+    ss_run.split_long_lines(
+        data, _cfg(), get_nlp=lambda: None, stem="x", call_llm=FakeLLM(), recorder=Rec()
+    )
     assert units == ["x line 2", "x line 3"]
 
 
@@ -307,6 +309,33 @@ def test_run_with_no_long_line_writes_equal_content_without_nlp(tmp_path, monkey
     )
     assert json.loads(out_json.read_text(encoding="utf-8")) == data
     assert out_txt.read_text(encoding="utf-8") == "さし\nあい\n"
+
+
+def test_run_enabled_speechless_source_is_byte_identical(tmp_path, monkeypatch):
+    data = {"language": "ja", "segments": [], "word_segments": []}
+    in_json, in_txt = _write_inputs(tmp_path, data, "")
+    out_json, out_txt = tmp_path / "out.json", tmp_path / "out.txt"
+    monkeypatch.setattr(ss_run, "load_nlp", lambda: None)
+    ss_run.run_sentence_split(
+        in_json, in_txt, out_json, out_txt, {"sentence_split": _cfg()}, stem="x"
+    )
+    assert out_txt.read_text(encoding="utf-8") == ""
+    assert out_json.read_bytes() == in_json.read_bytes()
+
+
+def test_run_enabled_no_long_line_is_byte_identical(tmp_path, monkeypatch):
+    data = {"language": "ja", "segments": [_seg("さし", 0), _seg("あい", 3)]}
+    in_json, in_txt = _write_inputs(tmp_path, data, "")
+    # compact JSON and a txt without the trailing newline: re-serialising would differ
+    in_json.write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
+    in_txt.write_text("さし\nあい", encoding="utf-8")
+    out_json, out_txt = tmp_path / "out.json", tmp_path / "out.txt"
+    monkeypatch.setattr(ss_run, "load_nlp", lambda: None)
+    ss_run.run_sentence_split(
+        in_json, in_txt, out_json, out_txt, {"sentence_split": _cfg()}, stem="x"
+    )
+    assert out_json.read_bytes() == in_json.read_bytes()
+    assert out_txt.read_bytes() == in_txt.read_bytes()
 
 
 def test_run_takes_no_cuts_txt():

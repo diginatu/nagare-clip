@@ -13,6 +13,7 @@ from __future__ import annotations
 import json
 import logging
 import shutil
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
@@ -74,7 +75,7 @@ def _split_one(
 def split_long_lines(
     json_data: dict[str, Any],
     sp_cfg: dict[str, Any],
-    nlp: Any,
+    get_nlp: Callable[[], Any],
     *,
     recorder: Recorder = NULL_RECORDER,
     stem: str = "",
@@ -84,16 +85,21 @@ def split_long_lines(
 
     One LLM call per long line (unit ``"{stem} line N"``, N 1-based), in order.
     A short or untimed line is the same dict in the output. When no line is
-    split, ``json_data`` itself is returned.
+    split, ``json_data`` itself is returned. ``get_nlp`` is called once, at
+    the first long line, so GiNZA never loads when no line is long.
     """
-    max_s = float(sp_cfg.get("max_line_seconds", 8.0))
+    max_s = float(sp_cfg["max_line_seconds"])
     segments = json_data.get("segments", [])
     new_segments: list[dict[str, Any]] = []
     split = False
+    nlp: Any = None
+    loaded = False
     for n, seg in enumerate(segments, 1):
         if not is_long_line(seg, max_s):
             new_segments.append(seg)
             continue
+        if not loaded:
+            nlp, loaded = get_nlp(), True
         pieces = _split_one(
             seg, sp_cfg, nlp, recorder=recorder, unit=f"{stem} line {n}", call_llm=call_llm
         )
@@ -133,11 +139,13 @@ def run_sentence_split(
         return
 
     json_data = json.loads(json_in.read_text(encoding="utf-8"))
-    max_s = float(sp_cfg.get("max_line_seconds", 8.0))
-    segments = json_data.get("segments", [])
-    long_lines = sum(is_long_line(seg, max_s) for seg in segments)
-    nlp = load_nlp() if long_lines else None
-    new_data = split_long_lines(json_data, sp_cfg, nlp, recorder=recorder, stem=stem)
+    new_data = split_long_lines(json_data, sp_cfg, lambda: load_nlp(), recorder=recorder, stem=stem)
+    if new_data is json_data:
+        # nothing split: keep the transcription files byte-identical (a
+        # speechless source's "" .txt must not become "\n")
+        logging.info("sentence_split: %s no line split, copying through", stem)
+        _copy_through(json_in, txt_in, output_json, output_txt)
+        return
 
     output_json.write_text(
         json.dumps(new_data, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
@@ -147,9 +155,8 @@ def run_sentence_split(
         encoding="utf-8",
     )
     logging.info(
-        "sentence_split: %s %d long line(s); %d -> %d segments",
+        "sentence_split: %s %d -> %d segments",
         stem,
-        long_lines,
-        len(segments),
+        len(json_data.get("segments", [])),
         len(new_data.get("segments", [])),
     )
