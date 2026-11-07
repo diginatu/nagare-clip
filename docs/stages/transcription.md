@@ -43,7 +43,12 @@ region lost fillers and misread short chunks.
 token is not a character), in seconds relative to the chunk, at 80 ms resolution,
 with durations of 0 to 0.32 s. The worker adds the chunk offset and strips whitespace
 and `▁` from the token text; a token left empty is dropped (one appears at every
-chunk start). The transcribed text with and without `timestamps=True` is identical.
+chunk start). **Byte-fallback:** a character outside the SentencePiece vocab comes
+back as one `"�"` entry per UTF-8 byte; the worker takes
+`model.tokenizer.ids_to_tokens(h.y_sequence)` (aligned 1:1 with the entries) and joins
+each maximal run of `<0xNN>` pieces into one token (UTF-8 decode, `errors="replace"`,
+first entry's start to last entry's end). Without pieces, or when their count differs
+from the entries (a warning goes to stderr), the entries are used as they are. The transcribed text with and without `timestamps=True` is identical.
 The remaining timing error at a chunk start is bounded by `audio_silence.speech_pad`
 (the chunk starts that far before the speech).
 
