@@ -802,4 +802,4 @@ def test_window_segments_default_200():
 
 def test_whisper_config_defaults():
     w = get_effective_config(None, {})["whisper"]
-    assert w == {"enabled": False, "model": "large-v3", "batch_size": 8, "beam_size": 5}
+    assert w == {"enabled": False, "model": "large-v3", "beam_size": 5}

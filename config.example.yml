@@ -61,7 +61,6 @@ audio_silence:
 whisper:
   enabled: false   # Run the Whisper hint pass
   model: "large-v3"   # faster-whisper model baked in the whisperx image (Systran)
-  batch_size: 8   # Chunks per batched decode
   beam_size: 5   # Beam search width
 
 # sentence_split stage: runs per source between audio_silence and text_filter.

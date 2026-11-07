@@ -9,24 +9,52 @@ import pytest
 from nagare_clip.whisper import worker
 
 
-def test_group_by_chunk_strips_spaces():
-    out = worker.group_by_chunk([(0, 30), (30, 60)], [(0.5, "はい いつも"), (31.0, "水位 が")])
-    assert out == ["はいいつも", "水位が"]
+class FakeSeg:
+    def __init__(self, text):
+        self.text = text
 
 
-def test_group_by_chunk_split_long_chunk():
-    out = worker.group_by_chunk([(0, 60)], [(1.0, "あ い"), (31.0, "う　え\n")])
-    assert out == ["あいうえ"]
+class FakeModel:
+    """Returns text keyed by the slice length, so attribution is checkable."""
+
+    def __init__(self, by_len):
+        self.by_len = by_len
+        self.calls = []
+
+    def transcribe(self, audio, **kw):
+        self.calls.append((len(audio), kw))
+        return iter([FakeSeg(t) for t in self.by_len[len(audio)]]), None
 
 
-def test_group_by_chunk_empty_chunk():
-    out = worker.group_by_chunk([(0, 30), (30, 60)], [(31.0, "はい")])
-    assert out == ["", "はい"]
+def test_decode_chunks_one_call_per_chunk_attributed_by_construction():
+    # two short chunks close together: a batched pipeline would merge them
+    chunks = [(0.0, 2.0), (2.5, 4.0), (10.0, 10.5)]
+    model = FakeModel({32000: ["はい いつも", "\n"], 24000: ["水位 が"], 8000: []})
+    audio = [0.0] * (16000 * 11)
+    texts = worker.decode_chunks(model, audio, chunks, beam_size=5)
+    assert texts == ["はいいつも", "水位が", ""]
+    assert [n for n, _ in model.calls] == [32000, 24000, 8000]
+    kw = model.calls[0][1]
+    assert kw == {
+        "vad_filter": False,
+        "language": "ja",
+        "beam_size": 5,
+        "condition_on_previous_text": False,
+        "without_timestamps": True,
+    }
 
 
-def test_group_by_chunk_nearest_chunk_when_in_none():
-    out = worker.group_by_chunk([(0, 10), (20, 30)], [(11.0, "a"), (19.0, "b")])
-    assert out == ["a", "b"]
+def test_decode_chunks_warns_over_30s(capsys):
+    model = FakeModel({16000 * 31: ["あ"]})
+    worker.decode_chunks(model, [0.0] * (16000 * 40), [(1.0, 32.0)], beam_size=5)
+    err = capsys.readouterr().err
+    assert "31" in err and "30" in err
+
+
+def test_worker_has_no_batched_pipeline():
+    src = Path(worker.__file__).read_text(encoding="utf-8")
+    assert "BatchedInferencePipeline(" not in src
+    assert "import BatchedInferencePipeline" not in src
 
 
 def test_find_model_globs(tmp_path):
@@ -53,7 +81,6 @@ def test_main_no_chunks_skips_model(tmp_path, monkeypatch):
         json.dumps(
             {
                 "model": "large-v3",
-                "batch_size": 8,
                 "beam_size": 5,
                 "sources": [{"path": "/x.mp4", "out": str(out), "chunks": []}],
             }

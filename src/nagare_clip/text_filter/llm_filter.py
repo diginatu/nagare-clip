@@ -25,7 +25,8 @@ HINT_INSTRUCTIONS = (
     "only as evidence to fix a misrecognition in the original line, by marking "
     "the fix with {{old->new}} on the original text. Never copy the reference's "
     "punctuation, fillers or phrasing, and leave a line alone when the "
-    "reference gives no clear evidence of an error."
+    "reference gives no clear evidence of an error. Reply with the numbered "
+    "transcript lines only; never repeat the reference block."
 )
 
 
@@ -268,6 +269,8 @@ def _parse_response(response: str, original_batch: list[tuple[int, str]]) -> dic
     # Parse response lines with line-number prefix
     response_lines: dict[int, str] = {}
     for raw_line in response.splitlines():
+        if raw_line.strip().startswith(HINT_HEADER):
+            break  # an echoed reference block: nothing after it is a transcript line
         m = _LINE_RE.match(raw_line)
         if m:
             line_num = int(m.group(1)) - 1  # convert to 0-indexed

@@ -104,7 +104,7 @@ runtime behavior.
   **CLI > later YAML > earlier YAML > model defaults**, validated once on the
   merged result, the same way as every other config consumer. Every `--config`
   path is checked up front and a missing one raises `PipelineError` naming it.
-  `main()` then: creates the input/output/per-stage/cache directories, calls
+  `main()` then: creates the input/output/per-stage directories, calls
   `setup_logging()` once, writes `output/effective_config.yml`
   (`config.write_effective_config()`: the merged, validated cfg with `api_key`
   values blanked and a header listing the source files) and stores its path as

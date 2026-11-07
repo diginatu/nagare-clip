@@ -6,7 +6,7 @@ testable in the main environment.
 
 Usage: ``python - <request.json>`` (container paths). Request::
 
-    {"model": "large-v3", "batch_size": 8, "beam_size": 5,
+    {"model": "large-v3", "beam_size": 5,
      "sources": [{"path": "...", "out": "...", "chunks": [[s, e], ...]}]}
 
 Each source's ``out`` gets ``{"chunks": [[s, e], ...], "texts": [str, ...]}``,
@@ -25,33 +25,35 @@ MODEL_ROOT = "/.cache/huggingface/hub"
 _WS = re.compile(r"\s+")
 
 
-def group_by_chunk(
-    chunks: list[tuple[float, float]], segments: list[tuple[float, str]]
-) -> list[str]:
-    """Join each segment's text onto the chunk containing its start.
+SAMPLE_RATE = 16000
+MAX_WINDOW_SECONDS = 30.0
 
-    A start inside no chunk goes to the nearest one. Whitespace is removed.
+
+def decode_chunks(model, audio, chunks: list[tuple[float, float]], beam_size: int) -> list[str]:
+    """Decode each chunk with its own ``model.transcribe`` call.
+
+    Per-chunk calls make attribution exact. (``BatchedInferencePipeline`` with
+    ``clip_timestamps`` merges neighbouring short clips into one window and
+    returns one segment, so texts cannot be assigned back to chunks.)
     """
-    parts: list[list[str]] = [[] for _ in chunks]
-    if not chunks:
-        return []
-    for start, text in segments:
-        idx = None
-        for i, (s, e) in enumerate(chunks):
-            if s <= start < e:
-                idx = i
-                break
-        if idx is None:
-            idx = min(
-                range(len(chunks)),
-                key=lambda i: (
-                    0.0
-                    if chunks[i][0] <= start <= chunks[i][1]
-                    else min(abs(start - chunks[i][0]), abs(start - chunks[i][1]))
-                ),
+    texts: list[str] = []
+    for s, e in chunks:
+        if e - s > MAX_WINDOW_SECONDS:
+            print(
+                f"[whisper] warning: chunk {s:.1f}-{e:.1f}s is {e - s:.1f}s, longer than "
+                f"{MAX_WINDOW_SECONDS:.0f}s; Whisper decodes 30 s windows, the tail may be lost",
+                file=sys.stderr,
             )
-        parts[idx].append(text)
-    return [_WS.sub("", "".join(p)) for p in parts]
+        segments, _ = model.transcribe(
+            audio[int(s * SAMPLE_RATE) : int(e * SAMPLE_RATE)],
+            vad_filter=False,
+            language="ja",
+            beam_size=beam_size,
+            condition_on_previous_text=False,
+            without_timestamps=True,
+        )
+        texts.append(_WS.sub("", "".join(sg.text for sg in segments)))
+    return texts
 
 
 def find_model(model: str, root: str = MODEL_ROOT) -> str:
@@ -73,28 +75,18 @@ def main(argv: list[str]) -> None:
     with open(argv[0], encoding="utf-8") as f:
         request = json.load(f)
     sources = request["sources"]
-    pipeline = None
+    model = None
     decode_audio = None
     for src in sources:
         chunks = [(float(s), float(e)) for s, e in src["chunks"]]
         texts: list[str] = []
         if chunks:
-            if pipeline is None:
-                from faster_whisper import BatchedInferencePipeline, decode_audio
+            if model is None:
+                from faster_whisper import decode_audio
 
-                pipeline = BatchedInferencePipeline(load_model(request["model"]))
+                model = load_model(request["model"])
             audio = decode_audio(src["path"])
-            segments, _ = pipeline.transcribe(
-                audio,
-                clip_timestamps=[{"start": s, "end": e} for s, e in chunks],
-                batch_size=int(request["batch_size"]),
-                vad_filter=False,
-                language="ja",
-                beam_size=int(request["beam_size"]),
-                condition_on_previous_text=False,
-                without_timestamps=True,
-            )
-            texts = group_by_chunk(chunks, [(sg.start, sg.text) for sg in segments])
+            texts = decode_chunks(model, audio, chunks, int(request["beam_size"]))
         out_dir = os.path.dirname(src["out"])
         if out_dir:
             os.makedirs(out_dir, exist_ok=True)

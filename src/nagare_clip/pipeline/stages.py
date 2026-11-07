@@ -181,12 +181,22 @@ def _whisper_run(ctx: PipelineContext) -> None:
     if not w["enabled"]:
         print("[whisper] skipped (whisper.enabled is false)")
         return
+    if not ctx.cfg["text_filter"]["use_llm"]:
+        print(
+            "[whisper] warning: text_filter.use_llm is false, so the Whisper hints will not be used"
+        )
     d = ctx.stage_dir("whisper")
     tdir = ctx.stage_dir("transcription")
     d.mkdir(parents=True, exist_ok=True)
     sources = []
     for src in ctx.sources:
-        haas = json.loads((tdir / f"{src.stem}_haas.json").read_text(encoding="utf-8"))
+        haas_path = tdir / f"{src.stem}_haas.json"
+        if not haas_path.is_file():
+            raise PipelineError(
+                f"whisper needs {haas_path}, which is missing; "
+                "re-run with --from-stage transcription"
+            )
+        haas = json.loads(haas_path.read_text(encoding="utf-8"))
         sources.append(
             {
                 "path": f"/app/{src.relative}",
@@ -199,7 +209,6 @@ def _whisper_run(ctx: PipelineContext) -> None:
         json.dumps(
             {
                 "model": w["model"],
-                "batch_size": w["batch_size"],
                 "beam_size": w["beam_size"],
                 "sources": sources,
             },

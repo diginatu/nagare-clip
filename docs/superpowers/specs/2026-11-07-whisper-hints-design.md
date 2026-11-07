@@ -9,15 +9,15 @@ the LLM still only emits `{{old->new}}` patches on the Haas line.
 ## Measured (probe, RTX 3060, 120 s, 4 packed chunks)
 
 - `ghcr.io/jim60105/whisperx:large-v3-ja` contains faster-whisper 1.2.0
-  (`BatchedInferencePipeline` available), Python `/venv/bin/python` 3.11, and the model
+  (`WhisperModel`), Python `/venv/bin/python` 3.11, and the model
   baked at `/.cache/huggingface/hub/models--Systran--faster-whisper-large-v3/snapshots/*/`.
   Entrypoint is `dumb-init -- sh -c "whisperx ..."` → override with `--entrypoint python`.
   `soundfile` is absent; `faster_whisper.decode_audio` works.
-- One `BatchedInferencePipeline.transcribe(audio, clip_timestamps=[{"start": s, "end": e},
-  ...], batch_size=8, vad_filter=False, language="ja", beam_size=5,
-  condition_on_previous_text=False, without_timestamps=True)` returned one segment per
-  chunk, boundaries equal to the chunks; 2.9 s for 117 s (load 2.7 s). A per-chunk loop
-  took 4.3 s; texts 0.997 similar.
+- Per-chunk `model.transcribe(audio_slice, vad_filter=False, language="ja", beam_size=5,
+  condition_on_previous_text=False, without_timestamps=True)`, one call per chunk, texts
+  joined per call. (A single batched `clip_timestamps` call was tried first and rejected:
+  faster-whisper 1.2.0 merges neighbouring clips of at most 30 s total into one window and
+  returns one segment, so attribution to chunks fails. Final-review ruling: per-chunk.)
 - Similarity: Whisper↔old WhisperX 0.972, Whisper↔Haas 0.963. Whisper drops fillers,
   normalises colloquial forms (流してる→流している), inserts stray spaces, and hallucinated
   once (えっと→越冬). Hence: hints only, never truth.
@@ -39,11 +39,11 @@ the LLM still only emits `{{old->new}}` patches on the Haas line.
    gap_context/publish only run ffmpeg there and do not need it.
 4. **Chunks = the chunks Haas used**, read from `output/transcription/{stem}_haas.json`
    (`"chunks"`, after sub-splitting), so both transcripts cover identical audio. A chunk
-   over 30 s may come back as several segments; segments are grouped back to the chunk
-   that contains their start.
+   over 30 s (Whisper decodes 30 s windows) triggers a stderr warning. Each chunk is
+   decoded by its own `transcribe` call, so its text is attributed by construction.
 5. **Worker protocol.** Request (written by the pipeline to
    `output/whisper/whisper_request.json`, container paths):
-   `{"model": "large-v3", "batch_size": int, "beam_size": int, "sources": [{"path":
+   `{"model": "large-v3", "beam_size": int, "sources": [{"path":
    "/app/<relative>", "out": "/output/whisper/{stem}_whisper.json", "chunks": [[s, e],
    ...]}]}`. Output per source: `{"chunks": [[s, e], ...], "texts": [str, ...]}` (one text
    per chunk, whitespace removed). The model is resolved from the baked snapshot glob for
@@ -64,7 +64,7 @@ the LLM still only emits `{{old->new}}` patches on the Haas line.
    hints of their own lines. Output format unchanged. No hints → messages byte-identical
    to today (regression-tested). A missing/unreadable whisper file for an enabled stage →
    warning, no hints for that source.
-8. **Config `whisper:`**: `enabled: false`, `model: "large-v3"`, `batch_size: 8`,
+8. **Config `whisper:`**: `enabled: false`, `model: "large-v3"`,
    `beam_size: 5`. Language is fixed to `ja` (Haas is Japanese-only).
 
 ## Out of scope

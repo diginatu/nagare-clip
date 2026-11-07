@@ -70,3 +70,20 @@ def test_system_prompt_gets_instructions_once():
     for c in calls:
         assert c[0]["content"] == "BASE" + "\n\n" + HINT_INSTRUCTIONS
         assert c[0]["content"].count(HINT_INSTRUCTIONS) == 1
+
+
+def test_echoed_reference_block_is_ignored():
+    def respond(n, messages):
+        return "1: one\n2: {{two->TWO}}\n3: three\n4: four\n\n" + HEADER + "\n2: TWO\n4: FOUR"
+
+    out = filter_transcript(
+        LINES,
+        {"prompt": "BASE", "batch_size": 10},
+        call_llm=lambda m, c: respond(1, m),
+        hints=[None, "TWO", None, "FOUR"],
+    )
+    assert out == ["one", "{{two->TWO}}", "three", "four"]
+
+
+def test_instructions_forbid_repeating_reference():
+    assert "never repeat the reference block" in HINT_INSTRUCTIONS

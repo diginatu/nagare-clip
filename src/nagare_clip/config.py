@@ -315,7 +315,6 @@ class WhisperConfig(BaseModel):
     model: str = Field(
         "large-v3", description="faster-whisper model baked in the whisperx image (Systran)"
     )
-    batch_size: int = Field(8, description="Chunks per batched decode")
     beam_size: int = Field(5, description="Beam search width")
 
 

@@ -944,6 +944,24 @@ def test_whisper_disabled_no_docker_call(tmp_path, monkeypatch, capsys):
     assert not (tmp_path / "out" / "whisper").exists()
 
 
+def test_whisper_missing_haas_json_raises(tmp_path, monkeypatch):
+    ctx = _ctx(tmp_path, cfg=_whisper_cfg())
+    monkeypatch.setattr(st, "run_command", lambda *a, **k: pytest.fail("docker called"))
+    with pytest.raises(st.PipelineError, match=r"_haas\.json.*--from-stage transcription"):
+        st._whisper_run(ctx)
+
+
+def test_whisper_warns_when_hints_unused(tmp_path, monkeypatch, capsys):
+    ctx = _ctx(tmp_path, cfg=_whisper_cfg())
+    tdir = tmp_path / "out" / "transcription"
+    tdir.mkdir(parents=True)
+    for stem in ctx.stems:
+        (tdir / f"{stem}_haas.json").write_text(json.dumps({"chunks": []}))
+    monkeypatch.setattr(st, "run_command", lambda *a, **k: None)
+    st._whisper_run(ctx)
+    assert "use_llm" in capsys.readouterr().out
+
+
 def test_whisper_stage_one_docker_call_for_all_sources(tmp_path, monkeypatch):
     ctx = _ctx(tmp_path, cfg=_whisper_cfg(), stems=("a", "b"))
     tdir = tmp_path / "out" / "transcription"
@@ -963,7 +981,6 @@ def test_whisper_stage_one_docker_call_for_all_sources(tmp_path, monkeypatch):
     req = json.loads((tmp_path / "out" / "whisper" / "whisper_request.json").read_text())
     assert req == {
         "model": "large-v3",
-        "batch_size": 8,
         "beam_size": 5,
         "sources": [
             {

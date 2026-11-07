@@ -73,7 +73,7 @@ def test_pipeline_wires_context_and_prints_done(tmp_path, monkeypatch, capsys):
     assert ctx.output_dir == (tmp_path / "output").resolve()
     # stage output dirs created upfront
     assert (tmp_path / "output" / "intervals").is_dir()
-    assert (tmp_path / "cache").is_dir()
+    assert not (tmp_path / "cache").exists()
     assert "Done: " in capsys.readouterr().out
 
 
