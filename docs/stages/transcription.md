@@ -28,7 +28,7 @@ stage changes.
 
 ## Chunking: "packed"
 
-`pack_regions()` merges consecutive VAD regions greedily into one chunk while the
+`pack_regions()` merges consecutive joined speech spans (VAD regions closer than `audio_silence.min_silence` merged) greedily into one chunk while the
 chunk spans at most `transcription.max_chunk_seconds` (default 30 s); every chunk
 starts at a region start. A single region longer than the limit is sub-split inside
 the worker with `haas_asr.split_at_quiet_points`. Measured on real footage: packed
@@ -57,7 +57,17 @@ The remaining timing error at a chunk start is bounded by `audio_silence.speech_
 `build_whisperx_json(tokens, regions)` returns
 `{"segments": [...], "word_segments": [...], "language": "ja"}`:
 
-- **One segment per VAD region.** A token belongs to the region holding its start; a
+- **One segment per speech span between cuts.** The VAD regions are first joined by
+  `audio_silence.vad.join_close_regions(speech, audio_silence.min_silence)`: Silero splits
+  at its own pauses before padding, so padded neighbours can sit 0.1-0.69 s apart with no
+  cut between them (a real case split 結構 across two lines). Joining regions closer than
+  `min_silence` makes the gaps between spans exactly the internal silences of
+  `{stem}_cuts.txt`: a line boundary exists where, and only where, a cut exists. The same
+  joined spans are what `asr_request` packs into chunks (chunks never start inside a
+  line), and `finish_transcription(..., min_silence)` builds segments from them; a joined
+  span longer than `max_chunk_seconds` is a chunk of its own and the worker's
+  `split_long_chunks` sub-splits it, the segment staying one per span. `{stem}_vad.json`
+  stays Silero's raw output. A token belongs to the span holding its start; a
   token in a gap goes to the nearer region (a tie goes to the earlier one). A region
   with no tokens yields no segment.
 - **`words` has one entry per non-whitespace character**, because the intervals stage
@@ -67,7 +77,7 @@ The remaining timing error at a chunk start is bounded by `audio_silence.speech_
 - Segment `text` is `"".join(word)` with no whitespace; `{stem}.txt` is one segment
   text per line.
 
-Because segments are VAD regions (about 2 s on average, against WhisperX's ~25 s),
+Because segments are speech spans (about 2 s on average, against WhisperX's ~25 s),
 `sentence_split.window_segments` defaults to 200 (see
 [`sentence_split.md`](sentence_split.md)).
 

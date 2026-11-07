@@ -914,6 +914,37 @@ def test_transcription_stage_one_asr_call_for_all_sources(tmp_path, monkeypatch)
         assert (d / f"{stem}.txt").read_text().strip() == "あい"
 
 
+def test_transcription_stage_joins_regions_by_audio_silence_min_silence(tmp_path, monkeypatch):
+    ctx = _ctx(tmp_path, stems=("a",))
+    ctx.cfg["audio_silence"]["min_silence"] = 0.7
+    adir = tmp_path / "out" / "audio_silence"
+    adir.mkdir(parents=True)
+    (adir / "a_vad.json").write_text(
+        json.dumps({"duration": 10.0, "speech": [[1.0, 2.0], [2.6, 3.0]]})
+    )
+
+    def fake_run(cmd, **kw):
+        req = json.loads(open(cmd[-1]).read())
+        assert req["sources"][0]["chunks"] == [[1.0, 3.0]]
+        with open(req["sources"][0]["out"], "w") as f:
+            json.dump(
+                {
+                    "chunks": req["sources"][0]["chunks"],
+                    "tokens": [
+                        {"text": "あ", "start": 1.0, "end": 1.4},
+                        {"text": "い", "start": 2.6, "end": 3.0},
+                    ],
+                },
+                f,
+            )
+
+    monkeypatch.setattr(st, "run_command", fake_run)
+    st._transcription_run(ctx)
+    d = tmp_path / "out" / "transcription"
+    assert json.loads((d / "a.json").read_text())["segments"][0]["text"] == "あい"
+    assert (d / "a.txt").read_text().splitlines() == ["あい"]
+
+
 def test_from_stage_transcription_requires_vad_json(tmp_path):
     by_name = {s.name: s for s in st.STAGES}
     d = tmp_path / "out" / "audio_silence"

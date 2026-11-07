@@ -30,3 +30,21 @@ def silences_from_speech(
     if duration - cursor >= min_silence:
         out.append((cursor, duration))
     return out
+
+
+def join_close_regions(
+    speech: Sequence[tuple[float, float]], min_silence: float
+) -> list[tuple[float, float]]:
+    """Merge regions separated by less than *min_silence*.
+
+    The exact complement of ``silences_from_speech``'s ``>= min_silence`` cut: the
+    gaps left between the returned regions are precisely its internal silences, so
+    a line boundary exists where (and only where) a cut exists.
+    """
+    out: list[tuple[float, float]] = []
+    for start, end in sorted(speech):
+        if out and start - out[-1][1] < min_silence:
+            out[-1] = (out[-1][0], max(out[-1][1], end))
+        else:
+            out.append((start, end))
+    return out

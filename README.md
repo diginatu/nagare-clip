@@ -698,7 +698,7 @@ There is no standalone CLI; it runs through the pipeline orchestrator and needs
 Notes:
 
 - One `transcribe/` worker process handles all sources (Haas warm-up takes several seconds); it needs a CUDA GPU.
-- Output is `{stem}.json` in the WhisperX JSON shape (one segment per VAD speech region, one `words` entry per non-whitespace character) plus `{stem}.txt`.
+- Output is `{stem}.json` in the WhisperX JSON shape (one segment per speech span between cuts — VAD regions closer than `audio_silence.min_silence` are joined, because splitting inside a word is worse than joining two phrases — one `words` entry per non-whitespace character) plus `{stem}.txt`.
 - The chunking and timestamp details are in [`docs/stages/transcription.md`](docs/stages/transcription.md).
 
 ### audio_silence only (audio-silence detection)
