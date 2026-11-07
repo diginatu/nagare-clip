@@ -94,3 +94,30 @@ def test_load_malformed_segments_returns_none(tmp_path):
     a.write_text(json.dumps({"segments": [{"text": "あ", "words": [5]}]}))
     b.write_text(json.dumps({"chunks": [[0, 2]], "texts": ["あ"]}))
     assert load_line_hints(a, b) is None
+
+
+def test_punctuation_only_difference_has_no_hint():
+    segs = [seg("あ、入ったかこれは", 0), seg("じゃあね。バイバイ。", 10), seg("本当?", 25)]
+    texts = ["あ入ったかこれは", "じゃあねバイバイ", "本当？"]
+    hints = line_hints(segs, [(0, 9), (10, 20), (25, 28)], texts)
+    assert hints == [None, None, None]
+
+
+def test_whitespace_only_difference_has_no_hint():
+    segs = [seg("あいう", 0)]
+    assert line_hints(segs, [(0, 3)], ["あ い　う"]) == [None]
+
+
+def test_prolonged_sound_mark_is_not_punctuation():
+    segs = [seg("下がったね", 0)]
+    assert line_hints(segs, [(0, 5)], ["下がったねー"]) == ["下がったねー"]
+
+
+def test_real_difference_keeps_hint_verbatim_with_punctuation():
+    segs = [seg("散乱感出してる", 0)]
+    assert line_hints(segs, [(0, 7)], ["産卵管、出してる。"]) == ["産卵管、出してる。"]
+
+
+def test_empty_whisper_text_for_speech_line_stays_empty():
+    segs = [seg("あいう", 0)]
+    assert line_hints(segs, [(0, 3)], [""]) == [""]

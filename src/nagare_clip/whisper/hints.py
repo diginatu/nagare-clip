@@ -6,11 +6,17 @@ import difflib
 import json
 import logging
 import re
+import unicodedata
 from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
 _WS = re.compile(r"\s+")
+
+
+def _comparable(s: str) -> str:
+    """``s`` without punctuation (Unicode category P*) and whitespace."""
+    return "".join(c for c in s if not (unicodedata.category(c).startswith("P") or c.isspace()))
 
 
 def _nearest_chunk(start: float, chunks: list[tuple[float, float]]) -> int:
@@ -41,7 +47,7 @@ def line_hints(
     chunks: list[tuple[float, float]],
     texts: list[str],
 ) -> list[str | None]:
-    """The Whisper text covering each line, or ``None`` when it equals the line.
+    """The Whisper text covering each line, or ``None`` when it equals the line ignoring punctuation and whitespace.
 
     Each character joins the chunk containing its ``start`` (nearest if none).
     Per chunk the Haas characters are aligned with the Whisper text; a line's
@@ -94,7 +100,11 @@ def line_hints(
             out.append(None)
             continue
         hint = "".join(pieces[li])
-        out.append(None if hint == text else hint)
+        out.append(
+            None
+            if _comparable(hint) == _comparable(text) and (hint or not _comparable(text))
+            else hint
+        )
     return out
 
 

@@ -55,7 +55,7 @@ the LLM still only emits `{{old->new}}` patches on the Haas line.
    containing its `start` (nearest chunk if in none). Per chunk, align that chunk's Haas
    characters with its Whisper text (difflib, `autojunk=False`); each line's hint is the
    Whisper span covering its characters' aligned positions (an insertion between two lines
-   goes to the earlier line). A hint equal to the line text → `None`. Result:
+   goes to the earlier line). A hint equal to the line text ignoring punctuation and whitespace (Unicode category `P*`) → `None`; a differing hint is shown unchanged. Result:
    `list[str | None]`, one per line.
 7. **text_filter.** Only when hints are given and at least one is not `None`: a fixed
    instruction block is appended to the system prompt (after the summary context), and
