@@ -100,3 +100,34 @@ def test_worker_never_imports_nagare_clip():
         else:
             continue
         assert not any(n.split(".")[0] == "nagare_clip" for n in names)
+
+
+def test_main_chowns_output_to_nagare_owner(tmp_path, monkeypatch):
+    """The container is root: the output goes back to $NAGARE_OWNER, the
+    same variable `pipeline.external` sets (the worker cannot import it)."""
+    import os
+
+    from nagare_clip.pipeline.external import OWNER_ENV
+
+    assert OWNER_ENV == "NAGARE_OWNER"
+    calls = []
+    monkeypatch.setattr(worker.os, "chown", lambda p, u, g: calls.append((p, u, g)))
+    monkeypatch.setenv(OWNER_ENV, "1234:5678")
+    out = tmp_path / "out.json"
+    req = tmp_path / "req.json"
+    req.write_text(
+        json.dumps(
+            {
+                "model": "large-v3",
+                "beam_size": 5,
+                "sources": [{"path": "/x.mp4", "out": str(out), "chunks": []}],
+            }
+        )
+    )
+    worker.main([str(req)])
+    assert calls == [(str(out), 1234, 5678)]
+    calls.clear()
+    monkeypatch.delenv(OWNER_ENV)
+    worker.main([str(req)])
+    assert calls == []
+    assert os.path.exists(out)

@@ -796,8 +796,8 @@ in the file you are already reading. See
 
 ## Operational Notes
 
-- `gap_context` and `publish` run ffmpeg as root in the Docker image (`--user "0:0"`), so frame files under `output/` can be root-owned on host.
-- If needed, fix ownership after run:
+- `whisper`, `gap_context` and `publish` run as root in the Docker image (`--user "0:0"`), but hand every file they write back to you: the pipeline passes your `uid:gid` as `NAGARE_OWNER` and the container `chown`s its outputs before it exits.
+- Files written as root by an older version (e.g. the former Docker WhisperX `transcription/*.json`) block the now host-side stages with `PermissionError`. Fix ownership once:
 
 ```bash
 sudo chown -R "$(id -u):$(id -g)" output

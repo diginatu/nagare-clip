@@ -15,9 +15,27 @@ from collections.abc import Sequence
 from pathlib import Path
 from typing import NamedTuple
 
+OWNER_ENV = "NAGARE_OWNER"
+"""Env var carrying the host ``uid:gid`` into the whisperx container.
+
+The container runs as root (``--user 0:0``), so every file it writes under
+``/output`` would be root-owned on the host -- and a later host-side stage
+(or a host-side rewrite of the same file) then fails with ``PermissionError``.
+Every container step therefore hands what it wrote back to this owner.
+"""
+
+
+def host_owner() -> str | None:
+    """The invoking user's ``uid:gid``, or None where there is no such notion."""
+    getuid = getattr(os, "getuid", None)
+    getgid = getattr(os, "getgid", None)
+    if getuid is None or getgid is None:
+        return None
+    return f"{getuid()}:{getgid()}"
+
 
 def _compose_prefix(project_root: Path) -> list[str]:
-    return [
+    prefix = [
         "docker",
         "compose",
         "-f",
@@ -27,6 +45,10 @@ def _compose_prefix(project_root: Path) -> list[str]:
         "--user",
         "0:0",
     ]
+    owner = host_owner()
+    if owner is not None:
+        prefix += ["-e", f"{OWNER_ENV}={owner}"]
+    return prefix
 
 
 def build_transcribe_cmd(project_root: Path, command: str, request: Path) -> list[str]:
@@ -108,6 +130,14 @@ def build_snapshot_batch_cmd(
         f"-filter_complex {shlex.quote(f'ssim=stats_file={stats_out}')} -f null - || true"
         for first, last, stats_out in ssim_jobs
     ]
+    # Hand every output back to the host user (see `OWNER_ENV`). Missing
+    # files (a failed seek) only make chown complain; the rest still change.
+    outputs = [out for _, _, out in jobs] + [stats for _, _, stats in ssim_jobs]
+    if outputs:
+        quoted = " ".join(shlex.quote(o) for o in outputs)
+        lines.append(
+            f'[ -n "${{{OWNER_ENV}:-}}" ] && chown "${OWNER_ENV}" -- {quoted} 2>/dev/null || true'
+        )
     script = "\n".join(lines) + "\n"
     argv = [
         *_compose_prefix(project_root),

@@ -70,6 +70,23 @@ def load_model(model: str):
     return WhisperModel(find_model(model), device="cuda", compute_type="float16")
 
 
+def _give_to_owner(path: str) -> None:
+    """chown *path* to ``$NAGARE_OWNER`` (host ``uid:gid``; the container is root).
+
+    Mirrors ``pipeline.external.OWNER_ENV`` -- this script never imports
+    nagare_clip. Without it the output is root-owned on the host.
+    """
+    owner = os.environ.get("NAGARE_OWNER", "")
+    try:
+        uid, gid = (int(x) for x in owner.split(":"))
+    except ValueError:
+        return
+    try:
+        os.chown(path, uid, gid)
+    except OSError as exc:
+        print(f"whisper: could not chown {path}: {exc}", file=sys.stderr)
+
+
 def main(argv: list[str]) -> None:
     os.environ.setdefault("HF_HUB_OFFLINE", "1")
     with open(argv[0], encoding="utf-8") as f:
@@ -96,6 +113,7 @@ def main(argv: list[str]) -> None:
                 f,
                 ensure_ascii=False,
             )
+        _give_to_owner(src["out"])
 
 
 if __name__ == "__main__":

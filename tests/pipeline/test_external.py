@@ -1,5 +1,6 @@
 """Tests for external (docker/blender) command construction."""
 
+import subprocess
 from pathlib import Path
 
 from nagare_clip.config import get_effective_config
@@ -172,7 +173,7 @@ def test_build_snapshot_batch_cmd_each_job_tolerates_failure():
     ]
     script = build_snapshot_batch_cmd(Path("/proj"), jobs, 960).script
     lines = [line for line in script.splitlines() if line.strip()]
-    assert len(lines) == len(jobs)
+    assert len(lines) == len(jobs) + 1  # + the closing chown
     for line in lines:
         assert line.rstrip().endswith("|| true")
 
@@ -213,11 +214,54 @@ def test_build_snapshot_batch_cmd_appends_ssim_jobs_after_extraction():
     ]
     script = build_snapshot_batch_cmd(Path("/proj"), jobs, 960, ssim_jobs=ssim_jobs).script
     lines = script.splitlines()
-    assert len(lines) == 2
+    assert len(lines) == 3
     assert "-frames:v 1" in lines[0]  # extraction first
     assert "ssim=stats_file=" in lines[1]  # comparison after
     assert lines[1].endswith("|| true")
     assert "-f null" in lines[1]
+
+
+def test_build_snapshot_batch_cmd_chowns_every_output_last():
+    """The container runs as root: without a final chown, frames and SSIM
+    stats are root-owned on the host and a later host write fails."""
+    from nagare_clip.pipeline.external import OWNER_ENV, build_snapshot_batch_cmd
+
+    jobs = [("in.mp4", 1.0, "/output/gap_context/frames/v/a b.jpg")]
+    ssim_jobs = [("/x.jpg", "/y.jpg", "/output/gap_context/frames/v/ssim.txt")]
+    script = build_snapshot_batch_cmd(Path("/proj"), jobs, 960, ssim_jobs=ssim_jobs).script
+    last = script.splitlines()[-1]
+    assert last.startswith(f'[ -n "${{{OWNER_ENV}:-}}" ] && chown "${OWNER_ENV}" -- ')
+    assert "'/output/gap_context/frames/v/a b.jpg'" in last
+    assert "/output/gap_context/frames/v/ssim.txt" in last
+    assert last.endswith("|| true")
+
+
+def test_build_snapshot_batch_cmd_chown_changes_ownership_via_sh(tmp_path, monkeypatch):
+    """Run the generated chown line through a real sh: with the owner set to
+    the current uid:gid it succeeds, and with it unset it is a no-op."""
+    import os
+
+    from nagare_clip.pipeline.external import OWNER_ENV, build_snapshot_batch_cmd
+
+    out = tmp_path / "f.jpg"
+    out.write_bytes(b"x")
+    script = build_snapshot_batch_cmd(Path("/proj"), [("in.mp4", 1.0, str(out))], 960).script
+    chown_line = script.splitlines()[-1]
+    env = {**os.environ, OWNER_ENV: f"{os.getuid()}:{os.getgid()}"}
+    subprocess.run(["sh", "-c", chown_line], check=True, env=env)
+    env.pop(OWNER_ENV)
+    subprocess.run(["sh", "-c", chown_line], check=True, env=env)
+
+
+def test_compose_prefix_passes_host_owner(monkeypatch):
+    import os
+
+    from nagare_clip.pipeline import external
+
+    prefix = external._compose_prefix(Path("/proj"))
+    assert prefix[-2:] == ["-e", f"{external.OWNER_ENV}={os.getuid()}:{os.getgid()}"]
+    monkeypatch.setattr(external, "host_owner", lambda: None)
+    assert "-e" not in external._compose_prefix(Path("/proj"))
 
 
 def test_build_snapshot_batch_cmd_no_ssim_jobs_is_byte_identical():

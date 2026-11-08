@@ -26,7 +26,12 @@ runtime behavior.
 - `external.py` — the subprocess boundaries of the pipeline: the `transcribe/`
   uv subproject (Silero VAD for audio_silence, Haas-ja ASR for transcription;
   no Docker), the whisperx Docker image (the gap_context/publish frame
-  snapshots) and headless Blender.
+  snapshots, the whisper worker) and headless Blender.
+  Containers run as root (`--user 0:0`); `_compose_prefix()` passes the host
+  `uid:gid` as `-e NAGARE_OWNER=…` (`OWNER_ENV`, `host_owner()`), and every
+  container step `chown`s what it wrote to it — the snapshot batch's last line,
+  the whisper worker's `_give_to_owner()` — so no output is root-owned on the
+  host (a root-owned file once blocked the host-side transcription rewrite).
   `build_transcribe_cmd()`, `build_snapshot_batch_cmd()`, and
   `build_blender_cmd()` are pure functions
   returning command lines (testable without Docker/Blender installed;
