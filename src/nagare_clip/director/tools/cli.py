@@ -1,4 +1,4 @@
-"""``python -m nagare_clip.director.tools {view,dump,preview,write}``.
+"""``python -m nagare_clip.director.tools {view,dump,preview,transcript,write}``.
 
 Deterministic, no LLM call.  Every subcommand takes ``--config`` (repeatable,
 merged left to right like the pipeline's) and reads the project's output dir
@@ -22,6 +22,7 @@ from nagare_clip.director.checks import order_segments
 from nagare_clip.director.files import write_ops, write_order, write_plan
 from nagare_clip.director.load import VIEW_HEADER, project_context
 from nagare_clip.director.ops import keep_limit_note, max_keep_lines
+from nagare_clip.director.played import played_transcript
 from nagare_clip.director.preview import edit_state, edit_summary
 from nagare_clip.director.tools.project import (
     Project,
@@ -193,18 +194,32 @@ def _resolve_sources(project: Project, values: list[str] | None) -> set[int] | N
     return out
 
 
-def cmd_preview(project: Project, args: argparse.Namespace) -> int:
+def _edit_in_force(project: Project, edit_arg: str | None):
+    """``(ops, order, plan, problems)``: the files on disk, or the candidate
+    *edit_arg* names (its problems listed; only the ops that passed kept)."""
     state = current_state(project)
-    problems: list[Problem] = []
-    if args.edit is None:
-        ops, order, plan = state.ops, state.order, state.plan
+    if edit_arg is None:
         for note in state.unmapped:
             print(f"warning: does not map onto the view, left out: {note}", file=sys.stderr)
-    else:
-        edit, problems = _validate(project, _read_edit(args.edit))
-        ops = to_source(project.view, edit)
-        order = edit.order or []
-        plan = edit.plan if edit.plan is not None else state.plan
+        return state.ops, state.order, state.plan, []
+    edit, problems = _validate(project, _read_edit(edit_arg))
+    plan = edit.plan if edit.plan is not None else state.plan
+    return to_source(project.view, edit), edit.order or [], plan, problems
+
+
+def _finish(problems: list[Problem], what: str) -> int:
+    if problems:
+        print(
+            f"\n(the {what} above shows only the ops that passed their own checks)",
+            file=sys.stderr,
+        )
+        _print_problems(problems)
+        return 1
+    return 0
+
+
+def cmd_preview(project: Project, args: argparse.Namespace) -> int:
+    ops, order, plan, problems = _edit_in_force(project, args.edit)
     only = _resolve_sources(project, args.source)
     if args.summary:
         text = edit_summary(
@@ -227,14 +242,14 @@ def cmd_preview(project: Project, args: argparse.Namespace) -> int:
             focus=args.lines,
         )
     print(text)
-    if problems:
-        print(
-            "\n(the preview above shows only the ops that passed their own checks)",
-            file=sys.stderr,
-        )
-        _print_problems(problems)
-        return 1
-    return 0
+    return _finish(problems, "preview")
+
+
+def cmd_transcript(project: Project, args: argparse.Namespace) -> int:
+    ops, order, _plan, problems = _edit_in_force(project, args.edit)
+    only = _resolve_sources(project, args.source)
+    print(played_transcript(project.view, project.transcripts, ops, order=order, only=only))
+    return _finish(problems, "transcript")
 
 
 def write_edit(project: Project, edit: Edit) -> list[Path]:
@@ -364,6 +379,28 @@ def build_parser() -> argparse.ArgumentParser:
         "captions and problems stay whole-video",
     )
     p.set_defaults(func=cmd_preview)
+
+    p = sub.add_parser(
+        "transcript",
+        parents=[common],
+        help="Print the transcript as the finished video plays it (writes nothing)",
+        description=(
+            "Print every line that still plays, in playback order, with the edit "
+            "ops applied and the captions under their lines; a cut or a timelapse "
+            "is one marker where its lines were. Read it top to bottom to check "
+            "that each line still follows from the one before. With --edit, "
+            "shows that candidate instead of the files on disk, and lists its "
+            "problems (exit 1). Never writes."
+        ),
+        epilog=EDIT_HELP,
+    )
+    p.add_argument("--edit", help="Candidate edit JSON file, or - for stdin")
+    p.add_argument(
+        "--source",
+        action="append",
+        help="Only this source ([k] number or stem; repeatable)",
+    )
+    p.set_defaults(func=cmd_transcript)
 
     p = sub.add_parser(
         "write",

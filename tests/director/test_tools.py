@@ -685,3 +685,88 @@ def test_preview_lines_narrows_to_ops_in_range(project, capsys):
 def test_preview_unknown_source_is_an_error(project, capsys):
     err = _run(capsys, "preview", "--config", _cfg(project), "--source", "zzz", code=2).err
     assert "unknown source 'zzz'" in err
+
+
+# --- transcript: the edit as the viewer hears it ---------------------------------
+
+
+def _transcript(capsys, project, edit=None, *extra, code=0):
+    argv = ["transcript", "--config", _cfg(project), *extra]
+    if edit is not None:
+        argv += ["--edit", _edit_file(project, edit)]
+    return _run(capsys, *argv, code=code)
+
+
+def test_transcript_without_ops_is_every_speech_line_in_order(project, capsys):
+    out = _transcript(capsys, project).out
+    body = out.split("▶ [1] a", 1)[1]
+    assert body.index("1: aの1行目") < body.index("3: aの2行目") < body.index("6: bの2行目")
+    # A dropped silence is not heard, so it is not listed.
+    assert "[silent" not in body
+
+
+def test_transcript_plays_the_order_and_leaves_out_cut_and_timelapsed_speech(project, capsys):
+    out = _transcript(capsys, project, GOOD).out
+    assert out.index("5: bの1行目") < out.index("6: bの2行目") < out.index("⏩ timelapse")
+    # Line 4 is cut and lines 1-3 are timelapsed: their words are not heard.
+    for gone in ("aの1行目", "aの2行目", "aの3行目"):
+        assert gone not in out
+    assert "✂ cut line 4" in out
+    assert "⏩ timelapse lines 1-3 x6.0 「作業中」" in out
+    # The overlay's caption is shown under the line it starts on.
+    assert out.index("5: bの1行目") < out.index("「結果」") < out.index("6: bの2行目")
+    # The reorder is visible as a jump between the blocks.
+    assert out.index("▶ [2] b") < out.index("▶ [1] a")
+
+
+def test_transcript_applies_edit_ops(project, capsys):
+    edit = {
+        "plan": PLAN,
+        "ops": [{"type": "edit", "lines": [5, 5], "old": "1行", "new": "最初の行"}],
+    }
+    out = _transcript(capsys, project, edit).out
+    assert "5: bの最初の行目" in out
+    assert "bの1行目" not in out
+
+
+def test_transcript_shows_a_kept_silence(project, capsys):
+    edit = {"plan": PLAN, "ops": [{"type": "keep", "lines": [1, 2]}]}
+    out = _transcript(capsys, project, edit).out
+    assert "2: [silent " in out
+
+
+def test_transcript_marks_a_cut_where_the_seam_is(project, capsys):
+    edit = {"plan": PLAN, "ops": [{"type": "cut", "lines": [3, 3]}]}
+    out = _transcript(capsys, project, edit).out
+    assert out.index("1: aの1行目") < out.index("✂ cut line 3") < out.index("4: aの3行目")
+    assert "aの2行目" not in out
+
+
+def test_transcript_of_files_on_disk_and_problems(project, capsys):
+    _run(capsys, "write", "--config", _cfg(project), "--edit", _edit_file(project, GOOD))
+    out = _transcript(capsys, project).out
+    assert "✂ cut line 4" in out and "aの3行目" not in out
+    edit = dict(GOOD, ops=[*GOOD["ops"], {"type": "speed", "lines": [6, 6], "factor": 2}])
+    res = _transcript(capsys, project, edit, code=1)
+    assert "✂ cut line 4" in res.out
+    assert "'speed' op [6, 6] is not an operation" in res.err
+
+
+def test_transcript_source_narrows(project, capsys):
+    out = _transcript(capsys, project, None, "--source", "b").out
+    assert "bの1行目" in out and "aの1行目" not in out
+
+
+def test_transcript_mild_speed_keeps_its_words(project):
+    """A hand-written speed under the unintelligible threshold is still heard."""
+    from nagare_clip.config import get_effective_config
+    from nagare_clip.director.played import played_transcript
+
+    proj = load_project(get_effective_config([project / "cfg.yml"], {}))
+    ops = {
+        2: [DirectorOp(type="speed", lines=(1, 1), factor=1.5)],
+        1: [DirectorOp(type="speed", lines=(1, 1), factor=3.0)],
+    }
+    out = played_transcript(proj.view, proj.transcripts, ops)
+    assert "5: bの1行目  (x1.5)" in out
+    assert "aの1行目" not in out and "⏩ speed line 1 x3.0" in out

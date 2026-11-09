@@ -29,8 +29,8 @@ it:
 ## The tools (`src/nagare_clip/director/tools/`, no LLM call)
 
 ```
-./scripts/director_tools.sh {view,dump,preview,write} --config <yml> [...]
-uv run python -m nagare_clip.director.tools {view,dump,preview,write} ...
+./scripts/director_tools.sh {view,dump,preview,transcript,write} --config <yml> [...]
+uv run python -m nagare_clip.director.tools {view,dump,preview,transcript,write} ...
 ```
 
 `--config` is repeatable and deep-merged like the pipeline's. All line numbers
@@ -52,6 +52,7 @@ transcript rather than splitting `""` into a phantom line).
 | `view [--lines A-B] [--no-context]` | brief (`brief.format_brief`), `ops.keep_limit_note` (the cap, and that touching keeps count as one), `project_context_block`, a source index — one row per source with its line range and its default runtime, or `default unknown — <why>` (`project.runtime_status()`: no sentence_split JSON, segment count ≠ transcript line count, or a line without start/end) — and the whole-video default runtime, or `unknown` naming the source(s); never omitted silently, `VIEW_HEADER`, `DisplayView.render(first, last)` | nothing |
 | `dump` | `director/` as one edit file in display numbering (`plan`, `order` when not shooting order, `ops`) — revising from it preserves a reorder | nothing |
 | `preview [--edit FILE\|-] [--summary [--min-run S]] [--lines A-B] [--source k]` | `preview.edit_state()` over the files on disk or a candidate edit: plan, per-op playback, segment runs, the video as it plays with seams, captions in playback order, whole-video runtime. `--summary` prints `preview.edit_summary()` instead — per-source default → edited runtime, the whole-video total, every `timeline_runs()` run in playback order (`--min-run S` hides runs under S on-screen seconds and counts them; cuts always shown), the captions in playback order — about a screenful, for every iteration. `--lines A-B` / `--source k` (index or stem, repeatable) narrow the per-segment detail (or the summary's run list) via `edit_state(only=, focus=)` / `preview_segment(focus=)`; totals, captions and problems stay whole-video. Nothing is re-modelled: the summary's figures are `segment_preview()`'s, and with no narrowing `edit_state()` prints the whole edit. A candidate's problems go to stderr and exit 1; only the ops that passed their own checks are previewed | nothing |
+| `transcript [--edit FILE\|-] [--source k]` | `director.played.played_transcript()`: the finished video as text, in playback order. Every line that plays is `N: text` with its `edit` ops applied (`(edited)`; an op whose `old` no longer occurs exactly once is left unapplied, as guided_edit leaves it) and its captions under it; a run of `cut` is one `✂ cut lines a-b` marker and a run sped at `UNINTELLIGIBLE_FACTOR` or faster one `⏩` marker (factor, caption, on-screen seconds), neither quoting the words; a silence line is listed only in a `keep` run; a mild hand-written speed shows `(xF)`. A new `▶ [k]` heading starts at each source and at each jump of the order. Built from `segment_preview()`'s `timeline_runs()` and captions, so it cannot disagree with `preview`; an untimed source is listed without its ops under a note. Why: an edit whose cuts were each right on their own left lines that no longer followed, and nothing showed the surviving lines next to each other. Candidate problems → stderr, exit 1, as `preview` | nothing |
 | `write --edit FILE\|-` | validates; on any problem prints them **all** (stderr, exit 1) and writes nothing; else writes every `{stem}_director.json` (empty list included), and `order.json`/`plan.md` when the edit carries them | director files |
 
 `DisplayView.render()` gained an optional

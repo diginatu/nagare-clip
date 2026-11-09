@@ -56,3 +56,15 @@ order, and `whole video so far: default X → with the ops Y`.
 (`1x`, `1x+silence`, `timelapse` with its factor and caption, `cut`, each with
 its on-screen seconds and display lines) and the captions; `--lines`/`--source`
 limit the detail to part of the video.
+
+`transcript` prints the finished video as text, in playback order, under one
+`▶ [k] stem` heading per stretch (a new heading also marks a jump the order
+makes). A line that plays is `N: text` with its display number, its `edit`
+ops applied (`(edited)` after it) and its captions under it as
+`+「text」 seconds`; a mild hand-written speed shows `(xF)`. A cut is
+`✂ cut lines a-b`, a timelapse (or any speed of 2.0x or more)
+`⏩ timelapse lines a-b xF 「caption」, S s on screen — its speech is not
+followed`; neither prints the words, because the viewer does not hear them.
+A silence line is listed only inside a keep, where it plays; elsewhere it is
+dropped and left out. A source with no line timings is listed without its
+ops, under a note saying so.

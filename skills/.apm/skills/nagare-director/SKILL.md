@@ -40,6 +40,7 @@ The tools are deterministic (no LLM call):
 <nagare-clip>/scripts/director_tools.sh view    --config A.yml [--config B.yml] [--lines A-B] [--no-context]
 <nagare-clip>/scripts/director_tools.sh dump    --config ...              # files on disk -> edit JSON
 <nagare-clip>/scripts/director_tools.sh preview --config ... [--edit FILE|-] [--summary [--min-run S]] [--lines A-B] [--source k]
+<nagare-clip>/scripts/director_tools.sh transcript --config ... [--edit FILE|-] [--source k]
 <nagare-clip>/scripts/director_tools.sh write   --config ... --edit FILE|-
 ```
 
@@ -57,6 +58,12 @@ The tools are deterministic (no LLM call):
   `--lines A-B` or `--source k` — totals, captions and problems stay
   whole-video. `--edit` previews a candidate without writing anything and
   lists its problems (exit 1).
+- `transcript` — the edit as the viewer **hears** it: every line that still
+  plays, in playback order, with `edit` ops applied and captions under their
+  lines; a cut is one `✂` marker and a timelapse one `⏩` marker where their
+  lines were, and a silence line appears only where an op keeps it. It is
+  for checking that the finished video still makes sense, which no other
+  output shows. `--edit` and `--source` work as in `preview`.
 - `write` — validates the whole edit; on **any** problem it prints them all
   and writes nothing (exit 1). Otherwise it writes `{stem}_director.json`
   for every source and `director/order.json`, and `director/plan.md` when
@@ -102,15 +109,29 @@ edits in a scratch file in the project's output directory (e.g.
    only at the end. For any op whose playback you are unsure of, read the
    detail with `preview --edit <file> --lines A-B`: the usual mistake is a
    span that opens one line too early.
-7. **Show the user the numbers that matter** — from `--summary`: default ->
+7. **Read the result as the viewer, before showing it to the user.** When
+   the draft is ready to show, run `transcript --edit <file>` once and **read
+   it top to bottom**: does every line still follow from the one before it?
+   A cut can be right on its own and still leave a reply to a question that
+   is gone, a "so"/"then"/"this" pointing at nothing, a result before its
+   setup, or a promise that is never paid off. A line that no longer follows
+   names the `✂`/`⏩` just above it — widen, narrow or drop that op (or
+   bridge with a caption), then re-read only the sources you changed
+   (`transcript --edit <file> --source k`). It prints the whole video, so do
+   not run it after every small change while drafting.
+8. **Show the user the numbers that matter** — from `--summary`: default ->
    edited runtime against the target, each timelapse's on-screen seconds and
    factor, what the cuts remove, the captions in playback order, and every
-   seam if the order moved anything. Summarise; do not paste the preview
+   seam if the order moved anything, and any place where `transcript` shows
+   the story jumping that you chose to keep. Summarise; do not paste the preview
    unless asked.
-8. **Iterate** on their feedback: edit the file, `preview --summary` again
-   (detail only where needed), report again. Update the plan when the
-   footage proves it wrong.
-9. **Write** with `write --edit <file>` once the user is happy, then tell them
+9. **Iterate** on their feedback: edit the file, `preview --summary` again
+   (detail only where needed), and before reporting back re-read
+   `transcript --source k` for each source whose ops changed. Update the plan
+   when the footage proves it wrong.
+10. **Write** with `write --edit <file>` once the user is happy — if the ops
+   changed since your last full `transcript` read, read the whole of it once
+   more first — then tell them
    to resume the pipeline from guided_edit — their wrapper with
    `--from-stage guided_edit`, or
    `<nagare-clip>/scripts/run_pipeline.sh --config ... --from-stage guided_edit`.
