@@ -5,6 +5,95 @@ See the [stage overview in AGENTS.md](../../AGENTS.md#blender--blender-vse-layou
 Retiming/speed-strip behaviour is documented alongside the `<speed>` marker in
 [intervals.md](intervals.md#keepspeedoverlaycut-markers).
 
+## Proxies, built by ffmpeg (`blender/proxy.py`)
+
+Blender builds a strip's proxy only when a person selects it and presses
+Rebuild Proxy (there is no "build every proxy" in the UI), and its builder
+encodes on the CPU. The proxy is an ordinary video file, so the `blender`
+stage writes it itself **before** Blender starts (`stages._build_proxies`),
+when `blender.use_proxy` and `blender.proxy_build` (both default true), one
+`proxy_<proxy_size>.avi` per source. Blender finds it where it looks and uses
+it; `proxy.use_overwrite` stays false, so it never rebuilds over it.
+
+What Blender 5.2.2 writes — **measured, not documented** by Blender (its manual
+covers the settings, not the file):
+
+- `<source dir>/BL_proxy/<source file name>/proxy_<N>.avi` (per-strip storage),
+  wherever the `.blend` lives — beside the **original** media, which is what
+  the stage hands Blender;
+- an **MP4** container holding **H.264** (High, yuv420p) despite the `.avi`
+  name — the MJPEG/AVI proxies of older Blender are gone — no B-frames,
+  keyframe interval 10 (x264 `keyint=10`), x264 crf 25 at the default
+  quality 50, **no audio**; Blender 5.x has no timecode index files, so the
+  video is all there is;
+- the source's frame rate and **exact timestamps** — a variable-rate phone
+  clip stays variable, a first frame after 0 stays there (a frame with a
+  duplicate timestamp is dropped) — hence `-copyts -fps_mode passthrough
+  -enc_time_base demux`: without them ffmpeg moves the first frame to 0 and
+  snaps every timestamp to a 1/frame-rate grid; the frame **unrotated**, with the
+  source's display-matrix rotation copied as metadata (so `-noautorotate`);
+- `N` percent of the source size, `int(W * N / 100)` rounded **up** to even
+  (1918x1078 at 75% → 1438x808, at 25% → 480x270).
+
+Blender's x264 settings, read from the stream's SEI: `veryfast` plus
+`-tune fastdecode` (`cabac=0`, deblocking off, `weightp=0`) — chosen for a
+cheap decode, which is what a proxy is for.
+
+`proxy.encode_cmd()` reproduces that on two independent axes:
+
+- `blender.proxy_decode`: `cuda` (default) — NVDEC (`-hwaccel cuda
+  -hwaccel_output_format cuda`, which works for any codec, unlike the
+  per-codec `hevc_cuvid`; measured identical speed) and `scale_cuda` — or
+  `cpu`.
+- `blender.proxy_encoder`: `libx264` (default) with Blender's exact settings,
+  frames brought down by `hwdownload`; or `h264_nvenc` (`p1`, `-cq 34 -b:v 0`,
+  `-coder cavlc`), which reads the CUDA frames directly and names no
+  `-pix_fmt` (that demands a CPU conversion of a CUDA surface and fails).
+
+Why that default — measured on 60 s of a 1080p60 HEVC phone clip (RTX 3060,
+16 cores; decode = single-thread decode of the proxy, the scrubbing cost):
+
+| decode + encode | build | size | decode | SSIM |
+|---|---|---|---|---|
+| cpu + libx264 (Blender's own) | 9.3 s | 66 MB | 4.3 s | 0.971 |
+| **cuda + libx264** | **6.5 s** | 66 MB | **4.3 s** | 0.971 |
+| cuda + nvenc cq 34 cavlc | 5.4 s | 57 MB | 6.3 s | 0.971 |
+| cuda + nvenc cq 25 (cabac) | 4.9 s | 146 MB | 15.2 s | 0.987 |
+
+cuda + libx264 writes Blender's file 1.4x faster. NVENC builds a little
+faster still but its proxy scrubs ~1.5x slower (no deblocking switch; CAVLC
+only narrows the gap), and the build happens once while scrubbing happens all
+edit long. At the same `-cq` NVENC spends far more bits than crf 25 does;
+`cq 34` is where its SSIM meets crf 25's.
+
+**`tests/blender/test_proxy_matches_blender.py`** has real Blender build a
+proxy of a rotated clip and compares every stream property, the keyframe
+positions and the x264 settings with ours, and the timestamps on a
+variable-rate clip (cpu + libx264, since CI has no GPU) — it is the test that
+fails when a Blender upgrade changes the format.
+
+- **Why bother.** Blender's own builder is not slow (a 45 s 1080p60 HEVC
+  phone clip: 7.6 s at 100%, 5.1 s at 25% on 16 cores). The gain is that
+  every source gets its proxy with no clicking, plus NVDEC for the decode,
+  which is the bottleneck (6.5 min clip: 67 s cpu → 33 s with the GPU). The proxy itself pays
+  for scrubbing: that clip has a keyframe every 60 frames of HEVC, the proxy
+  every 10 frames of H.264 (169 MB → 39 MB at 100%, 5.8 MB at 25%).
+- **Host ffmpeg**, like host `blender`: the whisperx image has no NVDEC/NVENC (its
+  compose service grants `capabilities: [gpu]`, not `video`) and mounts only
+  the input dir, while the proxy must sit beside each original.
+- A proxy is skipped while it is at least as new as its source
+  (`is_fresh()`); a replaced source rebuilds it. The encode goes to
+  `proxy_<N>.nagare_part.avi` and is renamed, so Blender never reads half a file.
+- Any failing GPU attempt (no GPU, driver, NVENC session limit) is retried
+  once as cpu + libx264 — Blender's own build; when that fails too, or ffprobe cannot read the source, the
+  stage **warns and carries on** — Blender plays the original without a proxy.
+- `scene.set_preview_proxy_size()` sets every sequencer space's
+  `proxy_render_size` to `PROXY_<proxy_size>`: the Video_Editing template
+  previews at `PROXY_100`, so any other size would look for a file never built.
+- Not verified headlessly: that the preview *displays* the file (no GL in a
+  background Blender). Check it by hand: overwrite a proxy with a solid-colour
+  clip of the same shape and open the `.blend` — the preview turns that colour.
+
 - `place_strips()` opens the source once as a muted template video+sound pair on high channels and duplicates it — a `new_movie()` per interval would open an FFmpeg decoder per strip (measured: 300 intervals, 16s that way vs. 0.8s by duplicating). Two things keep that duplication from going quadratic, because `sequencer.duplicate`/`connect` both cost more per call the more strips the scene already holds:
   - **The template pair is connected once, before any duplication** (`sequencer.connect`), and every copy inherits a connection to *its own* audio copy — never to the seed's. So one connect op covers all pairs instead of one per interval (verified for 4000 pairs), and `_duplicate_pairs()` uses that inherited connection to pair each new video with its own sound rather than trusting collection order.
   - **`allocate_pairs()` grows the pool by doubling**: each round duplicates the whole pool so far (clipped to what is still needed), reaching N pairs in `ceil(log2(N)) + 1` operator calls instead of N. Every remaining per-interval step is plain property assignment — no operator, no full-collection selection scan.

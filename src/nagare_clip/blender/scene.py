@@ -20,6 +20,20 @@ def reset_scene() -> bpy.types.Scene:
     return scene
 
 
+def set_preview_proxy_size(size: int) -> None:
+    """Make every sequencer space preview through the ``proxy_<size>`` proxy.
+
+    The Video_Editing template previews at PROXY_100, so any other
+    ``blender.proxy_size`` would look for a proxy that was never built and
+    decode the original instead.
+    """
+    for screen in bpy.data.screens:
+        for area in screen.areas:
+            for space in area.spaces:
+                if space.type == "SEQUENCE_EDITOR":
+                    space.proxy_render_size = f"PROXY_{size}"
+
+
 def load_source_metadata(source_path: Path) -> tuple[float, int, int]:
     clip = bpy.data.movieclips.load(str(source_path))
     fps = float(clip.fps) if clip.fps and clip.fps > 0 else FALLBACK_FPS

@@ -1077,3 +1077,73 @@ def test_text_filter_drops_hints_on_line_count_mismatch(tmp_path, monkeypatch, c
     st._text_filter_run(_ctx(tmp_path, cfg=_whisper_cfg(), stems=("a",)))
     assert seen == [None]
     assert "hint" in caplog.text.lower()
+
+
+# --- blender: proxies built by ffmpeg before Blender runs --------------------
+
+
+def _blender_ctx(tmp_path, **blender):
+    cfg = get_effective_config(None, {})
+    cfg["blender"].update(blender)
+    ctx = _ctx(tmp_path, cfg=cfg, stems=("a",))
+    (tmp_path / "a.mp4").write_bytes(b"video")
+    return ctx
+
+
+def _fake_media(monkeypatch, fail_encoders=()):
+    calls = []
+
+    def fake_run_command(cmd, **kwargs):
+        calls.append(cmd)
+        if cmd[0] == "ffmpeg":
+            if "-c:v" in cmd and cmd[cmd.index("-c:v") + 1] in fail_encoders:
+                raise subprocess.CalledProcessError(1, cmd, stderr="boom")
+            from pathlib import Path
+
+            Path(cmd[-1]).write_bytes(b"proxy")
+
+    def fake_run_capture(cmd):
+        calls.append(cmd)
+        return "1920,1080\n"
+
+    monkeypatch.setattr(st, "run_command", fake_run_command)
+    monkeypatch.setattr(st, "run_capture", fake_run_capture)
+    return calls
+
+
+def test_blender_adapter_builds_proxy_before_blender(tmp_path, monkeypatch):
+    calls = _fake_media(monkeypatch)
+    by_name = {s.name: s for s in st.STAGES}
+    by_name["blender"].run(_blender_ctx(tmp_path, proxy_size=50))
+    tools = [c[0] for c in calls]
+    assert tools == ["ffprobe", "ffmpeg", "blender"]
+    # Default: NVDEC decode, Blender's x264 encode.
+    assert calls[1][calls[1].index("-hwaccel") + 1] == "cuda"
+    assert calls[1][calls[1].index("-c:v") + 1] == "libx264"
+    assert (tmp_path / "BL_proxy" / "a.mp4" / "proxy_50.avi").read_bytes() == b"proxy"
+
+
+def test_blender_adapter_proxy_settings_from_config(tmp_path, monkeypatch):
+    calls = _fake_media(monkeypatch)
+    by_name = {s.name: s for s in st.STAGES}
+    by_name["blender"].run(_blender_ctx(tmp_path, proxy_decode="cpu", proxy_encoder="h264_nvenc"))
+    (enc,) = [c for c in calls if c[0] == "ffmpeg"]
+    assert "-hwaccel" not in enc
+    assert enc[enc.index("-c:v") + 1] == "h264_nvenc"
+
+
+@pytest.mark.parametrize("blender", [{"use_proxy": False}, {"proxy_build": False}])
+def test_blender_adapter_no_proxy_build(tmp_path, monkeypatch, blender):
+    calls = _fake_media(monkeypatch)
+    by_name = {s.name: s for s in st.STAGES}
+    by_name["blender"].run(_blender_ctx(tmp_path, **blender))
+    assert [c[0] for c in calls] == ["blender"]
+
+
+def test_blender_adapter_proxy_failure_does_not_stop_blender(tmp_path, monkeypatch, caplog):
+    calls = _fake_media(monkeypatch, fail_encoders={"libx264"})
+    by_name = {s.name: s for s in st.STAGES}
+    by_name["blender"].run(_blender_ctx(tmp_path))
+    assert calls[-1][0] == "blender"
+    assert not (tmp_path / "BL_proxy" / "a.mp4" / "proxy_100.avi").exists()
+    assert "proxy" in caplog.text.lower()

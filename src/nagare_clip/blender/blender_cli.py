@@ -19,7 +19,7 @@ import bpy
 
 from nagare_clip.blender.frames import ordered_sources, placement_order
 from nagare_clip.blender.render_settings import apply_render_settings
-from nagare_clip.blender.scene import load_source_metadata, reset_scene
+from nagare_clip.blender.scene import load_source_metadata, reset_scene, set_preview_proxy_size
 from nagare_clip.blender.timeline import (
     OVERLAY_CHANNEL,
     SPEED_MARK_CHANNEL,
@@ -139,6 +139,8 @@ def _build(args: argparse.Namespace) -> None:
         raise ValueError("No segments to place: the manifest names no known source.")
 
     scene = reset_scene()
+    if cfg["blender"]["use_proxy"]:
+        set_preview_proxy_size(cfg["blender"]["proxy_size"])
 
     # Scene metadata comes from whatever plays FIRST, which a reorder can change.
     first_fps, first_width, first_height = load_source_metadata(path_by_stem[segments[0][0]])

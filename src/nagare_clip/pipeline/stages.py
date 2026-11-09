@@ -16,6 +16,7 @@ from pathlib import Path
 from nagare_clip.audio_silence.cuts_file import read_cuts
 from nagare_clip.audio_silence.run import run_audio_silence
 from nagare_clip.blender.frames import ordered_sources
+from nagare_clip.blender.proxy import build_proxy
 from nagare_clip.blender.warnings_file import WARNINGS_FILENAME
 from nagare_clip.cut_report.report import build_cut_report
 from nagare_clip.director import files as director_files
@@ -53,6 +54,7 @@ from nagare_clip.pipeline.external import (
     build_snapshot_batch_cmd,
     build_transcribe_cmd,
     build_whisper_cmd,
+    run_capture,
     run_command,
     run_magick,
 )
@@ -813,8 +815,45 @@ def _intervals_required(ctx: PipelineContext) -> list[Path]:
 # --- blender -----------------------------------------------------------------
 
 
+def _build_proxies(ctx: PipelineContext) -> None:
+    """Write each source's VSE proxy with host ffmpeg, before Blender opens it.
+
+    Blender builds proxies only on a person's Rebuild Proxy click, on the CPU;
+    the file is a plain video, so it is made here, on the GPU when it can be
+    (`blender.proxy_decode`/`proxy_encoder`).  Host ffmpeg, like host
+    `blender`: the whisperx service has no NVDEC/NVENC access.  A failure only
+    warns -- Blender works without a proxy.
+    """
+    bcfg = ctx.cfg["blender"]
+    if not (bcfg["use_proxy"] and bcfg["proxy_build"]):
+        return
+    size = bcfg["proxy_size"]
+
+    def run(cmd: list[str]) -> None:
+        run_command(cmd, capture_stderr=True)
+
+    for src in ctx.sources:
+        result = build_proxy(
+            src.abs_path,
+            size,
+            decode=bcfg["proxy_decode"],
+            encoder=bcfg["proxy_encoder"],
+            run=run,
+            probe=run_capture,
+        )
+        if result.status == "built":
+            print(f"[blender] proxy {size}%: {src.relative} ({result.method})")
+        elif result.status == "failed":
+            logging.warning(
+                "blender: no proxy for %s (Blender will play the original): %s",
+                src.relative,
+                result.message,
+            )
+
+
 def _blender_run(ctx: PipelineContext) -> None:
     print("[blender] VSE project generation")
+    _build_proxies(ctx)
     # Named after the first source in SHOOTING order, so a reorder does not
     # rename the project file.
     output_blend = ctx.stage_dir("blender") / f"{ctx.stems[0]}_edited.blend"

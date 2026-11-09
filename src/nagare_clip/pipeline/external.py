@@ -1,8 +1,8 @@
 """External-process command construction and execution.
 
 The genuine process boundaries of the pipeline: the whisperx Docker image
-(ffmpeg snapshots), the ``transcribe/`` worker (Silero VAD, Haas ASR) and
-headless Blender. Command lines are built by pure functions so they are testable
+(ffmpeg snapshots), the ``transcribe/`` worker (Silero VAD, Haas ASR), host
+ffmpeg/ffprobe (the Blender proxies, built on the GPU) and headless Blender. Command lines are built by pure functions so they are testable
 without Docker or Blender installed.
 """
 
@@ -206,6 +206,12 @@ def run_command(
             subprocess.run(cmd, check=True, env=env, stdout=subprocess.DEVNULL, stderr=f)
     else:
         subprocess.run(cmd, check=True, env=env)
+
+
+def run_capture(cmd: list[str]) -> str:
+    """Run a host tool (ffprobe) and return its stdout; stderr rides on the
+    `CalledProcessError` for the caller's warning."""
+    return subprocess.run(cmd, check=True, capture_output=True, text=True).stdout
 
 
 def run_magick(cmd: list[str]) -> str:

@@ -723,6 +723,22 @@ class BlenderConfig(BaseModel):
         True, description="Enable proxy on movie strips for smooth VSE playback"
     )
     proxy_size: int = Field(100, description="Proxy render size percentage: 25 | 50 | 75 | 100")
+    proxy_build: bool = Field(
+        True,
+        description="Build the proxy files with host ffmpeg before Blender runs "
+        "(Blender never builds them by itself); skipped while a proxy is newer "
+        "than its source",
+    )
+    proxy_decode: Literal["cuda", "cpu"] = Field(
+        "cuda",
+        description="Where the proxy build decodes and scales: cuda (NVDEC) | cpu",
+    )
+    proxy_encoder: Literal["libx264", "h264_nvenc"] = Field(
+        "libx264",
+        description="Proxy encoder: libx264 (Blender's own settings; cheapest to "
+        "scrub) | h264_nvenc (faster to build, ~1.5x heavier to scrub); any "
+        "failure retries with cpu + libx264",
+    )
     render: BlenderRenderConfig = Field(default_factory=BlenderRenderConfig)
     caption_style: CaptionStyleConfig = Field(default_factory=CaptionStyleConfig)
     overlay_style: OverlayStyleConfig = Field(default_factory=OverlayStyleConfig)

@@ -328,7 +328,7 @@ alongside Langfuse — the two are independent sinks.
 
 - Linux
 - NVIDIA GPU (CUDA) for the `transcription` stage (Haas-ja ASR); the VAD in `audio_silence` runs on CPU
-- `ffmpeg` on the host `PATH` (the `transcribe/` worker decodes audio with it)
+- `ffmpeg` on the host `PATH` (the `transcribe/` worker decodes audio with it, and the `blender` stage builds the VSE proxies with it — decoding on the NVIDIA GPU when it can, otherwise on the CPU)
 - Docker + Docker Compose with the NVIDIA Container Toolkit (used by `gap_context` and `publish` for frame snapshots, and by `whisper` for faster-whisper on the GPU)
 - Blender available as `blender`
 - ImageMagick available as `magick` (only needed for `render.enabled`, i.e. when the `render` stage composites thumbnails)
@@ -524,6 +524,22 @@ director:
   api_key: ""        # or set OPENAI_API_KEY in the environment
   api_base: ""       # leave empty for cloud providers
 ```
+
+### blender: Proxies
+
+Blender only builds a proxy when you select strips and press Rebuild Proxy, one
+batch at a time, on the CPU. With `blender.use_proxy` (default) the `blender`
+stage builds them itself before Blender starts, with the host ffmpeg: one
+`proxy_<proxy_size>.avi` per source, written where Blender looks for it
+(`BL_proxy/<file name>/` beside the source video), so the `.blend` opens with
+proxies ready. By default the video is decoded and scaled on the NVIDIA GPU
+(`blender.proxy_decode: cuda`) and encoded with x264 using Blender's own
+settings (`blender.proxy_encoder: libx264`) — the same file Blender would
+make, about 1.4x faster. `proxy_encoder: h264_nvenc` builds a little faster
+again, but its proxies are heavier to scrub. When a GPU build fails it is
+retried on the CPU, and if that fails too the run carries on without a
+proxy. A proxy newer than its source is reused; replace the source and it is
+rebuilt. Set `blender.proxy_build: false` to leave proxy building to Blender.
 
 ### blender.render: Render/Output Settings
 
