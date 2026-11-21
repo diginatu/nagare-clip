@@ -63,7 +63,8 @@ _BLUR_RE = re.compile(r"^\d{1,3}(?:\.\d+)?x\d{1,3}(?:\.\d+)?$")
 MIN_POINTSIZE, MAX_POINTSIZE = 8, 400
 MAX_STROKEWIDTH = 40
 LINE_KEYS = ("font", "pointsize", "fill", "stroke", "strokewidth")
-SET_KEYS = ("gravity", "offset", "shadow")
+SET_KEYS = ("gravity", "offset", "shadow", "line_gap")
+MAX_LINE_GAP = 400
 
 # A thumbnail line states which job it does, so a layout can follow a set of
 # one, two or three lines instead of the copy being padded to fill a template.
@@ -208,6 +209,10 @@ def _offset(value: Any) -> str | None:
     return value if isinstance(value, str) and _OFFSET_RE.match(value.strip()) else None
 
 
+def _line_gap(value: Any) -> int | None:
+    return _int_in(value, 0, MAX_LINE_GAP)
+
+
 def _blur(value: Any) -> str | None:
     return value.strip() if isinstance(value, str) and _BLUR_RE.match(value.strip()) else None
 
@@ -247,6 +252,8 @@ def set_style_problems(raw: Mapping[str, Any]) -> list[str]:
         )
     if "offset" in raw and _offset(raw["offset"]) is None:
         problems.append(f"offset {raw['offset']!r} is invalid: want like +56+62")
+    if "line_gap" in raw and _line_gap(raw["line_gap"]) is None:
+        problems.append(f"line_gap {raw['line_gap']!r} is invalid: want an int 0-{MAX_LINE_GAP}")
     if "shadow" in raw:
         shadow = raw["shadow"]
         if isinstance(shadow, Mapping):
@@ -583,7 +590,7 @@ def render_sets(
             "ImageMagick's default face draws nothing for a glyph it lacks"
         )
     canvas = (int(render_cfg.get("width", 1280)), int(render_cfg.get("height", 720)))
-    line_gap = int(render_cfg.get("line_gap", 12))
+    config_line_gap = int(render_cfg.get("line_gap", 12))
 
     def skip(index: int, reason: str) -> None:
         logger.warning("render: set %d not rendered: %s", index, reason)
@@ -607,6 +614,13 @@ def render_sets(
             for line in thumb_set.lines
         ]
         set_style = resolve_set_style(thumb_set.style, preset)
+        # A set's own gap overrides the config's (0 is a real value); an invalid
+        # one falls back like every other per-set key.
+        line_gap = (
+            gap
+            if (gap := _line_gap(thumb_set.style.get("line_gap"))) is not None
+            else config_line_gap
+        )
         try:
             metrics = parse_metrics(run(build_measure_cmd(styled)), expected=len(styled))
         except subprocess.CalledProcessError as e:

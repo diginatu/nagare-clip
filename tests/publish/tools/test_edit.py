@@ -251,3 +251,18 @@ def test_resolve_chapters_is_public_and_shared_with_validate_edit(project):
         min_chapter=5.0,
     )
     assert "chapters[0] (line 99): no such line (1-3)" in via_validate
+
+
+def test_line_gap_passes_validation_and_is_kept_on_the_set(tmp_path, project):
+    data = _edit()
+    data["thumbnails"][0]["line_gap"] = 30
+    edit, _, problems, _ = _run(tmp_path, project, data)
+    assert problems == []
+    assert edit is not None and edit.thumbnails[0]["line_gap"] == 30
+
+
+def test_a_bad_line_gap_is_a_problem(tmp_path, project):
+    data = _edit()
+    data["thumbnails"][0]["line_gap"] = 999
+    _, _, problems, _ = _run(tmp_path, project, data)
+    assert any("line_gap" in p for p in problems)

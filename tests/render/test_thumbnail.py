@@ -891,3 +891,64 @@ def test_zero_sets_still_clears_stale_thumbnails(tmp_path):
 def test_set_style_problems_reports_unknown_shadow_keys():
     problems = set_style_problems({"shadow": {"colour": "red", "blur": "0x6"}})
     assert problems == ["unknown style key 'colour'"]
+
+
+def _two_line_set(**style):
+    return ThumbSet(
+        lines=[ThumbLine("hook", "a", {}), ThumbLine("hook", "b", {})], style=dict(style)
+    )
+
+
+def _second_y(cmd):
+    return cmd[cmd.index("b", cmd.index("-annotate")) - 1]
+
+
+def test_a_sets_line_gap_overrides_the_config_gap(tmp_path):
+    _touch(tmp_path, "frames/a/1.000.jpg")
+    run = FakeRun()
+    render_sets([_two_line_set(line_gap=40)], [_shot()], CFG, tmp_path, tmp_path, run)
+    assert _second_y(run.cmds[1]) == "+56+192"  # 62 + 90 + 40
+
+
+def test_line_gap_zero_is_a_real_value(tmp_path):
+    _touch(tmp_path, "frames/a/1.000.jpg")
+    run = FakeRun()
+    render_sets([_two_line_set(line_gap=0)], [_shot()], CFG, tmp_path, tmp_path, run)
+    assert _second_y(run.cmds[1]) == "+56+152"
+
+
+def test_an_absent_line_gap_uses_the_config_gap(tmp_path):
+    _touch(tmp_path, "frames/a/1.000.jpg")
+    run = FakeRun()
+    render_sets([_two_line_set()], [_shot()], CFG, tmp_path, tmp_path, run)
+    assert _second_y(run.cmds[1]) == "+56+164"
+
+
+@pytest.mark.parametrize("bad", [-1, 401, "12", 1.5, True, None])
+def test_an_invalid_line_gap_falls_back_to_the_config_gap(tmp_path, bad):
+    _touch(tmp_path, "frames/a/1.000.jpg")
+    run = FakeRun()
+    render_sets([_two_line_set(line_gap=bad)], [_shot()], CFG, tmp_path, tmp_path, run)
+    assert _second_y(run.cmds[1]) == "+56+164"
+
+
+def test_the_height_warning_uses_the_sets_gap(tmp_path):
+    _touch(tmp_path, "frames/a/1.000.jpg")
+    cfg = {**CFG, "height": 250}  # block = 180 + gap + 62
+    tight = render_sets([_two_line_set(line_gap=0)], [_shot()], cfg, tmp_path, tmp_path, FakeRun())
+    roomy = render_sets([_two_line_set(line_gap=40)], [_shot()], cfg, tmp_path, tmp_path, FakeRun())
+    assert tight.warnings == []
+    assert len(roomy.warnings) == 1
+
+
+def test_set_style_problems_checks_line_gap():
+    assert set_style_problems({"line_gap": 0}) == []
+    assert set_style_problems({"line_gap": 400}) == []
+    for bad in (-1, 401, "12", 1.5, True):
+        problems = set_style_problems({"line_gap": bad})
+        assert len(problems) == 1 and "line_gap" in problems[0]
+
+
+def test_line_gap_survives_the_publish_json_round_trip():
+    data = {"thumbnail_copy": [{"lines": [{"text": "x"}], "line_gap": 30}]}
+    assert sets_from_dict(data)[0].style == {"line_gap": 30}
