@@ -878,3 +878,16 @@ def test_a_block_that_fits_has_no_warning(tmp_path):
     _touch(tmp_path, "frames/a/1.000.jpg")
     result = render_sets(_sets(1), [_shot()], CFG, tmp_path, tmp_path, FakeRun())
     assert result.warnings == []
+
+
+def test_zero_sets_still_clears_stale_thumbnails(tmp_path):
+    stale = tmp_path / "thumbnails" / "set1.jpg"
+    stale.parent.mkdir(parents=True)
+    stale.write_bytes(b"x")
+    render_sets([], [], CFG, tmp_path, tmp_path, FakeRun())
+    assert not stale.exists()
+
+
+def test_set_style_problems_reports_unknown_shadow_keys():
+    problems = set_style_problems({"shadow": {"colour": "red", "blur": "0x6"}})
+    assert problems == ["unknown style key 'colour'"]
