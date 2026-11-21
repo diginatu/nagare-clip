@@ -45,6 +45,11 @@ class PipelineContext:
     def llm_report_dir(self) -> Path:
         return self.output_dir / "llm_report"
 
+    @property
+    def blend_path(self) -> Path:
+        """Where the blender stage writes (or wrote) the deliverable."""
+        return self.stage_dir("blender") / f"{self.stems[0]}_edited.blend"
+
     def stage_dir(self, name: str) -> Path:
         return self.output_dir / name
 

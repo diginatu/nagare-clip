@@ -140,7 +140,7 @@ def main(argv: list[str] | None = None) -> int:
                 page = write_index(
                     ctx.output_dir,
                     cfg,
-                    blend=ctx.stage_dir("blender") / f"{ctx.stems[0]}_edited.blend",
+                    blend=ctx.blend_path,
                 )
                 print(f"Index: {page}")
             except Exception:

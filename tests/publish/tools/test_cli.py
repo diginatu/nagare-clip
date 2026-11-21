@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 from pathlib import Path
 
 import pytest
@@ -378,3 +379,35 @@ def test_frames_skips_a_malformed_stills_row_with_a_warning(setup, monkeypatch, 
     assert "stills.json row 0" in capsys.readouterr().err
     labels = [r["label"] for r in json.loads(path.read_text())]
     assert labels == ["keep me", "line 3 @0.5"]
+
+
+def _writable(project):
+    pub = project.ctx.stage_dir("publish")
+    project.ctx.cfg["publish"]["min_chapter_duration"] = 0.5
+    (pub / "frames/a").mkdir(parents=True)
+    (pub / "frames/a/1.500.jpg").write_bytes(b"x")
+
+
+def test_write_refreshes_output_index(setup, tmp_path):
+    project, _ = setup
+    _writable(project)
+    assert cli.main(["write", "--edit", _edit_file(tmp_path, GOOD)]) == 0
+    index = (project.ctx.output_dir / "index.md").read_text(encoding="utf-8")
+    row = next(ln for ln in index.splitlines() if "publish/publish.md" in ln)
+    assert re.search(r"\| \d\d-\d\d \d\d:\d\d \|$", row)  # an mtime, not —
+
+
+def test_render_refreshes_output_index(setup):
+    project, _ = setup
+    assert cli.main(["render"]) == 0
+    assert (project.ctx.output_dir / "index.md").is_file()
+
+
+def test_index_failure_only_warns(setup, tmp_path, monkeypatch, capsys):
+    _writable(setup[0])
+    def boom(*a, **k):
+        raise RuntimeError("nope")
+
+    monkeypatch.setattr(cli, "write_index", boom)
+    assert cli.main(["write", "--edit", _edit_file(tmp_path, GOOD), "--no-render"]) == 0
+    assert "warning: index.md not refreshed: nope" in capsys.readouterr().err

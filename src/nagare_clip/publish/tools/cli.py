@@ -22,6 +22,7 @@ from nagare_clip.director.load import project_context
 from nagare_clip.director.played import played_transcript
 from nagare_clip.director.tools.project import Project, current_state, load_project
 from nagare_clip.director.transcript import clean_for_display
+from nagare_clip.index_page import write_index
 from nagare_clip.pipeline.errors import PipelineError
 from nagare_clip.pipeline.external import run_magick
 from nagare_clip.publish.chapters import _spans, format_timestamp
@@ -269,6 +270,15 @@ def cmd_frames(project: Project, args: argparse.Namespace) -> int:
     return 0
 
 
+def _refresh_index(project: Project) -> None:
+    """Regenerate output/index.md the way every pipeline run does; never fails the tool."""
+    ctx = project.ctx
+    try:
+        write_index(ctx.output_dir, ctx.cfg, blend=ctx.blend_path)
+    except Exception as e:  # noqa: BLE001 - a page must not fail the command
+        print(f"warning: index.md not refreshed: {e}", file=sys.stderr)
+
+
 def _render(project: Project) -> None:
     ctx = project.ctx
     render_dir = ctx.stage_dir("render")
@@ -325,6 +335,7 @@ def cmd_write(project: Project, args: argparse.Namespace) -> int:
         print(f"wrote {p}")
     if not args.no_render:
         _render(project)
+    _refresh_index(project)
     return 0
 
 
@@ -369,6 +380,7 @@ def cmd_chapters(project: Project, args: argparse.Namespace) -> int:
 
 def cmd_render(project: Project, args: argparse.Namespace) -> int:
     _render(project)
+    _refresh_index(project)
     return 0
 
 
