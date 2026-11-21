@@ -225,3 +225,43 @@ def test_view_says_when_no_fonts_are_set(setup, capsys):
         "none set — a line uses ImageMagick's default face, which may draw Japanese "
         "as nothing; ask the user to set render.fonts"
     ) in out
+
+
+def _caption_ops(monkeypatch, ops):
+    monkeypatch.setattr(cli, "read_ops", lambda ctx, stems: {"a": ops})
+
+
+def _captions_block(out: str) -> list[str]:
+    block = out.split("## Captions\n", 1)[1].split("\n\n", 1)[0]
+    return block.splitlines()
+
+
+def test_captions_time_markers(setup, monkeypatch, capsys):
+    from nagare_clip.director.ops import DirectorOp
+
+    _caption_ops(
+        monkeypatch,
+        [
+            DirectorOp(type="overlay", lines=(2, 2), text="late", duration=2.0),
+            DirectorOp(type="overlay", lines=(1, 1), text="early", duration=2.0),
+            DirectorOp(type="overlay", lines=(1, 1), text="early", duration=2.0),
+            DirectorOp(
+                type="overlay", lines=(1, 1), text="in silence", duration=2.0, gap_start=True
+            ),
+        ],
+    )
+    assert cli.main(["view"]) == 0
+    assert _captions_block(capsys.readouterr().out) == [
+        "- 0:00  early",
+        "- 0:01  late",
+        "- ✂  in silence",
+    ]
+
+
+def test_captions_without_a_timeline_show_a_dash(setup, monkeypatch, capsys):
+    from nagare_clip.director.ops import DirectorOp
+
+    monkeypatch.setattr(cli, "finished_placements", lambda p: None)
+    _caption_ops(monkeypatch, [DirectorOp(type="overlay", lines=(2, 2), text="x", duration=2.0)])
+    assert cli.main(["view"]) == 0
+    assert _captions_block(capsys.readouterr().out) == ["- —  x"]

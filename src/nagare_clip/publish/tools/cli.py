@@ -19,7 +19,6 @@ from nagare_clip.broken_pipe import silence_stdout
 from nagare_clip.config import get_effective_config
 from nagare_clip.director.files import read_ops, read_plan
 from nagare_clip.director.load import project_context
-from nagare_clip.director.ops import collect_overlay_texts
 from nagare_clip.director.tools.project import Project, load_project
 from nagare_clip.pipeline.errors import PipelineError
 from nagare_clip.pipeline.external import run_magick
@@ -80,16 +79,41 @@ def _read_edit(source: str) -> Any:
     return json.loads(text)
 
 
+def _caption_time(project: Project, placements, stem: str, op) -> tuple[float | None, str]:
+    """``(finished seconds | None, label)`` of the caption's first display line."""
+    if placements is None:
+        return None, "—"
+    index = project.segment_index(stem)
+    number = None
+    if index is not None:
+        number = project.view.from_source(index, op.lines[0], silence=op.gap_start)
+    if number is None:
+        return None, "—"
+    t = line_time(placements, project, number)
+    return (None, "✂") if t is None else (t, format_timestamp(t))
+
+
 def _captions(project: Project, placements) -> list[str]:
+    """``M:SS  text`` rows in playback order (a text listed once, at its first use)."""
     stems = list(dict.fromkeys(line.stem for line in project.view.lines))
     if placements:
         played = list(dict.fromkeys(p.stem for p in placements))
         stems = [s for s in played if s in stems] + [s for s in stems if s not in played]
     ops_by_stem = read_ops(project.ctx, stems)
-    out: list[str] = []
+    seen: set[str] = set()
+    rows: list[tuple[float | None, str, str]] = []
     for stem in stems:
-        out += collect_overlay_texts(ops_by_stem.get(stem, []))
-    return out
+        for op in ops_by_stem.get(stem, []):
+            if op.type not in ("overlay", "timelapse"):
+                continue
+            text = (op.text or "").strip()
+            if not text or text in seen:
+                continue
+            seen.add(text)
+            t, label = _caption_time(project, placements, stem, op)
+            rows.append((t, label, text))
+    rows.sort(key=lambda r: (r[0] is None, r[0] if r[0] is not None else 0.0))
+    return [f"{label}  {text}" for _, label, text in rows]
 
 
 def _fonts_section(fonts: dict[str, str]) -> str:
