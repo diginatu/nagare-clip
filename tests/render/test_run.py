@@ -453,3 +453,25 @@ def test_stale_set_images_are_removed_before_compositing(tmp_path):
     assert not (thumbs / "set2.jpg").exists()
     assert not (thumbs / "set10.jpg").exists()
     assert (thumbs / "notes.txt").read_text(encoding="utf-8") == "keep"
+
+
+def test_a_line_with_no_role_prints_without_a_role_prefix(tmp_path):
+    """A hand-edited publish.json may leave ``role`` out (or empty); the contact
+    sheet then shows the text alone, never ``- : text``."""
+    publish = {
+        **PUBLISH,
+        "thumbnail_copy": [
+            {
+                "lines": [
+                    {"text": "役なし"},
+                    {"role": "", "text": "空の役"},
+                    {"role": "tag", "text": "タグ"},
+                ]
+            }
+        ],
+    }
+    _, md, _ = _run(tmp_path, publish=publish)
+    assert "- 役なし\n" in md
+    assert "- 空の役\n" in md
+    assert "- tag: タグ\n" in md
+    assert "- : " not in md

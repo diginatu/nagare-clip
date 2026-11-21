@@ -125,7 +125,8 @@ rather than an abstraction over it:
 | `shadow` | (an inline blurred layer) | set | `{color, blur}` (`blur` as `RxS`), `true`, or literal `false` to disable the shadow layer entirely |
 
 A line's `role` (`tag`/`hook`/`subtitle`, `VALID_ROLES`) only picks the preset
-defaults for the keys it leaves out; absent or empty means `hook`.
+defaults for the keys it leaves out; absent or empty means `hook`, and the
+contact sheet then lists the line as `- text` (no `role:` prefix).
 
 **Lenient here, strict in the tool.** `resolve_line_style()`/
 `resolve_set_style()` validate and clamp every value against that table, and a

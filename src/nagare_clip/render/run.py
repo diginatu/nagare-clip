@@ -100,7 +100,10 @@ def _render_markdown(
     for index, thumb_set in enumerate(sets, start=1):
         render = by_index.get(index)
         lines.append(f"## Set {index}")
-        lines += [f"- {line.role}: {line.text}" for line in thumb_set.lines]
+        lines += [
+            f"- {line.role}: {line.text}" if line.role else f"- {line.text}"
+            for line in thumb_set.lines
+        ]
         lines += [f"**Warning:** {message}" for message in warned.get(index, [])]
         if render is not None:
             lines += [
