@@ -36,7 +36,7 @@ first above. The list is capped at `publish.max_frames` (24 by default; `0`
   by default). A line marked `✂` in `view` is not in the finished video:
   avoid it as a background unless the user wants a frame from outside the cut.
 - **`--line` adds, plain `frames` replaces.** Plain `frames` rewrites
-  `output/publish/stills.json` from the director's ops; the stills you added
+  `<output_dir>/publish/stills.json` from the director's ops; the stills you added
   with `--line` drop off the list (their JPEGs stay on disk, and a
   `background` may still name them).
 - Several `--line` flags in one call share one Docker run, which is far

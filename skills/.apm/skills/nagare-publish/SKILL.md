@@ -31,6 +31,11 @@ footage and its config, not the nagare-clip repository. Config paths such as
   order (later files win). A project often has its own wrapper script for
   running the pipeline (e.g. `./run_nagare_clip.sh`); read it to learn the
   configs.
+- **`<output_dir>`** below is the config's `general.output_dir`, relative to
+  the video directory (it may be anything, e.g. `video-editor-ai`; the default
+  is `output`). `view` prints `output dir: …` as its first line, `frames`
+  prints `stills in …` and `write`/`render` print the real paths — use those,
+  and do not guess.
 - **The nagare-clip checkout.** The tools live in it, at
   `<nagare-clip>/scripts/publish_tools.sh` (the script keeps your working
   directory). If the checkout's path is not already known — from the
@@ -40,31 +45,45 @@ footage and its config, not the nagare-clip repository. Config paths such as
 The tools are deterministic (no LLM call):
 
 ```bash
-<nagare-clip>/scripts/publish_tools.sh view   --config A.yml [--config B.yml] [--lines A-B]
+<nagare-clip>/scripts/publish_tools.sh view   --config A.yml [--config B.yml] [--lines A-B | --compact]
 <nagare-clip>/scripts/publish_tools.sh frames --config ... [--line N[@pos]]...
+<nagare-clip>/scripts/publish_tools.sh chapters N [N ...] --config ...
 <nagare-clip>/scripts/publish_tools.sh write  --config ... --edit FILE|- [--no-render]
 <nagare-clip>/scripts/publish_tools.sh render --config ...
 ```
 
-- `view` — the editorial brief, the summaries (overall and per video), the
-  director's `plan.md`, the director's captions in playback order, the
-  finished runtime, then one row per display line: `N  M:SS  text`. `M:SS`
-  is where the line starts **in the finished video**; `✂` means the line
-  does not survive the cut; `—` means there is no finished timeline yet.
-  Line numbers are the director's display numbering. Page through a long
-  video with `--lines 1-200`, then `--lines 201-400`.
+- `view` — first line `output dir: …`, then the editorial brief, the
+  summaries (overall and per video), the director's `plan.md`, the director's
+  captions as `- M:SS  text` in playback order (`✂` = on a line that does not
+  survive, `—` = no finished timeline), the **font slots** a thumbnail line
+  may name (`render.fonts`, from the merged config; the first is the fallback
+  for a line with no `font`), the finished runtime, then the lines. By default
+  one row per display line: `N  M:SS  text`. `M:SS` is where the line starts
+  **in the finished video**; `✂` means the line does not survive the cut; `—`
+  means there is no finished timeline yet. Line numbers are the director's
+  display numbering. **`--compact`** replaces the per-line rows with the
+  finished video as the director's played transcript: only what plays, in
+  playback order, each row prefixed with its finished time, a cut as one `✂`
+  row and a timelapse as one `⏩` row — a long video is a few screens instead
+  of thousands of rows. `--lines A-B` zooms into those display lines (it does
+  not combine with `--compact`).
 - `frames` — with no `--line`: the thumbnail **shortlist** read off the
   director's ops (capped by `publish.max_frames`), written fresh to
-  `output/publish/stills.json`. With `--line N[@pos]` (repeatable; `pos` in
+  `<output_dir>/publish/stills.json`. With `--line N[@pos]` (repeatable; `pos` in
   `[0,1]` within the line's footage, default `0.5`): stills at those lines,
   **added** to the existing list. Each row is `line  M:SS  kind  label
-  path`, in playback order; the path is relative to `output/publish/` and is
+  path`, in playback order; the path is relative to `<output_dir>/publish/` and is
   what a thumbnail's `background` names. All stills of one call come from
   one Docker run; if Docker fails it exits 1 with the reason.
+- `chapters N [N ...]` — try chapter lines before writing: prints each one's
+  finished time and length (`line time length text`, sorted by time; a
+  chapter under `publish.min_chapter_duration` is marked), then every problem
+  `write` would report for them and the fewer-than-three warning. Exit 1 on a
+  problem. It writes nothing.
 - `write` — validates the whole edit; on **any** problem it prints them all
   and writes nothing (exit 1). Otherwise it saves the edit verbatim as
-  `output/publish/edit.json`, writes `publish.json` and `publish.md`, then
-  composites the thumbnails into `output/render/` (skip with `--no-render`).
+  `<output_dir>/publish/edit.json`, writes `publish.json` and `publish.md`, then
+  composites the thumbnails into `<output_dir>/render/` (skip with `--no-render`).
   Warnings print but do not block.
 - `render` — composites the thumbnails again from `publish.json` as it is
   on disk (for a hand edit of that file). Zero LLM calls, always.
@@ -78,15 +97,18 @@ Keep the draft edit in a file in the project's output directory (e.g.
    nagare-clip checkout. If `view` says the finished runtime is unknown, the
    pipeline has not run through `blender` yet: chapters cannot be resolved.
    Tell the user to resume the pipeline (from `guided_edit`, after the
-   director) first. If `output/publish/edit.json` exists, ask whether to
+   director) first. If `<output_dir>/publish/edit.json` exists, ask whether to
    revise it (see "Revising later") or start over.
-2. **Read everything.** Run `view` and read every page: the brief (audience,
-   tone, target), the summaries, the plan, the captions and the lines as the
-   finished video plays them.
+2. **Read everything.** Run `view --compact` first: the brief (audience,
+   tone, target), the summaries, the plan, the captions with their times, the
+   fonts, and the finished video top to bottom with every row timed. Zoom
+   into a stretch with `view --lines A-B` (every shot line, cut ones
+   included) when you need the exact lines around a moment.
 3. **Write the copy first — before you look at any frame.** Titles
    (several candidates that genuinely differ), the description lead, the
    chapters (by display line, see
-   [references/youtube-chapters.md](references/youtube-chapters.md)) and the
+   [references/youtube-chapters.md](references/youtube-chapters.md); try the
+   lines with `chapters N N ...` until none is too short or cut) and the
    thumbnail **text** for each set (one to a few lines each). Show them to
    the user and revise until they agree.
    *Why first:* copy written while looking at the stills ends up captioning
@@ -108,14 +130,14 @@ Keep the draft edit in a file in the project's output directory (e.g.
    [references/thumbnail-craft.md](references/thumbnail-craft.md).
 7. **Write** with `write --edit <file>`. Fix every problem it lists and write
    again.
-8. **Read each render**, `output/render/thumbnails/set{N}.jpg`, with your
-   image input, and `output/render/render.md` for a set that was not
+8. **Read each render**, `<output_dir>/render/thumbnails/set{N}.jpg` (`write` prints the directory), with your
+   image input, and `<output_dir>/render/render.md` for a set that was not
    rendered (its reason is printed) or whose text block overflows the canvas.
    Is the headline readable at a glance, at phone size? Does it cover the
    thing the picture is of? Revise the look (or the still, or the wording)
    and write again. Show the user the thumbnails and the copy; iterate on
    their feedback.
-9. **Hand over**: `output/publish/publish.md` holds the titles, the
+9. **Hand over**: `<output_dir>/publish/publish.md` holds the titles, the
    description with its chapter list and the thumbnails, ready to paste and
    upload.
 
@@ -151,7 +173,7 @@ Keep the draft edit in a file in the project's output directory (e.g.
   the first to `0:00`. Optional (`[]` is allowed, with a warning).
 - `thumbnails`: one entry per alternative thumbnail (`set1`, `set2`, ...).
   - `background` (required): a still's path as `frames` printed it,
-    relative to `output/publish/`, or an absolute path.
+    relative to `<output_dir>/publish/`, or an absolute path.
   - Set keys: `gravity` (`northwest`, `north`, `northeast`, `west`,
     `center`, `east`, `southwest`, `south`, `southeast`) — where the text
     block is anchored; `offset` `+X+Y` in px from that anchor; `shadow`
@@ -159,7 +181,7 @@ Keep the draft edit in a file in the project's output directory (e.g.
   - `lines` (at least one; any number, stacked top to bottom): `text`
     (required), `role` (`tag`, `hook`, `subtitle`; absent = `hook`) — it only
     picks the default size and colours for keys you leave out — and the
-    style keys `font` (a slot name from the project's `render.fonts`),
+    style keys `font` (a slot name from the `## Fonts` list `view` prints),
     `pointsize` (8-400), `fill`, `stroke` (colours: `#RRGGBB`, `#RGB`,
     `rgb(...)`/`rgba(...)` or a name such as `white`), `strokewidth` (0-40).
 - The edit is the **complete state**: `write` replaces everything written
@@ -189,7 +211,7 @@ the timestamps but draws no segmented progress bar.
 
 ## Revising later
 
-`write` saved the edit verbatim as `output/publish/edit.json`; there is no
+`write` saved the edit verbatim as `<output_dir>/publish/edit.json`; there is no
 `dump`. To revise, copy it to your draft file, change it, and `write` it
 again. After the director's edit changes and the pipeline is re-run through
 `blender`, the finished timeline has moved: run `write` again with the saved

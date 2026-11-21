@@ -70,8 +70,8 @@ the sizes.
 
 ## Iterate on the render
 
-After every `write`, Read `output/render/thumbnails/set{N}.jpg`. Typical
+After every `write`, Read `<output_dir>/render/thumbnails/set{N}.jpg`. Typical
 fixes: text over the subject → change `gravity`/`offset` or the still;
 unreadable → thicker `stroke`, a shadow, another colour or another still;
 cramped → fewer words or a smaller `pointsize`; a set missing → its reason is
-in `output/render/render.md` (`**Not rendered:** ...`).
+in `<output_dir>/render/render.md` (`**Not rendered:** ...`).
