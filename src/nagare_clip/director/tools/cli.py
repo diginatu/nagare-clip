@@ -17,6 +17,7 @@ from pathlib import Path
 from typing import Any
 
 from nagare_clip.brief import format_brief
+from nagare_clip.broken_pipe import silence_stdout
 from nagare_clip.config import get_effective_config
 from nagare_clip.director.checks import order_segments
 from nagare_clip.director.files import write_ops, write_order, write_plan
@@ -425,6 +426,9 @@ def main(argv: list[str] | None = None) -> int:
     try:
         project = load_project(_load_cfg(args.config))
         return args.func(project, args)
+    except BrokenPipeError:
+        silence_stdout()
+        return 1
     except PipelineError as e:
         print(f"error: {e}", file=sys.stderr)
         return 2
