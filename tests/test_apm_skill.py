@@ -25,7 +25,7 @@ def test_package_manifest():
     manifest = yaml.safe_load((PACKAGE / "apm.yml").read_text(encoding="utf-8"))
     assert manifest["name"] and manifest["version"]
     assert manifest["includes"] == [".apm/"]
-    assert [p.name for p in SKILLS] == ["nagare-director"]
+    assert [p.name for p in SKILLS] == ["nagare-director", "nagare-publish"]
 
 
 def test_nothing_is_deployed_at_the_repo_root():
@@ -45,16 +45,34 @@ def test_frontmatter_is_valid(skill):
     assert description and len(description.group(1)) <= 1024
 
 
-def test_skill_names_only_real_tool_commands():
-    """Every `director_tools.sh <cmd>` the skill tells an agent to run exists."""
+def _director_parser():
     from nagare_clip.director.tools.cli import build_parser
 
-    commands = set(build_parser()._subparsers._group_actions[0].choices)  # noqa: SLF001
-    skill = PACKAGE / ".apm" / "skills" / "nagare-director"
+    return build_parser()
+
+
+def _publish_parser():
+    from nagare_clip.publish.tools.cli import build_parser
+
+    return build_parser()
+
+
+@pytest.mark.parametrize(
+    ("skill_name", "shim", "parser"),
+    [
+        ("nagare-director", "director_tools", _director_parser),
+        ("nagare-publish", "publish_tools", _publish_parser),
+    ],
+    ids=["nagare-director", "nagare-publish"],
+)
+def test_skill_names_only_real_tool_commands(skill_name, shim, parser):
+    """Every `<shim>.sh <cmd>` a skill tells an agent to run exists."""
+    commands = set(parser()._subparsers._group_actions[0].choices)  # noqa: SLF001
+    skill = PACKAGE / ".apm" / "skills" / skill_name
     text = "\n".join(p.read_text(encoding="utf-8") for p in skill.rglob("*.md"))
-    used = set(re.findall(r"director_tools\.sh\"? (\w+)", text))
+    used = set(re.findall(rf"{shim}\.sh\"? (\w+)", text))
     assert used and used <= commands
-    assert (ROOT / "scripts" / "director_tools.sh").is_file()
+    assert (ROOT / "scripts" / f"{shim}.sh").is_file()
 
 
 def test_skill_md_edit_example_passes_write_validation():
@@ -85,3 +103,68 @@ def test_skill_md_edit_example_passes_write_validation():
     assert len(view.lines) == lines
     _edit, problems = validate_edit(view, example, has_plan=False, max_keep_lines=8)
     assert [str(p) for p in problems] == []
+
+
+def test_publish_skill_edit_example_passes_validation(tmp_path):
+    """The publish edit example is what agents copy: write must accept it."""
+    import json
+
+    from nagare_clip.config import get_effective_config
+    from nagare_clip.director.display import build_display_view
+    from nagare_clip.director.load import SegmentTranscript
+    from nagare_clip.director.tools.project import Project
+    from nagare_clip.order import Segment
+    from nagare_clip.pipeline.runner import PipelineContext
+    from nagare_clip.pipeline.sources import SourceMedia
+    from nagare_clip.publish.timeline import Placement
+    from nagare_clip.publish.tools.edit import validate_edit
+
+    text = (PACKAGE / ".apm" / "skills" / "nagare-publish" / "SKILL.md").read_text(encoding="utf-8")
+    block = re.search(r"## Edit format\s+```json\n(.*?)\n```", text, re.S)
+    assert block, "SKILL.md must keep a ```json example under '## Edit format'"
+    example = json.loads(block.group(1))
+
+    stem = "a"
+    lines = max([c["line"] for c in example.get("chapters", [])] + [1]) + 10
+    transcript = SegmentTranscript(
+        edit_lines=[f"line {i}" for i in range(1, lines + 1)],
+        first_line=1,
+        seg_times=[(i * 20.0, i * 20.0 + 15.0) for i in range(lines)],
+        silences=None,
+        gaps=[],
+    )
+    view = build_display_view([(Segment(stem, None), transcript)])
+    ctx = PipelineContext(
+        cfg=get_effective_config(None, {}),
+        project_root=tmp_path,
+        config_path=None,
+        input_videos_dir=tmp_path / "in",
+        output_dir=tmp_path / "out",
+        sources=[SourceMedia(tmp_path / "a.mp4", stem, "a.mp4")],
+        from_index=0,
+        to_index=0,
+    )
+    project = Project(ctx=ctx, view=view, transcripts=[transcript], inputs=[])
+    end = lines * 20.0
+    placements = [Placement(stem, 0.0, end, 0.0, end, 1.0)]
+
+    publish_dir = tmp_path / "publish"
+    fonts: dict[str, str] = {}
+    for thumb in example.get("thumbnails", []):
+        background = publish_dir / thumb["background"]
+        background.parent.mkdir(parents=True, exist_ok=True)
+        background.write_bytes(b"jpeg")
+        for line in thumb.get("lines", []):
+            if "font" in line:
+                fonts[line["font"]] = f"Font-{line['font']}"
+
+    edit, _chapters, problems, _warnings = validate_edit(
+        example,
+        project,
+        placements,
+        fonts=fonts,
+        publish_dir=publish_dir,
+        min_chapter=10.0,
+    )
+    assert problems == []
+    assert edit is not None and edit.thumbnails

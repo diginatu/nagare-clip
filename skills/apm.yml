@@ -5,6 +5,6 @@ license: MIT
 # One APM package for the skills you use while editing a video — installed
 # into the VIDEO directory, never deployed into this repository:
 #   apm install <nagare-clip checkout>/skills --target claude,codex
-# Each skill lives under .apm/skills/<name>/ (today: nagare-director).
+# Each skill lives under .apm/skills/<name>/ (nagare-director, nagare-publish).
 includes:
   - .apm/

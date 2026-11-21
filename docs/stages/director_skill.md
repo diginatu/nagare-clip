@@ -237,7 +237,7 @@ types*, *Targets matrix*, *apm compile*, *apm install*):
 - **One package for the video-editing skills**, at `skills/`: `skills/apm.yml`
   (`includes: [.apm/]`) and each skill under `skills/.apm/skills/<name>/`
   (the classic `.apm/` package layout, where each primitive is hoisted on
-  install). Today it holds `nagare-director`; skills for other stages can be
+  install). It holds `nagare-director` and `nagare-publish`; skills for other stages can be
   added beside it.
 - It is installed into a **video directory**, never deployed here — the repo
   root has no `apm.yml`, `.apm/`, `.claude/skills/` or `.agents/skills/`, so
