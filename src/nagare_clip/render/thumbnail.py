@@ -68,7 +68,6 @@ SET_KEYS = ("gravity", "offset", "shadow")
 # A thumbnail line states which job it does, so a layout can follow a set of
 # one, two or three lines instead of the copy being padded to fill a template.
 VALID_ROLES = ("tag", "hook", "subtitle")
-MAX_THUMB_LINES = 3
 
 
 @dataclass(frozen=True)
@@ -568,7 +567,7 @@ def render_sets(
     import subprocess
 
     result = RenderResult(renders=[], skipped=[], warnings=[])
-    if not render_cfg.get("enabled", True) or not sets:
+    if not sets:
         return result
 
     fonts = render_cfg.get("fonts") or {}

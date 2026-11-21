@@ -57,8 +57,6 @@ def test_stage_names_canonical_order():
         "guided_edit",
         "intervals",
         "blender",
-        "publish",
-        "render",
     ]
     assert [s.name for s in st.STAGES] == st.STAGE_NAMES
 
@@ -1147,3 +1145,9 @@ def test_blender_adapter_proxy_failure_does_not_stop_blender(tmp_path, monkeypat
     assert calls[-1][0] == "blender"
     assert not (tmp_path / "BL_proxy" / "a.mp4" / "proxy_100.avi").exists()
     assert "proxy" in caplog.text.lower()
+
+
+def test_stage_names_end_at_blender():
+    assert st.STAGE_NAMES[-1] == "blender"
+    assert "publish" not in st.STAGE_NAMES and "render" not in st.STAGE_NAMES
+    assert [s.name for s in st.STAGES] == st.STAGE_NAMES

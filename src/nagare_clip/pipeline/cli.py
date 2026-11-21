@@ -146,16 +146,11 @@ def main(argv: list[str] | None = None) -> int:
             except Exception:
                 logging.exception("index: could not write the output index")
 
-        # The .blend is the deliverable; the publish material and the rendered
-        # thumbnails (when the run reached those stages) sit beside it and are
-        # the next things a human opens, so every path reached is printed.
+        # The .blend is the deliverable (publish material comes from the
+        # nagare-publish skill's tools, not from a stage).
         last_stage = STAGES[to_index].name
-        if last_stage in ("blender", "publish", "render"):
+        if last_stage == "blender":
             print(f"Done: {ctx.stage_dir('blender') / f'{ctx.stems[0]}_edited.blend'}")
-            if last_stage in ("publish", "render"):
-                print(f"Publish material: {ctx.stage_dir('publish') / 'publish.md'}")
-            if last_stage == "render":
-                print(f"Thumbnails: {ctx.stage_dir('render') / 'render.md'}")
         else:
             print(f"Done (stopped at --to-stage {p['to_stage']})")
         return 0

@@ -136,7 +136,7 @@ def test_a_run_from_scratch_stops_at_the_director(project):  # noqa: F811
     ctx = _ctx(project)
     names = list(st.STAGE_NAMES)
     ctx.from_index = names.index("sentence_split")
-    ctx.to_index = names.index("render")
+    ctx.to_index = names.index("blender")
     with pytest.raises(PipelineStop):
         run_stages(st.STAGES, ctx)
     assert not (project / "out" / "guided_edit").exists()

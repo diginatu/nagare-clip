@@ -18,7 +18,7 @@ from nagare_clip.pipeline.external import run_magick
 
 HAS_MAGICK = shutil.which("magick") is not None
 
-CFG = {"render": {"enabled": True, "width": 1280, "height": 720, "line_gap": 12, "fonts": {}}}
+CFG = {"render": {"width": 1280, "height": 720, "line_gap": 12, "fonts": {}}}
 
 PUBLISH = {
     "titles": ["候補1"],
@@ -85,12 +85,6 @@ def _run(tmp_path, cfg=CFG, *, run=None, publish=PUBLISH, frames=("frames/a/1.00
         (render_dir / "render.md").read_text(encoding="utf-8"),
         render_dir,
     )
-
-
-def test_disabled_writes_an_empty_artifact(tmp_path):
-    data, md, _ = _run(tmp_path, {"render": {"enabled": False}})
-    assert data == {"renders": [], "skipped": [], "warnings": []}
-    assert "disabled" in md
 
 
 def test_a_missing_publish_json_writes_an_empty_artifact(tmp_path, caplog):
@@ -267,7 +261,7 @@ def test_configured_fonts_mean_no_warning(tmp_path):
     assert "render.fonts" not in md
 
 
-def test_the_render_package_never_reaches_for_the_llm():
+def test_the_publish_and_render_packages_never_reach_for_the_llm():
     """Zero calls by construction, not by configuration.
 
     Every provider in this repo goes through ``llm_client.call_llm`` (a hard
@@ -275,7 +269,11 @@ def test_the_render_package_never_reaches_for_the_llm():
     model -- and a future edit that tries to has to trip this first.
     """
     offenders = []
-    for path in sorted(Path("src/nagare_clip/render").glob("*.py")):
+    paths = sorted(Path("src/nagare_clip/render").rglob("*.py")) + sorted(
+        Path("src/nagare_clip/publish").rglob("*.py")
+    )
+    assert any("publish/tools" in str(p) for p in paths)
+    for path in paths:
         source = path.read_text(encoding="utf-8")
         for node in ast.walk(ast.parse(source)):
             names = []
@@ -289,7 +287,7 @@ def test_the_render_package_never_reaches_for_the_llm():
     assert offenders == []
 
 
-def test_the_stage_runs_without_ever_loading_the_transport(tmp_path):
+def test_the_tools_and_render_run_without_ever_loading_the_transport(tmp_path):
     """The static guard above, confirmed on the real code path.
 
     A fresh interpreter, because other tests import the whole pipeline and
@@ -300,13 +298,18 @@ def test_the_stage_runs_without_ever_loading_the_transport(tmp_path):
         r"""
         import json, sys
         from pathlib import Path
+        # The tools' pure modules (the tools' own modules reach the director's
+        # view, which imports llm_client for unrelated reasons).  The
+        # static guard above covers every file, these confirm the real import.
+        import nagare_clip.publish.chapters, nagare_clip.publish.document  # noqa: F401
+        import nagare_clip.publish.thumbs, nagare_clip.publish.timeline  # noqa: F401
         from nagare_clip.render.run import run_render
 
         publish_dir, render_dir = Path(sys.argv[1]), Path(sys.argv[2])
         run_render(
             publish_dir / "publish.json",
             render_dir / "render.json",
-            {"render": {"enabled": True, "width": 1280, "height": 720, "line_gap": 12}},
+            {"render": {"width": 1280, "height": 720, "line_gap": 12}},
             markdown=render_dir / "render.md",
             run=lambda cmd: "300 90\n" * sum(a.startswith("label:") for a in cmd),
         )

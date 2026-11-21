@@ -8,14 +8,15 @@ from pathlib import Path
 
 import pytest
 
-from nagare_clip.publish.publish_llm import ThumbLine, ThumbSet
 from nagare_clip.publish.thumbs import ThumbShot
 from nagare_clip.render.thumbnail import (
     PRESETS,
     LineStyle,
     PlacedLine,
     SetStyle,
+    ThumbLine,
     ThumbRender,
+    ThumbSet,
     build_measure_cmd,
     build_render_cmd,
     escape_magick_text,
@@ -505,7 +506,6 @@ def test_any_aspect_ratio_is_cropped_to_fill_the_canvas(tmp_path, source_size):
 
 
 CFG = {
-    "enabled": True,
     "width": 1280,
     "height": 720,
     "line_gap": 12,
@@ -668,16 +668,6 @@ def test_a_set_whose_background_is_missing_is_dropped_and_the_rest_render(tmp_pa
     renders = render_sets(sets, [_shot()], CFG, tmp_path, tmp_path, FakeRun()).renders
     assert [r.index for r in renders] == [2]
     assert "gone.jpg" in caplog.text
-
-
-def test_disabled_renders_nothing(tmp_path):
-    _touch(tmp_path, "frames/a/1.000.jpg")
-    run = FakeRun()
-    assert (
-        render_sets(_sets(2), [_shot()], {**CFG, "enabled": False}, tmp_path, tmp_path, run).renders
-        == []
-    )
-    assert run.cmds == []
 
 
 def test_no_background_renders_nothing(tmp_path, caplog):

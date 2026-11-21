@@ -77,7 +77,6 @@ def _no_font_warning(sets: Sequence[Any], fonts: Any) -> str:
 def _render_markdown(
     sets: Sequence[Any],
     result: RenderResult,
-    enabled: bool,
     markup: str,
     fonts: Any = None,
 ) -> str:
@@ -88,8 +87,6 @@ def _render_markdown(
     a set that quietly disappears from it turns a one-character typo into a
     mystery whose only trace is a log line.
     """
-    if not enabled:
-        return "# render\n\nThe render stage is disabled (`render.enabled: false`).\n"
     lines = ["# render", ""]
     warning = _no_font_warning(sets, fonts)
     if warning:
@@ -129,18 +126,12 @@ def run_render(
 ) -> None:
     """Composite every copy set in *publish_json* into *output*'s directory."""
     render_cfg = cfg["render"]
-    enabled = bool(render_cfg.get("enabled", True))
     publish_dir = publish_json.parent
     out_dir = output.parent
 
-    sets: list[Any] = []
-    result = RenderResult()
-    if not enabled:
-        logging.info("render: disabled, writing empty render material")
-    else:
-        data = _load_publish(publish_json)
-        sets = sets_from_dict(data)
-        result = render_sets(sets, shots_from_dict(data), render_cfg, publish_dir, out_dir, run)
+    data = _load_publish(publish_json)
+    sets: list[Any] = sets_from_dict(data)
+    result = render_sets(sets, shots_from_dict(data), render_cfg, publish_dir, out_dir, run)
 
     artifact = {
         "renders": [
@@ -161,7 +152,7 @@ def run_render(
         markdown.parent.mkdir(parents=True, exist_ok=True)
         markup = str((cfg.get("general") or {}).get("image_markup", "html"))
         markdown.write_text(
-            _render_markdown(sets, result, enabled, markup, render_cfg.get("fonts")),
+            _render_markdown(sets, result, markup, render_cfg.get("fonts")),
             encoding="utf-8",
         )
         logging.info("render: wrote %s", markdown)

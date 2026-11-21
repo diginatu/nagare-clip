@@ -283,7 +283,7 @@ class TestGetEffectiveConfig:
     def test_pipeline_stage_defaults_are_names(self):
         cfg = get_effective_config(None)
         assert cfg["pipeline"]["from_stage"] == "audio_silence"
-        assert cfg["pipeline"]["to_stage"] == "render"
+        assert cfg["pipeline"]["to_stage"] == "blender"
 
     def test_retry_defaults_present(self):
         cfg = get_effective_config(None)
@@ -553,29 +553,6 @@ def test_text_filter_prompt_repeated_phrase_example_is_valid_patch_syntax():
     assert apply_patches_to_lines(["{{映ってる->}}映ってるね"]) == ["映ってるね"]
 
 
-def test_publish_describe_frames_defaults():
-    cfg = get_effective_config(None, {})["publish"]["describe_frames"]
-    assert cfg["enabled"] is False  # a vision model has to be configured first
-    assert cfg["provider"] == "ollama_chat"
-    assert cfg["max_retries"] == 2
-    assert cfg["prompt"]
-
-
-def test_the_frame_description_prompt_asks_for_prose_and_the_empty_regions():
-    """It is read by a model and by a human; neither needs a schema."""
-    prompt = get_effective_config(None, {})["publish"]["describe_frames"]["prompt"].lower()
-    assert "json" not in prompt or "no json" in prompt
-    assert "empty" in prompt
-    assert "legible" in prompt
-
-
-def test_the_frame_description_prompt_forbids_writing_a_headline():
-    """Writing copy is the copy call's job; this one only looks. A vision model
-    handed a frame will happily caption it unless told not to."""
-    prompt = get_effective_config(None, {})["publish"]["describe_frames"]["prompt"].lower()
-    assert "do not write a headline" in prompt
-
-
 def test_image_markup_is_general_not_per_stage():
     """It is a property of the VIEWER, not of a stage: two copies is one for a
     human to keep in sync, and one project with two markdown files disagreeing."""
@@ -593,50 +570,9 @@ def test_a_per_stage_image_markup_is_rejected_rather_than_ignored(tmp_path, sect
         get_effective_config(path, {})
 
 
-def test_publish_pairing_defaults():
-    cfg = get_effective_config(None, {})["publish"]["pairing"]
-    assert cfg["enabled"] is True  # same text model as the copy call; no new dependency
-    # unset = inherit publish's, because it runs on publish's model and must be
-    # sampled the way that model requires
-    assert cfg["temperature"] is None
-    assert cfg["max_retries"] is None
-    assert cfg["retry_temp_step"] is None and cfg["retry_temp_cap"] is None
-    assert cfg["prompt"]
-
-
-def test_the_pairing_prompt_owns_the_look_vocabulary_the_copy_prompt_lost():
-    prompt = get_effective_config(None, {})["publish"]["pairing"]["prompt"].lower()
-    for word in ("fill", "stroke", "strokewidth", "pointsize", "gravity", "offset"):
-        assert word in prompt
-
-
-def test_the_pairing_prompt_asks_for_an_index_never_a_path():
-    """A path is a string a model can invent; an index is bounded."""
-    prompt = get_effective_config(None, {})["publish"]["pairing"]["prompt"].lower()
-    assert "index" in prompt
-    assert ".jpg" not in prompt and "path" not in prompt
-
-
-def test_the_pairing_prompts_own_json_example_parses():
-    from nagare_clip.publish.pairing import try_parse_pairing_response
-
-    prompt = get_effective_config(None, {})["publish"]["pairing"]["prompt"]
-    start = prompt.index("{", prompt.index("JSON shape"))
-    depth, end = 0, start
-    for i, ch in enumerate(prompt[start:], start=start):
-        depth += (ch == "{") - (ch == "}")
-        if depth == 0:
-            end = i + 1
-            break
-    got = try_parse_pairing_response(prompt[start:end], num_sets=4, num_frames=24)
-    assert got is not None and got[1].frame is not None
-    assert got[1].style and got[1].lines
-
-
 def test_render_defaults():
     cfg = get_effective_config(None, {})
     render = cfg["render"]
-    assert render["enabled"] is True
     assert (render["width"], render["height"]) == (1280, 720)
     assert render["line_gap"] == 12
     assert render["fonts"] == {}
@@ -698,8 +634,6 @@ _LLM_SECTIONS = [
     ("text_filter",),
     ("summary",),
     ("gap_context",),
-    ("publish",),
-    ("publish", "describe_frames"),
 ]
 
 
@@ -837,3 +771,30 @@ def test_config_rejects_all_removed_sentence_split_keys_at_once(tmp_path):
 def test_whisper_config_defaults():
     w = get_effective_config(None, {})["whisper"]
     assert w == {"enabled": False, "model": "large-v3", "beam_size": 5}
+
+
+@pytest.mark.parametrize(
+    "key",
+    [
+        "publish.enabled",
+        "publish.model",
+        "publish.provider",
+        "publish.prompt",
+        "publish.pairing",
+        "publish.describe_frames",
+        "render.enabled",
+    ],
+)
+def test_removed_publish_keys_fail(tmp_path, key):
+    section, name = key.split(".")
+    path = tmp_path / "c.yml"
+    path.write_text(f"{section}:\n  {name}: {{}}\n", encoding="utf-8")
+    with pytest.raises(ValueError) as e:
+        get_effective_config(path, {})
+    assert f"`{key}`" in str(e.value)
+
+
+def test_publish_and_render_keep_only_what_the_tools_read():
+    cfg = get_effective_config(None, {})
+    assert set(cfg["publish"]) == {"min_chapter_duration", "max_frames", "frame_width"}
+    assert set(cfg["render"]) == {"width", "height", "line_gap", "fonts"}

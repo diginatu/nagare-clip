@@ -20,7 +20,6 @@ from nagare_clip.blender.proxy import build_proxy
 from nagare_clip.blender.warnings_file import WARNINGS_FILENAME
 from nagare_clip.cut_report.report import build_cut_report
 from nagare_clip.director import files as director_files
-from nagare_clip.director.ops import DirectorOp, collect_overlay_texts, ops_from_dict
 from nagare_clip.director.tools.project import current_state, project_for
 from nagare_clip.edit_lines import parse_edit_lines
 from nagare_clip.gap_context.describe import GapFrames
@@ -57,21 +56,9 @@ from nagare_clip.pipeline.external import (
     failure_reason,
     run_capture,
     run_command,
-    run_magick,
 )
 from nagare_clip.pipeline.runner import PipelineContext, Stage
 from nagare_clip.pipeline.sources import SourceMedia, project_stems
-from nagare_clip.publish.run import run_publish
-from nagare_clip.publish.thumbs import (
-    ThumbCandidate,
-    ThumbShot,
-    cap_candidates,
-    select_candidates,
-)
-from nagare_clip.publish.thumbs import (
-    frame_relpath as thumb_relpath,
-)
-from nagare_clip.render.run import run_render
 from nagare_clip.sentence_split.run import run_sentence_split
 from nagare_clip.summary.run import run_summary
 from nagare_clip.text_filter.run import run_text_filter
@@ -91,8 +78,6 @@ STAGE_NAMES = [
     "guided_edit",
     "intervals",
     "blender",
-    "publish",
-    "render",
 ]
 
 
@@ -859,153 +844,6 @@ def _blender_run(ctx: PipelineContext) -> None:
     write_cut_report(ctx)
 
 
-# --- publish -----------------------------------------------------------------
-
-
-def _director_ops(ctx: PipelineContext, stem: str) -> tuple[list[DirectorOp], list]:
-    """This source's director ops plus its segment times (both may be empty).
-
-    Every input is optional here: the publish stage runs last, so the director
-    may have been disabled or its output removed, and the shortlist simply
-    stays empty rather than failing the run.
-    """
-    seg_times: list = []
-    json_path = ctx.stage_dir("sentence_split") / f"{stem}.json"
-    if json_path.is_file():
-        try:
-            seg_times = segment_times(json.loads(json_path.read_text(encoding="utf-8")))
-        except (ValueError, OSError):
-            logging.warning("publish: could not read %s", json_path)
-    ops: list[DirectorOp] = []
-    director_path = ctx.stage_dir("director") / f"{stem}_director.json"
-    if director_path.is_file():
-        try:
-            ops = ops_from_dict(
-                json.loads(director_path.read_text(encoding="utf-8")), len(seg_times)
-            )
-        except (ValueError, OSError):
-            logging.warning("publish: could not read %s", director_path)
-    return ops, seg_times
-
-
-def _extract_thumb_frames(
-    ctx: PipelineContext, candidates: list[ThumbCandidate]
-) -> list[ThumbShot]:
-    """Snapshot every candidate moment in ONE whisperx container.
-
-    Same reasoning as gap_context's batch: a `docker compose run` costs ~0.8s
-    of container init against ~30ms of actual ffmpeg work per still, so the
-    whole shortlist rides in a single call.
-    """
-    if not candidates:
-        return []
-    width = ctx.cfg["publish"]["frame_width"]
-    d = ctx.stage_dir("publish")
-    relative_by_stem = {s.stem: s.relative for s in ctx.sources}
-
-    jobs: list[tuple[str, float, str]] = []
-    planned: list[tuple[ThumbCandidate, str, Path]] = []
-    for cand in candidates:
-        relative = relative_by_stem.get(cand.stem)
-        if relative is None:
-            continue
-        rel = thumb_relpath(cand.stem, cand.time)
-        host_path = d / rel
-        host_path.parent.mkdir(parents=True, exist_ok=True)
-        jobs.append((relative, cand.time, f"/output/publish/{rel}"))
-        planned.append((cand, rel, host_path))
-
-    if jobs:
-        batch = build_snapshot_batch_cmd(ctx.project_root, jobs, width)
-        try:
-            run_command(
-                batch.argv,
-                env_extra=_docker_env(ctx),
-                stdin_text=batch.script,
-                capture_stderr=True,
-            )
-        except (OSError, subprocess.CalledProcessError) as exc:
-            # A failed batch is a Docker-level failure (docker missing, image
-            # gone, daemon down, argv too long): one bad seek cannot cause it,
-            # since every line ends in `|| true`. Stop the run here rather
-            # than carry on with no frames.
-            raise PipelineError(
-                f"publish: frame extraction in Docker failed "
-                f"({len(jobs)} job(s)): {failure_reason(exc)}"
-            ) from exc
-
-    shots: list[ThumbShot] = []
-    for cand, rel, host_path in planned:
-        if not host_path.is_file():
-            logging.warning(
-                "publish: no still written at %.3fs for %s; dropped from the shortlist",
-                cand.time,
-                cand.stem,
-            )
-            continue
-        shots.append(
-            ThumbShot(stem=cand.stem, time=cand.time, kind=cand.kind, label=cand.label, path=rel)
-        )
-    return shots
-
-
-def _publish_run(ctx: PipelineContext) -> None:
-    print("[publish] Title, description, chapters, thumbnail material")
-    rec = _recorder(ctx, "publish")
-    rec.clear()
-    try:
-        thumbs: list[ThumbShot] = []
-        overlay_texts: dict[str, list[str]] = {}
-        if ctx.cfg["publish"]["enabled"]:
-            candidates: list[ThumbCandidate] = []
-            for src in ctx.sources:
-                ops, seg_times = _director_ops(ctx, src.stem)
-                candidates += select_candidates(src.stem, ops, seg_times)
-                texts = collect_overlay_texts(ops)
-                if texts:
-                    overlay_texts[src.stem] = texts
-            thumbs = _extract_thumb_frames(
-                ctx, cap_candidates(candidates, ctx.cfg["publish"]["max_frames"])
-            )
-        d = ctx.stage_dir("publish")
-        run_publish(
-            ctx.stage_dir("summary") / "summary.json",
-            d / "publish.json",
-            ctx.cfg,
-            ordered=ordered_sources_for(ctx),
-            plan=director_files.read_plan(ctx),
-            overlay_texts=overlay_texts,
-            thumbs=thumbs,
-            frames_json=d / "frames.json",
-            markdown=d / "publish.md",
-            recorder=rec,
-        )
-    finally:
-        rec.rebuild_index()
-
-
-def _publish_required(ctx: PipelineContext) -> list[Path]:
-    return [ctx.stage_dir("publish") / "publish.json"]
-
-
-# --- render ------------------------------------------------------------------
-
-
-def _render_run(ctx: PipelineContext) -> None:
-    print("[render] Thumbnails from publish.json (no LLM call)")
-    run_render(
-        ctx.stage_dir("publish") / "publish.json",
-        ctx.stage_dir("render") / "render.json",
-        ctx.cfg,
-        markdown=ctx.stage_dir("render") / "render.md",
-        run=run_magick,
-    )
-
-
-def _render_required(ctx: PipelineContext) -> list[Path]:
-    return [ctx.stage_dir("render") / "render.json"]
-
-
 STAGES = [
     Stage("audio_silence", _audio_silence_run, _audio_silence_required),
     Stage("transcription", _transcription_run, _transcription_required),
@@ -1018,6 +856,4 @@ STAGES = [
     Stage("guided_edit", _guided_edit_run, _guided_edit_required),
     Stage("intervals", _intervals_run, _intervals_required),
     Stage("blender", _blender_run),
-    Stage("publish", _publish_run, _publish_required),
-    Stage("render", _render_run, _render_required),
 ]

@@ -435,3 +435,16 @@ def test_an_output_dir_that_does_not_exist_is_not_a_crash(tmp_path):
 @pytest.mark.parametrize("markup", ["html", "markdown", "nonsense"])
 def test_any_markup_setting_produces_a_page(tmp_path, markup):
     assert build_index(_project(tmp_path), {"general": {"image_markup": markup}})
+
+
+def test_index_page_rows_without_stages(tmp_path):
+    """publish.md / render.md are written by the publish tools, not a stage: with
+    no publish/ or render/ directory at all the rows are still named, as dashes,
+    and the page never needs the stage registry."""
+    output = tmp_path / "out"
+    output.mkdir()
+    md = build_index(output, CFG)
+    for needle in ("publish/publish.md", "render/render.md"):
+        assert _row(md, needle).rstrip().endswith("— |") or "—" in _row(md, needle)
+    source = Path("src/nagare_clip/index_page.py").read_text(encoding="utf-8")
+    assert "pipeline.stages" not in source and "STAGE_NAMES" not in source

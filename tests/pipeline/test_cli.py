@@ -2,6 +2,7 @@
 
 import os
 
+import pytest
 import yaml
 
 from nagare_clip.pipeline import cli
@@ -77,7 +78,7 @@ def test_pipeline_wires_context_and_prints_done(tmp_path, monkeypatch, capsys):
     assert "Done: " in capsys.readouterr().out
 
 
-def test_full_run_points_at_the_blend_the_copy_and_the_thumbnails(tmp_path, monkeypatch, capsys):
+def test_full_run_points_at_the_blend_only(tmp_path, monkeypatch, capsys):
     monkeypatch.chdir(tmp_path)
     (tmp_path / "src_video").mkdir()
     (tmp_path / "src_video" / "a.mp4").write_bytes(b"x")
@@ -85,20 +86,7 @@ def test_full_run_points_at_the_blend_the_copy_and_the_thumbnails(tmp_path, monk
     assert cli.main([]) == 0
     out = capsys.readouterr().out
     assert "a_edited.blend" in out
-    assert "publish.md" in out
-    assert "render.md" in out
-
-
-def test_stopping_at_publish_does_not_point_at_thumbnails(tmp_path, monkeypatch, capsys):
-    """The contact sheet does not exist until render has run."""
-    monkeypatch.chdir(tmp_path)
-    (tmp_path / "src_video").mkdir()
-    (tmp_path / "src_video" / "a.mp4").write_bytes(b"x")
-    monkeypatch.setattr(cli, "run_stages", lambda stages, ctx: None)
-    assert cli.main(["--to-stage", "publish"]) == 0
-    out = capsys.readouterr().out
-    assert "publish.md" in out
-    assert "render.md" not in out
+    assert "publish.md" not in out and "render.md" not in out
 
 
 def test_stopping_at_blender_points_at_the_blend_only(tmp_path, monkeypatch, capsys):
@@ -175,7 +163,7 @@ def test_a_single_stage_run_writes_the_index_too(tmp_path, monkeypatch):
     """It is a finally, not the last stage: --to-stage cuts the stage list."""
     _one_source(tmp_path, monkeypatch)
     monkeypatch.setattr(cli, "run_stages", lambda stages, ctx: None)
-    assert cli.main(["--from-stage", "render", "--to-stage", "render"]) == 0
+    assert cli.main(["--from-stage", "blender", "--to-stage", "blender"]) == 0
     assert (tmp_path / "output" / "index.md").is_file()
 
 
@@ -309,3 +297,12 @@ def test_the_snapshot_is_written_without_any_config_file(tmp_path, monkeypatch):
     assert cli.main([]) == 0
     ctx = seen["ctx"]
     assert ctx.config_path is not None and ctx.config_path.is_file()
+
+
+@pytest.mark.parametrize("name", ["publish", "render"])
+def test_from_stage_publish_is_an_error(tmp_path, monkeypatch, capsys, name):
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "src_video").mkdir()
+    (tmp_path / "src_video" / "a.mp4").write_bytes(b"x")
+    assert cli.main(["--from-stage", name]) == 1
+    assert f"Invalid --from-stage value: {name}" in capsys.readouterr().err
