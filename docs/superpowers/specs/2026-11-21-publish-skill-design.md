@@ -73,7 +73,7 @@ work with `—` times, and `write` reports every chapter as a problem. With zero
   "thumbnails": [
     {
       "background": "frames/a/63.200.jpg",
-      "gravity": "south", "offset": "+0+40", "shadow": "0x6",
+      "gravity": "south", "offset": "+0+40", "shadow": {"blur": "0x6"},
       "lines": [
         {"role": "tag",  "text": "3日目", "fill": "#FFCC00", "font": "sans-bold"},
         {"text": "まさかの水漏れ", "pointsize": 140, "stroke": "black", "strokewidth": 8}
