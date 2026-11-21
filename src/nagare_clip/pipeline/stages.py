@@ -54,6 +54,7 @@ from nagare_clip.pipeline.external import (
     build_snapshot_batch_cmd,
     build_transcribe_cmd,
     build_whisper_cmd,
+    failure_reason,
     run_capture,
     run_command,
     run_magick,
@@ -271,22 +272,6 @@ def _sentence_split_required(ctx: PipelineContext) -> list[Path]:
 # --- gap_context ---------------------------------------------------------------
 
 
-def _failure_reason(exc: BaseException, tail_lines: int = 20) -> str:
-    """The exception text plus the tail of the process's stderr, if any.
-
-    A bare "batch frame extraction failed" once hid an `Argument list too
-    long` for a whole run; the reason must always reach the user.
-    """
-    reason = f"{type(exc).__name__}: {exc}"
-    stderr = getattr(exc, "stderr", None)
-    if isinstance(stderr, bytes):
-        stderr = stderr.decode("utf-8", "replace")
-    if stderr and stderr.strip():
-        tail = stderr.strip().splitlines()[-tail_lines:]
-        reason += "\n  stderr:\n    " + "\n    ".join(tail)
-    return reason
-
-
 def _extract_gap_frames(
     ctx: PipelineContext,
     gaps_by_source: list[tuple[SourceMedia, list[tuple[float, float]]]],
@@ -360,7 +345,7 @@ def _extract_gap_frames(
             # than carry on with no frames.
             raise PipelineError(
                 f"gap_context: frame extraction in Docker failed "
-                f"({len(jobs)} job(s)): {_failure_reason(exc)}"
+                f"({len(jobs)} job(s)): {failure_reason(exc)}"
             ) from exc
 
     result: dict[str, list[GapFrames]] = {}
@@ -946,7 +931,7 @@ def _extract_thumb_frames(
             # than carry on with no frames.
             raise PipelineError(
                 f"publish: frame extraction in Docker failed "
-                f"({len(jobs)} job(s)): {_failure_reason(exc)}"
+                f"({len(jobs)} job(s)): {failure_reason(exc)}"
             ) from exc
 
     shots: list[ThumbShot] = []

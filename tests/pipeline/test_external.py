@@ -369,3 +369,13 @@ def test_build_whisper_cmd():
 def test_compose_has_no_cache_volume():
     compose = Path(__file__).resolve().parents[2] / "docker-compose.yml"
     assert "/.cache" not in compose.read_text(encoding="utf-8")
+
+
+def test_failure_reason_is_public_and_carries_stderr():
+    import subprocess
+
+    from nagare_clip.pipeline.external import failure_reason
+
+    exc = subprocess.CalledProcessError(1, ["x"], stderr=b"a\nb")
+    text = failure_reason(exc)
+    assert text.startswith("CalledProcessError:") and "stderr:" in text and "    b" in text

@@ -222,3 +222,19 @@ def run_magick(cmd: list[str]) -> str:
     fontconfig.  Never `shell=True`: the copy is LLM-written.
     """
     return subprocess.run(cmd, check=True, capture_output=True, text=True).stdout
+
+
+def failure_reason(exc: BaseException, tail_lines: int = 20) -> str:
+    """The exception text plus the tail of the process's stderr, if any.
+
+    A bare "batch frame extraction failed" once hid an `Argument list too
+    long` for a whole run; the reason must always reach the user.
+    """
+    reason = f"{type(exc).__name__}: {exc}"
+    stderr = getattr(exc, "stderr", None)
+    if isinstance(stderr, bytes):
+        stderr = stderr.decode("utf-8", "replace")
+    if stderr and stderr.strip():
+        tail = stderr.strip().splitlines()[-tail_lines:]
+        reason += "\n  stderr:\n    " + "\n    ".join(tail)
+    return reason
