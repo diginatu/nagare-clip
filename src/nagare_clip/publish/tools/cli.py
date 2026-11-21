@@ -1,0 +1,298 @@
+"""``python -m nagare_clip.publish.tools {view,frames,write,render}``.
+
+Deterministic, no LLM call.  Line numbers are the director's display numbering;
+every second is computed here from the finished timeline, never carried by the
+edit.
+"""
+
+from __future__ import annotations
+
+import argparse
+import json
+import logging
+import sys
+from pathlib import Path
+from typing import Any
+
+from nagare_clip.brief import format_brief
+from nagare_clip.config import get_effective_config
+from nagare_clip.director.files import read_ops, read_plan
+from nagare_clip.director.load import project_context
+from nagare_clip.director.ops import collect_overlay_texts
+from nagare_clip.director.tools.project import Project, load_project
+from nagare_clip.pipeline.errors import PipelineError
+from nagare_clip.pipeline.external import run_magick
+from nagare_clip.publish.chapters import format_timestamp
+from nagare_clip.publish.document import render_publish_markdown
+from nagare_clip.publish.timeline import total_duration
+from nagare_clip.publish.tools.build import build_publish
+from nagare_clip.publish.tools.edit import validate_edit
+from nagare_clip.publish.tools.frames import (
+    Still,
+    extract_stills,
+    format_stills,
+    plan_stills,
+    read_stills,
+    write_stills,
+)
+from nagare_clip.publish.tools.lines import finished_placements, line_time
+from nagare_clip.render.run import run_render
+
+EDIT_HELP = (
+    'A publish edit is one JSON object: {"titles": [...], "lead": "...", '
+    '"chapters": [{"line": N, "title": "..."}], "thumbnails": [{"background": '
+    '"frames/<stem>/<t>.jpg", "lines": [{"text": "...", "role"?: ...}]}]}. '
+    "Lines are display numbers from `view`; the tool computes every time."
+)
+
+
+def _parse_lines(value: str) -> tuple[int, int]:
+    try:
+        a, _, b = value.partition("-")
+        first, last = int(a), int(b or a)
+    except ValueError:
+        raise argparse.ArgumentTypeError(f"expected A-B, got {value!r}") from None
+    if first < 1 or last < first:
+        raise argparse.ArgumentTypeError(f"expected 1 <= A <= B, got {value!r}")
+    return first, last
+
+
+def _parse_line_pos(value: str) -> tuple[int, float]:
+    number, _, pos = value.partition("@")
+    try:
+        n = int(number)
+        p = float(pos) if pos else 0.5
+    except ValueError:
+        raise argparse.ArgumentTypeError(f"expected N or N@pos, got {value!r}") from None
+    if n < 1 or not 0.0 <= p <= 1.0:
+        raise argparse.ArgumentTypeError(f"expected N>=1 and pos in [0, 1], got {value!r}")
+    return n, p
+
+
+def _load_cfg(paths: list[str] | None) -> dict:
+    return get_effective_config([Path(c).resolve() for c in paths or []], {})
+
+
+def _read_edit(source: str) -> Any:
+    text = sys.stdin.read() if source == "-" else Path(source).read_text(encoding="utf-8")
+    return json.loads(text)
+
+
+def _captions(project: Project, placements) -> list[str]:
+    stems = list(dict.fromkeys(line.stem for line in project.view.lines))
+    if placements:
+        played = list(dict.fromkeys(p.stem for p in placements))
+        stems = [s for s in played if s in stems] + [s for s in stems if s not in played]
+    ops_by_stem = read_ops(project.ctx, stems)
+    out: list[str] = []
+    for stem in stems:
+        out += collect_overlay_texts(ops_by_stem.get(stem, []))
+    return out
+
+
+def cmd_view(project: Project, args: argparse.Namespace) -> int:
+    view = project.view
+    total = len(view.lines)
+    first, last = args.lines or (1, total)
+    if first > total:
+        print(f"the video has {total} display lines", file=sys.stderr)
+        return 2
+    last = min(last, total)
+    ctx = project.ctx
+    placements = finished_placements(project)
+    parts: list[str] = []
+    brief = format_brief(ctx.cfg.get("project"))
+    if brief:
+        parts.append(brief)
+    context = project_context(ctx.stage_dir("summary") / "summary.json", view)
+    if context:
+        parts.append(context)
+    plan = read_plan(ctx)
+    if plan:
+        parts.append("## Plan\n" + plan)
+    captions = _captions(project, placements)
+    if captions:
+        parts.append("## Captions\n" + "\n".join(f"- {c}" for c in captions))
+    if placements:
+        seconds = total_duration(placements)
+        parts.append(f"finished runtime {format_timestamp(seconds)} ({seconds:.1f} s)")
+    else:
+        parts.append("finished runtime unknown — no intervals yet")
+    rows = []
+    for line in view.lines[first - 1 : last]:
+        if placements is None:
+            when = "—"
+        else:
+            t = line_time(placements, project, line.number)
+            when = "✂" if t is None else format_timestamp(t)
+        rows.append(f"{line.number}  {when}  {line.text}".rstrip())
+    parts.append("\n".join(rows))
+    print("\n\n".join(parts))
+    return 0
+
+
+def _still_from_row(row: dict) -> Still:
+    return Still(
+        row["stem"],
+        float(row["source_time"]),
+        row["kind"],
+        row["label"],
+        row.get("line"),
+        row["path"],
+    )
+
+
+def cmd_frames(project: Project, args: argparse.Namespace) -> int:
+    ctx = project.ctx
+    requests = args.line or []
+    stills, problems = plan_stills(project, ctx.cfg, requests)
+    if problems:
+        for p in problems:
+            print(f"  {p}", file=sys.stderr)
+        return 1
+    stills = extract_stills(project, stills)
+    path = ctx.stage_dir("publish") / "stills.json"
+    if requests:
+        new_paths = {s.path for s in stills}
+        kept = [_still_from_row(r) for r in read_stills(path) if r.get("path") not in new_paths]
+        stills = kept + stills
+    placements = finished_placements(project)
+    write_stills(path, stills, placements)
+    print(format_stills(stills, placements))
+    return 0
+
+
+def _render(project: Project) -> None:
+    ctx = project.ctx
+    render_dir = ctx.stage_dir("render")
+    run_render(
+        ctx.stage_dir("publish") / "publish.json",
+        render_dir / "render.json",
+        ctx.cfg,
+        run=run_magick,
+        markdown=render_dir / "render.md",
+    )
+    print(f"rendered into {render_dir}")
+
+
+def cmd_write(project: Project, args: argparse.Namespace) -> int:
+    ctx = project.ctx
+    cfg = ctx.cfg
+    data = _read_edit(args.edit)
+    publish_dir = ctx.stage_dir("publish")
+    placements = finished_placements(project)
+    edit, chapters, problems, warnings = validate_edit(
+        data,
+        project,
+        placements,
+        fonts=cfg["render"]["fonts"],
+        publish_dir=publish_dir,
+        min_chapter=cfg["publish"]["min_chapter_duration"],
+    )
+    if problems:
+        print(f"{len(problems)} problem(s); nothing written:", file=sys.stderr)
+        for p in problems:
+            print(f"  {p}", file=sys.stderr)
+        return 1
+    for w in warnings:
+        print(f"warning: {w}", file=sys.stderr)
+    assert edit is not None
+    publish_dir.mkdir(parents=True, exist_ok=True)
+    edit_path = publish_dir / "edit.json"
+    edit_path.write_text(json.dumps(data, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    result = build_publish(
+        edit,
+        chapters,
+        placements,
+        read_stills(publish_dir / "stills.json"),
+        min_chapter=cfg["publish"]["min_chapter_duration"],
+    )
+    json_path = publish_dir / "publish.json"
+    json_path.write_text(json.dumps(result, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    md_path = publish_dir / "publish.md"
+    md_path.write_text(
+        render_publish_markdown(result, cfg["general"]["image_markup"]), encoding="utf-8"
+    )
+    for p in (edit_path, json_path, md_path):
+        print(f"wrote {p}")
+    if not args.no_render:
+        _render(project)
+    return 0
+
+
+def cmd_render(project: Project, args: argparse.Namespace) -> int:
+    _render(project)
+    return 0
+
+
+def build_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(
+        prog="publish-tools",
+        description=(
+            "Deterministic tools for writing a video's upload material with a coding "
+            "agent (no LLM call). Line numbers are the director's display numbering."
+        ),
+        epilog=EDIT_HELP,
+    )
+    common = argparse.ArgumentParser(add_help=False)
+    common.add_argument(
+        "--config",
+        action="append",
+        default=None,
+        help="Path to YAML config file (repeatable; merged left to right, later files win)",
+    )
+    sub = parser.add_subparsers(dest="command", required=True)
+
+    p = sub.add_parser(
+        "view",
+        parents=[common],
+        help="Print the brief, plan, captions, runtime and the lines with their times",
+    )
+    p.add_argument("--lines", type=_parse_lines, help="Only display lines A-B")
+    p.set_defaults(func=cmd_view)
+
+    p = sub.add_parser(
+        "frames",
+        parents=[common],
+        help="Extract the thumbnail shortlist, or stills at given lines",
+        description=(
+            "Without --line: write the shortlist fresh. With --line N[@pos] "
+            "(repeatable, pos in [0,1], default 0.5): add those stills to the "
+            "existing list. One container for every still."
+        ),
+    )
+    p.add_argument("--line", action="append", type=_parse_line_pos, metavar="N[@pos]")
+    p.set_defaults(func=cmd_frames)
+
+    p = sub.add_parser(
+        "write",
+        parents=[common],
+        help="Validate an edit and write edit.json, publish.json, publish.md, then render",
+        epilog=EDIT_HELP,
+    )
+    p.add_argument("--edit", required=True, help="Edit JSON file, or - for stdin")
+    p.add_argument("--no-render", action="store_true", help="Skip compositing the thumbnails")
+    p.set_defaults(func=cmd_write)
+
+    p = sub.add_parser(
+        "render",
+        parents=[common],
+        help="Composite the thumbnails from publish.json (no LLM)",
+    )
+    p.set_defaults(func=cmd_render)
+    return parser
+
+
+def main(argv: list[str] | None = None) -> int:
+    args = build_parser().parse_args(argv)
+    logging.basicConfig(level=logging.ERROR)
+    try:
+        project = load_project(_load_cfg(args.config))
+        return args.func(project, args)
+    except (PipelineError, OSError, ValueError) as e:
+        print(f"error: {e}", file=sys.stderr)
+        return 2
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
