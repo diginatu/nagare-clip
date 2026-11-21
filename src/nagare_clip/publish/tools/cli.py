@@ -251,7 +251,14 @@ def cmd_frames(project: Project, args: argparse.Namespace) -> int:
     path = ctx.stage_dir("publish") / "stills.json"
     if requests:
         new_paths = {s.path for s in stills}
-        kept = [_still_from_row(r) for r in read_stills(path) if r.get("path") not in new_paths]
+        kept = []
+        for i, row in enumerate(read_stills(path)):
+            try:
+                if row.get("path") in new_paths:
+                    continue
+                kept.append(_still_from_row(row))
+            except (AttributeError, KeyError, TypeError, ValueError):
+                print(f"warning: stills.json row {i} is malformed; skipped", file=sys.stderr)
         stills = kept + stills
     placements = finished_placements(project)
     write_stills(path, stills, placements)

@@ -33,6 +33,8 @@ def line_span(project: Project, number: int) -> LineSpan | None:
         if not 0 <= offset < len(times):
             return None
         start, end = times[offset]
+        if start is None or end is None:
+            return None
         return LineSpan(line.stem, float(start), float(end))
     for silence in transcript.silence_lines:
         if silence.after_line == line.source_line:

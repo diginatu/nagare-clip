@@ -47,7 +47,10 @@ def render_publish_markdown(data: dict[str, Any], markup: str = "html") -> str:
     if data["thumbnail_copy"]:
         for i, thumb_set in enumerate(data["thumbnail_copy"], start=1):
             lines.append(f"### Set {i}")
-            lines += [f"- {line['role']}: {line['text']}" for line in thumb_set["lines"]]
+            lines += [
+                f"- {line['role']}: {line['text']}" if line.get("role") else f"- {line['text']}"
+                for line in thumb_set["lines"]
+            ]
             lines.append("")
     else:
         lines += ["_(none)_", ""]

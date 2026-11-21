@@ -43,3 +43,8 @@ def test_finished_placements_from_intervals(project):
     )
     pl = finished_placements(p)
     assert pl is not None and [(x.stem, x.tl_start, x.tl_end) for x in pl] == [("a", 0.0, 1.0)]
+
+
+def test_untimed_segment_time_is_none(project):
+    project.transcripts[0].seg_times[0] = (None, None)
+    assert line_span(project, 1) is None

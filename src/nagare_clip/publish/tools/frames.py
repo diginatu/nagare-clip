@@ -231,12 +231,15 @@ def read_stills(path: Path) -> list[dict[str, Any]]:
 
 
 def format_stills(stills: Sequence[Still], placements: Sequence[Placement] | None) -> str:
-    """``line  M:SS|—  kind  label  path`` rows in playback order, untimed last."""
+    """``line  M:SS|✂|—  kind  label  path`` rows in playback order, untimed last."""
     rows = [(_timeline_time(placements, s), s) for s in stills]
     rows.sort(key=lambda r: (r[0] is None, r[0] if r[0] is not None else 0.0))
     out = []
     for t, s in rows:
         line = "—" if s.line is None else str(s.line)
-        when = "—" if t is None else format_timestamp(t)
+        if t is not None:
+            when = format_timestamp(t)
+        else:
+            when = "—" if placements is None else "✂"
         out.append(f"{line}  {when}  {s.kind}  {s.label}  {s.path}")
     return "\n".join(out)

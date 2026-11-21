@@ -358,3 +358,23 @@ def test_frames_warns_on_stderr_about_a_still_the_batch_did_not_write(
     assert cli.main(["frames", "--line", "1"]) == 0
     err = capsys.readouterr().err
     assert "warning: frames: no still written at 1.500s for a; dropped" in err
+
+
+def test_frames_skips_a_malformed_stills_row_with_a_warning(setup, monkeypatch, capsys):
+    project, _ = setup
+    monkeypatch.setattr(cli, "extract_stills", lambda proj, stills, **kw: stills)
+    path = project.ctx.stage_dir("publish") / "stills.json"
+    path.parent.mkdir(parents=True)
+    good = {
+        "stem": "a",
+        "source_time": 1.0,
+        "kind": "line",
+        "label": "keep me",
+        "line": 1,
+        "path": "frames/a/1.000.jpg",
+    }
+    path.write_text(json.dumps([{"stem": "a"}, good]), encoding="utf-8")
+    assert cli.main(["frames", "--line", "3"]) == 0
+    assert "stills.json row 0" in capsys.readouterr().err
+    labels = [r["label"] for r in json.loads(path.read_text())]
+    assert labels == ["keep me", "line 3 @0.5"]

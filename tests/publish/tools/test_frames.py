@@ -143,7 +143,9 @@ def test_write_read_and_format(tmp_path):
         "frames/a/7.000.jpg",
         "frames/a/99.000.jpg",
     ]
-    assert "0:03" in lines[0] and "—" in lines[2]
+    assert "0:03" in lines[0] and "✂" in lines[2]
+    # with no timeline at all it is unknown, not cut
+    assert "—" in format_stills(stills, None).splitlines()[2]
 
 
 def _timings(project):
