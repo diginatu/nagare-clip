@@ -405,9 +405,60 @@ def test_render_refreshes_output_index(setup):
 
 def test_index_failure_only_warns(setup, tmp_path, monkeypatch, capsys):
     _writable(setup[0])
+
     def boom(*a, **k):
         raise RuntimeError("nope")
 
     monkeypatch.setattr(cli, "write_index", boom)
     assert cli.main(["write", "--edit", _edit_file(tmp_path, GOOD), "--no-render"]) == 0
     assert "warning: index.md not refreshed: nope" in capsys.readouterr().err
+
+
+def _saved_lines(project):
+    return project.ctx.stage_dir("publish") / "edit_lines.json"
+
+
+def test_write_saves_the_chapter_lines_text(setup, tmp_path):
+    project, _ = setup
+    _writable(project)
+    assert cli.main(["write", "--edit", _edit_file(tmp_path, GOOD), "--no-render"]) == 0
+    assert json.loads(_saved_lines(project).read_text(encoding="utf-8")) == {
+        "1": "one",
+        "3": "two",
+    }
+
+
+def test_write_warns_when_a_chapter_line_now_reads_differently(setup, tmp_path, capsys):
+    project, _ = setup
+    _writable(project)
+    _saved_lines(project).write_text(json.dumps({"1": "one", "3": "other"}), encoding="utf-8")
+    assert cli.main(["write", "--edit", _edit_file(tmp_path, GOOD), "--no-render"]) == 0
+    err = capsys.readouterr().err
+    assert (
+        "warning: line 3 read 「other」 when edit.json was last written; it now reads 「two」"
+        " — the numbering may have moved; check this chapter"
+    ) in err
+    assert "line 1 read" not in err
+    # and the file now describes this write
+    assert json.loads(_saved_lines(project).read_text(encoding="utf-8"))["3"] == "two"
+
+
+def test_write_is_quiet_when_the_text_is_unchanged_or_the_file_absent(setup, tmp_path, capsys):
+    project, _ = setup
+    _writable(project)
+    assert cli.main(["write", "--edit", _edit_file(tmp_path, GOOD), "--no-render"]) == 0
+    assert "read 「" not in capsys.readouterr().err
+    assert cli.main(["write", "--edit", _edit_file(tmp_path, GOOD), "--no-render"]) == 0
+    assert "read 「" not in capsys.readouterr().err
+    _saved_lines(project).write_text("not json", encoding="utf-8")
+    assert cli.main(["write", "--edit", _edit_file(tmp_path, GOOD), "--no-render"]) == 0
+    assert "read 「" not in capsys.readouterr().err
+
+
+def test_chapters_warns_about_drift_too(setup, capsys):
+    project, _ = setup
+    pub = project.ctx.stage_dir("publish")
+    pub.mkdir(parents=True)
+    _saved_lines(project).write_text(json.dumps({"3": "other"}), encoding="utf-8")
+    cli.main(["chapters", "1", "3"])
+    assert "line 3 read 「other」" in capsys.readouterr().err

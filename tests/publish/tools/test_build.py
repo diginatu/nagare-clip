@@ -72,7 +72,9 @@ def test_markdown_renders():
 
 def test_a_set_line_with_no_role_has_no_empty_prefix():
     data = empty_publish()
-    data["thumbnail_copy"] = [{"lines": [{"role": "", "text": "Hi"}, {"role": "hook", "text": "Yo"}]}]
+    data["thumbnail_copy"] = [
+        {"lines": [{"role": "", "text": "Hi"}, {"role": "hook", "text": "Yo"}]}
+    ]
     md = render_publish_markdown(data, "html")
     assert "- Hi" in md and "- hook: Yo" in md
     assert "- : " not in md

@@ -270,6 +270,41 @@ def cmd_frames(project: Project, args: argparse.Namespace) -> int:
     return 0
 
 
+def _read_saved_lines(path: Path) -> dict[str, str]:
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+    if not isinstance(data, dict):
+        return {}
+    return {str(k): v for k, v in data.items() if isinstance(v, str)}
+
+
+def _drift_warnings(project: Project, saved: dict[str, str], numbers: list[int]) -> list[str]:
+    """One warning per chapter line whose text differs from when edit.json was written."""
+    out = []
+    for number in dict.fromkeys(numbers):
+        old = saved.get(str(number))
+        new = _bare_text(project, number)
+        if old is not None and old != new:
+            out.append(
+                f"warning: line {number} read 「{old}」 when edit.json was last written; "
+                f"it now reads 「{new}」 — the numbering may have moved; check this chapter"
+            )
+    return out
+
+
+def _chapter_numbers(data: Any) -> list[int]:
+    rows = data.get("chapters") if isinstance(data, dict) else None
+    return [
+        c["line"]
+        for c in rows or []
+        if isinstance(c, dict)
+        and isinstance(c.get("line"), int)
+        and not isinstance(c["line"], bool)
+    ]
+
+
 def _refresh_index(project: Project) -> None:
     """Regenerate output/index.md the way every pipeline run does; never fails the tool."""
     ctx = project.ctx
@@ -316,6 +351,15 @@ def cmd_write(project: Project, args: argparse.Namespace) -> int:
         print(f"warning: {w}", file=sys.stderr)
     assert edit is not None
     publish_dir.mkdir(parents=True, exist_ok=True)
+    lines_path = publish_dir / "edit_lines.json"
+    numbers = _chapter_numbers(data)
+    for w in _drift_warnings(project, _read_saved_lines(lines_path), numbers):
+        print(w, file=sys.stderr)
+    lines_path.write_text(
+        json.dumps({str(n): _bare_text(project, n) for n in numbers}, ensure_ascii=False, indent=2)
+        + "\n",
+        encoding="utf-8",
+    )
     edit_path = publish_dir / "edit.json"
     edit_path.write_text(json.dumps(data, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     result = build_publish(
@@ -355,6 +399,9 @@ def _bare_text(project: Project, number: int) -> str:
 def cmd_chapters(project: Project, args: argparse.Namespace) -> int:
     min_chapter = project.ctx.cfg["publish"]["min_chapter_duration"]
     placements = finished_placements(project)
+    saved = _read_saved_lines(project.ctx.stage_dir("publish") / "edit_lines.json")
+    for w in _drift_warnings(project, saved, list(args.lines)):
+        print(w, file=sys.stderr)
     refs = []
     for number in args.lines:
         text = _bare_text(project, number)
