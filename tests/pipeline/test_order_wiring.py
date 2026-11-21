@@ -222,18 +222,18 @@ class TestOrderedSources:
             built, [{"stem": "a", "lines": [4, 5]}, {"stem": "b"}, {"stem": "a", "lines": [1, 3]}]
         )
         st._write_manifest(_ctx(built))
-        out = st._ordered_sources(_ctx(built))
+        out = st.ordered_sources_for(_ctx(built))
         assert [stem for stem, _ in out] == ["a", "b", "a"]
         assert out[0][1]["keep_intervals"] == [{"start": 30.0, "end": 50.0}]
         assert out[2][1]["keep_intervals"] == [{"start": 0.0, "end": 20.0}]
 
     def test_it_is_filtered_to_the_sources_this_run_processes(self, built):
         st._write_manifest(_ctx(built))
-        out = st._ordered_sources(_ctx(built, stems=("b",)))
+        out = st.ordered_sources_for(_ctx(built, stems=("b",)))
         assert [stem for stem, _ in out] == ["b"]
 
     def test_no_manifest_degrades_to_shooting_order(self, built):
-        out = st._ordered_sources(_ctx(built))
+        out = st.ordered_sources_for(_ctx(built))
         assert [stem for stem, _ in out] == ["a", "b"]
         assert out[0][1]["keep_intervals"] == [
             {"start": 0.0, "end": 20.0},

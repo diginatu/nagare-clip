@@ -750,7 +750,7 @@ def _write_manifest(ctx: PipelineContext) -> list[TimelineSegment]:
     return entries
 
 
-def _ordered_sources(ctx: PipelineContext) -> list[tuple[str, dict]]:
+def ordered_sources_for(ctx: PipelineContext) -> list[tuple[str, dict]]:
     """The finished video as ``(stem, sliced intervals data)``, in playback order.
 
     Filtered to the sources this run processes, which is what makes
@@ -787,7 +787,7 @@ def write_cut_report(ctx: PipelineContext) -> None:
     """
     note = ctx.llm_report_dir / "notes" / CUT_REPORT_NOTE
     try:
-        sources = _ordered_sources(ctx)
+        sources = ordered_sources_for(ctx)
         text = (
             build_cut_report(
                 sources,
@@ -987,7 +987,7 @@ def _publish_run(ctx: PipelineContext) -> None:
             ctx.stage_dir("summary") / "summary.json",
             d / "publish.json",
             ctx.cfg,
-            ordered=_ordered_sources(ctx),
+            ordered=ordered_sources_for(ctx),
             plan=director_files.read_plan(ctx),
             overlay_texts=overlay_texts,
             thumbs=thumbs,
