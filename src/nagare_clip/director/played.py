@@ -101,14 +101,14 @@ def _run_rows(
     captions: Mapping[int, list[tuple[str, float]]],
     when: Callable[[int], str] | None = None,
 ) -> list[str]:
-    def stamp(n: int) -> str:
-        return "" if when is None else when(n) + "  "
+    def stamp(n: int | None) -> str:
+        return "" if when is None or n is None else when(n) + "  "
 
     where = _lines_phrase(run.lines) if run.lines else ""
     if run.kind == "cut":
         return [f"{INDENT}✂ cut {where}"]
     if _collapsed(run):
-        row = f"{stamp(run.lines[0])}{INDENT}⏩ {run.kind} {where} x{run.factor}"
+        row = f"{stamp(run.lines[0] if run.lines else None)}{INDENT}⏩ {run.kind} {where} x{run.factor}"
         if run.text:
             row += " 「" + run.text.replace("\n", "\\n") + "」"
         rows = [row + f", {_s(run.seconds)} on screen — its speech is not followed"]

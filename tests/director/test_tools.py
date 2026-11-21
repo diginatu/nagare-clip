@@ -791,3 +791,14 @@ def test_played_transcript_when_prefixes_played_and_sped_rows(project):
     assert "T1      ⏩ speed line 1 x3.0" in out
     assert "T3  3: aの2行目" in out
     assert "    ✂ cut line 4" in out and "T4" not in out
+
+
+def test_a_collapsed_run_with_no_lines_does_not_crash():
+    from nagare_clip.director.played import _run_rows
+    from nagare_clip.director.preview import Run
+
+    run = Run(kind="timelapse", seconds=1.5, lines=[], after=3, factor=4.0, text="cap")
+    plain = _run_rows(run, None, {}, set(), {})
+    assert len(plain) == 1 and "⏩ timelapse" in plain[0]
+    stamped = _run_rows(run, None, {}, set(), {}, when=lambda n: f"T{n}")
+    assert stamped == plain  # no first line, so no prefix
