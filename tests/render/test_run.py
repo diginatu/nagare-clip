@@ -436,3 +436,16 @@ def test_no_warnings_key_content_when_everything_fits(tmp_path):
     data, md, _ = _run(tmp_path)
     assert data["warnings"] == []
     assert "**Warning:**" not in md
+
+
+def test_stale_set_images_are_removed_before_compositing(tmp_path):
+    one_set = {**PUBLISH, "thumbnail_copy": PUBLISH["thumbnail_copy"][:1]}
+    thumbs = tmp_path / "render" / "thumbnails"
+    thumbs.mkdir(parents=True)
+    (thumbs / "set2.jpg").write_bytes(b"old")
+    (thumbs / "set10.jpg").write_bytes(b"old")
+    (thumbs / "notes.txt").write_text("keep", encoding="utf-8")
+    _run(tmp_path, publish=one_set)
+    assert not (thumbs / "set2.jpg").exists()
+    assert not (thumbs / "set10.jpg").exists()
+    assert (thumbs / "notes.txt").read_text(encoding="utf-8") == "keep"

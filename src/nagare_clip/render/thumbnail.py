@@ -582,6 +582,10 @@ def render_sets(
     canvas = (int(render_cfg.get("width", 1280)), int(render_cfg.get("height", 720)))
     line_gap = int(render_cfg.get("line_gap", 12))
     (out_dir / "thumbnails").mkdir(parents=True, exist_ok=True)
+    for stale in (out_dir / "thumbnails").iterdir():
+        # A previous run's sets beyond this run's count would otherwise linger.
+        if stale.is_file() and re.fullmatch(r"set\d+\.jpg", stale.name):
+            stale.unlink()
 
     def skip(index: int, reason: str) -> None:
         logger.warning("render: set %d not rendered: %s", index, reason)
