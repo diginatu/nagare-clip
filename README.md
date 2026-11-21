@@ -16,10 +16,11 @@ The pipeline creates a rough-cut Blender project for human review and fine-tunin
 7. director: a **checkpoint** — you direct the cut with a coding agent through the `nagare-director` skill, which writes `output/director/` (`plan.md`, `order.json`, `{stem}_director.json`); a run always stops here, and you resume with `--from-stage guided_edit`
 8. guided_edit: applies the director's ops into `_edits.txt` deterministically (no LLM)
 9. intervals: Patch application + keep intervals -> `*_intervals.json` keep ranges (audio cuts unioned in), plus `output/intervals/timeline.json` — the order in seconds
-10. blender: Blender headless -> `.blend` with VSE strips arranged back-to-back, in the order `timeline.json` gives
-11. publish (optional, project-wide): title candidates, a description with chapter timestamps taken from the finished timeline, thumbnail copy and candidate stills -> reviewable `output/publish/publish.md` + `publish.json`
+10. blender: Blender headless -> `.blend` with VSE strips arranged back-to-back, in the order `timeline.json` gives — the last stage
 
-Stages are referenced by name (`--from-stage <name>`); the sentence_split/gap_context/summary/publish stages are no-ops unless enabled in config. A run always stops at the director (exit 0); resume with `--from-stage guided_edit` once the director files are written — see *Directing with a coding agent* below.
+After the pipeline, not a stage: you write the upload material — title candidates, a description with chapter timestamps taken from the finished timeline, and composited thumbnails — with a coding agent through the `nagare-publish` skill -> reviewable `output/publish/publish.md` + `output/render/render.md` (see *Publishing with a coding agent* below).
+
+Stages are referenced by name (`--from-stage <name>`); the sentence_split/gap_context/summary stages are no-ops unless enabled in config. A run always stops at the director (exit 0); resume with `--from-stage guided_edit` once the director files are written — see *Directing with a coding agent* below.
 
 ## Human Editing Workflow
 
@@ -34,7 +35,7 @@ The `director` checkpoint and `guided_edit` automate steps like the above: you d
 
 A director `keep` op protects a span from cutting **including its silences**, and its width follows what is on screen: the narrowest range to rescue one silent gap, or the whole run of lines when a continuous event is playing out — an accident and the cleanup after it, a demo running — since chopping such a sequence into per-gap keeps reads as jump cuts through the payoff. What it is *not* is a way to mark a long span of **talking** as important: speech is never dropped by default, so a keep over talking only restores its pauses. `director.max_keep_lines` (default `8`, `0` = no limit) is the cap the skill's `write` enforces, counting keeps that touch as one keep; a `keep` you write by hand into `{stem}_director.json` is always honoured. A fast span that needs a keep of its own belongs in a `timelapse` op instead.
 
-The optional `summary` stage runs **once over all source videos** (project-wide) and gives downstream stages cross-video context. Enable `summary.enabled` in config: it runs before `text_filter`, segments each sentence_split transcript into line-range parts with a summary each, lists per-video misspelling-prone keywords, generates a whole-video summary per video, and writes one all-videos summary to `output/summary/summary.json` (`{summary, parts, keywords, video_summaries}`) — its per-video summary/part summaries/keywords also prime the `text_filter` LLM's prompt, the director's `view` shows the overall and per-video summaries as facts, and `publish` builds its chapters from the parts.
+The optional `summary` stage runs **once over all source videos** (project-wide) and gives downstream stages cross-video context. Enable `summary.enabled` in config: it runs before `text_filter`, segments each sentence_split transcript into line-range parts with a summary each, lists per-video misspelling-prone keywords, generates a whole-video summary per video, and writes one all-videos summary to `output/summary/summary.json` (`{summary, parts, keywords, video_summaries}`) — its per-video summary/part summaries/keywords also prime the `text_filter` LLM's prompt, the director's `view` shows the overall and per-video summaries as facts, and so does the publish tools' `view`.
 
 #### The order of the finished video
 
@@ -148,105 +149,104 @@ never explains an absence: a timestamp is a fact, while a guess at *why*
 something is missing, written by something that cannot see your run, is worse
 than a dash.
 
-### Publishing material (`output/publish/`)
+### Publishing with a coding agent (the `nagare-publish` skill)
 
-The optional `publish` stage runs **after** Blender and writes what you would
-otherwise retype by hand for every upload. Enable `publish.enabled` in config;
-it writes files, you upload.
+Publishing is **not a pipeline stage** — the pipeline ends at `blender`. Once
+the `.blend` exists, you write what an upload needs together with a coding
+agent, in its own chat, through the `nagare-publish` skill: **title
+candidates**, the **description lead**, the **chapters** and the
+**thumbnails**. The agent writes the words and chooses the look; deterministic
+tools (no LLM call) compute every time from the finished timeline, extract the
+candidate stills, validate, write the files and composite the thumbnails. The
+agent looks at the stills and at every rendered thumbnail with its own image
+input. Uploading stays manual.
 
-`output/publish/publish.md` is the reviewable file:
+1. Install the skills into your video directory (the same APM package as the
+   director's, see step 0 above — it holds both `nagare-director` and
+   `nagare-publish`).
+2. Run the pipeline through `blender` (resume from `guided_edit` after the
+   director).
+3. In the video directory, ask your agent to publish the video (for example
+   "nagare-publish でタイトルとサムネを作って"). It reads the finished video,
+   writes the copy **before** looking at any still (copy written while looking
+   at the pictures ends up captioning them), shows it to you, then picks a
+   background and a look per thumbnail, renders, looks, and revises with you.
 
-- **Title candidates** — several, not one. Hook quality varies a lot between
-  attempts and picking from a list is cheap.
-- **Description** — a short lead written from the whole-video summary and your
-  `project:` brief, followed by the chapter list, ready to paste.
-- **Thumbnail copy** — alternative sets of one to three lines, each tagged
-  `tag` / `hook` / `subtitle`. The count is never padded to fill a template:
-  a punchier video may want just a hook.
-- **Thumbnail frame candidates** — a table of stills extracted at the moments
-  the director marked as payoffs (`overlay` captions, `keep` events, and both
-  boundaries of a `timelapse`), so you pick from a shortlist instead of
-  scrubbing the timeline. The JPEGs are under `output/publish/frames/`.
+The tools, which you can also run yourself (all paths are under your config's
+`general.output_dir`, `output` by default):
 
-Images are embedded as sized `<img>` tags by default. If you read these files
-in a viewer that strips raw HTML, set `general.image_markup: markdown` and they
-become plain `![alt](path)` images instead (markdown has no width syntax, so
-they render full width). One key, read by both `publish.md` and `render.md` —
-it describes your viewer, not a stage.
+```bash
+./scripts/publish_tools.sh view     --config <yml> [--lines 1-200 | --compact]   # brief, summaries, plan, captions, fonts, runtime, the lines with finished times
+./scripts/publish_tools.sh frames   --config <yml> [--line 40 --line 95@0.2]       # the thumbnail shortlist, or stills at given lines (one Docker run)
+./scripts/publish_tools.sh chapters 1 40 95 --config <yml>                         # try chapter lines: finished time, length, problems
+./scripts/publish_tools.sh write    --config <yml> --edit edit.json [--no-render]  # validate, then write publish.json/publish.md and render — all or nothing
+./scripts/publish_tools.sh render   --config <yml>                                 # re-composite from a hand-edited publish.json
+```
 
-`output/publish/publish.json` holds the same material as data, and is the
-**hand-editable contract** the `render` stage below reads — like
-`_director.json` is for the edit. `publish` itself composites nothing.
+- `view` prints the output dir first, then the brief, the summaries, the
+  director's plan, the director's captions with their finished times, the font
+  slots a thumbnail may use (`render.fonts`), the finished runtime and one row
+  per line, `N  M:SS  text` (`✂` = the line does not survive the cut, `—` = no
+  finished timeline yet). `--compact` shows only what plays, in playback order,
+  each row with its finished time — a cut and a timelapse are one row each.
+- `frames` without `--line` writes the **shortlist**: stills at the moments the
+  director marked as payoffs (mid-line of an `overlay` caption, the middle of a
+  `keep`, both ends of a `timelapse`). Stills that are not in the finished video
+  are left out before the `publish.max_frames` cap. `--line N[@pos]` adds a
+  still anywhere (`pos` 0–1 within the line, default 0.5). The list is
+  `publish/stills.json`; the JPEGs are under `publish/frames/`.
+- The edit is one JSON file: `{"titles": [...], "lead": "...", "chapters":
+  [{"line": 40, "title": "..."}], "thumbnails": [{"background":
+  "frames/a/63.200.jpg", "gravity": "south", "lines": [{"text": "...",
+  "fill": "#FFCC00", "font": "sans-bold"}]}]}`. Chapters name **display
+  lines, never times**: the tool takes each line's first surviving moment in
+  the finished video, sorts the chapters and shows the first as `0:00`.
+- `write` refuses the edit — listing every problem, writing nothing — for an
+  unknown key or wrong type, an empty `titles`, a title over 100 characters or
+  holding `<`/`>`, a description over 5000 characters, a chapter on a line that
+  does not exist or is cut, two chapters at one time, a chapter shorter than
+  `publish.min_chapter_duration` (YouTube's 10 s), a thumbnail style value
+  outside the allowed set, a `font` that is not a `render.fonts` slot, or a
+  `background` that does not exist. Fewer than three chapters is a warning
+  (YouTube links the timestamps but draws no segmented bar). On success it
+  saves the edit as `publish/edit.json` (revise that later; there is no
+  `dump`), writes `publish/publish.json` and `publish/publish.md`, and renders.
 
-**How a headline meets its picture.** `publish` makes two text calls where it
-used to make one. The **copy** call writes the hooks from the story and is shown
-no frames at all — two dozen frame descriptions in front of it and it starts
-captioning the photographs instead. The **pairing** call then takes those hooks
-and the frame *descriptions* (never the images) and decides, per set, which
-frame it goes on and where and in what colour the text sits. It names its frame
-by index, and `publish` writes the resolved **path** into `publish.json`, which
-is what you then edit. Turn it off with `publish.pairing.enabled: false` and
-every set falls back to the built-in presets.
+`publish.md` holds the title candidates, the description with its chapter list
+ready to paste, the thumbnail copy and the stills. `publish.json` is the same as
+data. Nothing in the pipeline rebuilds them: after the cut changes and the
+pipeline re-runs through `blender`, `write` the saved edit again — the times are
+recomputed and a chapter on a now-cut line is reported.
 
-**Looking at the frames.** With `publish.describe_frames.enabled` (and a
-vision-capable model configured), each candidate still is described once — what
-is actually legible in it, where the subject sits, which regions are empty and
-what colour they are — into `output/publish/frames.json`. A label from the
-director says what it *thought* was happening at that moment; only looking says
-what a viewer can make out. Descriptions are cached by a content hash of the
-JPEG itself, so re-running `publish` for better copy over an unchanged shortlist
-costs **no** vision calls, a re-extracted frame whose picture changed is
-described again, and a description you rewrite by hand in `frames.json` is the
-description from then on.
-
-### Rendered thumbnails (`output/render/`)
-
-`render` is the last stage, and the only one that **never makes an LLM call
-under any circumstances**. It reads `output/publish/publish.json` and
-composites one real thumbnail per copy set into
-`output/render/thumbnails/set{N}.jpg`, with `output/render/render.md` as a
-contact sheet embedding the finished images beside the copy they carry.
-
-Each set names **its own background** and carries its own *look* — font,
-colours, outline, block position — so the sets you see are real options rather
-than several wordings of one image. Both are decided by `publish`'s **pairing**
-call, in ImageMagick's own vocabulary;
-the pipeline validates every value and builds every `magick` command as an
-argument list (never a shell string). This needs `magick` (ImageMagick) on
-`PATH`; set `render.enabled: false` to keep the copy but skip compositing.
+**Thumbnails** (`output/render/`). `render` composites one thumbnail per set
+into `render/thumbnails/set{N}.jpg`, with `render/render.md` as a contact sheet;
+stale `set{N}.jpg` from an earlier, longer run are deleted first. It **never
+makes an LLM call**, under any circumstances. Each set names its own background
+(any image — a still, or a photograph of your own) and carries its own look in
+ImageMagick's vocabulary (`font`, `pointsize`, `fill`, `stroke`, `strokewidth`
+per line; `gravity`, `offset`, `shadow` per set); every value is validated and
+every `magick` command is an argument list, never a shell string. Line
+positions are measured, an over-wide line is shrunk, and a text block taller
+than the canvas is flagged in `render.md`. A set that produced no image keeps
+its heading in `render.md` and says why. This needs `magick` (ImageMagick) on
+`PATH`.
 
 **Set `render.fonts` if your copy is not plain ASCII.** ImageMagick's default
 face draws nothing at all — not even a box — for a character it has no glyph
 for, so a Japanese headline comes back invisible. The first slot you list is
-also the face any line falls back to when the model named none, so put a font
-that covers your language first. `render.md` says so at the top when it applies.
+also the face any line falls back to when it names none, so put a font that
+covers your language first. `view` lists the slots; `render.md` warns at the
+top when none is set.
 
-The split exists for one loop — look at a render, change one thing, look
-again:
-
-```bash
-$EDITOR output/publish/publish.json          # retype a hook, swap a colour
-./scripts/run_pipeline.sh --from-stage render --to-stage render
-```
-
-That costs **zero** LLM calls, every time. See
-[`docs/stages/render.md`](docs/stages/render.md) for the full style-key table
-and escaping rules.
-
-**Chapter timestamps come from the finished timeline**, not from the source: a
-part that was cut entirely drops out of the list, and a part inside a timelapse
-gets its compressed position. YouTube only turns a timestamp list into chapters
-when the first entry is exactly `0:00`, there are at least three, they ascend,
-and each runs at least 10 seconds — so the stage forces the first entry to
-`0:00` (your opening is almost always partly cut) and merges any chapter that
-lands under 10 seconds into a neighbour. The list is written either way: YouTube
-auto-links timestamps regardless, so a list of two still lets a viewer jump — it
-just does not draw the segmented progress bar. When the conditions are not met,
-`publish.md` says so and why.
+Images in `publish.md`, `render.md` and `output/index.md` are sized `<img>` tags
+by default; set `general.image_markup: markdown` for viewers that strip raw
+HTML. Details: [`docs/stages/publish.md`](docs/stages/publish.md),
+[`docs/stages/render.md`](docs/stages/render.md). Maintainers: the skill's
+source is `skills/.apm/skills/nagare-publish/`.
 
 ### LLM report (`output/llm_report/`)
 
-Every LLM stage (`sentence_split`, `gap_context`, `text_filter`, `summary`, `publish`)
+Every LLM stage (`sentence_split`, `gap_context`, `text_filter`, `summary`)
 writes a per-call record under `output/llm_report/`: an `index.md` table
 (stage, unit, attempts, outcome, reason) linking to per-call detail files under
 `<stage>/<unit>.md` that hold the full prompt and raw response for every attempt,
@@ -329,9 +329,9 @@ alongside Langfuse — the two are independent sinks.
 - Linux
 - NVIDIA GPU (CUDA) for the `transcription` stage (Haas-ja ASR); the VAD in `audio_silence` runs on CPU
 - `ffmpeg` on the host `PATH` (the `transcribe/` worker decodes audio with it, and the `blender` stage builds the VSE proxies with it — decoding on the NVIDIA GPU when it can, otherwise on the CPU)
-- Docker + Docker Compose with the NVIDIA Container Toolkit (used by `gap_context` and `publish` for frame snapshots, and by `whisper` for faster-whisper on the GPU)
+- Docker + Docker Compose with the NVIDIA Container Toolkit (used by `gap_context` and the publish tools' `frames` for frame snapshots, and by `whisper` for faster-whisper on the GPU)
 - Blender available as `blender`
-- ImageMagick available as `magick` (only needed for `render.enabled`, i.e. when the `render` stage composites thumbnails)
+- ImageMagick available as `magick` (only needed when the publish tools composite thumbnails)
 - Python 3.11+
 
 ## Setup
@@ -411,7 +411,7 @@ This produces outputs under `output/` (or your `--output-dir`), including:
 - `text_filter/myvideo_edits.txt`
 - `intervals/myvideo_intervals.json`
 - `blender/myvideo_edited.blend` (named after the first source file)
-- `publish/publish.md` + `publish/publish.json` (when `publish.enabled`)
+- later, from the publish tools: `publish/publish.md` + `publish/publish.json`, `render/render.md` + `render/thumbnails/`
 
 ## Configuration
 
@@ -493,9 +493,21 @@ the old pipeline wrote for a disabled director; resuming from guided_edit then
 passes with `Continuing with 0 op(s)` — run the skill to direct it.
 `director/conversation.md` is no longer read and can be deleted.
 
+### Migrating a config from the LLM publish
+
+The LLM publish is gone (publishing is the `nagare-publish` skill), and its
+keys fail config loading, each one named. Delete under `publish:` `enabled`,
+`provider`, `api_base`, `model`, `api_key`, `temperature`, `reasoning_effort`,
+`timeout`, `response_format`, `max_retries`, `retry_temp_step`,
+`retry_temp_cap`, `prompt` and the `pairing:`/`describe_frames:` subsections
+(keep `min_chapter_duration`, `max_frames`, `frame_width`), and `render.enabled`
+(calling the tool is the decision to render). An old `output/publish/frames.json`
+is no longer read. `--from-stage publish`/`render` is now an unknown-stage
+error.
+
 ### project: the editorial brief
 
-The `project:` section tells the editorial LLM stages what the transcript never says — who the video is for, how long it should be, how it should feel, and what happened last episode. Everything set here is appended to the system prompts of `summary`, `text_filter` and `publish`, and printed at the top of the director's `view`; every field is optional free text and defaults to empty (with nothing set, prompts are exactly as they were before this section existed).
+The `project:` section tells the editorial LLM stages what the transcript never says — who the video is for, how long it should be, how it should feel, and what happened last episode. Everything set here is appended to the system prompts of `summary` and `text_filter`, and printed at the top of the director's and the publish tools' `view`; every field is optional free text and defaults to empty (with nothing set, prompts are exactly as they were before this section existed).
 
 ```yaml
 project:
@@ -510,11 +522,11 @@ project:
 
 `previous_summary` is how a series carries over: point it at the earlier project's `output/summary/summary.json` and the director learns what "これ" refers to when the cut opens mid-story. A missing or unreadable file just drops that one line (logged), leaving the rest of the brief intact. `target_duration` and `tone` are what let `director` plan for the runtime you want and deviate from its default ~1-overlay-per-3-5-minutes density. The mechanical stages (`gap_context`, `sentence_split`, `guided_edit`) are deliberately not briefed.
 
-The config file covers all sections, each named after its stage: `general`, `project`, `transcription`, `audio_silence`, `whisper`, `sentence_split`, `gap_context`, `text_filter`, `summary`, `director`, `intervals`, `blender`, `publish`, `render`, `cut_report`, `pipeline`. The old `plan:`/`plan_revise:` sections, every `guided_edit:` key and the LLM director's keys are rejected with a message naming them (see *Migrating a config from the LLM director*). See `config.example.yml` for the full list of keys and their defaults.
+The config file covers all sections, each named after its stage: `general`, `project`, `transcription`, `audio_silence`, `whisper`, `sentence_split`, `gap_context`, `text_filter`, `summary`, `director`, `intervals`, `blender`, `publish`, `render`, `cut_report`, `pipeline`. The `publish` and `render` sections configure the publish tools, not stages. The old `plan:`/`plan_revise:` sections, every `guided_edit:` key, the LLM director's keys and the LLM publish's keys are rejected with a message naming them (see *Migrating a config from the LLM director* and *Migrating a config from the LLM publish*). See `config.example.yml` for the full list of keys and their defaults.
 
 ### Choosing an LLM provider
 
-Every LLM stage (`sentence_split`, `gap_context`, `text_filter`, `summary`, `publish`) routes through a unified transport backed by the [LiteLLM](https://github.com/BerriAI/litellm) library, so you can point any stage at a local or cloud provider. On a stage's config block, set `provider:` to one of `ollama_chat` (default, local Ollama), `openai`, `gemini`, or `anthropic`, and set `model:` to that provider's model name — LiteLLM receives the combined `"<provider>/<model>"`. Supply credentials with `api_key:` (or the provider's standard environment variable, e.g. `OPENAI_API_KEY`, `GEMINI_API_KEY`, `ANTHROPIC_API_KEY`). Leave `api_base:` empty for cloud providers; for `ollama_chat` an empty `api_base` falls back to local Ollama (`http://localhost:11434`). Each stage chooses its provider independently, so you can mix (e.g. a cloud model for `director` and local Ollama for `guided_edit`).
+Every LLM stage (`sentence_split`, `gap_context`, `text_filter`, `summary`) routes through a unified transport backed by the [LiteLLM](https://github.com/BerriAI/litellm) library, so you can point any stage at a local or cloud provider. On a stage's config block, set `provider:` to one of `ollama_chat` (default, local Ollama), `openai`, `gemini`, or `anthropic`, and set `model:` to that provider's model name — LiteLLM receives the combined `"<provider>/<model>"`. Supply credentials with `api_key:` (or the provider's standard environment variable, e.g. `OPENAI_API_KEY`, `GEMINI_API_KEY`, `ANTHROPIC_API_KEY`). Leave `api_base:` empty for cloud providers; for `ollama_chat` an empty `api_base` falls back to local Ollama (`http://localhost:11434`). Each stage chooses its provider independently, so you can mix (e.g. a cloud model for `director` and local Ollama for `guided_edit`).
 
 ```yaml
 director:
@@ -699,8 +711,8 @@ without the extra context.
 Options:
 - `--source FILE` — source video file (may be repeated for multiple sources); when omitted, all videos in `--input-videos-dir` are processed alphabetically.
 - `--config FILE` — path to a YAML config file; config values fill in between CLI overrides and built-in defaults. Repeatable: files are deep-merged left to right, later files win (see [Layering several config files](#layering-several-config-files)).
-- `--from-stage NAME` — start from stage `NAME`, reusing earlier stage outputs. `NAME` is a stage name: `audio_silence`, `transcription`, `whisper`, `sentence_split`, `gap_context`, `summary`, `text_filter`, `director`, `guided_edit`, `intervals`, `blender`, `publish`, `render`. Also settable via `pipeline.from_stage` in config.
-- `--to-stage NAME` — stop **after** stage `NAME` (inclusive); later stages are skipped. Same stage names as `--from-stage`, and must not precede it. Defaults to `publish` (run to the end). Also settable via `pipeline.to_stage` in config. Combine with `--from-stage` to run a window of stages, e.g. `--from-stage summary --to-stage director`.
+- `--from-stage NAME` — start from stage `NAME`, reusing earlier stage outputs. `NAME` is a stage name: `audio_silence`, `transcription`, `whisper`, `sentence_split`, `gap_context`, `summary`, `text_filter`, `director`, `guided_edit`, `intervals`, `blender`. Also settable via `pipeline.from_stage` in config.
+- `--to-stage NAME` — stop **after** stage `NAME` (inclusive); later stages are skipped. Same stage names as `--from-stage`, and must not precede it. Defaults to `blender` (run to the end). Also settable via `pipeline.to_stage` in config. Combine with `--from-stage` to run a window of stages, e.g. `--from-stage summary --to-stage director`.
 - Defaults: input videos under `src_video/`, outputs under `output/`.
 - If `--source` contains `/`, it is treated as the exact path; otherwise it is resolved inside `--input-videos-dir`.
 - `silence_threshold` and `min_keep` default to `1.5` and `1.0` (overridable via config).
@@ -782,47 +794,9 @@ blender --background --factory-startup --python-exit-code 1 --python src/nagare_
   --config my_project.yml
 ```
 
-### publish only (title, description, chapters, thumbnail material)
-
-```bash
-./scripts/run_pipeline.sh --from-stage publish --to-stage publish --config my_project.yml
-```
-
-Reuses `output/summary/summary.json`, the director's plan (`output/director/plan.md`), each source's
-`output/director/{stem}_director.json` and `output/intervals/{stem}_intervals.json`,
-so it can be re-run on its own to get a different set of title/thumbnail
-candidates without touching the cut. Any of those inputs missing degrades just
-the part that needed it (no intervals → no chapter timestamps).
-
-### render only (composite the thumbnails)
-
-```bash
-./scripts/run_pipeline.sh --from-stage render --to-stage render --config my_project.yml
-```
-
-Picking a background still and nudging a colour is iterative, and re-running
-`publish` would call the LLM again and hand you *different* copy than the one
-you were judging. So `render` is its own stage: it reads
-`output/publish/publish.json` (including the model-authored font/colour/
-position values), re-runs ImageMagick and makes **no LLM call at all** — hand-
-edit a set's `background`/`fill`/`stroke`/`gravity`/… first, then re-run the
-stage to see the change.
-
-A set's `background` is a path relative to `output/publish/` (where the
-shortlist stills are), or an absolute path. It does **not** have to be a
-shortlist frame: any image of any aspect ratio works, and is scaled to cover
-and centre-cropped to the canvas — so a photograph the camera never rolled on,
-or a frame you pulled by hand at a timestamp the shortlist missed, is one line
-of JSON away. A set that names nothing falls back to the first shortlist
-candidate; a set that names a file which is not there is skipped with a warning
-rather than quietly rendered onto some other frame — `render.md` keeps that
-set's heading and copy and says why it produced no image, so a typo is visible
-in the file you are already reading. See
-[`docs/stages/render.md`](docs/stages/render.md) for the full style-key table.
-
 ## Operational Notes
 
-- `gap_context` and `publish` run ffmpeg as root in the Docker image (`--user "0:0"`), so frame files under `output/` can be root-owned on host.
+- `gap_context` and the publish tools' `frames` run ffmpeg as root in the Docker image (`--user "0:0"`), so frame files under `output/` can be root-owned on host.
 - If needed, fix ownership after run:
 
 ```bash

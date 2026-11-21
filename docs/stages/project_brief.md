@@ -1,8 +1,10 @@
 # project brief — runtime notes
 
 The `project:` config section is not a stage: it is a project-wide **editorial
-brief** appended to the system prompts of the four LLM stages that make
-editorial judgements — `summary`, `director`, `text_filter` and `publish`. It
+brief** appended to the system prompts of the two LLM stages that make
+editorial judgements — `summary` and `text_filter` — and printed (by
+`format_brief`) at the top of the two agent skills' views: the director's
+`director_tools.sh view` and the publish tools' `publish_tools.sh view`. It
 carries what no transcript can state: who the video is for, how long it should
 be, how it should feel, and what happened in a previous episode of a series.
 
@@ -53,7 +55,9 @@ already-merged `cfg` dict and no LLM module gained a new parameter:
 |-------|----------------------|----------|
 | `summary` | `prompt`, `overall_prompt` | both the per-video map call and the all-videos reduce call |
 | `text_filter` | `prompt` | brief first, then `build_enhanced_prompt`'s per-video summary/keyword context (which stays closest to the transcript) |
-| `publish` | `prompt` | — (the audience/tone the title, lead and thumbnail copy are written for) |
+
+The director and publish are agent skills with no prompt to brief; their
+`view` prints the block instead (above).
 
 ## Whole-project instructions on a per-source prompt
 
@@ -66,7 +70,8 @@ caption on four of the videos, each op individually correct.
 The `director` does not have this problem: it is the nagare-director agent
 skill, whose `director_tools.sh view` prints the brief (`brief.format_brief`)
 above the whole video, so a START/END instruction is about the one finished
-video it is editing. `summary` and `publish` run once project-wide, and `text_filter`
+video it is editing; the publish tools' `view` does the same for the titles,
+lead and thumbnail copy. `summary` runs once project-wide, and `text_filter`
 makes no editorial placement decisions.
 
 `gap_context` and `sentence_split` are deliberately **not** briefed (and

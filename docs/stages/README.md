@@ -7,7 +7,7 @@ the hard constraints live in the top-level [`AGENTS.md`](../../AGENTS.md).
 
 | Topic | File |
 |-------|------|
-| Project editorial brief injected into summary/text_filter/publish prompts (and printed by the director's `view`) | [project_brief.md](project_brief.md) |
+| Project editorial brief injected into summary/text_filter prompts (and printed by the director's and the publish tools' `view`) | [project_brief.md](project_brief.md) |
 | Audio-silence detection | [audio_silence.md](audio_silence.md) |
 | Whisper hints: second recognizer feeding text_filter | [whisper.md](whisper.md) |
 | sentence_split: splitting lines longer than `max_line_seconds` | [sentence_split.md](sentence_split.md) |
@@ -15,8 +15,8 @@ the hard constraints live in the top-level [`AGENTS.md`](../../AGENTS.md).
 | Text filter + summary-stage filter context | [text_filter.md](text_filter.md) |
 | Intervals: `<keep>`/`<speed>`/`<overlay/>`/`<cut>` markers, margins, captions | [intervals.md](intervals.md) |
 | Blender VSE layout, text styling, retiming | [blender.md](blender.md) |
-| Publish material: titles, description + chapters, thumbnail copy/frames | [publish.md](publish.md) |
-| Render: compositing the thumbnails with ImageMagick (no LLM call, ever) | [render.md](render.md) |
+| The `nagare-publish` skill's tools (not a stage): titles, description + chapters, stills, the edit file | [publish.md](publish.md) |
+| render: the publish tools' thumbnail compositor (ImageMagick, no LLM call, ever) | [render.md](render.md) |
 | Pipeline orchestration (`run_pipeline.sh`) | [pipeline.md](pipeline.md) |
 | Segment order: the director's `order`, the timeline manifest, the order note | [order.md](order.md) |
 | Finished-cut metrics + checks (deterministic, no LLM) | [cut_report.md](cut_report.md) |

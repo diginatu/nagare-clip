@@ -119,7 +119,7 @@ longer maps onto the transcripts.
 
 `pipeline/stages._resolve_order` reads `director/order.json`, else shooting
 order. The manifest builder and the order note read it
-(through `_timeline_segments`). `blender`, `publish` and `cut_report` read the manifest and
+(through `_timeline_segments`). `blender`, `cut_report` and the publish tools (not a stage) read the manifest and
 never an order. Nothing downstream of `intervals` re-derives a time from a line
 number, and nothing upstream reasons in seconds.
 

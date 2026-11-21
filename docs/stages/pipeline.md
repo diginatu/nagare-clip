@@ -7,6 +7,12 @@ package `src/nagare_clip/pipeline/`. See the
 per-stage input/output contract; this file covers the orchestrator's own
 runtime behavior.
 
+The pipeline **ends at `blender`**. The upload material (titles, description,
+chapters, thumbnails) is not a stage: it is the `nagare-publish` agent skill's
+deterministic tools, `scripts/publish_tools.sh` ([`publish.md`](publish.md),
+[`render.md`](render.md)). `--from-stage publish`/`render` is an unknown-stage
+error.
+
 ## Modules
 
 - `errors.py` — `PipelineStop`, a deliberate stop that is not a failure (the director checkpoint, which always stops so the director files are written or revised with the skill): `cli.main()` prints it to stdout and returns 0, and `run_stages` re-raises it unwrapped. `PipelineError`, the single user-facing failure type. `cli.main()`
@@ -25,8 +31,10 @@ runtime behavior.
   never the staged copy.
 - `external.py` — the subprocess boundaries of the pipeline: the `transcribe/`
   uv subproject (Silero VAD for audio_silence, Haas-ja ASR for transcription;
-  no Docker), the whisperx Docker image (the gap_context/publish frame
-  snapshots) and headless Blender.
+  no Docker), the whisperx Docker image (the gap_context frame snapshots; the
+  publish tools reuse `build_snapshot_batch_cmd`/`run_command` for their
+  stills), headless Blender, host ffmpeg for the proxies, and `run_magick`
+  (host ImageMagick, called only by the publish tools' render).
   `build_transcribe_cmd()`, `build_snapshot_batch_cmd()`, and
   `build_blender_cmd()` are pure functions
   returning command lines (testable without Docker/Blender installed;
@@ -62,12 +70,13 @@ runtime behavior.
   when skipping ..."). Any stage exception other than `PipelineError`/`PipelineStop` is
   wrapped as `PipelineError(f"[{stage.name}] failed: {exc}")` so the CLI's
   top-level handler is the only place that prints and exits non-zero.
-- `stages.py` — `STAGE_NAMES` (the thirteen canonical stage names, in order) and
+- `stages.py` — `STAGE_NAMES` (the eleven canonical stage names, in order,
+  `audio_silence` … `blender`) and
   `STAGES` (the `Stage` registry consumed by `runner.run_stages`). One adapter
   function per stage translates `PipelineContext` into that stage's typed
   `run()` call (`run_audio_silence`, `run_sentence_split`, `run_gap_context`,
-  `run_summary`, `run_text_filter`, `run_guided_edit`, `run_intervals`,
-  `run_publish`) or an external command
+  `run_summary`, `run_text_filter`, `run_guided_edit`, `run_intervals`)
+  or an external command
   (`blender`); `director` is a checkpoint (below). `audio_silence` and
   `transcription` each make ONE `transcribe/` worker call for all sources
   (`vad` then `asr`, request files `vad_request.json` / `asr_request.json`)
@@ -84,14 +93,13 @@ runtime behavior.
   (`run_command(argv, env_extra=_docker_env(ctx), stdin_text=script)`);
   its `required_outputs` are `{stem}_whisper.json` only when enabled and the
   run starts at or before `text_filter`, and `text_filter` loads hints only
-  when `whisper.enabled` (see [`whisper.md`](whisper.md)). `summary`, `director`, `blender` and `publish`
+  when `whisper.enabled` (see [`whisper.md`](whisper.md)). `summary`, `director` and `blender`
   run once per pipeline invocation; `sentence_split`, `gap_context`,
   `text_filter`, `guided_edit` and `intervals` loop per source inside their
-  adapter. `publish` runs once
-  but still reads per-source material (its frame shortlist and caption list),
-  which it gathers in the adapter before a single batched Docker call — the
-  same shape as `gap_context`'s extraction. Each LLM stage adapter
-  (`sentence_split`, `gap_context`, `summary`, `text_filter`, `publish`) owns its `llm_report.Recorder`
+  adapter. `ordered_sources_for(ctx)` (the manifest's segments, sliced, in
+  playback order) is public because the publish tools lay out the finished
+  timeline with it. Each LLM stage adapter
+  (`sentence_split`, `gap_context`, `summary`, `text_filter`) owns its `llm_report.Recorder`
   lifecycle: it builds one
   recorder via `recorder_from_config(stage, cfg, override_dir=...)`, calls
   `rec.clear()` **once before** its stem loop (so a stage's `output/llm_report/`
@@ -191,8 +199,10 @@ The checks run where the run actually continues — **resuming with
 ## Output layout
 
 Output dirs are one per stage by name, created up front by `cli.main()`:
-`output/audio_silence|transcription|whisper|sentence_split|gap_context|summary|text_filter|director|guided_edit|intervals|blender|publish|render/`.
-`sentence_split`/`gap_context`/`summary`/`guided_edit`/`publish` all still run
+`output/audio_silence|transcription|whisper|sentence_split|gap_context|summary|text_filter|director|guided_edit|intervals|blender/`.
+`output/publish/` and `output/render/` are not created by the pipeline; the
+publish tools create them when they first write.
+`sentence_split`/`gap_context`/`summary`/`guided_edit` all still run
 unconditionally (cheap no-ops when their stage is disabled in config), exactly
 as under the bash orchestrator — see [AGENTS.md](../../AGENTS.md#pipeline-overview)
 for what each no-op produces.
@@ -211,7 +221,7 @@ the whole design:
 - **It goes last**, after `llm_report/index.md` has been written, because it
   counts that file's calls.
 - **It is deliberately not a stage.** It cannot be `STAGES[-1]` (`resolve_window()`
-  cuts the list, so `--to-stage render` would drop it), and it needs no
+  cuts the list, so `--to-stage intervals` would drop it), and it needs no
   `Stage.when`/`ALWAYS` concept in the runner: it has one consumer, and the
   `finally` regenerates the page on every invocation, so there is nothing to
   name with `--from-stage`. If a second always-runs step ever appears, build the
@@ -219,7 +229,8 @@ the whole design:
 
 The file rows are in pipeline-flow order (`index_page._rows()`, pinned by a
 test): `director/plan.md`, the `.blend`,
-`publish.md`, `render.md`, and `llm_report/index.md` last because it covers
+`publish.md`, `render.md` (both written by the publish tools, not by a stage —
+the page only reads what is on disk), and `llm_report/index.md` last because it covers
 every call of the run rather than one stage. `cut_report.md` deliberately has
 no row: `llm_report/index.md` inlines it (its `## finished cut` section) and the
 headline already states its source → finished minutes, so a row would be a
@@ -232,7 +243,7 @@ The headline is `cut_report.metrics.measure()`, so the page and the cut report
 cannot disagree; the finished cut it measures is the **manifest's**, over the
 whole project rather than one run's `--source` filter. Nothing under it imports
 `llm_client` — zero calls is a property of the code, enforced by an AST check
-and a fresh-interpreter run, the way improvement 25 enforced it for `render`.
+and a fresh-interpreter run, the way it is enforced for `render` and the publish tools.
 
 The embedded thumbnails carry each set's hook in the **alt text**
 (`_thumbnail_alt`, hooks read from `publish.json`'s `thumbnail_copy`, no call).

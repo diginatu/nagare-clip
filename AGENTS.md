@@ -15,9 +15,9 @@ Maintain and improve a multi-stage rough-cut pipeline:
 7. director — a **checkpoint** with no LLM that always stops the run: the `nagare-director` agent skill (a coding agent directing with the user through deterministic tools) writes the plan, the high-level edits (cut/timelapse/overlay/keep/edit) as a reviewable JSON op list and the playback order; the run resumes with `--from-stage guided_edit`, which checks those files — see [`docs/stages/director_skill.md`](docs/stages/director_skill.md)
 8. guided_edit — applies the director's ops into `_edits.txt` deterministically (no LLM), verified
 9. Patch application + keep-interval computation in Python (audio cuts unioned in)
-10. Blender VSE auto-layout in headless mode
-11. publish — title candidates, a description with chapter timestamps taken from the finished timeline, thumbnail copy and candidate stills (disabled by default)
-12. render — composites one thumbnail per copy set with ImageMagick; the last stage, and the only one that never makes an LLM call
+10. Blender VSE auto-layout in headless mode — the **last** stage
+
+After the pipeline, outside it: the **`nagare-publish` agent skill** (a coding agent working with the user through deterministic tools, `scripts/publish_tools.sh`) writes the upload material — title candidates, a description lead with chapters whose times the tool computes from the finished timeline, and thumbnails it composites with ImageMagick (`render`, never an LLM call) — see the *publish skill* section below.
 
 Plus three deterministic, non-stage artifacts (no LLM call):
 
@@ -25,15 +25,17 @@ Plus three deterministic, non-stage artifacts (no LLM call):
 - **`cut_report`**, which measures the finished cut after `intervals`/`blender` and writes a section into `llm_report/index.md` (see below);
 - **`output/index.md`** (`index_page.py`), written by a `finally` in `pipeline/cli.py` after **every** invocation, failed ones included: one page naming the `.blend` and linking the files written for a human, each row carrying an mtime or `—` and **never explaining an absence** (an explanation is a guess by something that cannot see the run). Deliberately not a stage and no `Stage.when`/`ALWAYS` concept in the runner. Zero LLM calls, enforced the way `render`'s are (an AST import check plus a fresh-interpreter run); it honours `general.image_markup` like `publish.md`/`render.md`, and each embedded thumbnail's alt is `Set N — <that set's hook>`. See [`docs/stages/pipeline.md`](docs/stages/pipeline.md).
 
-Final deliverable is a `.blend` project for human editing, plus a reviewable
-`publish.md` of the material needed to upload it and the thumbnails `render`
-composited from it.
+Final deliverable is a `.blend` project for human editing; the publish skill
+then adds a reviewable `publish.md` of the material needed to upload it and the
+thumbnails its `render` tool composited.
 
 > **Naming convention:** Stages are identified only by their **functional /
 > config-section name** — there are no stage numbers anywhere. The canonical
 > identifiers are: `audio_silence:`, `transcription:`, `whisper:`, `sentence_split:`,
 > `gap_context:`, `summary:`, `text_filter:`, `director:`, `guided_edit:`,
-> `intervals:`, `blender:`, `publish:`, `render:`.
+> `intervals:`, `blender:`.
+> `publish:` and `render:` are config sections of the publish skill's tools,
+> **not stages** (`--from-stage publish|render` is an unknown-stage error).
 > Package dirs (`src/nagare_clip/<name>/`), `output/<name>/` subdirs, and
 > `run_pipeline.sh --from-stage`/`--to-stage` all use these same names. A new
 > stage can be inserted anywhere without renumbering the others.
@@ -112,7 +114,7 @@ Validate a hand-edited `_edits.txt` before resuming with `python -m nagare_clip.
 
 **The view** is **always shooting order**: `director.display.build_display_view()` numbers every source's lines 1..N **once**, one `[k]` block per source, speech lines and silence lines together, and `DisplayView.to_source()` / `from_source()` convert between that numbering and the per-source coordinates `_director.json`, `guided_edit` and `intervals` speak — so an op crossing a source boundary is *unrepresentable* (`checks.join_problem` refuses it). `DisplayLine.raw` carries a speech line's raw `_edits.txt` text (what an `edit` op's patch is placed in). Loading: `director.files.director_inputs()` and `director.load.load_segment_transcript()`, shared by the tools and the checkpoint (`tools.project.project_for(ctx, stems)`).
 
-**Ops.** `{stem}_director.json` is `{"ops": [{type, lines:[a,b], factor?, text?, duration?, old?, new?, note}]}`, `type ∈ {cut, timelapse, overlay, keep, edit}` (plus `speed`, below), lines 1-based, `"n~"` = the silence after line `n`, `"0~"` = the leading silence before line 1 (only as a silence edge of a range starting at the source's line 1). It **never re-outputs transcript text** except an `edit` op's exact `old`/`new`. `director.ops.parse_op()` validates one op; `ops_from_dict()` (every reader: guided_edit, publish, the tools) drops a malformed one (logged).
+**Ops.** `{stem}_director.json` is `{"ops": [{type, lines:[a,b], factor?, text?, duration?, old?, new?, note}]}`, `type ∈ {cut, timelapse, overlay, keep, edit}` (plus `speed`, below), lines 1-based, `"n~"` = the silence after line `n`, `"0~"` = the leading silence before line 1 (only as a silence edge of a range starting at the source's line 1). It **never re-outputs transcript text** except an `edit` op's exact `old`/`new`. `director.ops.parse_op()` validates one op; `ops_from_dict()` (every reader: guided_edit, the director tools, the publish tools' shortlist/captions) drops a malformed one (logged).
 
 - **`speed` is off the director's menu** (`ops.MENU_TYPES = VALID_TYPES - {"speed"}`, `off_menu_problem()`): repeated prompt rounds could not keep the mild 1.3–2.0 band from returning over large shares of the video, because a middle option is always cheaper to choose than a `timelapse`. `speed` stays in `VALID_TYPES` because it is the marker `guided_edit.timelapse.expand_timelapse_ops()` builds, and `ops_from_dict()` keeps a hand-written one.
 - **`overlay`** must carry a positive `duration` alongside non-blank `text` (CR/CRLF normalised to `\n`); its `lines` only say where the caption appears (the first line of the range).
@@ -136,8 +138,8 @@ A general coding agent plays the director with the user via the skill `skills/.a
 - `view [--lines A-B] [--no-context]` — the brief (`brief.format_brief`), `ops.keep_limit_note`, `project_context_block`, a source index with each source's default runtime or `unknown — <why>` (`project.runtime_status()`; never omitted silently) + the whole-video total, `load.VIEW_HEADER`, `DisplayView.render(first, last)`; when the director files on disk no longer map (`current_state().unmapped`) it says so on stderr, as `dump`/`preview` do. `dump` — `director/` as an edit in display numbering. `preview [--edit F|-]` — `edit_state()` over the files or a candidate, writes nothing, a candidate's problems → exit 1; `--summary [--min-run S]` prints `preview.edit_summary()` (per-source and whole-video runtime, the runs in playback order, captions — a screenful), and `--lines A-B`/`--source k` narrow the detail via the optional `only`/`focus` parameters of `edit_state()`/`preview_segment()`; totals, captions and problems stay whole-video. The header reads as "this edit" (`STATE_HEADER`, `PLAN_HEADER`). `transcript [--edit F|-] [--source k]` — `director.played.played_transcript()`: the edit as the viewer hears it, in playback order — every line that plays with its `edit` ops applied and its captions under it, a cut as one `✂` marker and a timelapse (or any speed ≥ `UNINTELLIGIBLE_FACTOR`) as one `⏩` marker where their lines were, a silence line only inside a keep — so the agent can read the finished video top to bottom and catch a cut that breaks the story; built on `segment_preview()`'s runs (nothing re-modelled), writes nothing, a candidate's problems → exit 1. `write --edit F|-` — all problems at once and nothing written, else every `{stem}_director.json` and `order.json` always, `plan.md` when given (through `director.files`).
 - Edit file: `{"plan"?, "order"?, "ops"}` in **display numbering**, the complete state (writing it twice gives the same files): `ops` replaces every op; an absent `order` is shooting order and `order.json` is always written; the timelapse/break checks use the edit's order, never the one on disk; `dump` carries the order in force, so revising from it keeps a reorder. An absent `plan` keeps `plan.md` (required while it has none).
 - **Validation** (`tools/validate.py::validate_edit`, pure, every problem at once): `ops.parse_op`, `off_menu_problem`, `keep_cap_problem`; `checks.order_problems` (via `read_order`), `join_problem` (every crossing refused), `break_problem`, `silence_ref_problem`; a `cut` may not overlap any other op; an `edit` op names a speech line and its `old` occurs **exactly once** in that line as `view` shows it (`clean_for_display`: patches applied, tags stripped) without cutting through a marker or patch (`guided_edit.patch.edit_problem`, which maps visible characters back to raw indices and refuses markup it cannot map); keeps that touch or overlap (within one source) count as ONE keep against `max_keep_lines` — the skill covers an on-screen event with ONE keep and, for one wider than the cap, asks the user to raise `max_keep_lines` or considers a `timelapse`.
-- Shared code lives in public modules: `director/ops.py` (op contract + per-op checks), `director/checks.py` (order, joins, breaks), `director/transcript.py` (clean/numbered/timed transcript; `summary` reuses it), `director/load.py` (`SegmentInputs`, `load_segment_transcript`, `source_drops`, `VIEW_HEADER`, `project_context`), `director/files.py` (the director files' I/O, `director_inputs`, `missing_files`), `nagare_clip/llm_json.py` (`FENCE_RE`, `strip_code_fence`; summary/publish).
-- APM: `skills/` is ONE package for the skills used while editing a video (`skills/apm.yml`, `includes: [.apm/]`, each skill under `skills/.apm/skills/<name>/`; `nagare-director` and `nagare-publish`). It is installed into a **video directory**, never deployed in this repo (no root `apm.yml`, `.apm/`, `.claude/skills/` or `.agents/skills/`, so working on nagare-clip never triggers it): `apm install <nagare-clip checkout>/skills --target claude,codex` (recommended — skill text and scripts are the same version) or `apm install diginatu/nagare-clip/skills#main --target claude,codex`. `make apm` smoke-installs it into a temp directory, diffs the deployed copies against the source and runs `apm audit --ci` there (needs the apm CLI; not in CI); `tests/test_apm_skill.py` checks the package shape, the frontmatter, the tool commands the skill names, and that nothing is deployed at the repo root.
+- Shared code lives in public modules: `director/ops.py` (op contract + per-op checks), `director/checks.py` (order, joins, breaks), `director/transcript.py` (clean/numbered/timed transcript; `summary` reuses it), `director/load.py` (`SegmentInputs`, `load_segment_transcript`, `source_drops`, `VIEW_HEADER`, `project_context`), `director/files.py` (the director files' I/O, `director_inputs`, `missing_files`), `nagare_clip/llm_json.py` (`FENCE_RE`, `strip_code_fence`; summary).
+- APM: `skills/` is ONE package for the skills used while editing a video (`skills/apm.yml`, `includes: [.apm/]`, each skill under `skills/.apm/skills/<name>/`; `nagare-director` and `nagare-publish`). It is installed into a **video directory**, never deployed in this repo (no root `apm.yml`, `.apm/`, `.claude/skills/` or `.agents/skills/`, so working on nagare-clip never triggers it): `apm install <nagare-clip checkout>/skills --target claude,codex` (recommended — skill text and scripts are the same version) or `apm install diginatu/nagare-clip/skills#main --target claude,codex`. `make apm` smoke-installs it into a temp directory, diffs the deployed copies against the source and runs `apm audit --ci` there (needs the apm CLI; not in CI); `tests/test_apm_skill.py` checks the package shape, each skill's frontmatter, the tool commands each skill names (`director_tools.sh`/`publish_tools.sh`), each edit example against its `validate_edit`, and that nothing is deployed at the repo root.
 
 See [`docs/stages/director_skill.md`](docs/stages/director_skill.md).
 
@@ -189,44 +191,42 @@ See [`docs/stages/cut_report.md`](docs/stages/cut_report.md) for the thresholds,
 - **Inputs:** every `{stem}_intervals.json`; optionally `output/blender/blender_warnings.json`
 - **Outputs:** `output/llm_report/notes/cut_report.md` (inlined into `index.md`)
 
-### publish — Title, Description + Chapters, Thumbnail Material
+### publish skill — Titles, Description + Chapters, Thumbnails With a Coding Agent
 
-A larger LLM (config `publish:`, disabled by default) runs **once project-wide after `blender`**, turning material the pipeline already holds into what a human otherwise retypes for every upload. It writes files; uploading stays manual.
+**Not a stage**: the pipeline ends at `blender` (`STAGE_NAMES` has neither `publish` nor `render`). The LLM publish (blind copy call, per-still vision call, pairing call, `frames.json`, its LLM-report recorder) is **deleted**. A coding agent plays the publisher with the user via the skill `skills/.apm/skills/nagare-publish/` (`SKILL.md` — workflow, tools, edit format, enforced rules — plus `references/shortlist.md`, `thumbnail-craft.md`, `youtube-chapters.md`), in its own session after the director's, **in the video directory** with the pipeline's `--config` files in order, calling `<nagare-clip>/scripts/publish_tools.sh` (`python -m nagare_clip.publish.tools`, `src/nagare_clip/publish/tools/`, no LLM call). Line numbers are the director's display numbering (loaded with `director.tools.project.load_project`). Workflow: `view --compact` → write the copy (titles, lead, chapters, thumbnail text) **before** looking at any still → `frames` → Read every still → choose a background and look per set → `write` → Read each render → revise. Every path is under `general.output_dir` (`<output_dir>`):
 
-- **Copy** (one call, `publish_llm.generate_publish_copy()`): several *title candidates* (`publish.temperature` defaults to `0.7` so they differ), a description *lead*, *chapter titles* keyed by the part's **original** 1-based index, and *thumbnail copy* as sets of one to three lines tagged `tag`/`hook`/`subtitle`. The call is **blind** — `PUBLISH_PROMPT` carries no colour/placement vocabulary (a test asserts it) and `_parse_thumb_set` drops any style key that arrives anyway. Hard failure retries via `llm_retry`; all attempts failing degrades to empty copy and the files are still written.
-- **Timing** is deterministic and never asked of the LLM: `publish/timeline.py` reproduces the blender concatenation over the manifest's segments, in seconds, reusing `split_intervals_by_speed()` (which lives in `blender/frames.py` because `bpy` does not exist in the pipeline process — a fresh-interpreter test guards that import). `publish/chapters.py` makes YouTube's conditions hold (first entry forced to `0:00`, chapters under `publish.min_chapter_duration` dropped, non-ascending entries dropped, timestamps truncated) and always writes the list, reporting what is missing via `chapter_issues()`.
-- **Frame descriptions** (`publish/describe_frames.py`, `publish.describe_frames:`, disabled by default): one vision call per candidate still, run before the copy call, without showing the director's label. Results land in `output/publish/frames.json`, keyed by a sha256 of the JPEG's bytes, so an unchanged shortlist costs zero calls and a hand-rewritten description survives.
-- **Thumbnail frame candidates** come from the director's ops (`thumbs.select_candidates()`), capped by `publish.max_frames` (`cap_candidates()`), extracted in one `docker compose run` via `build_snapshot_batch_cmd`; a Docker-level failure of that batch stops the run (`PipelineError`). Images are embedded per `general.image_markup` via `markdown.embed_image()`. **`publish` composites nothing** — that is `render`; `publish.json`'s `thumbnail_copy` is the hand-editable contract for the look.
-- **Pairing** (`publish/pairing.py`, `publish.pairing:`, enabled by default) is a second, text-only call that picks each set's frame **by index** (resolved to a path by `apply_pairing()`) and its look in ImageMagick's vocabulary. It is separate from the copy call because frame descriptions in front of the copy call anchor it to captioning the pictures. Values are not validated here; `render` falls back per key to a preset. It uses `publish:`'s provider/model and sampling settings (`_pairing_cfg()`); its `temperature`/`max_retries`/`retry_temp_step`/`retry_temp_cap` default to `None` = **inherit**, because a hardcoded default beside an inherited model can be one that model rejects. `llm_retry.cfg_for_attempt()` bounds only a rise (`min(base + step*attempt, max(cap, base))`), so a retry never drops below the configured base, and `retry_temp_step: 0` pins the temperature.
+- `view [--lines A-B | --compact]` — `output dir: …` first, then the brief, the summaries, `plan.md`, the director's captions as `M:SS  text` by **finished** time (`✂` cut, `—` no timeline), the **effective `render.fonts` slots** (the first marked as the fallback), the finished runtime, then one row per display line `N  M:SS  text`. `--compact` replaces the rows with the director's played transcript (`played_transcript(..., when=...)`) prefixed by finished times — only what plays, a cut one `✂` row, a timelapse one `⏩` row; unmapped director files → stderr warning and the per-line rows.
+- `frames [--line N[@pos]]...` — without `--line`, the **shortlist** written fresh: `thumbs.select_candidates()` off the director ops (overlay mid-line, keep mid-event, both timelapse boundaries); stills **not on the finished timeline are left out before** `cap_candidates(publish.max_frames)` (a note says how many). With `--line`, stills at those lines (`pos` in [0,1], default 0.5) **added** to the list. One `docker compose run` of the whisperx image per call (`build_snapshot_batch_cmd`); a Docker failure is a `PipelineError` with the stderr tail. The list is `<output_dir>/publish/stills.json` (`{stem, source_time, kind, label, line, path, timeline_time}`; no descriptions — the agent Reads the JPEGs under `publish/frames/{stem}/{t:.3f}.jpg`).
+- `chapters N [N ...]` — the chapter lines' finished time and length, and every problem `write` would report for them (`edit.resolve_chapters()`, the **same** resolution `write` uses); writes nothing, exit 1 on a problem.
+- `write --edit F|- [--no-render]` — `edit.validate_edit()`; any problem → all of them on stderr, exit 1, **nothing written**. Else writes `publish/edit.json` (the edit verbatim — there is no `dump`; a later session revises it), `publish.json` (`build.build_publish()`, the old shape: titles, lead, description, chapters, `chapters_qualify`/`chapter_issues`, `thumbnail_copy`, `thumbnails`) and `publish.md` (`general.image_markup`), then renders unless `--no-render`.
+- `render` — `render.run.run_render()` over `publish.json` as it is on disk (a hand edit).
 
-Every input is optional — a missing `summary.json`/`plan.md`/`_director.json`/`_intervals.json` degrades only the part that needed it. Disabled → `publish.json` holds the full shape with nothing in it, no LLM or Docker call.
+**Edit file** `{"titles": [...], "lead": "...", "chapters": [{"line", "title"}], "thumbnails": [{"background", gravity?, offset?, shadow?, "lines": [{"text", role?, font?, pointsize?, fill?, stroke?, strokewidth?}]}]}` — the complete state. `background` is required (relative to `<output_dir>/publish/`, or absolute); `role` is optional (absent → `hook`, only picks preset defaults); no line cap. The description is `lead` + the chapter lines.
 
-See [`docs/stages/publish.md`](docs/stages/publish.md) for the timeline mapping, the chapter rules, the frame descriptions, the pairing and the frame shortlist in detail.
+**Problems** (nothing written): unknown key / wrong type / empty `titles`; a title over 100 chars or holding `<`/`>`; a description over 5000 chars; a chapter on a missing, untimed or entirely cut line, two at one time, one shorter than `publish.min_chapter_duration` (no silent merge — the agent re-chooses), any while the timeline is unavailable; a thumbnail with no lines, empty text, an unknown role or style key, a value outside render's allowlist (reported, not replaced — `render.thumbnail.line_style_problems()`/`set_style_problems()`), a `font` not in `render.fonts`, a missing `background`. **Warning** (written anyway): fewer than three chapters.
 
-- **Inputs:** `output/summary/summary.json`; optionally the director's `output/director/plan.md` (as `plan`, context for the copy), each source's `{stem}_intervals.json` (in blender's concatenation order, as `intervals_paths`), `{stem}_director.json` and the sentence_split `{stem}.json` (for the frame shortlist and the caption list)
-- **Outputs:** `output/publish/publish.md` (reviewable), `output/publish/publish.json` (the hand-editable look contract), `output/publish/frames.json` (the described shortlist), `output/publish/frames/{stem}/{t}.jpg`
+**Timing is the tool's**, never the edit's, and the authority rule holds: `lines.finished_placements()` = `publish.timeline.build_placements(pipeline.stages.ordered_sources_for(ctx))` over the manifest's segments in playback order (`None` before intervals exist → `—` times, every chapter refused). A display line → its source span → `first_surviving_time()` (the earliest surviving moment; `None` = cut; compressed inside a timelapse). Chapters are sorted by finished time and the first is rendered `0:00` (`chapters.chapter_timestamps`; spans from `0.0`); `format_timestamp` truncates. `timeline.py` reuses `split_intervals_by_speed()` from `blender/frames.py` (no `bpy`; fresh-interpreter test). `publish.json` is **never rebuilt** by the pipeline: after an upstream change the agent runs `write` again with its saved edit.
 
-### render — Compositing the Thumbnails (no LLM call, ever)
+**render** is the tool's compositor, reached only through `write`/`render`. It reads `publish.json` and composites one image per set into `<output_dir>/render/thumbnails/set{N}.jpg` + `render.json` + `render.md`; before compositing it **deletes stale `set<N>.jpg`**. `render/thumbnail.py` validates every style value against an allowlist (unknown key dropped, bad value falls back **per key** to a `preset_for()` preset — lenient for a hand edit, while `write` is strict); a line naming no known slot falls back to the **first face in `render.fonts`** (`fallback_font()`; ImageMagick's default face draws CJK as nothing). Every `magick` call is an argument list. `layout_lines()` stacks lines by **measured** height and shrinks an over-wide line; a block **taller** than the canvas adds a warning (`render.json` `warnings`, `**Warning:**` in `render.md`) and still renders. The background is per set (`set_background()`); a set naming a missing path is dropped. Every skip carries a reason (`**Not rendered:** <reason>`). Missing `publish.json` → empty contact sheet. **Zero LLM calls is a property of the code**: nothing under `publish/` or `render/` names `llm_client`/`call_llm` (AST check + fresh-interpreter run, `tests/render/test_run.py`), and `tests/publish/tools/test_zero_llm.py` runs every command with the transport booby-trapped.
 
-The **last** stage, and the only one that never calls a model under any circumstances. It reads `output/publish/publish.json` and composites one image per copy set. `render/thumbnail.py` validates every model-authored style value against an allowlist (unknown key dropped, bad value falls back **per key** to a `preset_for()` preset); a line naming no known font slot falls back to the **first face listed in `render.fonts`** (`fallback_font()`), since ImageMagick's default face draws a CJK character as nothing at all. Every `magick` invocation is an argument list, never a shell string. Line *positions* stay code's: `layout_lines()` stacks lines by **measured** height and shrinks an over-wide line. The background is **per set** (`thumbnail_copy[i].background`, resolved by `set_background()` against the publish stage dir; any path and aspect ratio works); a set naming nothing falls back to the first shortlist candidate on disk, and a set naming a missing path is **dropped** with a warning. Every skip carries a **reason**, recorded in `render.json` and printed in `render.md` as `**Not rendered:** <reason>`.
+See [`docs/stages/publish.md`](docs/stages/publish.md) and [`docs/stages/render.md`](docs/stages/render.md).
 
-It is a stage rather than a flag so the loop "edit `publish.json`, `--from-stage render --to-stage render`, read `render.md`" costs **zero** calls and keeps the copy being judged; there is deliberately no second path (no standalone thumbnail CLI, no project-wide background). Zero calls is a property of the **code**: nothing under `src/nagare_clip/render/` names `llm_client`/`call_llm`, guarded statically and in a fresh interpreter. See [`docs/stages/render.md`](docs/stages/render.md).
-
-- **Inputs:** `output/publish/publish.json` (missing/unreadable → an empty contact sheet, never a traceback)
-- **Outputs:** `output/render/thumbnails/set{N}.jpg`, `output/render/render.json`, `output/render/render.md`
+- **Inputs:** the director's view and files (`director/`, `_edits.txt`, sentence_split `{stem}.json`), `summary/summary.json`, every `{stem}_intervals.json` + `intervals/timeline.json`, the source videos (stills)
+- **Outputs:** `<output_dir>/publish/{edit.json,publish.json,publish.md,stills.json}`, `publish/frames/{stem}/{t}.jpg`; `<output_dir>/render/{thumbnails/set{N}.jpg,render.json,render.md}`
 
 ### Human Editing Workflow
 
 1. Run audio_silence–text_filter → audio_silence produces `{stem}_vad.json` and `{stem}_cuts.txt`, transcription produces `{stem}.json`/`.txt` (Haas), text_filter produces `{stem}_edits.txt`
 2. Human edits `_cuts.txt` (delete/adjust silent spans) and `_edits.txt` (`{{old->new}}` patches; optional `<keep>`, `<speed factor="N.N">`, `<overlay text="..." duration="N.N"/>`)
 3. Resume with `--from-stage intervals` → unions cuts, applies patches, syncs JSON, carves out `<keep>` ranges (not `<speed>`, which only annotates playback speed), computes intervals, runs Blender (with Speed Control effects for `<speed>` regions)
+4. After `blender`, write the upload material with the `nagare-publish` skill (`scripts/publish_tools.sh`); re-run its `write` whenever the cut changes
 
 ## Hard Constraints
 
 - Dependency management uses uv + pyproject.toml.
 - LiteLLM is the LLM transport dependency: all provider access (OpenAI/Gemini/Anthropic/Ollama) goes through `nagare_clip.llm_client.call_llm` — do not add provider-specific HTTP clients.
 - Runtime NLP dependency is `ginza` + `ja_ginza` (spaCy-based).
-- Route media tooling (ffmpeg) through the existing whisperx Docker image (`gap_context` and `publish` still use it); do not add host binaries or new Python audio deps. Exception: the `transcribe/` worker subproject decodes audio with the **host** `ffmpeg` (`ffmpeg -nostdin -v error -i SRC -ac 1 -ar 16000 -f f32le -`) for Silero VAD and Haas; its heavy dependencies (torch, NeMo, haas-asr, silero-vad) live only in that uv project and the main package never imports them. The Blender proxies (`blender/proxy.py`) are a second exception: host `ffmpeg`/`ffprobe`, because they need NVDEC/NVENC (absent from the whisperx service) and must sit beside each original source. ImageMagick (`magick`, `render/thumbnail.py`) is a deliberate, documented exception: it runs on the **host**, like the `blender` stage already does, because the whisperx image has neither ImageMagick nor CJK fonts, and font slots resolve through host fontconfig (which is what makes a CJK font slot work at all).
+- Route media tooling (ffmpeg) through the existing whisperx Docker image (`gap_context` and the publish tools' `frames` use it); do not add host binaries or new Python audio deps. Exception: the `transcribe/` worker subproject decodes audio with the **host** `ffmpeg` (`ffmpeg -nostdin -v error -i SRC -ac 1 -ar 16000 -f f32le -`) for Silero VAD and Haas; its heavy dependencies (torch, NeMo, haas-asr, silero-vad) live only in that uv project and the main package never imports them. The Blender proxies (`blender/proxy.py`) are a second exception: host `ffmpeg`/`ffprobe`, because they need NVDEC/NVENC (absent from the whisperx service) and must sit beside each original source. ImageMagick (`magick`, `render/thumbnail.py`, called only by the publish tools' `write`/`render` through `pipeline.external.run_magick`) is a deliberate, documented exception: it runs on the **host**, like the `blender` stage already does, because the whisperx image has neither ImageMagick nor CJK fonts, and font slots resolve through host fontconfig (which is what makes a CJK font slot work at all).
 - Preserve the interval JSON (`intervals/` package) as the human-editable contract for the Blender stage.
 - `_edits.txt` is the single human-editable record of every edit. `intervals` applies only what is in it (plus the audio_silence `_cuts.txt`, a detection result the human prunes). No stage may feed `intervals` an edit from another source; an edit the file cannot express is a format change to `_edits.txt`, not a side channel. Guarded by `tests/intervals/test_single_edit_record.py`.
 - The Blender stage must reference original media; do not re-encode/copy source media.
@@ -241,11 +241,12 @@ src/nagare_clip/          # Main Python package (src layout)
   llm_retry.py                # Shared bounded-retry helpers for the LLM stages: retry_attempts(), cfg_for_attempt()
   llm_report.py               # Structured per-call LLM report: Recorder + rebuild_index (index.md + per-call <stage>/<unit>.md)
   llm_client.py               # Unified LiteLLM transport: call_llm(messages, cfg) -> str (OpenAI/Gemini/Anthropic/Ollama)
-  markdown.py                 # embed_image(): the one image embed shared by publish.md and render.md
+  markdown.py                 # embed_image(): the one image embed shared by publish.md, render.md and index.md
+  broken_pipe.py              # silence_stdout(): the tools exit quietly when stdout's reader closes (view | head)
   index_page.py               # output/index.md: the one page at the top of the output dir (no LLM)
   order.py                    # Segment/TimelineSegment: the playback order, identity, coverage contract, manifest
   order_note.py               # format_order_note(): says plainly when the order is not shooting order (no LLM)
-  brief.py                    # project: editorial brief -> format_brief()/apply_brief() (summary/text_filter/publish prompts; the director's view)
+  brief.py                    # project: editorial brief -> format_brief()/apply_brief() (summary/text_filter prompts; the director's and publish tools' view)
   edit_lines.py               # _edits.txt line contract: silence_body() renderer + parse_edit_lines()
   timing.py                   # Pure timing helpers: segment_times(), span_silence(), segment_silences(), format_dur_gap() (director duration context)
   __main__.py                 # python -m nagare_clip support (re-aliased to the pipeline CLI)
@@ -286,7 +287,7 @@ src/nagare_clip/          # Main Python package (src layout)
   summary/                    # summary stage (project-wide): per-part + all-videos summaries
     summarize.py              # PartSummary/ProjectSummary(+keywords), segment_video(), build_summary()
     run.py                    # run_summary() (repeated sentence_split txt/json paths -> summary.json)
-  llm_json.py                 # FENCE_RE/strip_code_fence: reading a model's fenced JSON reply (summary, publish)
+  llm_json.py                 # FENCE_RE/strip_code_fence: reading a model's fenced JSON reply (summary)
   director/                   # the director's contract, view and tools (the director itself is the agent skill)
     ops.py                    # DirectorOp, parse_op/ops_from_dict/ops_to_dict, per-op checks, keep cap + note
     checks.py                 # the order (read_order/order_problems/breaks/segments) and join/break/"n~" checks (pure)
@@ -323,7 +324,7 @@ src/nagare_clip/          # Main Python package (src layout)
     scene.py                  # Blender scene setup
     timeline.py               # Strip and caption placement
     proxy.py                  # Blender's proxy file, written by host ffmpeg (GPU) before Blender runs (no bpy)
-    frames.py                 # Pure placement helpers, no bpy (clamp_frames, split_intervals_by_speed, slice_intervals_data, placement_order, ordered_sources -- shared with publish/cut_report)
+    frames.py                 # Pure placement helpers, no bpy (clamp_frames, split_intervals_by_speed, slice_intervals_data, placement_order, ordered_sources -- shared with the publish tools/cut_report)
     color.py                  # Hex -> RGBA for caption_style colour keys (Blender's Ctrl-C linearises; its Hex field does not)
     render_settings.py        # blender.render -> scene.render RNA, forwarded 1:1 (no bpy; recurses into image_settings/ffmpeg)
     warnings_file.py          # capture_warnings()/write_warnings(): blender_warnings.json for cut_report
@@ -331,16 +332,19 @@ src/nagare_clip/          # Main Python package (src layout)
     metrics.py                # CutMetrics/SpeedSpan/SpanStats + measure() (pure)
     checks.py                 # Finding + find_issues() + read_blender_warnings()
     report.py                 # format_cut_report() / build_cut_report(sources, cfg)
-  publish/                    # publish stage (project-wide, after blender)
+  publish/                    # the nagare-publish skill's code (NOT a stage; no LLM call anywhere)
     timeline.py               # source seconds -> finished-timeline seconds (build_placements/first_surviving_time)
-    chapters.py               # YouTube chapter rules: 0:00 anchor, 10s merge, ascending, M:SS
-    thumbs.py                 # ThumbCandidate/ThumbShot: payoff moments from director ops
-    describe_frames.py        # one vision call per candidate still -> frames.json, cached by content hash
-    pairing.py                # the second text call: copy set -> frame index + look; index resolved to a path
-    publish_llm.py            # titles/lead/chapter titles/thumbnail copy (incl. LOOK) in one call
-    run.py                    # run_publish() (writes publish.json + publish.md)
-  render/                     # render stage (project-wide, after publish; never calls an LLM)
-    thumbnail.py              # ThumbLine/ThumbSet contract; escape/validate/layout/build magick argv; render_sets()
+    chapters.py               # YouTube chapter rules: 0:00 anchor, spans, chapter_issues, M:SS (truncating)
+    thumbs.py                 # ThumbCandidate/ThumbShot: the shortlist's payoff moments from director ops, cap_candidates
+    document.py               # the publish.json shape (empty_publish) + render_publish_markdown -> publish.md
+    tools/                    # python -m nagare_clip.publish.tools {view,frames,chapters,write,render}
+      cli.py                  # the commands (view/--compact, frames, chapters, write, render)
+      lines.py                # display line -> source span -> finished time; finished_placements()
+      edit.py                 # validate_edit()/resolve_chapters(): every problem at once (pure)
+      frames.py               # plan_stills() (shortlist / --line), extract_stills() (one docker run), stills.json
+      build.py                # build_publish(): a validated edit -> publish.json
+  render/                     # the publish tools' compositor (NOT a stage; never calls an LLM)
+    thumbnail.py              # ThumbLine/ThumbSet contract; escape/validate (lenient + *_problems strict)/layout/magick argv; render_sets()
     run.py                    # run_render() (publish.json -> render.json + render.md)
 transcribe/                   # separate uv subproject: Haas-ja ASR + Silero VAD worker (torch/NeMo pins); `python -m nagare_transcribe {vad,asr}`
   src/nagare_transcribe/      # audio.py (host ffmpeg decode), vad.py, asr.py, __main__.py — a thin worker, no shaping logic
@@ -348,9 +352,11 @@ transcribe/                   # separate uv subproject: Haas-ja ASR + Silero VAD
 scripts/
   run_pipeline.sh             # Shim: exec uv run python -m nagare_clip.pipeline "$@"
   director_tools.sh           # Shim: the agent-skill director tools (python -m nagare_clip.director.tools)
+  publish_tools.sh            # Shim: the agent-skill publish tools (python -m nagare_clip.publish.tools)
 skills/                       # APM package of the skills for editing a video (installed into a VIDEO dir)
   apm.yml                     # package manifest (includes: [.apm/])
   .apm/skills/nagare-director/  # the director skill: SKILL.md + references/
+  .apm/skills/nagare-publish/   # the publish skill: SKILL.md + references/ (shortlist, thumbnail craft, YouTube chapters)
 docs/
   stages/                     # Deep per-stage runtime notes (loaded on demand)
 Makefile                      # Canonical dev commands (make help / check / validate / test)
@@ -369,8 +375,8 @@ tests/
   guided_edit/                # guided_edit apply/patch/reconcile + run() tests
   intervals/                  # interval-stage unit tests (incl. <keep>/<cut> markers, cuts_txt union)
   blender/                    # Blender-stage tests
-  publish/                    # publish (timeline / chapters / thumbs / publish_llm / run / stage wiring) tests
-  render/                     # render (thumbnail argv/layout / run / stage wiring) tests
+  publish/                    # publish (timeline / chapters / thumbs / reorder) + tools/ (lines / edit / frames / build / cli / zero-LLM) tests
+  render/                     # render (thumbnail argv/layout/problems / run / zero-LLM guard) tests
   cut_report/                 # finished-cut metrics / checks / report / stage-wiring tests
   test_index_page.py          # output/index.md: rows, mtimes, headline, thumbnails, zero calls
 ```
@@ -409,19 +415,19 @@ All tunable parameters are defined as typed **pydantic-settings models** in
 The `project:` section is the project-wide **editorial brief** (audience,
 purpose, target_duration, tone, story_so_far, previous_summary — all free text,
 all empty by default). `nagare_clip.brief.apply_brief()` appends the rendered
-brief to the system prompts of `summary` (both `prompt` and `overall_prompt`),
-`text_filter` and `publish`, called from those stages' `run.py`
-so no LLM module needed a new parameter; the director's `view` prints it
-(`format_brief`). `previous_summary` is a path to a previous
+brief to the system prompts of `summary` (both `prompt` and `overall_prompt`)
+and `text_filter`, called from those stages' `run.py`
+so no LLM module needed a new parameter; the director's and the publish tools'
+`view` print it (`format_brief`). `previous_summary` is a path to a previous
 project's `summary.json`; its overall summary joins the brief (a missing/unreadable
 file drops only that line). Every field empty → `apply_brief` returns the same
 dict and prompts are byte-identical to a run without the section — regression-tested
 per stage. `gap_context`/`sentence_split` are deliberately not briefed
 (mechanical stages). See [`docs/stages/project_brief.md`](docs/stages/project_brief.md).
 
-All LLM stages (`sentence_split`, `gap_context`, `summary`, `text_filter`, `publish`) route through `nagare_clip.llm_client.call_llm` (LiteLLM). Each block selects its backend with a `provider` key (default `ollama_chat`); the model id sent to LiteLLM is `"<provider>/<model>"`. An empty `api_base` falls back to `http://localhost:11434` for an ollama provider, or is omitted for a cloud provider. `api_key` is forwarded when set (or use the provider's env var). `response_format: "json"` maps to a JSON-object request; `reasoning_effort` is passed to LiteLLM as `reasoning_effort` **unchanged** — the user reads the config key as "this goes straight to LiteLLM", so there is no translation and no per-provider special case (what a value means for a model is LiteLLM's contract; working around its behaviour is not this pipeline's job). Unset (`null`, the default) sends nothing, so the model runs at its own default. The old `thinking` key (which *was* translated: `false` → off, `true` → `"high"`) is **removed, not aliased**: `config._reject_removed_keys()` fails `get_effective_config` on a `thinking` key anywhere in the merged config, before validation, with a message naming every such path and saying to use `reasoning_effort` — a silent alias would hand the old values a different meaning. Keys of a removed feature fail the same way, every path named at once (`config.REMOVED_KEYS`): every `guided_edit.*` key (the section has no settings; an empty one is accepted), the LLM director's `director.*` keys (`enabled`, `provider`, `api_base`, `model`, `api_key`, `temperature`, `reasoning_effort`, `timeout`, `response_format`, `max_retries`, `retry_temp_step`, `retry_temp_cap`, `chunk_lines`, `pause_after_plan`, `prompt`), `audio_silence.noise`/`.enabled` (always on), `transcription.compute_type`/`.language`/`.align_model` (Haas-ja only) and `sentence_split.window_segments`/`.force_split`/`.force_split_min_silence` (the stage splits only long lines).
+All LLM stages (`sentence_split`, `gap_context`, `summary`, `text_filter`) route through `nagare_clip.llm_client.call_llm` (LiteLLM). Each block selects its backend with a `provider` key (default `ollama_chat`); the model id sent to LiteLLM is `"<provider>/<model>"`. An empty `api_base` falls back to `http://localhost:11434` for an ollama provider, or is omitted for a cloud provider. `api_key` is forwarded when set (or use the provider's env var). `response_format: "json"` maps to a JSON-object request; `reasoning_effort` is passed to LiteLLM as `reasoning_effort` **unchanged** — the user reads the config key as "this goes straight to LiteLLM", so there is no translation and no per-provider special case (what a value means for a model is LiteLLM's contract; working around its behaviour is not this pipeline's job). Unset (`null`, the default) sends nothing, so the model runs at its own default. The old `thinking` key (which *was* translated: `false` → off, `true` → `"high"`) is **removed, not aliased**: `config._reject_removed_keys()` fails `get_effective_config` on a `thinking` key anywhere in the merged config, before validation, with a message naming every such path and saying to use `reasoning_effort` — a silent alias would hand the old values a different meaning. Keys of a removed feature fail the same way, every path named at once (`config.REMOVED_KEYS`): every `guided_edit.*` key (the section has no settings; an empty one is accepted), the LLM director's `director.*` keys (`enabled`, `provider`, `api_base`, `model`, `api_key`, `temperature`, `reasoning_effort`, `timeout`, `response_format`, `max_retries`, `retry_temp_step`, `retry_temp_cap`, `chunk_lines`, `pause_after_plan`, `prompt`), `audio_silence.noise`/`.enabled` (always on), `transcription.compute_type`/`.language`/`.align_model` (Haas-ja only), `sentence_split.window_segments`/`.force_split`/`.force_split_min_silence` (the stage splits only long lines), the LLM publish's `publish.*` keys (`enabled`, `provider`, `api_base`, `model`, `api_key`, `temperature`, `reasoning_effort`, `timeout`, `response_format`, `max_retries`, `retry_temp_step`, `retry_temp_cap`, `prompt`, `pairing`, `describe_frames` — only `min_chapter_duration`/`max_frames`/`frame_width` remain) and `render.enabled` (calling the tool is the decision to render).
 
-Only `blender/blender_cli.py` still takes a `--config <path>` flag on its command line — it runs as a separate Blender subprocess. It is given exactly **one** file: `output/effective_config.yml`, the snapshot `pipeline.cli` writes after merging (`config.write_effective_config()`: the validated cfg, CLI overrides included, `api_key` values blanked, a header listing the source files). `PipelineContext.config_path` holds that snapshot's path, never a user file, so Blender sees what the pipeline validated however many `--config` files built it. The other `--config` reader (`director_tools.sh` via `director/tools/cli.py`) accepts `--config` repeatedly with the same merge. Every other stage receives the already-merged `cfg` dict in-process (no subprocess, no re-parsing of `--config`).
+Only `blender/blender_cli.py` still takes a `--config <path>` flag on its command line — it runs as a separate Blender subprocess. It is given exactly **one** file: `output/effective_config.yml`, the snapshot `pipeline.cli` writes after merging (`config.write_effective_config()`: the validated cfg, CLI overrides included, `api_key` values blanked, a header listing the source files). `PipelineContext.config_path` holds that snapshot's path, never a user file, so Blender sees what the pipeline validated however many `--config` files built it. The other `--config` readers (`director_tools.sh` via `director/tools/cli.py`, `publish_tools.sh` via `publish/tools/cli.py`) accept `--config` repeatedly with the same merge. Every other stage receives the already-merged `cfg` dict in-process (no subprocess, no re-parsing of `--config`).
 
 ## Current Runtime Quirks
 
@@ -431,7 +437,7 @@ read the relevant file first when you need to touch a stage, and keep every
 `docs/stages/` file up to date whenever you change that stage's behavior** (see
 the [Documentation Policy](#documentation-policy)):
 
-- project brief (`project:` config → summary/text_filter/publish prompts, the director's `view`) → [`docs/stages/project_brief.md`](docs/stages/project_brief.md)
+- project brief (`project:` config → summary/text_filter prompts, the director's and publish tools' `view`) → [`docs/stages/project_brief.md`](docs/stages/project_brief.md)
 - audio_silence → [`docs/stages/audio_silence.md`](docs/stages/audio_silence.md)
 - whisper (second recognizer, hints for text_filter) → [`docs/stages/whisper.md`](docs/stages/whisper.md)
 - transcription (Haas chunking, token timestamps, the WhisperX-shaped JSON) → [`docs/stages/transcription.md`](docs/stages/transcription.md)
@@ -440,8 +446,8 @@ the [Documentation Policy](#documentation-policy)):
 - text_filter (+ summary-stage filter context) → [`docs/stages/text_filter.md`](docs/stages/text_filter.md)
 - intervals (`<keep>`/`<speed>`/`<overlay/>`/`<cut>` markers, margins, captions) → [`docs/stages/intervals.md`](docs/stages/intervals.md)
 - blender (VSE layout, text styling, retiming) → [`docs/stages/blender.md`](docs/stages/blender.md)
-- publish (finished-timeline mapping, chapter rules, thumbnail material) → [`docs/stages/publish.md`](docs/stages/publish.md)
-- render (style validation, layout/escaping, the zero-call loop) → [`docs/stages/render.md`](docs/stages/render.md)
+- publish skill tools (not a stage: view/frames/chapters/write/render, the edit file, validation, timing, stills.json) → [`docs/stages/publish.md`](docs/stages/publish.md)
+- render (the tools' compositor: style validation, layout/escaping, stale renders, the height warning, zero calls) → [`docs/stages/render.md`](docs/stages/render.md)
 - cut_report (finished-cut metrics + checks, Blender-warning capture) → [`docs/stages/cut_report.md`](docs/stages/cut_report.md)
 - segment order (the director's `order`; the `intervals/timeline.json` manifest; the order note) → [`docs/stages/order.md`](docs/stages/order.md)
 - director skill (agent-run director, its tools, the `edit` op and the APM package); the director checkpoint → pipeline.md → [`docs/stages/director_skill.md`](docs/stages/director_skill.md)

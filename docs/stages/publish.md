@@ -1,325 +1,347 @@
-# publish stage — title, description, chapters, thumbnail material
+# publish — the `nagare-publish` skill and its tools
 
-Runs **once project-wide, after `blender`** — the last stage. Everything it
-emits already existed somewhere in the pipeline (`summary.json` knows what the
-video is about, the `project:` brief knows who it is for, the director's
-`plan.md` has the editorial shape, the intervals know what survived), but nothing past the
-`.blend` used any of it, so it was retyped by hand for every upload.
+Publishing is **not a pipeline stage**. The pipeline ends at `blender`; the
+upload material — title candidates, a description lead, YouTube chapters and
+the thumbnails — is written by a coding agent working with the user through the
+`nagare-publish` agent skill (`skills/.apm/skills/nagare-publish/`), which calls
+deterministic tools. **No LLM call anywhere** under `src/nagare_clip/publish/`
+or `src/nagare_clip/render/`: the agent writes the words and chooses the look;
+the tools compute every time, extract the stills, validate, write the files and
+composite the thumbnails. Uploading stays manual.
 
-Output is **reviewable, not published**: the stage writes files, a human
-uploads.
+The LLM publish (one blind copy call, a vision call per still, a text-only
+pairing call, `frames.json`) is deleted. Its complexity existed to make up for
+models that could not see the result; a coding agent Reads the stills and the
+rendered `set{N}.jpg` with its own image input and iterates. Every key it used
+fails config loading (`config.REMOVED_KEYS`, below).
+
+All paths below are under `general.output_dir` (`<output_dir>`, default
+`output`), relative to the video directory the tools run in.
 
 | Path | What it is |
 |------|------------|
-| `output/publish/publish.md` | The reviewable file: title candidates, a copy-pasteable description, thumbnail copy, the frame shortlist |
-| `output/publish/publish.json` | The same material as data — including the model-authored look; the hand-editable contract the `render` stage reads |
-| `output/publish/frames/{stem}/{t:.3f}.jpg` | Candidate stills at the director's payoff moments |
-| `output/publish/frames.json` | One entry per still: its shortlist fields, a content hash, and what looking at it showed |
+| `<output_dir>/publish/edit.json` | The last edit `write` accepted, saved verbatim — what a later session revises (there is no `dump`) |
+| `<output_dir>/publish/publish.json` | The material as data, seconds resolved; the hand-editable contract `render` reads |
+| `<output_dir>/publish/publish.md` | The reviewable file: title candidates, a copy-pasteable description, chapters, thumbnail copy, the stills |
+| `<output_dir>/publish/stills.json` | The stills `frames` extracted (shortlist and `--line` stills), with their finished times |
+| `<output_dir>/publish/frames/{stem}/{t:.3f}.jpg` | The stills themselves (`t` = source seconds) |
+| `<output_dir>/render/…` | The thumbnails — see [`render.md`](render.md) |
 
-Compositing is **not** done here — that is the [`render`](render.md) stage,
-which makes no LLM call, so a hook or a colour can be hand-edited in
-`publish.json` and re-rendered without paying for the copy again.
+Nothing rebuilds `publish.json` when an upstream edit moves the timeline: like
+every other output it goes stale, and the agent runs `write` again with its
+saved edit (times are recomputed; a chapter on a line that is now cut is
+reported).
 
-Disabled by default (`publish.enabled: false`) → `publish.json` holds the full
-shape with nothing in it, `publish.md` says the stage is off, and no LLM or
-Docker call is made.
+## The tools — `src/nagare_clip/publish/tools/`
 
-## Three phases
+`scripts/publish_tools.sh` → `python -m nagare_clip.publish.tools`, run **in the
+video directory** (the script keeps the CWD), `--config` repeatable and
+deep-merged left to right like the pipeline and the director tools
+(`cli._load_cfg` → `get_effective_config`). The project is loaded with the
+director's own `director.tools.project.load_project()`, so **line numbers are
+the director's display numbering** (`director.display.DisplayView`) and every
+tool sees the view the director saw.
 
-The stage splits along what an LLM can and cannot know, and — for the two that
-can — along what each is allowed to see.
+| command | does | writes |
+| --- | --- | --- |
+| `view [--lines A-B \| --compact]` | the page below | nothing |
+| `frames [--line N[@pos]]...` | the shortlist, or stills at given lines, in one Docker run | `publish/frames/…`, `publish/stills.json` |
+| `chapters N [N ...]` | try chapter lines: finished time, length, `write`'s problems for them | nothing |
+| `write --edit F\|- [--no-render]` | validate; all problems or write `edit.json`, `publish.json`, `publish.md`, then render | `publish/`, `render/` |
+| `render` | `render.run.run_render()` over `publish.json` as it is on disk | `render/` |
 
-**Look** (one vision call per candidate still, `describe_frames.py`) — what is
-actually legible in each frame, cached in `frames.json` by the frame's own
-bytes. Depends on nothing but the frame.
+Exit codes (`cli.main`): `0` ok; `1` a validation problem (`write`, `chapters`,
+a bad `frames --line`); `2` a `PipelineError`/`OSError`/`ValueError` —
+including no project, unreadable edit JSON, and a failed Docker run in
+`frames` — printed as `error: …`. A closed stdout (`view | head`) exits quietly
+(`broken_pipe.silence_stdout`).
 
-**Copy** (one LLM call, `publish_llm.py`) — title candidates, the description
-lead, chapter *titles*, thumbnail *copy* as plain `role`+`text`. It is shown
-**no frames at all** and its prompt carries no look vocabulary.
+### `view`
 
-**Pair** (one text-only LLM call, `pairing.py`) — per set: which frame, where
-the text sits, what colour it is. From the descriptions, never from images.
+One page, sections separated by blank lines:
 
-**Timing** (deterministic, `timeline.py` + `chapters.py`) — every timestamp.
-The LLM is never asked for one; it cannot see the finished timeline.
+1. `output dir: <ctx.output_dir>` — always the first line, so the agent never
+   guesses `<output_dir>`.
+2. the editorial brief (`brief.format_brief`), the summaries
+   (`director.load.project_context` over `summary/summary.json`), the
+   director's `plan.md` (`## Plan`);
+3. `## Captions` — the director's `overlay`/`timelapse` op texts as
+   `- M:SS  text`, each text once (first use), sorted by **finished** time
+   (`_captions`): the time of the op's first display line on the finished
+   timeline, `✂` when that line does not survive, `—` when there is no
+   timeline (untimed rows sort last). Sources are walked in playback order
+   (the placements' stem order).
+4. `## Fonts (render.fonts — …)` — the **effective** `render.fonts` slots from
+   the merged config, the first marked as the fallback for a line with no
+   `font` (`render.thumbnail.fallback_font`); with none set it says ImageMagick's
+   default face may draw Japanese as nothing and to ask the user to set
+   `render.fonts`.
+5. `finished runtime M:SS (N.N s)` (`timeline.total_duration`), or
+   `finished runtime unknown — no intervals yet`.
+6. the lines. By default one row per display line, `N  M:SS  text`, where
+   `M:SS` is the line's first surviving moment in the finished video, `✂` a
+   line that does not survive and `—` no timeline; `--lines A-B` narrows them.
+   **`--compact`** (mutually exclusive with `--lines`) replaces them with the
+   director's played transcript (`director.played.played_transcript`, the same
+   rows `director_tools.sh transcript` prints) with each row prefixed by its
+   finished time through `played_transcript(..., when=...)`: only what plays, in
+   playback order, a cut as one `✂` row and a timelapse as one `⏩` row — a long
+   video is a few screens instead of thousands of rows. It reads the director
+   files on disk (`current_state`); when they do not map onto the view it warns
+   on stderr, lists the unmapped items and falls back to the per-line rows.
 
-## Looking at the frames (`describe_frames.py`)
+### `frames` and `stills.json`
 
-The shortlist already carries the director's `label` for each still — but a
-label says what the director thought was happening at that moment, not what a
-viewer can make out. A frame labelled 「まさかの水漏れ発覚」 may show a
-person's back. Only looking can tell.
+Without `--line`: the **shortlist**, written fresh (`frames.plan_stills`):
 
-So each still is described once, in prose (not JSON — it is read by a model and
-by a human, and neither needs a schema): what is visible and **legible**, where
-the subject sits, which regions are **empty**, and the colour and lightness of
-those empty regions. The default prompt asks for exactly that and forbids
-writing a headline, because a vision model handed a frame will happily caption
-it.
+1. `thumbs.select_candidates()` per source, over that source's director ops and
+   its sentence_split `{stem}.json` segment times — the payoff moments the
+   director marked:
 
-**The label is deliberately not shown to the model.** The description exists to
-catch a label whose frame does not match it; handing the claim to the model
-meant to check it would only get the claim confirmed. A test asserts the label
-text never appears in the messages.
+   | Op | Still(s) |
+   |----|----------|
+   | `overlay` | midpoint of the line it is anchored to (a line's first frame is often still the previous shot) |
+   | `keep` | midpoint of the whole event it rescued |
+   | `timelapse` | **both** boundaries — start of the first line, end of the last (before/after) |
 
-**Described once, ever.** `frames.json` keys each description to
-`hashlib.sha256` of the JPEG's **bytes** — not its path and not its timestamp,
-both of which are stable across a re-extraction that changed the picture and
-change across one that did not. So:
+   Coinciding moments collapse to one candidate, keeping the higher-priority
+   kind.
+2. When the finished timeline is available, every candidate **not on it**
+   (`first_surviving_time` is `None`) is left out **before** the cap, so the cap
+   fills with stills a viewer can actually see; `N shortlist still(s) not in
+   the finished video were left out` is printed.
+3. `thumbs.cap_candidates(publish.max_frames)` keeps the best kinds
+   (`overlay` > `timelapse-start`/`-end` > `keep`; `0` = no limit).
 
-- re-running `publish` for better copy over an unchanged shortlist makes
-  **zero** vision calls;
-- re-running `director` changes the shortlist, and a frame whose bytes changed
-  is described again even at the same filename;
-- **a description you rewrite by hand survives.** If you disagree with what the
-  model saw, correct the prose in `frames.json` and that is the description
-  from then on.
+With `--line N[@pos]` (repeatable): one still per request at
+`start + pos·(end − start)` of the line's footage (`pos` in `[0, 1]`, default
+`0.5`; speech lines and silence lines both have a span, `lines.line_span`), kind
+`line`, label `line N @pos`. These are **added** to the existing
+`stills.json` (a still at the same path replaces the old row); a requested line
+is never dropped for being cut — the agent asked for it. A line that does not
+exist or has no timing is a problem (exit 1, nothing extracted). Plain `frames`
+again rewrites the list from scratch, dropping added stills.
 
-An entry with an *empty* description is not reusable — that is a call that
-failed, and the next run should retry it rather than cache the failure. Where
-two shortlist entries share one hash (an identical frame filed under two
-timestamps), the described one wins whichever order they sit in.
+**Extraction** (`frames.extract_stills`): every still of one call goes through
+**one** `docker compose run` of the whisperx image via
+`pipeline.external.build_snapshot_batch_cmd` (script on stdin — see
+[`gap_context.md`](gap_context.md) for the argv limit), at
+`publish.frame_width`. Container startup dwarfs the per-still ffmpeg work. A
+Docker-level failure (`OSError`/`CalledProcessError`) raises a `PipelineError`
+carrying the exception and the stderr tail (`failure_reason`), so the command
+exits 2 with that reason. A still that a batch which otherwise ran did not
+write is dropped from the list (a `logging.warning`).
 
-The vision path is `gap_context/describe.py`'s, not a second one: frames go as
-base64 data-URI `image_url` parts, and this module owns its own multimodal
-`CallLLM` alias so `publish_llm.py`'s stays text-only. The LLM report records
-frame **paths**, never base64 payloads — a 24-frame shortlist of inlined JPEGs
-would make the report unopenable, and the payload says nothing a path does not.
+`stills.json` is a list of
+`{stem, source_time, kind, label, line, path, timeline_time}` — `path` relative
+to `<output_dir>/publish/` (what a thumbnail's `background` names), `line` the
+display line containing the moment, `timeline_time` its finished seconds or
+`null`. There are no descriptions: the agent Reads the JPEGs. The command
+prints `line  M:SS  kind  label  path` rows in playback order (untimed last),
+any left-out note, then `stills in <output_dir>/publish (the paths above are
+relative to it)`.
 
-Disabled (`publish.describe_frames.enabled: false`, the default — a
-vision-capable model has to be configured first) `frames.json` is still written
-with the shortlist fields and hashes, and no call is made: the descriptions can
-then be written by hand, and turning the setting on later reuses them.
+### `chapters`
 
-## Pairing a headline to a picture
+`chapters N [N ...]` resolves the given display lines with
+`edit.resolve_chapters()` — **the same function `write` validates with**, so the
+preview cannot disagree with the write — and prints `line  time  length  text`
+sorted by finished time (the text is the line's own, without the view's
+timing bracket, cut to 40 characters), marking a chapter shorter than
+`publish.min_chapter_duration`; then the fewer-than-three warning and every
+problem (stderr). Exit 1 on a problem; writes nothing.
 
-One call used to write the copy *and* its `fill`/`gravity`/`pointsize` — which
-is precisely how the look came to be chosen blind: the model deciding where the
-text goes had never seen the photograph, so it picked a corner and the sets that
-read cleanly did so by luck. Splitting the two buys three things.
+### `write`
 
-**The copy call comes out blind.** It emits `role` and `text` and nothing else.
-`PUBLISH_PROMPT` lost the colour/placement vocabulary entirely (a test asserts
-`fill`, `stroke`, `pointsize`, `gravity`, `offset` and `imagemagick` do not
-appear in it), `_parse_thumb_set` drops a style key that arrives anyway, and
-`font_slot_note()` moved to `pairing.py` — a font is part of the look. If any
-frame material could reach this call the anchoring problem would move rather
-than go away, so the guard is a test, not a convention.
+`write --edit F|-` reads the edit (a file, or stdin), runs
+`edit.validate_edit()` and, on **any** problem, prints
+`N problem(s); nothing written:` and all of them on stderr and exits 1 having
+written nothing. Otherwise it prints the warnings, then writes
+`edit.json` (the input verbatim), `publish.json` (`build.build_publish`) and
+`publish.md` (`document.render_publish_markdown`, honouring
+`general.image_markup`), prints each path, and runs the render
+(`_render`, the same as the `render` command) unless `--no-render`.
 
-**The pairing call sees descriptions, not images.** It receives the copy sets
-(lines numbered) and the shortlist (frames numbered, each with kind, time, the
-director's label and the description), and answers per set with a frame plus
-`gravity`/`offset`/`shadow` and per-line `fill`/`stroke`/`strokewidth`/
-`pointsize`/`font`. Its prompt tells it to believe the description over the
-label where they disagree — the label is a claim about the moment, the
-description is what a viewer would really see — to put the block where the
-description says the picture is empty, and to choose colours against what the
-description says is behind the text.
+## The edit file
 
-**It names its frame by INDEX, never a path.** A path is a string a model can
-invent; an index is bounded and checkable. `apply_pairing()` resolves the index
-to a path before it reaches `publish.json`, because the human editing that file
-wants a filename, not a number.
+```json
+{
+  "titles": ["まさかの水漏れ…ポンプ交換3日目", "ポンプ交換3日目、原因はここだった"],
+  "lead": "Description body; the tool appends the chapter list",
+  "chapters": [
+    {"line": 1,  "title": "オープニング"},
+    {"line": 40, "title": "分解して原因を探す"}
+  ],
+  "thumbnails": [
+    {
+      "background": "frames/a/63.200.jpg",
+      "gravity": "south", "offset": "+0+40", "shadow": {"blur": "0x6"},
+      "lines": [
+        {"role": "tag",  "text": "3日目", "fill": "#FFCC00", "font": "sans-bold"},
+        {"text": "まさかの水漏れ", "pointsize": 140, "stroke": "black", "strokewidth": 8}
+      ]
+    }
+  ]
+}
+```
 
-Degrading follows the house style, with one deliberate asymmetry: only invalid
-JSON or a response with no usable `sets` array is a hard failure that retries. A
-bad **set** index drops that entry; a bad **frame** index costs only the
-background, and the rest of that set's decision still applies — the set renders
-on the shortlist's first still rather than not at all. Style *values* are not
-validated here, because `render/thumbnail.py` already checks every one against
-an allowlist and falls back **per key** to a preset. So a set the pairing never
-mentioned, a decision it got wrong, an index that did not resolve, a failed call
-and `pairing.enabled: false` all converge on the same place: today's `PRESETS`.
+The complete state: `write` replaces everything written before. Top-level keys
+are exactly `titles`, `lead`, `chapters`, `thumbnails` (`edit.TOP_KEYS`);
+`lead`, `chapters` and `thumbnails` may be absent (`""`/`[]`).
 
-## Why the timestamps can only be computed here
+- `titles` — candidates, at least one; the human picks at upload.
+- `lead` — the description body. The description is `lead`, a blank line, then
+  the chapter lines (`edit.assemble_description`, empty parts dropped).
+- `chapters` — `{line, title}` in display numbering. **Never a time.**
+- `thumbnails` — one set per alternative thumbnail (`set1`, `set2`, …): a
+  required `background` (a path relative to `<output_dir>/publish/`, or
+  absolute — any image, not only a still), the set keys `gravity`/`offset`/
+  `shadow`, and `lines` (any number, stacked top to bottom), each with `text`,
+  an optional `role` (`tag`/`hook`/`subtitle`; absent → `hook`, which only picks
+  the preset defaults for unstated keys) and the line keys `font` (a
+  `render.fonts` slot), `pointsize`, `fill`, `stroke`, `strokewidth`. The
+  vocabulary and its allowlist are [`render.md`](render.md)'s.
 
-A chapter timestamp needs the mapping from **source** time to **finished**
-time, and that mapping exists nowhere else: the `intervals` stage knows which
-spans survive, the `blender` stage knows how `speed_ranges` compress them, and
-only the two together say what "5:00 into the video" points at.
+### Problems — `write` writes nothing (`edit.validate_edit`)
 
-`timeline.build_placements()` reproduces the blender stage's concatenation —
+Every problem at once:
+
+- **structure** — the edit is not an object; an unknown key at the top or in a
+  chapter; a wrong type (`lead` not a string, `chapters`/`thumbnails` not a
+  list, a chapter `line` not an integer or `title` empty); empty `titles` or an
+  empty title;
+- **title** — over 100 characters (`MAX_TITLE_CHARS`), or containing `<` or `>`
+  (YouTube rejects both);
+- **description** — the assembled description over 5000 characters;
+- **chapter** (`resolve_chapters`) — a line that does not exist; a line with no
+  timing; a line entirely cut from the finished video; two chapters at the
+  same finished time; a chapter shorter than `publish.min_chapter_duration`
+  (YouTube's 10 s; formerly merged silently — the agent now re-chooses); **any**
+  chapter while the finished timeline is unavailable;
+- **thumbnail** — a set that is not an object; a missing/blank `background` or
+  one that does not exist; no `lines`; a line that is not an object or has
+  empty `text`; and whatever `render.thumbnail.set_style_problems()` /
+  `line_style_problems()` report: an unknown style key, a value outside
+  render's allowlist (reported, **not** replaced by the preset value as render
+  itself would), a `font` that is not a `render.fonts` slot, an unknown `role`.
+
+### Warnings — written anyway
+
+- fewer than three chapters, zero included (`chapter_count_warning`): YouTube
+  links the timestamps but draws no segmented bar.
+
+## Timing: the tool's, never the edit's
+
+The authority rule is unchanged: after `intervals`, `intervals/timeline.json`
+is the authority, and nothing here re-derives a time from a line number on its
+own. `lines.finished_placements()` lays the finished timeline out with
+`pipeline.stages.ordered_sources_for(ctx)` (the manifest's segments, sliced,
+in playback order) and `publish.timeline.build_placements()`; `None` when no
+source has intervals yet (blender not run — `view`/`frames` show `—`, `write`
+refuses every chapter, zero chapters still write).
+
+`build_placements()` reproduces the blender concatenation in **seconds** —
 sources in order, keep intervals back to back, each split at its speed
-boundaries — reusing the very same `split_intervals_by_speed()` the placement
-loop uses. That helper therefore lives in `blender/frames.py`, not
-`blender/timeline.py`: the publish stage runs in the pipeline process where
-`bpy` does not exist, and a second copy of the arithmetic would eventually
-disagree with the strips it is supposed to describe. `tests/publish/test_timeline.py`
-guards the import in a fresh interpreter, because other tests stub
-`sys.modules["bpy"]` and would mask a real `bpy` import.
+boundaries with the very same `split_intervals_by_speed()` blender uses. That
+helper lives in `blender/frames.py`, not `blender/timeline.py`, because `bpy`
+does not exist in this process and a second copy of the arithmetic would
+eventually disagree with the strips (`tests/publish/test_timeline.py` guards the
+import in a fresh interpreter). Seconds instead of frames cost a fraction of a
+second per interval, invisible at `M:SS`.
 
-The mapping is computed in **seconds**, while blender places strips in whole
-frames. That costs a fraction of a second per interval — invisible at the
-`M:SS` resolution a chapter list is written in, and it saves the stage having
-to know the source's frame rate.
+A display line → its source span (`lines.line_span`: a speech line's segment
+times, a silence line's silence span) → `lines.line_time()` =
+`timeline.first_surviving_time(placements, stem, start, end)`: the earliest
+moment of the span that survived (a line's opening is routinely cut), `None`
+when it was cut entirely, a compressed position inside a timelapse (`/ speed`).
+Under a reorder the placements are already in playback order, so chapters are
+resolved on the real finished timeline and then **sorted by time**
+(`resolve_chapters`) — see [`order.md`](order.md).
 
-`first_surviving_time(placements, stem, start, end)` is what a part is looked
-up with, not a point lookup:
+## YouTube's chapter conditions
 
-- a part's opening seconds are routinely cut, so the timestamp is taken at the
-  earliest moment of the part that actually survived;
-- a part that was cut entirely returns `None` and **drops out** of the list;
-- a part inside a timelapse gets its *compressed* position (`/ speed`).
+YouTube draws a segmented progress bar only when the first timestamp is
+`0:00`, there are at least three, they ascend, and each runs at least 10 s.
+The tool makes or checks each:
 
-## The four YouTube conditions
+- **`0:00`** — `chapters.chapter_timestamps()` renders the first chapter as
+  `0:00` whatever its first surviving moment was. Its span is therefore
+  measured from `0.0` (`chapters._spans`): a chapter whose footage starts at 8 s
+  is not a short chapter.
+- **ascending** — chapters are sorted by finished time; two at one time are a
+  problem.
+- **10 seconds** — a shorter chapter is a problem (`publish.min_chapter_duration`).
+  `chapters.build_chapters()`' silent merge is no longer called by the tool.
+- **three** — a warning only; the list is always written, because YouTube
+  auto-links timestamps regardless.
 
-YouTube renders a timestamp list as chapters (a segmented progress bar) only
-when **all** of these hold:
+`format_timestamp()` **truncates** (rounding 9.9 s up to `0:10` would point past
+the chapter's start). `publish.json` still carries `chapters_qualify` and
+`chapter_issues` (`chapters.chapter_issues()`), and `publish.md` says why the
+bar would not be drawn.
 
-1. the first timestamp is exactly `0:00`
-2. there are at least three of them
-3. they are in ascending order
-4. each chapter runs at least 10 seconds
+## `publish.json`
 
-The mapping rarely satisfies them on its own, so `chapters.py` *makes* them
-hold rather than hoping:
+`build.build_publish()` — the shape the LLM stage wrote, so `render` and
+`index_page` read it unchanged (`document.empty_publish()` is that shape, empty):
 
-- **`0:00`** — `chapter_timestamps()` forces the first entry, whatever the
-  first surviving moment actually was.
-- **10 seconds** — `build_chapters()` drops any chapter whose rendered span
-  falls short; the previous chapter's title stretches over it. The first
-  chapter has no previous neighbour, so it gives way to the *next* one, which
-  then inherits `0:00`. Dropping only lengthens the survivors, so the sweep
-  repeats until nothing is short — or until one chapter is left, which is as
-  far as merging can go.
-- **ascending** — an entry that does not advance past the previous one is
-  dropped rather than reordered; a title out of order would be wrong wherever
-  it landed.
+```json
+{
+  "titles": [...], "lead": "...", "description": "lead\n\n0:00 …\n1:23 …",
+  "chapters": [{"time": 83.2, "timestamp": "1:23", "title": "…"}],
+  "chapters_qualify": true, "chapter_issues": [],
+  "thumbnail_copy": [{"background": "…", "gravity": "…", "lines": [{"role": "hook", "text": "…"}]}],
+  "thumbnails": [{"stem", "source_time", "timeline_time", "kind", "label", "line", "path"}]
+}
+```
 
-Two details worth not re-deriving:
+`thumbnail_copy` is the edit's sets with each line's absent `role` filled with
+`hook`; `thumbnails` is `stills.json` re-timed on the current timeline (the
+frame shortlist table in `publish.md`, and `render`'s fallback background for a
+hand-edited set that names none). `publish.md` embeds images per
+`general.image_markup` through `markdown.embed_image`.
 
-- The **first** chapter's span is measured from `0.0`, not from its own
-  timestamp, because that is how it renders. A part whose surviving footage
-  starts at 8s is not a short chapter.
-- `format_timestamp()` **truncates**. Rounding 9.9s up to `0:10` would point a
-  viewer past the moment the chapter begins.
+## Zero LLM calls
 
-**The list is always written**, qualifying or not. YouTube auto-links
-timestamps in a description regardless of these rules, so a list of two still
-lets a viewer jump — it simply does not draw the segmented bar.
-`chapter_issues()` reports what is missing (`chapters_qualify` in the JSON, a
-note in the markdown); it never suppresses the output.
+A property of the code: nothing under `publish/` or `render/` names
+`llm_client`/`call_llm` (static AST check plus a fresh-interpreter import,
+`tests/render/test_run.py`), and `tests/publish/tools/test_zero_llm.py` runs
+`view`, `view --compact`, `frames` (Docker faked at the runner), `chapters`,
+`write` and `render` (magick faked) with `call_llm` replaced wherever it is
+bound and `litellm.completion` raising. `publish/thumbs.py` imports
+`DirectorOp` under `TYPE_CHECKING` only for the same reason.
 
-Chapter titles come from the LLM keyed by the part's **original** 1-based index
-— the numbering it was shown — so a dropped part never shifts the others'
-titles. A part the LLM skipped falls back to that part's `summary.json` text.
+## The skill
 
-## Copy: candidates, not answers
-
-**Titles** come back as several candidates. Hook quality varies a lot between
-attempts and picking from a list is cheap; committing to a single generated
-title is not. `publish.temperature` defaults to `0.7` — higher than the editing
-stages — because candidates that read as rephrasings of each other are not
-candidates.
-
-**Thumbnail copy** is alternative *sets*, each **one to three** lines, each
-line tagged `tag` / `hook` / `subtitle`. The count is never normalised: the
-previous project's thumbnail happened to use all three, but a punchier video
-may want a hook alone, and the layout should follow the copy rather than the
-copy being padded to fill a template. A set longer than three lines is trimmed
-(logged); an unknown role drops that line only.
-
-The LLM is handed the on-screen captions the director placed
-(`collect_overlay_texts()`, from `overlay` and `timelapse` ops) alongside the
-summaries and the director's plan (`director/plan.md`, as `plan`) — those captions are the edit's own account
-of where the payoffs are, which is exactly the register a title or hook wants.
-
-Parsing follows the house style: a hard failure (invalid JSON, no usable
-`titles`) retries via `llm_retry`; everything else is dropped item by item and
-logged. All attempts failing degrades to empty copy — the stage still writes
-its files.
-
-## Thumbnail frame candidates
-
-`thumbs.select_candidates()` reads the director's ops rather than guessing:
-
-| Op | Still(s) |
-|----|----------|
-| `overlay` | midpoint of the line it is anchored to |
-| `keep` | midpoint of the whole event it rescued |
-| `timelapse` | **both** boundaries — start of the first line, end of the last |
-
-Midpoints, not line starts: a line's first frame is often still the previous
-shot. Coinciding moments collapse to one candidate (they describe one frame,
-and the extracted file would collide anyway), keeping the highest-priority
-kind — whose label is the more useful one to show a human.
-
-`cap_candidates()` enforces `publish.max_frames` (default 24) by kind priority
-(`overlay` > `timelapse` boundaries > `keep`), then restores `(stem, time)`
-order so the shortlist reads as a walk through the video.
-
-Extraction reuses gap_context's batching: **one** `docker compose run` for the
-whole stage via `build_snapshot_batch_cmd`, because a container costs ~0.8s of
-init against ~30ms of actual ffmpeg work per still. The script reaches the
-container's `sh -s` on stdin, never in argv (see
-[`gap_context.md`](gap_context.md)
-for the 128 KiB argv limit that motivated it). A failed batch is a Docker-level
-failure and **stops the run** with a `PipelineError` naming the reason
-(exception text plus the stderr tail), before `publish.json` is written; a
-candidate whose file was not written by a batch that otherwise ran is dropped
-individually.
-
-## What stays manual
-
-Uploading, and the choice of which set to ship. Compositing itself is no longer
-manual — the [`render`](render.md) stage does it — but any taste adjustment
-beyond what a config key or a hand-edited `publish.json` covers is still a
-human call.
-
-## Every input is optional
-
-The stage runs last, so an earlier stage may have been disabled or its output
-removed. A missing `summary.json`, `plan.md`, `_director.json`,
-`{stem}.json` or `{stem}_intervals.json` degrades that part of the output and
-nothing else — the titles and thumbnail copy do not depend on the timeline, and
-the chapters simply come back empty.
+`skills/.apm/skills/nagare-publish/SKILL.md` holds the workflow — `view
+--compact` → write the copy (titles, lead, chapters via `chapters`, thumbnail
+text) **before** looking at any still → `frames` (+ `--line`) → Read every still
+→ choose a background and look per set → `write` → Read each render and
+`render.md` → revise — plus the tools, the edit format and the enforced rules.
+Writing the copy first keeps the copy-before-frames order the blind copy call
+used to guarantee by code. References: `shortlist.md` (each kind and how far to
+trust a label), `thumbnail-craft.md` (style vocabulary, legibility, placing
+text where the picture is empty), `youtube-chapters.md` (the four conditions).
+It ships in the same APM package as `nagare-director` (see
+[`director_skill.md`](director_skill.md#apm-layout)).
 
 ## Config
 
-`publish:` in `config.example.yml`. Beyond the usual LLM keys:
+`publish:` keeps only the tools' settings:
 
 | Key | Default | Meaning |
 |-----|---------|---------|
-| `min_chapter_duration` | `10.0` | YouTube's threshold; a shorter chapter is merged into a neighbour |
-| `max_frames` | `24` | Cap on candidate stills (`0` = no limit) |
+| `min_chapter_duration` | `10.0` | A shorter chapter is a `write` problem |
+| `max_frames` | `24` | Cap on shortlist stills (`0` = no limit); overlays outrank keeps |
 | `frame_width` | `1280` | Downscale width of the extracted JPEGs |
-| `image_markup` | `html` | How `publish.md` embeds the frame shortlist: `html` = sized `<img>`, `markdown` = `![alt](path)` |
-| `temperature` | `0.7` | Deliberately higher than the editing stages |
 
-`publish.pairing:` — the second text call. It uses `publish:`'s own
-provider/model (it is the same kind of call, and configuring a model twice
-would only be a way to configure it wrong), overriding only:
+`general.image_markup` (`html`/`markdown`) picks how `publish.md`, `render.md`
+and `output/index.md` embed images. The canvas, fonts and line gap are
+`render:`'s ([`render.md`](render.md)). The `project:` brief is no longer
+appended to any publish prompt (there is none); `view` prints it.
 
-| Key | Default | Meaning |
-|-----|---------|---------|
-| `enabled` | `true` | Pair each copy set to a frame and a look; `false` = every set falls back to the presets |
-| `temperature` | `0.2` | Lower than `publish.temperature`: this is a matching task, not writing |
-| `max_retries` | `2` | Extra attempts on an LLM error or an unparseable response |
-| `prompt` | (default) | Carries the style-key vocabulary the copy prompt gave up |
-
-`publish.describe_frames:` — its own LLM block, because it needs a **vision**
-model where the rest of the stage needs a text one:
-
-| Key | Default | Meaning |
-|-----|---------|---------|
-| `enabled` | `false` | Look at each candidate still (needs a vision-capable model) |
-| `provider` / `model` | `ollama_chat` / `qwen2.5vl:7b` | Same shape as `gap_context:` |
-| `max_retries` | `2` | Extra attempts on an LLM error or an empty answer |
-| `prompt` | (default) | What to say about a frame; forbids writing a headline |
-
-The canvas size, the font slots and the rest of the compositing settings are
-the render stage's: `render:`, documented in [`render.md`](render.md). They
-were `publish.thumbnail.*` before the split.
-
-The `project:` brief is appended to the prompt like the other briefed stages
-(`apply_brief`), so the copy knows the audience and tone.
-
-## Under a reordered timeline
-
-`build_placements` lays out the manifest's segments, sliced, in playback order —
-computing chapter times in shooting order and sorting afterwards would be
-sorting wrong numbers. `_chapter_entries` then sorts by finished-timeline time,
-because `build_chapters` drops an entry that does not advance and would
-otherwise delete chapters silently. Caption lists follow finished-video order.
-
-See [`order.md`](order.md).
+Removed (`config.REMOVED_KEYS`; loading fails naming every path):
+`publish.enabled`, `provider`, `api_base`, `model`, `api_key`, `temperature`,
+`reasoning_effort`, `timeout`, `response_format`, `max_retries`,
+`retry_temp_step`, `retry_temp_cap`, `prompt`, `pairing`, `describe_frames`; and
+`render.enabled`.

@@ -1,5 +1,16 @@
 # publish becomes an agent skill — design
 
+> **Status: implemented** (2026-11-21, through `4a2f9f9` plus the docs and the
+> runtime zero-LLM test). Added after this spec, from a real-video trial:
+> `view --compact` (the director's played transcript with finished times);
+> `view` printing `output dir: …` first, the effective `render.fonts` slots
+> (fallback marked) and the captions with their finished times; the `chapters`
+> command (the same resolution as `write`); shortlist stills not on the finished
+> timeline left out before the `max_frames` cap; `render` deleting stale
+> `set<N>.jpg` before compositing; the height-overflow warning; every path
+> under `general.output_dir`. Where the code differs from the text below, the
+> code and `docs/stages/publish.md` are the truth.
+
 The publish stage's LLM calls are replaced by a coding agent working with the user
 through deterministic tools, as the director was. The stage's complexity exists to make
 up for models that cannot see the result: the copy call is kept blind so it does not

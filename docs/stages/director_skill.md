@@ -120,7 +120,8 @@ The edit is the **complete state**, so writing it twice gives the same files:
 | an `edit` op's `old` occurs exactly once in its line as `view` shows it, outside any marker or patch | `guided_edit.patch.edit_problem` |
 
 `parse_op` is also what every reader of a `_director.json` drops a malformed
-op by (`ops_from_dict`, used by guided_edit, publish and the tools).
+op by (`ops_from_dict`, used by guided_edit, the director tools and the
+publish tools' shortlist and caption list).
 
 Checks over several ops:
 
@@ -237,8 +238,9 @@ types*, *Targets matrix*, *apm compile*, *apm install*):
 - **One package for the video-editing skills**, at `skills/`: `skills/apm.yml`
   (`includes: [.apm/]`) and each skill under `skills/.apm/skills/<name>/`
   (the classic `.apm/` package layout, where each primitive is hoisted on
-  install). It holds `nagare-director` and `nagare-publish`; skills for other stages can be
-  added beside it.
+  install). It holds `nagare-director` and `nagare-publish` (the upload
+  material, after `blender` — see [publish.md](publish.md)); further skills
+  can be added beside it.
 - It is installed into a **video directory**, never deployed here — the repo
   root has no `apm.yml`, `.apm/`, `.claude/skills/` or `.agents/skills/`, so
   contributors working on nagare-clip never get it:
@@ -262,10 +264,10 @@ types*, *Targets matrix*, *apm compile*, *apm install*):
   against `skills/.apm/skills`, and runs `apm audit --ci` there. It needs the
   apm CLI, so it is not in CI. `tests/test_apm_skill.py` checks in CI the
   package manifest, each skill's frontmatter (ASCII, `name` = directory,
-  description ≤ 1024 chars), that every `director_tools.sh <cmd>` the skill
-  names exists, that nothing is deployed at the repo root, and that SKILL.md's
-  edit-format example passes `validate_edit` (so the shape agents copy is one
-  `write` accepts).
+  description ≤ 1024 chars), that every `director_tools.sh <cmd>` /
+  `publish_tools.sh <cmd>` a skill names exists, that nothing is deployed at
+  the repo root, and that each SKILL.md's edit-format example passes its
+  `validate_edit` (so the shape agents copy is one `write` accepts).
 
 ## Phase 2/3 (done)
 
