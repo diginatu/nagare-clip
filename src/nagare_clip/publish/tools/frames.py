@@ -27,7 +27,7 @@ from nagare_clip.pipeline.sources import discover_sources
 from nagare_clip.publish.chapters import format_timestamp
 from nagare_clip.publish.thumbs import cap_candidates, frame_relpath, select_candidates
 from nagare_clip.publish.timeline import Placement, first_surviving_time
-from nagare_clip.publish.tools.lines import line_span
+from nagare_clip.publish.tools.lines import finished_placements, line_span
 from nagare_clip.timing import segment_times
 
 _EPS = 1e-6
@@ -65,10 +65,24 @@ def _seg_times(project: Project, stem: str) -> list:
         return []
 
 
+def _shown(placements: Sequence[Placement], stem: str, t: float) -> bool:
+    return first_surviving_time(placements, stem, t, t + _EPS) is not None
+
+
 def plan_stills(
-    project: Project, cfg: dict, requests: Sequence[tuple[int, float]]
+    project: Project,
+    cfg: dict,
+    requests: Sequence[tuple[int, float]],
+    *,
+    notes: list[str] | None = None,
 ) -> tuple[list[Still], list[str]]:
-    """The shortlist (no *requests*), or one still per ``(line, pos)`` request."""
+    """The shortlist (no *requests*), or one still per ``(line, pos)`` request.
+
+    The shortlist leaves out every candidate that is not on the finished
+    timeline (before the cap, so the cap fills with shown stills) when that
+    timeline is available; what was left out is appended to *notes*.  A
+    requested line is never dropped: the agent asked for it.
+    """
     problems: list[str] = []
     stills: list[Still] = []
     if not requests:
@@ -79,6 +93,15 @@ def plan_stills(
             candidates += select_candidates(
                 stem, ops_by_stem.get(stem, []), _seg_times(project, stem)
             )
+        placements = finished_placements(project)
+        if placements is not None:
+            shown = [c for c in candidates if _shown(placements, c.stem, c.time)]
+            left_out = len(candidates) - len(shown)
+            if left_out and notes is not None:
+                notes.append(
+                    f"{left_out} shortlist still(s) not in the finished video were left out"
+                )
+            candidates = shown
         for c in cap_candidates(candidates, cfg["publish"]["max_frames"]):
             stills.append(
                 Still(

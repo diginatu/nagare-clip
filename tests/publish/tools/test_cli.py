@@ -192,3 +192,15 @@ def test_render_prints_the_thumbnails_dir(setup, capsys):
     assert (
         f"thumbnails in {project.ctx.stage_dir('render') / 'thumbnails'}" in capsys.readouterr().out
     )
+
+
+def test_frames_prints_the_left_out_note(setup, monkeypatch, capsys):
+    monkeypatch.setattr(cli, "extract_stills", lambda proj, stills, **kw: stills)
+
+    def fake_plan(project, cfg, requests, *, notes=None):
+        notes.append("2 shortlist still(s) not in the finished video were left out")
+        return [], []
+
+    monkeypatch.setattr(cli, "plan_stills", fake_plan)
+    assert cli.main(["frames"]) == 0
+    assert "2 shortlist still(s) not in the finished video were left out" in capsys.readouterr().out

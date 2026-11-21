@@ -145,7 +145,8 @@ def _still_from_row(row: dict) -> Still:
 def cmd_frames(project: Project, args: argparse.Namespace) -> int:
     ctx = project.ctx
     requests = args.line or []
-    stills, problems = plan_stills(project, ctx.cfg, requests)
+    notes: list[str] = []
+    stills, problems = plan_stills(project, ctx.cfg, requests, notes=notes)
     if problems:
         for p in problems:
             print(f"  {p}", file=sys.stderr)
@@ -159,6 +160,8 @@ def cmd_frames(project: Project, args: argparse.Namespace) -> int:
     placements = finished_placements(project)
     write_stills(path, stills, placements)
     print(format_stills(stills, placements))
+    for note in notes:
+        print(note)
     print(f"stills in {ctx.stage_dir('publish')} (the paths above are relative to it)")
     return 0
 

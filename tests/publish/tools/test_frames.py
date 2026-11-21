@@ -144,3 +144,60 @@ def test_write_read_and_format(tmp_path):
         "frames/a/99.000.jpg",
     ]
     assert "0:03" in lines[0] and "—" in lines[2]
+
+
+def _timings(project):
+    d = project.ctx.stage_dir("sentence_split")
+    d.mkdir(parents=True)
+    (d / "a.json").write_text(
+        json.dumps({"segments": [{"start": 1.0, "end": 2.0}, {"start": 5.0, "end": 6.0}]})
+    )
+
+
+SHOWN_ONLY_LINE_1 = [Placement("a", 1.0, 2.0, 0.0, 1.0, 1.0)]
+
+
+def test_shortlist_leaves_out_stills_not_in_the_finished_video(project, monkeypatch):
+    # overlay on line 1 (shown) and a higher-priority-equal one on line 2 (cut)
+    ops = [
+        DirectorOp(type="overlay", lines=(1, 1), text="in", duration=2.0),
+        DirectorOp(type="overlay", lines=(2, 2), text="out", duration=2.0),
+    ]
+    _overlay_ops(monkeypatch, ops)
+    _timings(project)
+    monkeypatch.setattr(frames, "finished_placements", lambda p: SHOWN_ONLY_LINE_1)
+    notes: list[str] = []
+    stills, problems = plan_stills(project, project.ctx.cfg, [], notes=notes)
+    assert problems == []
+    assert [s.label for s in stills] == ["in"]
+    assert notes == ["1 shortlist still(s) not in the finished video were left out"]
+
+
+def test_the_cap_is_filled_with_stills_that_are_shown(project, monkeypatch):
+    ops = [
+        DirectorOp(type="overlay", lines=(2, 2), text="out", duration=2.0),
+        DirectorOp(type="overlay", lines=(1, 1), text="in", duration=2.0),
+    ]
+    _overlay_ops(monkeypatch, ops)
+    _timings(project)
+    project.ctx.cfg["publish"]["max_frames"] = 1
+    monkeypatch.setattr(frames, "finished_placements", lambda p: SHOWN_ONLY_LINE_1)
+    stills, _ = plan_stills(project, project.ctx.cfg, [])
+    assert [s.label for s in stills] == ["in"]
+
+
+def test_without_a_timeline_the_shortlist_is_unchanged(project, monkeypatch):
+    ops = [DirectorOp(type="overlay", lines=(2, 2), text="out", duration=2.0)]
+    _overlay_ops(monkeypatch, ops)
+    _timings(project)
+    monkeypatch.setattr(frames, "finished_placements", lambda p: None)
+    notes: list[str] = []
+    stills, _ = plan_stills(project, project.ctx.cfg, [], notes=notes)
+    assert [s.label for s in stills] == ["out"]
+    assert notes == []
+
+
+def test_line_requests_are_never_dropped(project, monkeypatch):
+    monkeypatch.setattr(frames, "finished_placements", lambda p: SHOWN_ONLY_LINE_1)
+    stills, _ = plan_stills(project, project.ctx.cfg, [(2, 0.5)])
+    assert len(stills) == 1
