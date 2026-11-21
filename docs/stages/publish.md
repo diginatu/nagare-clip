@@ -50,10 +50,11 @@ tool sees the view the director saw.
 | `write --edit F\|- [--no-render]` | validate; all problems or write `edit.json`, `publish.json`, `publish.md`, then render | `publish/`, `render/` |
 | `render` | `render.run.run_render()` over `publish.json` as it is on disk | `render/` |
 
-Exit codes (`cli.main`): `0` ok; `1` a validation problem (`write`, `chapters`,
-a bad `frames --line`); `2` a `PipelineError`/`OSError`/`ValueError` —
-including no project, unreadable edit JSON, and a failed Docker run in
-`frames` — printed as `error: …`. A closed stdout (`view | head`) exits quietly
+Exit codes: `0` ok; `1` a problem with the work — a validation problem
+(`write`, `chapters`, a bad `frames --line`) or a failed Docker run in `frames`
+(`cmd_frames` catches its `PipelineError`); `2` a tool-usage error caught by
+`cli.main` (`PipelineError`/`OSError`/`ValueError`: no project, unreadable edit
+JSON, …), printed as `error: …`. A closed stdout (`view | head`) exits quietly
 (`broken_pipe.silence_stdout`).
 
 ### `view`
@@ -128,9 +129,12 @@ again rewrites the list from scratch, dropping added stills.
 [`gap_context.md`](gap_context.md) for the argv limit), at
 `publish.frame_width`. Container startup dwarfs the per-still ffmpeg work. A
 Docker-level failure (`OSError`/`CalledProcessError`) raises a `PipelineError`
-carrying the exception and the stderr tail (`failure_reason`), so the command
-exits 2 with that reason. A still that a batch which otherwise ran did not
-write is dropped from the list (a `logging.warning`).
+carrying the exception and the stderr tail (`failure_reason`); `frames` prints
+it as `error: …` on stderr and exits 1. A still that a batch which otherwise
+ran did not write is dropped from the list and reported as
+`warning: frames: no still written at <t>s for <stem>; dropped` on stderr (the
+`warnings` list of `extract_stills`; the CLI logs only errors, so a
+`logging.warning` alone would never reach the agent).
 
 `stills.json` is a list of
 `{stem, source_time, kind, label, line, path, timeline_time}` — `path` relative

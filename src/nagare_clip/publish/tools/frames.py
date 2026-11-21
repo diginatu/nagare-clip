@@ -147,9 +147,17 @@ def snapshot_jobs(
 
 
 def extract_stills(
-    project: Project, stills: list[Still], *, run: Callable = run_command
+    project: Project,
+    stills: list[Still],
+    *,
+    run: Callable = run_command,
+    warnings: list[str] | None = None,
 ) -> list[Still]:
-    """Write every still in ONE container; drop (and warn about) a missing file."""
+    """Write every still in ONE container; drop (and warn about) a missing file.
+
+    Each drop is appended to *warnings* too, because the CLI logs only errors
+    and the agent must see that a still it asked for is not there.
+    """
     if not stills:
         return []
     ctx = project.ctx
@@ -181,9 +189,10 @@ def extract_stills(
         if (out_dir / s.path).is_file():
             kept.append(s)
         else:
-            logging.warning(
-                "frames: no still written at %.3fs for %s; dropped", s.source_time, s.stem
-            )
+            message = f"frames: no still written at {s.source_time:.3f}s for {s.stem}; dropped"
+            logging.warning(message)
+            if warnings is not None:
+                warnings.append(message)
     return kept
 
 

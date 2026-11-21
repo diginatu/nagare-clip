@@ -324,3 +324,37 @@ def test_chapters_truncates_text_to_40_chars(setup, monkeypatch, capsys):
     assert cli.main(["chapters", "1"]) in (0, 1)
     out = capsys.readouterr().out
     assert "x" * 39 + "…" in out and "x" * 40 not in out
+
+
+def test_frames_docker_failure_exits_1_with_the_reason(setup, monkeypatch, capsys):
+    from nagare_clip.pipeline.errors import PipelineError
+
+    def boom(proj, stills, **kw):
+        raise PipelineError(
+            "frames: extraction in Docker failed (1 job(s)): exit 125\nno such image"
+        )
+
+    monkeypatch.setattr(cli, "extract_stills", boom)
+    assert cli.main(["frames", "--line", "1"]) == 1
+    err = capsys.readouterr().err
+    assert "extraction in Docker failed" in err
+    assert "no such image" in err
+
+
+def test_frames_warns_on_stderr_about_a_still_the_batch_did_not_write(
+    setup, tmp_path, monkeypatch, capsys
+):
+    from nagare_clip.publish.tools import frames as frames_mod
+
+    (tmp_path / "in").mkdir()
+    (tmp_path / "in" / "a.mp4").write_bytes(b"")
+    monkeypatch.setattr(
+        cli,
+        "extract_stills",
+        lambda proj, stills, **kw: frames_mod.extract_stills(
+            proj, stills, run=lambda argv, **k: None, **kw
+        ),
+    )
+    assert cli.main(["frames", "--line", "1"]) == 0
+    err = capsys.readouterr().err
+    assert "warning: frames: no still written at 1.500s for a; dropped" in err

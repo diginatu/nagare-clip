@@ -240,7 +240,14 @@ def cmd_frames(project: Project, args: argparse.Namespace) -> int:
         for p in problems:
             print(f"  {p}", file=sys.stderr)
         return 1
-    stills = extract_stills(project, stills)
+    dropped: list[str] = []
+    try:
+        stills = extract_stills(project, stills, warnings=dropped)
+    except PipelineError as e:  # Docker itself failed: the reason, exit 1
+        print(f"error: {e}", file=sys.stderr)
+        return 1
+    for w in dropped:
+        print(f"warning: {w}", file=sys.stderr)
     path = ctx.stage_dir("publish") / "stills.json"
     if requests:
         new_paths = {s.path for s in stills}
