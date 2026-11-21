@@ -18,7 +18,7 @@ from nagare_clip.publish.timeline import (
 
 
 def test_import_does_not_require_bpy():
-    """The publish stage runs in the pipeline process, where bpy does not exist.
+    """The publish tools run in a plain Python process, where bpy does not exist.
 
     It reuses the blender stage's speed-splitting helper, so that helper must
     live in a bpy-free module -- guarded here in a fresh interpreter because

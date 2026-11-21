@@ -1,5 +1,6 @@
-"""render stage: reads publish.json, composites one thumbnail per copy set and
-writes render.json + render.md.  Never makes an LLM call, ever."""
+"""render (the publish tools' compositor): reads publish.json, composites one
+thumbnail per copy set and writes render.json + render.md.  Never makes an LLM
+call, ever."""
 
 from __future__ import annotations
 
@@ -58,7 +59,7 @@ class FakeRun:
 
 
 def _project(tmp_path, publish=PUBLISH, *, frames=("frames/a/1.000.jpg",)):
-    """A publish stage dir with publish.json and its stills, plus a render dir."""
+    """A publish dir with publish.json and its stills, plus a render dir."""
     publish_dir = tmp_path / "publish"
     publish_dir.mkdir(parents=True, exist_ok=True)
     (publish_dir / "publish.json").write_text(

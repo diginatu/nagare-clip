@@ -106,9 +106,8 @@ def test_a_line_with_no_font_falls_back_to_the_first_configured_slot():
     a set that chose no font must still reach `render.fonts`.
 
     Without this the whole preset fallback renders in ImageMagick's default
-    face, which has no CJK glyphs: a real run whose pairing call failed came
-    back as blank thumbnails, and "pairing disabled renders as it does today"
-    was false.
+    face, which has no CJK glyphs: a real run whose copy named no slot came
+    back as blank thumbnails.
     """
     fonts = {"sans-bold": "Noto-Sans-CJK-JP-Bold", "serif-black": "Noto-Serif-CJK-JP-Black"}
     style = resolve_line_style({}, "hook", fonts, PRESETS[0])
