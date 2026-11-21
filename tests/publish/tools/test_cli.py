@@ -204,3 +204,24 @@ def test_frames_prints_the_left_out_note(setup, monkeypatch, capsys):
     monkeypatch.setattr(cli, "plan_stills", fake_plan)
     assert cli.main(["frames"]) == 0
     assert "2 shortlist still(s) not in the finished video were left out" in capsys.readouterr().out
+
+
+def test_view_lists_the_font_slots_and_marks_the_fallback(setup, capsys):
+    project, _ = setup
+    project.ctx.cfg["render"]["fonts"] = {"sans-bold": "Noto-Sans-CJK-JP-Bold", "serif": "Serif-X"}
+    assert cli.main(["view"]) == 0
+    out = capsys.readouterr().out
+    assert "## Fonts (render.fonts — the `font` values a thumbnail line may name)" in out
+    assert "- sans-bold: Noto-Sans-CJK-JP-Bold   (the fallback for a line with no font)" in out
+    assert "- serif: Serif-X\n" in out
+
+
+def test_view_says_when_no_fonts_are_set(setup, capsys):
+    project, _ = setup
+    project.ctx.cfg["render"]["fonts"] = {}
+    assert cli.main(["view"]) == 0
+    out = capsys.readouterr().out
+    assert (
+        "none set — a line uses ImageMagick's default face, which may draw Japanese "
+        "as nothing; ask the user to set render.fonts"
+    ) in out

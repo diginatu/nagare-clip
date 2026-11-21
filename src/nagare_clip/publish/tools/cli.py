@@ -38,6 +38,7 @@ from nagare_clip.publish.tools.frames import (
 )
 from nagare_clip.publish.tools.lines import finished_placements, line_time
 from nagare_clip.render.run import run_render
+from nagare_clip.render.thumbnail import fallback_font
 
 EDIT_HELP = (
     'A publish edit is one JSON object: {"titles": [...], "lead": "...", '
@@ -91,6 +92,25 @@ def _captions(project: Project, placements) -> list[str]:
     return out
 
 
+def _fonts_section(fonts: dict[str, str]) -> str:
+    head = "## Fonts (render.fonts — the `font` values a thumbnail line may name)"
+    if not fonts:
+        return (
+            head + "\nnone set — a line uses ImageMagick's default face, which may draw "
+            "Japanese as nothing; ask the user to set render.fonts"
+        )
+    fallback = fallback_font(fonts)
+    rows = []
+    marked = False
+    for slot, face in fonts.items():
+        row = f"- {slot}: {face}"
+        if not marked and face == fallback:
+            row += "   (the fallback for a line with no font)"
+            marked = True
+        rows.append(row)
+    return head + "\n" + "\n".join(rows)
+
+
 def cmd_view(project: Project, args: argparse.Namespace) -> int:
     view = project.view
     total = len(view.lines)
@@ -114,6 +134,7 @@ def cmd_view(project: Project, args: argparse.Namespace) -> int:
     captions = _captions(project, placements)
     if captions:
         parts.append("## Captions\n" + "\n".join(f"- {c}" for c in captions))
+    parts.append(_fonts_section(ctx.cfg["render"]["fonts"]))
     if placements:
         seconds = total_duration(placements)
         parts.append(f"finished runtime {format_timestamp(seconds)} ({seconds:.1f} s)")
