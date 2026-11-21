@@ -514,3 +514,70 @@ def test_frames_at_without_a_timeline_exits_1(setup, monkeypatch, capsys):
     monkeypatch.setattr(cli, "extract_stills", lambda *a, **k: [])
     assert cli.main(["frames", "--at", "0:01"]) == 1
     assert "--at needs the finished timeline (run intervals)" in capsys.readouterr().err
+
+
+def _fake_magick(monkeypatch, calls, fail=False):
+    def run(cmd):
+        calls.append(cmd)
+        if fail:
+            raise RuntimeError("montage broke")
+        Path(cmd[-1]).write_bytes(b"sheet")
+        return ""
+
+    monkeypatch.setattr(cli, "run_magick", run)
+
+
+def _frames_with_files(monkeypatch):
+    def extract(proj, stills, **kw):
+        for s in stills:
+            p = proj.ctx.stage_dir("publish") / s.path
+            p.parent.mkdir(parents=True, exist_ok=True)
+            p.write_bytes(b"j")
+        return stills
+
+    monkeypatch.setattr(cli, "extract_stills", extract)
+
+
+def test_frames_sheet_writes_sheets_and_prints_paths(setup, monkeypatch, capsys):
+    project, _ = setup
+    _frames_with_files(monkeypatch)
+    calls: list = []
+    _fake_magick(monkeypatch, calls)
+    sheets = project.ctx.stage_dir("publish") / "sheets"
+    sheets.mkdir(parents=True)
+    (sheets / "sheet9.jpg").write_bytes(b"stale")
+    (sheets / "keep.txt").write_text("k")
+    assert cli.main(["frames", "--line", "1", "--line", "2", "--sheet"]) == 0
+    assert len(calls) == 1
+    assert not (sheets / "sheet9.jpg").exists() and (sheets / "keep.txt").exists()
+    assert (sheets / "sheet1.jpg").is_file()
+    out = capsys.readouterr().out
+    assert f"sheet: {sheets / 'sheet1.jpg'}" in out
+    assert out.index("#1  ") < out.index("sheet:")
+
+
+def test_frames_sheet_covers_every_still_in_stills_json(setup, monkeypatch):
+    project, _ = setup
+    _frames_with_files(monkeypatch)
+    calls: list = []
+    _fake_magick(monkeypatch, calls)
+    assert cli.main(["frames", "--line", "1"]) == 0
+    assert cli.main(["frames", "--line", "2", "--sheet"]) == 0
+    assert len([a for a in calls[0] if a == "-label"]) == 2
+
+
+def test_frames_sheet_magick_failure_exits_1_but_keeps_stills_json(setup, monkeypatch, capsys):
+    project, _ = setup
+    _frames_with_files(monkeypatch)
+    _fake_magick(monkeypatch, [], fail=True)
+    assert cli.main(["frames", "--line", "1", "--sheet"]) == 1
+    assert "error: " in capsys.readouterr().err
+    assert (project.ctx.stage_dir("publish") / "stills.json").is_file()
+
+
+def test_frames_without_sheet_runs_no_magick(setup, monkeypatch):
+    _frames_with_files(monkeypatch)
+    calls: list = []
+    _fake_magick(monkeypatch, calls)
+    assert cli.main(["frames", "--line", "1"]) == 0
+    assert calls == []

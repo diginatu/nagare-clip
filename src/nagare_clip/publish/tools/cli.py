@@ -10,6 +10,7 @@ from __future__ import annotations
 import argparse
 import json
 import logging
+import re
 import sys
 from pathlib import Path
 from typing import Any
@@ -42,6 +43,7 @@ from nagare_clip.publish.tools.frames import (
     format_stills,
     plan_stills,
     read_stills,
+    sheet_commands,
     write_stills,
 )
 from nagare_clip.publish.tools.lines import finished_placements, line_time
@@ -254,6 +256,24 @@ def _still_from_row(row: dict) -> Still:
     )
 
 
+def _write_sheets(project: Project, stills: list[Still], placements) -> list[Path]:
+    """Composite every listed still into contact sheets; stale ones go first."""
+    publish_dir = project.ctx.stage_dir("publish")
+    sheets = publish_dir / "sheets"
+    sheets.mkdir(parents=True, exist_ok=True)
+    for stale in sheets.iterdir():
+        if stale.is_file() and re.fullmatch(r"sheet\d+\.jpg", stale.name):
+            stale.unlink()
+    cfg = project.ctx.cfg
+    font = fallback_font(cfg.get("render", {}).get("fonts") or {})
+    commands = sheet_commands(
+        stills, placements, publish_dir, width=cfg["publish"]["frame_width"], font=font
+    )
+    for cmd in commands:
+        run_magick(cmd)
+    return [Path(cmd[-1]) for cmd in commands]
+
+
 def cmd_frames(project: Project, args: argparse.Namespace) -> int:
     ctx = project.ctx
     requests = args.line or []
@@ -296,6 +316,15 @@ def cmd_frames(project: Project, args: argparse.Namespace) -> int:
     print(format_stills(stills, placements))
     for note in notes:
         print(note)
+    if args.sheet:
+        try:
+            for sheet in _write_sheets(project, stills, placements):
+                print(f"sheet: {sheet}")
+        except Exception as e:  # noqa: BLE001 - magick missing or failing: the reason, exit 1
+            print(
+                f"error: contact sheet failed: {getattr(e, 'stderr', None) or e}", file=sys.stderr
+            )
+            return 1
     print(f"stills in {ctx.stage_dir('publish')} (the paths above are relative to it)")
     return 0
 
@@ -515,6 +544,14 @@ def build_parser() -> argparse.ArgumentParser:
         help=(
             "A still at finished-video time T (M:SS, H:MM:SS or seconds; repeatable, "
             "merges like --line)"
+        ),
+    )
+    p.add_argument(
+        "--sheet",
+        action="store_true",
+        help=(
+            "Also composite every still in stills.json into contact sheets "
+            "(sheets/sheet<K>.jpg, 12 per sheet) to Read instead of N images"
         ),
     )
     p.set_defaults(func=cmd_frames)

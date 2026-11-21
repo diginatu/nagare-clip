@@ -226,3 +226,76 @@ def test_at_without_a_timeline_or_past_the_end_is_a_problem(project):
         "--at 1:30 is past the finished runtime 0:02",
         "--at 1:00:00 is past the finished runtime 0:02",
     ]
+
+
+def _sheet_stills(project, n):
+    out = project.ctx.stage_dir("publish")
+    stills = []
+    for i in range(n):
+        s = Still("a", 1.0 + i, "line", f"l{i}", 1 if i % 2 == 0 else None, f"frames/a/{i}.jpg")
+        (out / s.path).parent.mkdir(parents=True, exist_ok=True)
+        (out / s.path).write_bytes(b"x")
+        stills.append(s)
+    return stills
+
+
+PLAYBACK = [Placement("a", 0.0, 100.0, 0.0, 100.0, 1.0)]
+
+
+def test_listing_carries_the_index(project):
+    stills = _sheet_stills(project, 2)
+    lines = format_stills(stills, PLAYBACK).splitlines()
+    assert lines[0].startswith("#1  ") and lines[1].startswith("#2  ")
+
+
+def test_sheet_commands_chunk_twelve_per_sheet_in_listed_order(project):
+    stills = _sheet_stills(project, 14)
+    out = project.ctx.stage_dir("publish")
+    cmds = frames.sheet_commands(stills, PLAYBACK, out, width=320, font="")
+    assert [len(c) for c in cmds] == [len(cmds[0]), len(cmds[1])]
+    assert [c[-1] for c in cmds] == [str(out / "sheets" / f"sheet{k}.jpg") for k in (1, 2)]
+    first = cmds[0]
+    assert first[:2] == ["magick", "montage"]
+    assert first[first.index("-tile") + 1] == "4x"
+    assert first[first.index("-geometry") + 1] == "320x+4+4"
+    assert "-font" not in first
+    labels = [first[i + 1] for i, a in enumerate(first) if a == "-label"]
+    files = [a for a in first if a.endswith(".jpg") and "frames" in a]
+    assert len(labels) == len(files) == 12
+    assert labels[0] == "#1  L1  0:01"
+    assert labels[1] == "#2  L—  0:02"
+    assert files[0].endswith("frames/a/0.jpg") and files[11].endswith("frames/a/11.jpg")
+    assert [cmds[1][i + 1] for i, a in enumerate(cmds[1]) if a == "-label"] == [
+        "#13  L1  0:13",
+        "#14  L—  0:14",
+    ]
+
+
+def test_sheet_labels_follow_the_listing_index_not_the_file_order(project):
+    stills = _sheet_stills(project, 3)
+    # the middle one is cut: listed last, so it is tile #3
+    placements = [Placement("a", 1.0, 2.0, 0.0, 1.0, 1.0), Placement("a", 3.0, 4.0, 1.0, 2.0, 1.0)]
+    cmds = frames.sheet_commands(stills, placements, project.ctx.stage_dir("publish"), width=100)
+    labels = [cmds[0][i + 1] for i, a in enumerate(cmds[0]) if a == "-label"]
+    assert labels == ["#1  L1  0:00", "#2  L1  0:01", "#3  L—  ✂"]
+
+
+def test_sheet_escapes_percent_and_passes_the_font(project):
+    s = Still("a", 1.0, "line", "x", 5, "frames/a/0.jpg")
+    out = project.ctx.stage_dir("publish")
+    (out / s.path).parent.mkdir(parents=True)
+    (out / s.path).write_bytes(b"x")
+    assert frames.magick_label("50% #1") == "50%% #1"
+    cmd = frames.sheet_commands([s], PLAYBACK, out, width=100, font="Noto Sans")[0]
+    assert cmd[cmd.index("-font") + 1] == "Noto Sans"
+
+
+def test_sheet_skips_missing_files_and_makes_no_command_when_none_left(project):
+    stills = _sheet_stills(project, 2)
+    out = project.ctx.stage_dir("publish")
+    (out / stills[0].path).unlink()
+    cmds = frames.sheet_commands(stills, PLAYBACK, out, width=100)
+    assert sum(a.endswith("frames/a/1.jpg") for a in cmds[0]) == 1
+    assert sum(a.endswith("frames/a/0.jpg") for a in cmds[0]) == 0
+    (out / stills[1].path).unlink()
+    assert frames.sheet_commands(stills, PLAYBACK, out, width=100) == []

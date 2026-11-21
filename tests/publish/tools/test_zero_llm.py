@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import json
 import sys
+from pathlib import Path
 
 import pytest
 
@@ -72,6 +73,9 @@ def project(tmp_path, monkeypatch, no_llm):
     monkeypatch.setattr(cli, "extract_stills", extract)
 
     def magick(cmd):
+        if cmd[:2] == ["magick", "montage"]:
+            Path(cmd[-1]).write_bytes(b"sheet")
+            return ""
         if cmd[-1] == "info:":
             return "".join("300 90\n" for a in cmd if a.startswith("label:"))
         return ""
@@ -84,6 +88,7 @@ def test_every_command_runs_without_an_llm(project, tmp_path, capsys):
     assert cli.main(["view"]) == 0
     assert cli.main(["view", "--compact"]) == 0
     assert cli.main(["frames", "--line", "1"]) == 0
+    assert cli.main(["frames", "--at", "0:01", "--sheet"]) == 0
     background = json.loads((project.ctx.stage_dir("publish") / "stills.json").read_text())[0][
         "path"
     ]

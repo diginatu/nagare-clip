@@ -264,16 +264,75 @@ def read_stills(path: Path) -> list[dict[str, Any]]:
     return data if isinstance(data, list) else []
 
 
-def format_stills(stills: Sequence[Still], placements: Sequence[Placement] | None) -> str:
-    """``line  M:SS|✂|—  kind  label  path`` rows in playback order, untimed last."""
+def _listed(
+    stills: Sequence[Still], placements: Sequence[Placement] | None
+) -> list[tuple[Still, str]]:
+    """Every still with its time as listed (``M:SS``, ``✂`` cut, ``—`` unknown),
+    in playback order, untimed last.  The one order the listing and the sheet share."""
     rows = [(_timeline_time(placements, s), s) for s in stills]
     rows.sort(key=lambda r: (r[0] is None, r[0] if r[0] is not None else 0.0))
     out = []
     for t, s in rows:
-        line = "—" if s.line is None else str(s.line)
         if t is not None:
             when = format_timestamp(t)
         else:
             when = "—" if placements is None else "✂"
-        out.append(f"{line}  {when}  {s.kind}  {s.label}  {s.path}")
+        out.append((s, when))
+    return out
+
+
+def format_stills(stills: Sequence[Still], placements: Sequence[Placement] | None) -> str:
+    """``#i  line  M:SS|✂|—  kind  label  path`` rows in playback order, untimed last."""
+    out = []
+    for i, (s, when) in enumerate(_listed(stills, placements), start=1):
+        line = "—" if s.line is None else str(s.line)
+        out.append(f"#{i}  {line}  {when}  {s.kind}  {s.label}  {s.path}")
     return "\n".join(out)
+
+
+SHEET_PER_SHEET = 12
+SHEET_COLUMNS = 4
+
+
+def magick_label(text: str) -> str:
+    """ImageMagick expands ``%`` escapes in a ``-label``; ``%%`` is a literal one."""
+    return text.replace("%", "%%")
+
+
+def sheet_commands(
+    stills: Sequence[Still],
+    placements: Sequence[Placement] | None,
+    publish_dir: Path,
+    *,
+    width: int,
+    font: str = "",
+) -> list[list[str]]:
+    """``magick montage`` argv lists: the listed stills, 12 per sheet, 4 columns.
+
+    A tile reads ``#<i>  L<line>  <M:SS>`` where ``i`` is the still's position
+    in the printed list, so a tile maps back to a row.  A still whose file is
+    missing is skipped (its index is not reused).
+    """
+    tiles = []
+    for i, (s, when) in enumerate(_listed(stills, placements), start=1):
+        if not (publish_dir / s.path).is_file():
+            continue
+        line = "—" if s.line is None else str(s.line)
+        tiles.append((f"#{i}  L{line}  {when}", str(publish_dir / s.path)))
+    commands = []
+    for k, start in enumerate(range(0, len(tiles), SHEET_PER_SHEET), start=1):
+        cmd = ["magick", "montage"]
+        if font:
+            cmd += ["-font", font]
+        cmd += ["-pointsize", "20", "-fill", "white", "-background", "#222222"]
+        for label, path in tiles[start : start + SHEET_PER_SHEET]:
+            cmd += ["-label", magick_label(label), path]
+        cmd += [
+            "-tile",
+            f"{SHEET_COLUMNS}x",
+            "-geometry",
+            f"{width}x+4+4",
+            str(publish_dir / "sheets" / f"sheet{k}.jpg"),
+        ]
+        commands.append(cmd)
+    return commands
