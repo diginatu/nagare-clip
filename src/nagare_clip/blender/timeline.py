@@ -12,7 +12,7 @@ from nagare_clip.blender.frames import clamp_frames, retimed_frame_count
 
 # Re-exported (explicit `as` alias) so blender_cli and the existing tests keep
 # importing it from here: it lives in `frames` because it is bpy-free and the
-# publish stage reuses it to place chapter timestamps on the same timeline.
+# publish tools reuse it to place chapter timestamps on the same timeline.
 from nagare_clip.blender.frames import split_intervals_by_speed as split_intervals_by_speed
 
 # Media channels: one video and one sound channel, the same for every source.

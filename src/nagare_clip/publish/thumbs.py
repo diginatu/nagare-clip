@@ -6,8 +6,9 @@ caption at each one, a ``keep`` around a silent event worth watching, and a
 rather than guessed from the timeline.
 
 Pure selection only.  Frame extraction runs through the whisperx Docker image
-in the pipeline adapter (same batching as ``gap_context``), which hands the
-results back as :class:`ThumbShot`.
+in the publish tools' ``frames`` command (``publish/tools/frames.py``, one
+container per call, as ``gap_context`` batches), and ``publish.json`` carries
+the stills that were written; ``render`` reads them back as :class:`ThumbShot`.
 """
 
 from __future__ import annotations
@@ -17,7 +18,7 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:  # annotation only: importing the director here would drag the
-    # LLM transport into the render stage, which must never load it.
+    # LLM transport into the renderer, which must never load it.
     from nagare_clip.director.ops import DirectorOp
 
 # Kinds, most interesting first: an overlay carries the director's own words
@@ -42,11 +43,11 @@ class ThumbShot:
     time: float
     kind: str
     label: str
-    path: str  # relative to the publish stage dir
+    path: str  # relative to <output_dir>/publish/
 
 
 def frame_relpath(stem: str, t: float) -> str:
-    """Frame path relative to the publish stage dir."""
+    """Frame path relative to ``<output_dir>/publish/``."""
     return f"frames/{stem}/{t:.3f}.jpg"
 
 

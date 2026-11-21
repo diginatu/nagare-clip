@@ -1,8 +1,8 @@
 """The thumbnail shortlist and stills at any display line (no LLM call).
 
 A coding agent calls ``frames`` and then looks at the JPEGs itself.  Every
-still of one call is extracted through ONE ``docker compose run``, the way the
-stage batches its shortlist: container startup dwarfs the ffmpeg work.
+still of one call is extracted through ONE ``docker compose run``, the way
+``gap_context`` batches its frames: container startup dwarfs the ffmpeg work.
 """
 
 from __future__ import annotations
@@ -40,7 +40,7 @@ class Still:
     kind: str  # a shortlist kind, or "line"
     label: str
     line: int | None  # the display line containing the time
-    path: str  # relative to the publish stage dir
+    path: str  # relative to <output_dir>/publish/
 
 
 def _display_line(project: Project, stem: str, t: float) -> int | None:

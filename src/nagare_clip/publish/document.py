@@ -9,7 +9,7 @@ from nagare_clip.publish.chapters import format_timestamp
 
 
 def empty_publish() -> dict[str, Any]:
-    """The disabled-stage artifact: the full shape, with nothing in it."""
+    """The full ``publish.json`` shape, with nothing in it."""
     return {
         "titles": [],
         "lead": "",

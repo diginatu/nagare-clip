@@ -1,18 +1,17 @@
-"""render stage: the last one, and the only one that never calls a model.
+"""render: the publish tools' compositor, and it never calls a model.
 
-``publish`` decides what the thumbnail *says*; this stage decides nothing at
-all.  It reads ``output/publish/publish.json`` -- the hand-editable contract --
-composites one image per copy set with ImageMagick, and writes them beside a
-contact sheet.
+The ``nagare-publish`` skill decides what the thumbnail *says* and how it
+looks; this module decides nothing at all.  It reads
+``<output_dir>/publish/publish.json`` -- the hand-editable contract -- composites
+one image per copy set with ImageMagick, and writes them beside a contact
+sheet.  It is reached only through the tools (``write`` runs it unless
+``--no-render``; ``render`` runs it alone) -- it is not a pipeline stage.
 
 The split exists for one loop: look at a render, change one thing, look again.
-The thing being changed sits *between* the two halves (a background that should
-have been the next frame over, a headline the model got nearly right), and a
-stage boundary is how this pipeline already says "stop here, edit the artifact,
-resume".  So::
+So::
 
-    $EDITOR output/publish/publish.json
-    ./scripts/run_pipeline.sh --from-stage render --to-stage render
+    $EDITOR <output_dir>/publish/publish.json
+    <nagare-clip>/scripts/publish_tools.sh render --config ...
 
 costs zero calls, every time.  Nothing in this package imports the LLM
 transport, so that is a property of the code rather than of the config.
@@ -38,8 +37,8 @@ from nagare_clip.render.thumbnail import (
 def _load_publish(publish_json: Path) -> Any:
     """``publish.json``, or ``None`` when it is missing/unreadable.
 
-    Never raises: ``render`` runs last, and a project that stopped before
-    ``publish`` should get an empty contact sheet rather than a traceback.
+    Never raises: ``render`` run before anything was written should get an
+    empty contact sheet rather than a traceback.
     """
     if not publish_json.is_file():
         logging.warning("render: no publish.json at %s; nothing to render", publish_json)

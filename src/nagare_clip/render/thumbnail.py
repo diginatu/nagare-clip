@@ -1,15 +1,15 @@
 """Render the thumbnail candidates, rather than describing them.
 
-The publish LLM writes the copy AND the style for that copy, in ImageMagick's
-own vocabulary (``-fill``, ``-stroke``, ``-strokewidth``, ``-pointsize``,
-``-gravity``), so the sets in ``publish.json`` are real options rather than
-several wordings of one look.  This module is the *render* stage: it turns
-those values into images and never calls a model.
+The publish edit carries the copy AND the style for that copy, in
+ImageMagick's own vocabulary (``-fill``, ``-stroke``, ``-strokewidth``,
+``-pointsize``, ``-gravity``), so the sets in ``publish.json`` are real options
+rather than several wordings of one look.  This module is the publish tools'
+compositor: it turns those values into images and never calls a model.
 
 It receives *values*; it builds every command.  ``magick`` reads and writes
-files (``@``, ``-write``, MSL), which makes a model-authored command line a
+files (``@``, ``-write``, MSL), which makes an agent-authored command line a
 real hole and an allowlisted operator set a cheap fix: the worst a bad
-generation can do is produce an ugly image.
+value can do is produce an ugly image.
 
 Commands are argument lists.  Never a shell string.
 """
@@ -81,9 +81,9 @@ class ThumbLine:
 class ThumbSet:
     """One alternative: its copy, the picture it goes on, and its look.
 
-    Defined here rather than beside the LLM call that writes it: this is what
-    ``publish.json`` carries, and the render stage must be able to read it
-    without loading the transport.
+    Defined here rather than beside the publish tools that write it: this is
+    what ``publish.json`` carries, and the renderer must be able to read it
+    without loading the director (and with it the LLM transport).
 
     ``background`` is per **set**, because a headline and the photograph it
     sits on are one decision: four copy treatments over one frame is four
@@ -93,7 +93,7 @@ class ThumbSet:
 
     lines: list[ThumbLine] = field(default_factory=list)
     style: dict[str, Any] = field(default_factory=dict)  # gravity / offset / shadow
-    background: str = ""  # relative to the publish stage dir, or absolute
+    background: str = ""  # relative to <output_dir>/publish/, or absolute
 
 
 @dataclass(frozen=True)
@@ -158,9 +158,7 @@ def fallback_font(fonts: Mapping[str, str]) -> str:
     The presets cannot name a slot -- slot names are project-defined, and this
     module has never seen the config -- so without this every preset renders in
     ImageMagick's own default face, which has no CJK glyphs.  A real run whose
-    pairing call failed came back as blank thumbnails for exactly that reason,
-    and "a project with pairing disabled renders as it does today" was false:
-    before the copy call was blinded it named a slot on every line.
+    copy named no slot came back as blank thumbnails for exactly that reason.
 
     First-listed rather than sorted: a human writes the face they want first,
     and YAML mapping order is preserved, so the rule is one a person can act
@@ -467,7 +465,7 @@ def build_render_cmd(
 @dataclass(frozen=True)
 class ThumbRender:
     index: int  # 1-based set number, matching render.md's "Set N"
-    path: str  # relative to the render stage dir
+    path: str  # relative to <output_dir>/render/
     background: str  # the still it was composited onto
 
 
@@ -494,7 +492,7 @@ class RenderResult:
 
 
 def set_relpath(index: int) -> str:
-    """Render path relative to the render stage dir."""
+    """Render path relative to ``<output_dir>/render/``."""
     return f"thumbnails/set{index}.jpg"
 
 
@@ -520,7 +518,7 @@ def named_background(thumb_set: Any) -> str:
 def set_background(thumb_set: Any, thumbs: Sequence[Any], publish_dir: Path) -> Path | None:
     """The still THIS set is composited onto.
 
-    A relative path is resolved against the **publish** stage dir, because
+    A relative path is resolved against ``<output_dir>/publish/``, because
     that is where the stills are and where ``publish.json`` names them.  An
     absolute path is taken as it stands, and neither form has to be a
     shortlist frame: ``build_render_cmd`` covers-and-crops whatever it is
@@ -557,10 +555,10 @@ def render_sets(
 
     Each set is composited onto **its own** background (``set_background``),
     resolved against *publish_dir* because that is where the stills are and
-    where ``publish.json`` names them; the images land under *out_dir*, which
-    is the render stage's own directory.
+    where ``publish.json`` names them; the images land under *out_dir*
+    (``<output_dir>/render/``).
 
-    Nothing here is allowed to fail the stage: a set whose background is
+    Nothing here is allowed to fail the render: a set whose background is
     missing or whose magick call dies comes back as a ``SkippedSet`` carrying
     the reason, and the rest still render.
     """
@@ -618,7 +616,7 @@ def render_sets(
             logger.debug("render: measure failed for set %d", index, exc_info=True)
             skip(index, f"could not measure the text: {e.stderr}")
             continue
-        except Exception as e:  # noqa: BLE001 - a dead magick must not fail the stage
+        except Exception as e:  # noqa: BLE001 - a dead magick must not fail the render
             logger.debug("render: measure failed for set %d", index, exc_info=True)
             skip(index, f"could not measure the text: {e}")
             continue
