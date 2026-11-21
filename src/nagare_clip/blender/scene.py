@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from pathlib import Path
 
 import bpy
@@ -32,6 +33,22 @@ def set_preview_proxy_size(size: int) -> None:
             for space in area.spaces:
                 if space.type == "SEQUENCE_EDITOR":
                     space.proxy_render_size = f"PROXY_{size}"
+
+
+def set_prefetch(scene: bpy.types.Scene, enabled: bool) -> None:
+    """Set the sequencer's "Prefetch Frames" (``SequenceEditor.use_prefetch``).
+
+    Prefetch renders frames ahead in a background thread; with many text
+    strips that thread and the UI both draw through FreeType, which is not
+    thread-safe, and Blender crashes in ``FTC_CMapCache_Lookup`` while the
+    strips are being edited. It is stored on the scene, so the saved
+    ``.blend`` opens with it.
+    """
+    editor = scene.sequence_editor
+    if not hasattr(editor, "use_prefetch"):
+        logging.warning("This Blender has no SequenceEditor.use_prefetch; blender.prefetch ignored")
+        return
+    editor.use_prefetch = enabled
 
 
 def load_source_metadata(source_path: Path) -> tuple[float, int, int]:

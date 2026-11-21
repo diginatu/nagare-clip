@@ -182,6 +182,7 @@ blender:
   proxy_build: true   # Build the proxy files with host ffmpeg before Blender runs (Blender never builds them by itself); skipped while a proxy is newer than its source
   proxy_decode: cuda   # Where the proxy build decodes and scales: cuda (NVDEC) | cpu
   proxy_encoder: libx264   # Proxy encoder: libx264 (Blender's own settings; cheapest to scrub) | h264_nvenc (faster to build, ~1.5x heavier to scrub); any failure retries with cpu + libx264
+  prefetch: true   # Sequencer 'Prefetch Frames' in the saved .blend; false avoids Blender crashes in font rendering (FreeType) while editing text strips
   # Render/output settings, written onto the scene so the .blend opens ready to
   # render instead of needing the encoder, resolution and audio set by hand every
   # time. Empty by default: what is not set here keeps coming from the first

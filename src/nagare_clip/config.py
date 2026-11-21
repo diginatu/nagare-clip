@@ -739,6 +739,11 @@ class BlenderConfig(BaseModel):
         "scrub) | h264_nvenc (faster to build, ~1.5x heavier to scrub); any "
         "failure retries with cpu + libx264",
     )
+    prefetch: bool = Field(
+        True,
+        description="Sequencer 'Prefetch Frames' in the saved .blend; false avoids "
+        "Blender crashes in font rendering (FreeType) while editing text strips",
+    )
     render: BlenderRenderConfig = Field(default_factory=BlenderRenderConfig)
     caption_style: CaptionStyleConfig = Field(default_factory=CaptionStyleConfig)
     overlay_style: OverlayStyleConfig = Field(default_factory=OverlayStyleConfig)

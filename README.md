@@ -541,6 +541,15 @@ retried on the CPU, and if that fails too the run carries on without a
 proxy. A proxy newer than its source is reused; replace the source and it is
 rebuilt. Set `blender.proxy_build: false` to leave proxy building to Blender.
 
+### blender.prefetch: Crashes While Editing
+
+If Blender crashes while you move or cut strips in the generated `.blend`
+(the crash report's backtrace ends in `libfreetype ... FTC_CMapCache_Lookup`),
+set `blender.prefetch: false`. It turns off the sequencer's Prefetch Frames
+(the preview's View menu) in the saved `.blend`: prefetch draws the caption
+text strips in a background thread while the UI draws them too, and FreeType
+is not thread-safe. Default `true` keeps Blender's own setting.
+
 ### blender.render: Render/Output Settings
 
 The `.blend` this pipeline hands you opens with the resolution and frame rate of whatever source plays first, and Blender's own defaults for everything else — so the encoder, the container, the audio codec and the output path are set by hand every time you render. `blender.render:` writes them onto the scene instead. Empty by default; nothing set here keeps today's behaviour exactly.

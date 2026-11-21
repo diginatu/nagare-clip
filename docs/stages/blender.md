@@ -90,6 +90,14 @@ fails when a Blender upgrade changes the format.
 - `scene.set_preview_proxy_size()` sets every sequencer space's
   `proxy_render_size` to `PROXY_<proxy_size>`: the Video_Editing template
   previews at `PROXY_100`, so any other size would look for a file never built.
+- `scene.set_prefetch()` sets `SequenceEditor.use_prefetch` from
+  `blender.prefetch` (default `true`, Blender's own). Prefetch renders frames
+  ahead in a background thread; it and the UI both draw text strips through
+  FreeType, which is not thread-safe, and Blender crashed in
+  `FTC_CMapCache_Lookup` while strips were being moved — gone with prefetch
+  off. Stored on the scene, so the saved `.blend` keeps it
+  (`tests/blender/test_prefetch.py`, Blender-gated). A Blender without the
+  property logs a warning (→ `blender_warnings.json`) and carries on.
 - Not verified headlessly: that the preview *displays* the file (no GL in a
   background Blender). Check it by hand: overwrite a proxy with a solid-colour
   clip of the same shape and open the `.blend` — the preview turns that colour.
