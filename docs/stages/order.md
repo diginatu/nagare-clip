@@ -120,8 +120,11 @@ longer maps onto the transcripts.
 `pipeline/stages._resolve_order` reads `director/order.json`, else shooting
 order. The manifest builder and the order note read it
 (through `_timeline_segments`). `blender`, `cut_report` and the publish tools (not a stage) read the manifest and
-never an order. Nothing downstream of `intervals` re-derives a time from a line
-number, and nothing upstream reasons in seconds.
+never an order. Nothing downstream of `intervals` re-derives a finished-timeline
+time, an order or a cut from a line number; the publish tools look a line up
+only as its **source** span in the transcript timings (a fact about the
+footage), and the manifest alone places it on the finished timeline. Nothing
+upstream reasons in seconds.
 
 A hand-edited `order.json` is checked for coverage but not against timelapses:
 a human who splits one means it.

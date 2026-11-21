@@ -236,9 +236,12 @@ Every problem at once:
 
 ## Timing: the tool's, never the edit's
 
-The authority rule is unchanged: after `intervals`, `intervals/timeline.json`
-is the authority, and nothing here re-derives a time from a line number on its
-own. `lines.finished_placements()` lays the finished timeline out with
+The authority rule, precisely: after `intervals`, `intervals/timeline.json` is
+the authority on the order, the cut and every finished-timeline time. The tools
+turn a display line into its **source** span from the transcript timings
+(`lines.line_span` — a fact about the footage, not an edit decision); only the
+manifest, through `build_placements`, places that span on the finished
+timeline. No order and no cut is re-derived here. `lines.finished_placements()` lays the finished timeline out with
 `pipeline.stages.ordered_sources_for(ctx)` (the manifest's segments, sliced,
 in playback order) and `publish.timeline.build_placements()`; `None` when no
 source has intervals yet (blender not run — `view`/`frames` show `—`, `write`
