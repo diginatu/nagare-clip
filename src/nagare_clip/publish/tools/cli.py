@@ -100,7 +100,7 @@ def cmd_view(project: Project, args: argparse.Namespace) -> int:
     last = min(last, total)
     ctx = project.ctx
     placements = finished_placements(project)
-    parts: list[str] = []
+    parts: list[str] = [f"output dir: {ctx.output_dir}"]
     brief = format_brief(ctx.cfg.get("project"))
     if brief:
         parts.append(brief)
@@ -159,6 +159,7 @@ def cmd_frames(project: Project, args: argparse.Namespace) -> int:
     placements = finished_placements(project)
     write_stills(path, stills, placements)
     print(format_stills(stills, placements))
+    print(f"stills in {ctx.stage_dir('publish')} (the paths above are relative to it)")
     return 0
 
 
@@ -173,6 +174,7 @@ def _render(project: Project) -> None:
         markdown=render_dir / "render.md",
     )
     print(f"rendered into {render_dir}")
+    print(f"thumbnails in {render_dir / 'thumbnails'}")
 
 
 def cmd_write(project: Project, args: argparse.Namespace) -> int:

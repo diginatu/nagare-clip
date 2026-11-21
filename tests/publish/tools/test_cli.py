@@ -169,3 +169,26 @@ def test_shim_exists_and_is_executable():
     assert shim.is_file()
     assert os.access(shim, os.X_OK)
     assert "nagare_clip.publish.tools" in shim.read_text()
+
+
+def test_view_first_line_names_the_output_dir(setup, capsys):
+    project, _ = setup
+    assert cli.main(["view"]) == 0
+    first = capsys.readouterr().out.splitlines()[0]
+    assert first == f"output dir: {project.ctx.output_dir}"
+
+
+def test_frames_names_the_publish_dir(setup, monkeypatch, capsys):
+    project, _ = setup
+    monkeypatch.setattr(cli, "extract_stills", lambda proj, stills, **kw: stills)
+    assert cli.main(["frames", "--line", "1"]) == 0
+    out = capsys.readouterr().out
+    assert f"stills in {project.ctx.stage_dir('publish')}" in out
+
+
+def test_render_prints_the_thumbnails_dir(setup, capsys):
+    project, _ = setup
+    assert cli.main(["render"]) == 0
+    assert (
+        f"thumbnails in {project.ctx.stage_dir('render') / 'thumbnails'}" in capsys.readouterr().out
+    )
