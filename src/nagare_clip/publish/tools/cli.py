@@ -19,7 +19,8 @@ from nagare_clip.broken_pipe import silence_stdout
 from nagare_clip.config import get_effective_config
 from nagare_clip.director.files import read_ops, read_plan
 from nagare_clip.director.load import project_context
-from nagare_clip.director.tools.project import Project, load_project
+from nagare_clip.director.played import played_transcript
+from nagare_clip.director.tools.project import Project, current_state, load_project
 from nagare_clip.pipeline.errors import PipelineError
 from nagare_clip.pipeline.external import run_magick
 from nagare_clip.publish.chapters import format_timestamp
@@ -135,6 +136,40 @@ def _fonts_section(fonts: dict[str, str]) -> str:
     return head + "\n" + "\n".join(rows)
 
 
+def _when(project: Project, placements):
+    """display line -> its finished time as text (``—`` unknown, ``✂`` cut)."""
+
+    def when(number: int) -> str:
+        if placements is None:
+            return "—"
+        t = line_time(placements, project, number)
+        return "✂" if t is None else format_timestamp(t)
+
+    return when
+
+
+def _compact_rows(project: Project, placements) -> str | None:
+    """The played transcript with finished times; ``None`` (reason on stderr)
+    when the director files on disk do not map onto this view."""
+    state = current_state(project)
+    if state.unmapped:
+        print(
+            f"warning: {len(state.unmapped)} item(s) in the director files do not map onto "
+            "this view, so --compact cannot show the finished video; showing every line:",
+            file=sys.stderr,
+        )
+        for note in state.unmapped:
+            print(f"  {note}", file=sys.stderr)
+        return None
+    return played_transcript(
+        project.view,
+        project.transcripts,
+        state.ops,
+        order=state.order,
+        when=_when(project, placements),
+    )
+
+
 def cmd_view(project: Project, args: argparse.Namespace) -> int:
     view = project.view
     total = len(view.lines)
@@ -164,15 +199,15 @@ def cmd_view(project: Project, args: argparse.Namespace) -> int:
         parts.append(f"finished runtime {format_timestamp(seconds)} ({seconds:.1f} s)")
     else:
         parts.append("finished runtime unknown — no intervals yet")
-    rows = []
-    for line in view.lines[first - 1 : last]:
-        if placements is None:
-            when = "—"
-        else:
-            t = line_time(placements, project, line.number)
-            when = "✂" if t is None else format_timestamp(t)
-        rows.append(f"{line.number}  {when}  {line.text}".rstrip())
-    parts.append("\n".join(rows))
+    compact = _compact_rows(project, placements) if args.compact else None
+    if compact is not None:
+        parts.append(compact)
+    else:
+        rows = []
+        for line in view.lines[first - 1 : last]:
+            when = _when(project, placements)(line.number)
+            rows.append(f"{line.number}  {when}  {line.text}".rstrip())
+        parts.append("\n".join(rows))
     print("\n\n".join(parts))
     return 0
 
@@ -299,7 +334,16 @@ def build_parser() -> argparse.ArgumentParser:
         parents=[common],
         help="Print the brief, plan, captions, runtime and the lines with their times",
     )
-    p.add_argument("--lines", type=_parse_lines, help="Only display lines A-B")
+    group = p.add_mutually_exclusive_group()
+    group.add_argument("--lines", type=_parse_lines, help="Only display lines A-B")
+    group.add_argument(
+        "--compact",
+        action="store_true",
+        help=(
+            "Instead of every shot line, the finished video: what plays, in playback "
+            "order, with its finished time (a cut is one row, a timelapse one row)"
+        ),
+    )
     p.set_defaults(func=cmd_view)
 
     p = sub.add_parser(

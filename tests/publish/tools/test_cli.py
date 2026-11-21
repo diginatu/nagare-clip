@@ -265,3 +265,34 @@ def test_captions_without_a_timeline_show_a_dash(setup, monkeypatch, capsys):
     _caption_ops(monkeypatch, [DirectorOp(type="overlay", lines=(2, 2), text="x", duration=2.0)])
     assert cli.main(["view"]) == 0
     assert _captions_block(capsys.readouterr().out) == ["- —  x"]
+
+
+def test_view_compact_prints_the_played_transcript_with_finished_times(setup, capsys):
+    assert cli.main(["view", "--compact"]) == 0
+    out = capsys.readouterr().out
+    assert out.startswith("output dir:")
+    assert "finished runtime" in out
+    assert "THE TRANSCRIPT AS IT PLAYS" in out
+    assert "0:00  1: one" in out
+    assert "0:01  3: two" in out
+    assert "0:00  one" not in out  # not the per-line rows
+
+
+def test_view_compact_and_lines_are_mutually_exclusive(setup, capsys):
+    with pytest.raises(SystemExit) as e:
+        cli.main(["view", "--compact", "--lines", "1-2"])
+    assert e.value.code == 2
+
+
+def test_view_compact_falls_back_when_the_director_files_do_not_map(setup, monkeypatch, capsys):
+    from nagare_clip.director.tools.project import CurrentState
+
+    monkeypatch.setattr(
+        cli,
+        "current_state",
+        lambda project: CurrentState(ops={}, order=[], plan="", unmapped=["a: op 3-9 is gone"]),
+    )
+    assert cli.main(["view", "--compact"]) == 0
+    cap = capsys.readouterr()
+    assert "a: op 3-9 is gone" in cap.err
+    assert "0:00  one" in cap.out
