@@ -21,6 +21,7 @@ from nagare_clip.render.thumbnail import (
     escape_magick_text,
     fallback_font,
     layout_lines,
+    line_style_problems,
     parse_metrics,
     preset_for,
     render_sets,
@@ -29,6 +30,7 @@ from nagare_clip.render.thumbnail import (
     resolve_set_style,
     set_background,
     set_relpath,
+    set_style_problems,
     sets_from_dict,
 )
 
@@ -805,3 +807,85 @@ def test_a_non_string_background_is_ignored_rather_than_raising():
 
 def test_set_relpath_is_one_based():
     assert set_relpath(1) == "thumbnails/set1.jpg"
+
+
+def test_line_style_problems_reports_each_bad_key():
+    problems = line_style_problems(
+        {"fill": "nope", "pointsize": 9999, "font": "x", "glow": 1}, {"sans": "Noto"}
+    )
+    assert len(problems) == 4
+    for key in ("fill", "pointsize", "font", "glow"):
+        assert any(key in p for p in problems), key
+
+
+def test_line_style_problems_accepts_valid():
+    raw = {"role": "tag", "text": "t", "fill": "#FFCC00", "pointsize": 120, "font": "sans"}
+    assert line_style_problems(raw, {"sans": "Noto"}) == []
+
+
+def test_line_style_problems_flags_a_bad_role_but_not_an_absent_or_empty_one():
+    assert any("role" in p for p in line_style_problems({"role": "title"}, {}))
+    assert line_style_problems({"role": ""}, {}) == []
+    assert line_style_problems({}, {}) == []
+
+
+def test_line_style_problems_checks_stroke_and_strokewidth():
+    problems = line_style_problems({"stroke": "x", "strokewidth": 41}, {})
+    assert len(problems) == 2
+    assert line_style_problems({"strokewidth": 0}, {}) == []
+
+
+def test_set_style_problems():
+    assert len(set_style_problems({"gravity": "middle", "offset": "10,10"})) == 2
+    ok = {"gravity": "south", "offset": "+0+40", "shadow": {"blur": "0x6"}}
+    assert set_style_problems(ok) == []
+
+
+def test_set_style_problems_ignores_lines_and_background_but_flags_unknown_keys():
+    assert set_style_problems({"lines": [], "background": "a.jpg"}) == []
+    assert any("glow" in p for p in set_style_problems({"glow": 1}))
+
+
+def test_set_style_problems_checks_the_shadow():
+    assert set_style_problems({"shadow": False}) == []
+    assert len(set_style_problems({"shadow": {"color": "nope", "blur": "big"}})) == 2
+    assert len(set_style_problems({"shadow": "yes"})) == 1
+
+
+def test_role_optional_uses_hook_preset():
+    assert (
+        resolve_line_style({}, "", {}, preset_for(1)).pointsize
+        == preset_for(1).lines["hook"].pointsize
+    )
+
+
+def test_five_lines_all_rendered(tmp_path):
+    _touch(tmp_path, "frames/a/1.000.jpg")
+    run = FakeRun()
+    lines = [ThumbLine("", f"L{i}", {"font": "serif-black", "pointsize": 40}) for i in range(5)]
+    render_sets([ThumbSet(lines=lines, style={})], [_shot()], CFG, tmp_path, tmp_path, run)
+    render_cmd = run.cmds[1]
+    for i in range(5):
+        assert f"L{i}" in render_cmd
+
+
+def test_height_overflow_warning(tmp_path):
+    _touch(tmp_path, "frames/a/1.000.jpg")
+
+    def run(cmd):
+        if cmd[-1] == "info:":
+            return "".join("300 300\n" for a in cmd if a.startswith("label:"))
+        return ""
+
+    lines = [ThumbLine("hook", f"L{i}", {}) for i in range(5)]
+    result = render_sets([ThumbSet(lines=lines, style={})], [_shot()], CFG, tmp_path, tmp_path, run)
+    assert len(result.warnings) == 1
+    index, message = result.warnings[0]
+    assert index == 1
+    assert "text block is" in message and "canvas is 720px" in message
+
+
+def test_a_block_that_fits_has_no_warning(tmp_path):
+    _touch(tmp_path, "frames/a/1.000.jpg")
+    result = render_sets(_sets(1), [_shot()], CFG, tmp_path, tmp_path, FakeRun())
+    assert result.warnings == []

@@ -147,6 +147,19 @@ outside that table is dropped before it enters `publish.json` or reaches a
 and log an unknown key themselves (`_warn_unknown()`) as a second guard, but
 that path is exercised by direct unit tests, not by the stage in production.
 
+`line_style_problems(raw, fonts)` / `set_style_problems(raw)` report what
+`resolve_*` would silently replace (unknown key, bad value, a `font` that is not
+a `render.fonts` slot, a non-empty `role` outside `VALID_ROLES` -- an absent or
+empty role is fine and takes the hook preset). They share one predicate per key
+with `resolve_*`, so render stays lenient while a strict caller (the publish
+tools' `write`) can refuse. There is no cap on the number of lines.
+
+After layout, a stacked block taller than the canvas (placed heights + gaps +
+`abs(y0)`) adds `text block is {h}px tall; canvas is {H}px` to
+`RenderResult.warnings` (`(set index, message)`); `render.json` carries
+`"warnings": [{set, message}]` and `render.md` prints `**Warning:** ...` under
+the set. The set still renders.
+
 A set with *no* usable style at all gets a whole preset, chosen **round-robin**
 by set index (`preset_for()`) rather than randomly, so a rerun of the same pipeline
 produces the same images and four sets still read as four options.

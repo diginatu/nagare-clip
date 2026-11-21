@@ -98,10 +98,14 @@ def _render_markdown(
         lines += ["_(none)_", ""]
     by_index = {r.index: r for r in result.renders}
     reasons = {s.index: s.reason for s in result.skipped}
+    warned: dict[int, list[str]] = {}
+    for w_index, w_message in result.warnings:
+        warned.setdefault(w_index, []).append(w_message)
     for index, thumb_set in enumerate(sets, start=1):
         render = by_index.get(index)
         lines.append(f"## Set {index}")
         lines += [f"- {line.role}: {line.text}" for line in thumb_set.lines]
+        lines += [f"**Warning:** {message}" for message in warned.get(index, [])]
         if render is not None:
             lines += [
                 "",
@@ -143,6 +147,7 @@ def run_render(
             {"set": r.index, "path": r.path, "background": r.background} for r in result.renders
         ],
         "skipped": [{"set": s.index, "reason": s.reason} for s in result.skipped],
+        "warnings": [{"set": i, "message": m} for i, m in result.warnings],
     }
     output.parent.mkdir(parents=True, exist_ok=True)
     output.write_text(json.dumps(artifact, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")

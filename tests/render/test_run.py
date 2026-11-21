@@ -89,7 +89,7 @@ def _run(tmp_path, cfg=CFG, *, run=None, publish=PUBLISH, frames=("frames/a/1.00
 
 def test_disabled_writes_an_empty_artifact(tmp_path):
     data, md, _ = _run(tmp_path, {"render": {"enabled": False}})
-    assert data == {"renders": [], "skipped": []}
+    assert data == {"renders": [], "skipped": [], "warnings": []}
     assert "disabled" in md
 
 
@@ -102,7 +102,7 @@ def test_a_missing_publish_json_writes_an_empty_artifact(tmp_path, caplog):
         run=FakeRun(),
     )
     data = json.loads((tmp_path / "render" / "render.json").read_text(encoding="utf-8"))
-    assert data == {"renders": [], "skipped": []}
+    assert data == {"renders": [], "skipped": [], "warnings": []}
     assert "publish.json" in caplog.text
 
 
@@ -411,3 +411,28 @@ def test_a_project_naming_no_background_renders_the_same_twice(tmp_path):
     # preset_for() is round-robin, which is what keeps four options looking
     # like four options.
     assert len(set(first.values())) == 4
+
+
+def test_a_tall_text_block_is_warned_about_in_json_and_markdown(tmp_path):
+    def run(cmd):
+        if cmd[-1] == "info:":
+            return "".join("300 300\n" for a in cmd if a.startswith("label:"))
+        return ""
+
+    publish = {
+        **PUBLISH,
+        "thumbnail_copy": [
+            {"lines": [{"role": "hook", "text": f"行{i}"} for i in range(5)], "background": ""}
+        ],
+    }
+    data, md, _ = _run(tmp_path, publish=publish, run=run)
+    assert len(data["warnings"]) == 1
+    assert data["warnings"][0]["set"] == 1
+    assert "text block is" in data["warnings"][0]["message"]
+    assert "**Warning:** text block is" in md
+
+
+def test_no_warnings_key_content_when_everything_fits(tmp_path):
+    data, md, _ = _run(tmp_path)
+    assert data["warnings"] == []
+    assert "**Warning:**" not in md

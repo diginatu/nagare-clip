@@ -193,6 +193,75 @@ def _warn_unknown(
             logger.warning("render: thumbnail style key %r is not supported; ignored", key)
 
 
+# One predicate per key, shared by resolve_* (which falls back) and *_problems
+# (which reports), so the two can never disagree about what is acceptable.
+def _pointsize(value: Any) -> int | None:
+    return _int_in(value, MIN_POINTSIZE, MAX_POINTSIZE)
+
+
+def _strokewidth(value: Any) -> int | None:
+    return _int_in(value, 0, MAX_STROKEWIDTH)
+
+
+def _gravity(value: Any) -> str | None:
+    return value if isinstance(value, str) and value in GRAVITIES else None
+
+
+def _offset(value: Any) -> str | None:
+    return value if isinstance(value, str) and _OFFSET_RE.match(value.strip()) else None
+
+
+def _blur(value: Any) -> str | None:
+    return value.strip() if isinstance(value, str) and _BLUR_RE.match(value.strip()) else None
+
+
+def _unknown_problems(
+    raw: Mapping[str, Any], known: tuple[str, ...], skip: tuple[str, ...]
+) -> list[str]:
+    return [f"unknown style key {key!r}" for key in raw if key not in known and key not in skip]
+
+
+def line_style_problems(raw: Mapping[str, Any], fonts: Mapping[str, str]) -> list[str]:
+    """Every reason a line's raw style would be rejected (render itself falls back)."""
+    problems = _unknown_problems(raw, LINE_KEYS, ("role", "text"))
+    role = raw.get("role")
+    if role not in (None, "") and role not in VALID_ROLES:
+        problems.append(f"role {role!r} is not one of {', '.join(VALID_ROLES)}")
+    if "font" in raw and not (isinstance(raw["font"], str) and raw["font"] in fonts):
+        problems.append(f"font {raw['font']!r} is not a render.fonts slot ({', '.join(fonts)})")
+    checks: tuple[tuple[str, Callable[[Any], Any], str], ...] = (
+        ("pointsize", _pointsize, f"an int {MIN_POINTSIZE}-{MAX_POINTSIZE}"),
+        ("fill", _color, "a hex, rgb()/rgba() or named colour"),
+        ("stroke", _color, "a hex, rgb()/rgba() or named colour"),
+        ("strokewidth", _strokewidth, f"an int 0-{MAX_STROKEWIDTH}"),
+    )
+    for key, ok, want in checks:
+        if key in raw and ok(raw[key]) is None:
+            problems.append(f"{key} {raw[key]!r} is invalid: want {want}")
+    return problems
+
+
+def set_style_problems(raw: Mapping[str, Any]) -> list[str]:
+    """Every reason a set's raw style would be rejected (render itself falls back)."""
+    problems = _unknown_problems(raw, SET_KEYS, ("lines", "background"))
+    if "gravity" in raw and _gravity(raw["gravity"]) is None:
+        problems.append(
+            f"gravity {raw['gravity']!r} is invalid: want one of {', '.join(GRAVITIES)}"
+        )
+    if "offset" in raw and _offset(raw["offset"]) is None:
+        problems.append(f"offset {raw['offset']!r} is invalid: want like +56+62")
+    if "shadow" in raw:
+        shadow = raw["shadow"]
+        if isinstance(shadow, Mapping):
+            if "color" in shadow and _color(shadow["color"]) is None:
+                problems.append(f"shadow color {shadow['color']!r} is invalid")
+            if "blur" in shadow and _blur(shadow["blur"]) is None:
+                problems.append(f"shadow blur {shadow['blur']!r} is invalid: want like 0x8")
+        elif not isinstance(shadow, bool):
+            problems.append(f"shadow {shadow!r} is invalid: want true, false or {{color, blur}}")
+    return problems
+
+
 def resolve_line_style(
     raw: Mapping[str, Any], role: str, fonts: Mapping[str, str], preset: Preset
 ) -> LineStyle:
@@ -207,13 +276,11 @@ def resolve_line_style(
     font = fonts.get(slot, base.font) if isinstance(slot, str) else base.font
     return LineStyle(
         font=font or fallback_font(fonts),
-        pointsize=_int_in(raw.get("pointsize"), MIN_POINTSIZE, MAX_POINTSIZE) or base.pointsize,
+        pointsize=_pointsize(raw.get("pointsize")) or base.pointsize,
         fill=_color(raw.get("fill")) or base.fill,
         stroke=_color(raw.get("stroke")) or base.stroke,
         strokewidth=(
-            sw
-            if (sw := _int_in(raw.get("strokewidth"), 0, MAX_STROKEWIDTH)) is not None
-            else base.strokewidth
+            sw if (sw := _strokewidth(raw.get("strokewidth"))) is not None else base.strokewidth
         ),
     )
 
@@ -222,23 +289,14 @@ def resolve_set_style(raw: Mapping[str, Any], preset: Preset) -> SetStyle:
     """The block anchor and shadow for one set."""
     _warn_unknown(raw, SET_KEYS, skip=("lines",))
     base = preset.set_style
-    gravity = raw.get("gravity")
-    offset = raw.get("offset")
     shadow_raw = raw.get("shadow", True)
-    shadow = shadow_raw is not False
     shadow_map = shadow_raw if isinstance(shadow_raw, Mapping) else {}
     return SetStyle(
-        gravity=gravity if gravity in GRAVITIES else base.gravity,
-        offset=(
-            offset if isinstance(offset, str) and _OFFSET_RE.match(offset.strip()) else base.offset
-        ),
-        shadow=shadow,
+        gravity=_gravity(raw.get("gravity")) or base.gravity,
+        offset=_offset(raw.get("offset")) or base.offset,
+        shadow=shadow_raw is not False,
         shadow_color=_color(shadow_map.get("color")) or base.shadow_color,
-        shadow_blur=(
-            blur.strip()
-            if isinstance(blur := shadow_map.get("blur"), str) and _BLUR_RE.match(blur.strip())
-            else base.shadow_blur
-        ),
+        shadow_blur=_blur(shadow_map.get("blur")) or base.shadow_blur,
     )
 
 
@@ -298,6 +356,7 @@ class PlacedLine:
     text: str
     style: LineStyle  # pointsize possibly reduced to fit the frame
     offset: str  # the ready-made `-annotate` argument, e.g. "+56+228"
+    height: int = 0  # rendered height after any shrink; used for the overflow warning
 
 
 def _parse_offset(offset: str) -> tuple[int, int]:
@@ -341,7 +400,7 @@ def layout_lines(
     placed: list[PlacedLine] = []
     y = y0
     for text, style, h in order:
-        placed.append(PlacedLine(text=text, style=style, offset=f"{x0:+d}{y:+d}"))
+        placed.append(PlacedLine(text=text, style=style, offset=f"{x0:+d}{y:+d}", height=h))
         y += h + line_gap
     return list(reversed(placed)) if set_style.gravity.startswith("south") else placed
 
@@ -432,6 +491,7 @@ class RenderResult:
 
     renders: list[ThumbRender] = field(default_factory=list)
     skipped: list[SkippedSet] = field(default_factory=list)
+    warnings: list[tuple[int, str]] = field(default_factory=list)  # (set index, message)
 
 
 def set_relpath(index: int) -> str:
@@ -507,7 +567,7 @@ def render_sets(
     """
     import subprocess
 
-    result = RenderResult(renders=[], skipped=[])
+    result = RenderResult(renders=[], skipped=[], warnings=[])
     if not render_cfg.get("enabled", True) or not sets:
         return result
 
@@ -564,6 +624,15 @@ def render_sets(
             logger.warning("render: unusable text metrics for set %d; estimating", index)
             metrics = [(1, int(style.pointsize * 1.2)) for _, style in styled]
         placed = layout_lines(styled, metrics, set_style, canvas, line_gap)
+        block = (
+            sum(p.height for p in placed)
+            + line_gap * max(len(placed) - 1, 0)
+            + abs(_parse_offset(set_style.offset)[1])
+        )
+        if block > canvas[1]:
+            message = f"text block is {block}px tall; canvas is {canvas[1]}px"
+            logger.warning("render: set %d: %s", index, message)
+            result.warnings.append((index, message))
         rel = set_relpath(index)
         try:
             run(build_render_cmd(background, placed, set_style, canvas, out_dir / rel))
