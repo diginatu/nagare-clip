@@ -95,18 +95,33 @@ def _chapter_refs(raw: Any, problems: list[str]) -> list[ChapterRef]:
     return refs
 
 
-def _resolve_chapters(
+def chapter_count_warning(count: int) -> str | None:
+    if count >= MIN_CHAPTER_COUNT:
+        return None
+    return (
+        f"only {count} chapter(s); YouTube links them but draws no segmented "
+        f"bar below {MIN_CHAPTER_COUNT}"
+    )
+
+
+def resolve_chapters(
     refs: list[ChapterRef],
     project: Project,
     placements: list[Placement] | None,
+    *,
     min_chapter: float,
-    problems: list[str],
-) -> list[ResolvedChapter]:
+) -> tuple[list[ResolvedChapter], list[str]]:
+    """``(chapters sorted by finished time, problems)`` for display-line refs.
+
+    The one resolution both ``write`` (through :func:`validate_edit`) and the
+    ``chapters`` command use, so a preview can never disagree with the write.
+    """
+    problems: list[str] = []
     if not refs:
-        return []
+        return [], problems
     if placements is None:
         problems.append("chapters: the finished timeline is unavailable (no intervals yet)")
-        return []
+        return [], problems
     resolved: list[tuple[int, ResolvedChapter]] = []
     for i, ref in enumerate(refs):
         where = f"chapters[{i}] (line {ref.line})"
@@ -134,7 +149,7 @@ def _resolve_chapters(
                 f"chapters[{i}] (line {c.line}): runs {span:.1f}s, "
                 f"shorter than the minimum {min_chapter:g}s"
             )
-    return [c for _, c in resolved]
+    return [c for _, c in resolved], problems
 
 
 def _thumbnails(
@@ -201,16 +216,17 @@ def validate_edit(
         problems.append("lead: want a string")
         lead = ""
     refs = _chapter_refs(data.get("chapters", []), problems)
-    chapters = _resolve_chapters(refs, project, placements, min_chapter, problems)
+    chapters, chapter_problems = resolve_chapters(
+        refs, project, placements, min_chapter=min_chapter
+    )
+    problems.extend(chapter_problems)
     thumbnails = _thumbnails(data.get("thumbnails", []), fonts, publish_dir, problems)
 
     description = assemble_description(lead, [Chapter(c.time, c.title) for c in chapters])
     if len(description) > MAX_DESCRIPTION_CHARS:
         problems.append(f"description: {len(description)} characters, over {MAX_DESCRIPTION_CHARS}")
-    if len(chapters) < MIN_CHAPTER_COUNT:
-        warnings.append(
-            f"only {len(chapters)} chapter(s); YouTube links them but draws no segmented "
-            f"bar below {MIN_CHAPTER_COUNT}"
-        )
+    warning = chapter_count_warning(len(chapters))
+    if warning:
+        warnings.append(warning)
     edit = PublishEdit(titles, lead, refs, thumbnails)
     return edit, chapters, problems, warnings

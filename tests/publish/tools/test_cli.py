@@ -296,3 +296,32 @@ def test_view_compact_falls_back_when_the_director_files_do_not_map(setup, monke
     cap = capsys.readouterr()
     assert "a: op 3-9 is gone" in cap.err
     assert "0:00  one" in cap.out
+
+
+def test_chapters_prints_a_table_sorted_by_finished_time(setup, capsys):
+    project, _ = setup
+    project.ctx.cfg["publish"]["min_chapter_duration"] = 0.5
+    assert cli.main(["chapters", "3", "1"]) == 0
+    out = capsys.readouterr().out.splitlines()
+    assert out[0].split() == ["line", "time", "length", "text"]
+    assert out[1].split()[:4] == ["1", "0:00", "0:01", "one"]
+    assert out[2].split()[:4] == ["3", "0:01", "0:01", "two"]
+    assert any("only 2 chapter" in row for row in out[3:])
+
+
+def test_chapters_reports_problems_and_exits_1(setup, capsys):
+    assert cli.main(["chapters", "1", "3"]) == 1  # both runs are 1 s, under the 10 s minimum
+    cap = capsys.readouterr()
+    assert "shorter than the minimum 10s" in cap.err + cap.out
+    assert "← shorter than 10 s" in cap.out
+
+
+def test_chapters_truncates_text_to_40_chars(setup, monkeypatch, capsys):
+    project, _ = setup
+    project.ctx.cfg["publish"]["min_chapter_duration"] = 0.5
+    from dataclasses import replace
+
+    project.view.lines[0] = replace(project.view.lines[0], text="x" * 60)
+    assert cli.main(["chapters", "1"]) in (0, 1)
+    out = capsys.readouterr().out
+    assert "x" * 39 + "…" in out and "x" * 40 not in out

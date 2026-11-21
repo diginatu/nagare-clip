@@ -1,4 +1,4 @@
-"""``python -m nagare_clip.publish.tools {view,frames,write,render}``.
+"""``python -m nagare_clip.publish.tools {view,frames,chapters,write,render}``.
 
 Deterministic, no LLM call.  Line numbers are the director's display numbering;
 every second is computed here from the finished timeline, never carried by the
@@ -23,11 +23,16 @@ from nagare_clip.director.played import played_transcript
 from nagare_clip.director.tools.project import Project, current_state, load_project
 from nagare_clip.pipeline.errors import PipelineError
 from nagare_clip.pipeline.external import run_magick
-from nagare_clip.publish.chapters import format_timestamp
+from nagare_clip.publish.chapters import _spans, format_timestamp
 from nagare_clip.publish.document import render_publish_markdown
 from nagare_clip.publish.timeline import total_duration
 from nagare_clip.publish.tools.build import build_publish
-from nagare_clip.publish.tools.edit import validate_edit
+from nagare_clip.publish.tools.edit import (
+    ChapterRef,
+    chapter_count_warning,
+    resolve_chapters,
+    validate_edit,
+)
 from nagare_clip.publish.tools.frames import (
     Still,
     extract_stills,
@@ -39,6 +44,8 @@ from nagare_clip.publish.tools.frames import (
 from nagare_clip.publish.tools.lines import finished_placements, line_time
 from nagare_clip.render.run import run_render
 from nagare_clip.render.thumbnail import fallback_font
+
+CHAPTER_TEXT_CHARS = 40
 
 EDIT_HELP = (
     'A publish edit is one JSON object: {"titles": [...], "lead": "...", '
@@ -306,6 +313,34 @@ def cmd_write(project: Project, args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_chapters(project: Project, args: argparse.Namespace) -> int:
+    min_chapter = project.ctx.cfg["publish"]["min_chapter_duration"]
+    placements = finished_placements(project)
+    refs = []
+    for number in args.lines:
+        text = ""
+        if 1 <= number <= len(project.view.lines):
+            text = project.view.lines[number - 1].text.strip()
+        if len(text) > CHAPTER_TEXT_CHARS:
+            text = text[: CHAPTER_TEXT_CHARS - 1] + "…"
+        refs.append(ChapterRef(number, text or f"line {number}"))
+    chapters, problems = resolve_chapters(refs, project, placements, min_chapter=min_chapter)
+    if chapters and placements is not None:
+        spans = _spans([c.time for c in chapters], total_duration(placements))
+        print("line   time   length  text")
+        for c, span in zip(chapters, spans):
+            row = f"{c.line:<6} {format_timestamp(c.time):<6} {format_timestamp(span):<7} {c.title}"
+            if span < min_chapter:
+                row += f"   ← shorter than {min_chapter:g} s"
+            print(row)
+    warning = chapter_count_warning(len(chapters))
+    if warning:
+        print(f"warning: {warning}")
+    for p in problems:
+        print(f"  {p}", file=sys.stderr)
+    return 1 if problems else 0
+
+
 def cmd_render(project: Project, args: argparse.Namespace) -> int:
     _render(project)
     return 0
@@ -368,6 +403,14 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--edit", required=True, help="Edit JSON file, or - for stdin")
     p.add_argument("--no-render", action="store_true", help="Skip compositing the thumbnails")
     p.set_defaults(func=cmd_write)
+
+    p = sub.add_parser(
+        "chapters",
+        parents=[common],
+        help="Try chapter lines: their finished times and lengths, and write's problems",
+    )
+    p.add_argument("lines", nargs="+", type=int, metavar="N", help="Display lines")
+    p.set_defaults(func=cmd_chapters)
 
     p = sub.add_parser(
         "render",

@@ -233,3 +233,21 @@ def test_untimed_line_says_no_timing(tmp_path, project):
     object.__setattr__(project.transcripts[0], "seg_times", None)
     _, _, problems, _ = _run(tmp_path, project, GOOD)
     assert any("no timing" in p for p in problems)
+
+
+def test_resolve_chapters_is_public_and_shared_with_validate_edit(project):
+    from nagare_clip.publish.tools.edit import resolve_chapters
+
+    refs = [ChapterRef(3, "Next"), ChapterRef(1, "Open"), ChapterRef(99, "Nope")]
+    chapters, problems = resolve_chapters(refs, project, PL, min_chapter=5.0)
+    assert chapters == [ResolvedChapter(1, 0.0, "Open"), ResolvedChapter(3, 12.0, "Next")]
+    assert problems == ["chapters[2] (line 99): no such line (1-3)"]
+    _, _, via_validate, _ = validate_edit(
+        {"titles": ["t"], "chapters": [{"line": 99, "title": "Nope"}]},
+        project,
+        PL,
+        fonts=FONTS,
+        publish_dir=None,
+        min_chapter=5.0,
+    )
+    assert "chapters[0] (line 99): no such line (1-3)" in via_validate
