@@ -25,7 +25,7 @@ Pure: no I/O, no LLM.
 
 from __future__ import annotations
 
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from collections.abc import Set as AbstractSet
 from typing import TYPE_CHECKING
 
@@ -99,12 +99,16 @@ def _run_rows(
     texts: Mapping[int, str],
     edited: AbstractSet[int],
     captions: Mapping[int, list[tuple[str, float]]],
+    when: Callable[[int], str] | None = None,
 ) -> list[str]:
+    def stamp(n: int) -> str:
+        return "" if when is None else when(n) + "  "
+
     where = _lines_phrase(run.lines) if run.lines else ""
     if run.kind == "cut":
         return [f"{INDENT}✂ cut {where}"]
     if _collapsed(run):
-        row = f"{INDENT}⏩ {run.kind} {where} x{run.factor}"
+        row = f"{stamp(run.lines[0])}{INDENT}⏩ {run.kind} {where} x{run.factor}"
         if run.text:
             row += " 「" + run.text.replace("\n", "\\n") + "」"
         rows = [row + f", {_s(run.seconds)} on screen — its speech is not followed"]
@@ -124,7 +128,7 @@ def _run_rows(
         line = view.lines[n - 1]
         if line.is_silence and run.kind != "keep":
             continue  # dropped: nobody hears it
-        row = f"{n}: {texts[n]}"
+        row = f"{stamp(n)}{n}: {texts[n]}"
         if n in edited:
             row += "  (edited)"
         if run.kind in SPED:
@@ -141,12 +145,16 @@ def played_transcript(
     *,
     order: Sequence[tuple[int, int]] = (),
     only: AbstractSet[int] | None = None,
+    when: Callable[[int], str] | None = None,
 ) -> str:
     """The finished video as text, in playback order (see the module doc).
 
     *ops* are keyed by the segment's 1-based index, in source coordinates, as
     :func:`~.preview.edit_state` takes them; *order* is the order in force in
     display ranges (empty: shooting order); *only* narrows to those segments.
+    *when* (display line -> text), when given, prefixes every played line row
+    and every ``⏩`` row with ``when(its first display line) + "  "`` (the
+    publish view's finished times); ``None`` leaves the output unchanged.
     """
     breaks = _order_breaks(order, len(view.lines))
     texts, edited = _texts(view, transcripts, ops)
@@ -186,13 +194,13 @@ def played_transcript(
             seg = view.segments[index - 1]
             out.append(f"{INDENT}{UNTIMED}")
             out.extend(
-                f"{n}: {texts[n]}"
+                f"{'' if when is None else when(n) + '  '}{n}: {texts[n]}"
                 for n in range(seg.first, seg.last + 1)
                 if not view.lines[n - 1].is_silence
             )
             previous = seg.last
             continue
-        out.extend(_run_rows(run, view, texts, edited, captions))
+        out.extend(_run_rows(run, view, texts, edited, captions, when))
         if run.lines:
             previous = run.lines[-1]
     return "\n".join(out)

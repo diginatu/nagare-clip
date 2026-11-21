@@ -770,3 +770,24 @@ def test_transcript_mild_speed_keeps_its_words(project):
     out = played_transcript(proj.view, proj.transcripts, ops)
     assert "5: bの1行目  (x1.5)" in out
     assert "aの1行目" not in out and "⏩ speed line 1 x3.0" in out
+
+
+def test_played_transcript_when_prefixes_played_and_sped_rows(project):
+    from nagare_clip.config import get_effective_config
+    from nagare_clip.director.played import played_transcript
+
+    proj = load_project(get_effective_config([project / "cfg.yml"], {}))
+    ops = {
+        2: [DirectorOp(type="speed", lines=(1, 1), factor=1.5)],
+        1: [
+            DirectorOp(type="speed", lines=(1, 1), factor=3.0),
+            DirectorOp(type="cut", lines=(3, 3)),
+        ],
+    }
+    plain = played_transcript(proj.view, proj.transcripts, ops)
+    assert played_transcript(proj.view, proj.transcripts, ops, when=None) == plain
+    out = played_transcript(proj.view, proj.transcripts, ops, when=lambda n: f"T{n}")
+    assert "T5  5: bの1行目  (x1.5)" in out
+    assert "T1      ⏩ speed line 1 x3.0" in out
+    assert "T3  3: aの2行目" in out
+    assert "    ✂ cut line 4" in out and "T4" not in out
