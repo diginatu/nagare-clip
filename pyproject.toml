@@ -10,7 +10,7 @@ dependencies = [
     "PyYAML",
     "ginza",
     "ja_ginza",
-    "litellm>=1.108.0",
+    "litellm>=1.109.1",
     "opentelemetry-api",
     "opentelemetry-sdk",
     "opentelemetry-exporter-otlp",
