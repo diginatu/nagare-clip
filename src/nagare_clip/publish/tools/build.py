@@ -56,8 +56,8 @@ def build_publish(
 ) -> dict[str, Any]:
     """publish.json in today's shape.
 
-    Chapters are already validated (none short or duplicated), so they are not
-    merged again; the first is shown as ``0:00`` by ``chapter_timestamps``.
+    Chapters are already validated (none short or duplicated) and are written
+    as they are; the first is shown as ``0:00`` by ``chapter_timestamps``.
     """
     chs = [Chapter(c.time, c.title) for c in chapters]
     total = total_duration(placements) if placements else 0.0

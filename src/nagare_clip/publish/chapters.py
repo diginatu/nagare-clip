@@ -8,11 +8,10 @@ these hold:
 - they are in ascending order
 - each chapter runs at least 10 seconds
 
-The mapping from summary parts to finished-timeline seconds rarely satisfies
-them on its own — the first part's opening is usually cut, so it starts late,
-and a part compressed inside a timelapse can be a couple of seconds long — so
-this module *makes* them hold: the first entry is rendered as ``0:00`` and any
-chapter whose span falls short is merged into a neighbour.
+The first is made to hold here (``chapter_timestamps`` renders the first entry
+as ``0:00``); the others are **validated, never merged**: the publish tools'
+``resolve_chapters`` sorts the chapters by finished time and reports a short or
+duplicate chapter as a problem, so the agent re-chooses its lines.
 
 The list is written either way.  YouTube auto-links timestamps in a description
 regardless of these rules, so a list of two still lets a viewer jump; it simply
@@ -65,41 +64,6 @@ def _spans(times: Sequence[float], total: float) -> list[float]:
     return [end - start for start, end in zip(starts, ends)]
 
 
-def build_chapters(
-    entries: Sequence[tuple[float, str]],
-    total: float,
-    min_duration: float = MIN_CHAPTER_SECONDS,
-) -> list[Chapter]:
-    """Enforce ascending order and the minimum chapter length.
-
-    Entries must already be in intended reading order (parts in transcript
-    order, videos in timeline order); an entry that does not advance past the
-    previous one is dropped rather than reordered, since a title out of order
-    would be wrong wherever it landed.
-
-    A chapter shorter than *min_duration* gives way to a neighbour: it is
-    dropped and the previous chapter's title stretches over it.  The first
-    chapter has no previous neighbour, so it gives way to the next one instead,
-    which then inherits ``0:00`` when the list is rendered.  Dropping only ever
-    lengthens the surviving chapters, so the sweep repeats until nothing is
-    short — or until a single chapter is left, which is as far as merging can
-    go.
-    """
-    kept: list[Chapter] = []
-    for time, title in entries:
-        if kept and time <= kept[-1].time:
-            continue
-        kept.append(Chapter(time=float(time), title=title))
-
-    while len(kept) > 1:
-        spans = _spans([c.time for c in kept], total)
-        short = next((i for i, span in enumerate(spans) if span < min_duration), None)
-        if short is None:
-            break
-        kept.pop(short)
-    return kept
-
-
 def chapter_timestamps(chapters: Sequence[Chapter]) -> list[str]:
     """Rendered timestamps, with the first entry forced to ``0:00``.
 
@@ -126,10 +90,10 @@ def chapter_issues(
 ) -> list[str]:
     """What still stops YouTube rendering these as chapters (``[]`` = nothing).
 
-    Ascending order and the leading ``0:00`` are guaranteed by
-    ``build_chapters``/``render_chapter_lines``, so what can survive is a list
-    too short to qualify, or — when merging bottomed out at one chapter — a
-    video too short for even that one to clear the minimum.
+    The leading ``0:00`` is guaranteed by ``chapter_timestamps`` and the
+    order by the tools' sort, so what can remain is a list too short to
+    qualify, or a chapter under the minimum (which ``write`` refuses before
+    it gets here).
     """
     issues: list[str] = []
     if len(chapters) < min_count:
@@ -141,7 +105,5 @@ def chapter_issues(
         if span < min_duration
     ]
     if short:
-        issues.append(
-            f"chapter(s) shorter than {min_duration:.0f}s and unmergeable: " + ", ".join(short)
-        )
+        issues.append(f"chapter(s) shorter than {min_duration:.0f}s: " + ", ".join(short))
     return issues

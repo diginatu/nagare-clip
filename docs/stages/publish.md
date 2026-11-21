@@ -275,7 +275,7 @@ The tool makes or checks each:
 - **ascending** — chapters are sorted by finished time; two at one time are a
   problem.
 - **10 seconds** — a shorter chapter is a problem (`publish.min_chapter_duration`).
-  `chapters.build_chapters()`' silent merge is no longer called by the tool.
+  Nothing merges a short chapter away.
 - **three** — a warning only; the list is always written, because YouTube
   auto-links timestamps regardless.
 
