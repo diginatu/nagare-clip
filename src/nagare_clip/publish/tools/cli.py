@@ -21,6 +21,7 @@ from nagare_clip.director.files import read_ops, read_plan
 from nagare_clip.director.load import project_context
 from nagare_clip.director.played import played_transcript
 from nagare_clip.director.tools.project import Project, current_state, load_project
+from nagare_clip.director.transcript import clean_for_display
 from nagare_clip.pipeline.errors import PipelineError
 from nagare_clip.pipeline.external import run_magick
 from nagare_clip.publish.chapters import _spans, format_timestamp
@@ -313,14 +314,25 @@ def cmd_write(project: Project, args: argparse.Namespace) -> int:
     return 0
 
 
+def _bare_text(project: Project, number: int) -> str:
+    """The line's text without the view's ``[N.Ns ...]`` timing bracket."""
+    if not 1 <= number <= len(project.view.lines):
+        return ""
+    line = project.view.lines[number - 1]
+    if line.is_silence:
+        return line.text.strip()
+    transcript = project.transcripts[line.segment - 1]
+    clean = clean_for_display(transcript.edit_lines)
+    offset = line.source_line - transcript.first_line
+    return clean[offset].strip() if 0 <= offset < len(clean) else ""
+
+
 def cmd_chapters(project: Project, args: argparse.Namespace) -> int:
     min_chapter = project.ctx.cfg["publish"]["min_chapter_duration"]
     placements = finished_placements(project)
     refs = []
     for number in args.lines:
-        text = ""
-        if 1 <= number <= len(project.view.lines):
-            text = project.view.lines[number - 1].text.strip()
+        text = _bare_text(project, number)
         if len(text) > CHAPTER_TEXT_CHARS:
             text = text[: CHAPTER_TEXT_CHARS - 1] + "…"
         refs.append(ChapterRef(number, text or f"line {number}"))

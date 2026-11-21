@@ -304,8 +304,8 @@ def test_chapters_prints_a_table_sorted_by_finished_time(setup, capsys):
     assert cli.main(["chapters", "3", "1"]) == 0
     out = capsys.readouterr().out.splitlines()
     assert out[0].split() == ["line", "time", "length", "text"]
-    assert out[1].split()[:4] == ["1", "0:00", "0:01", "one"]
-    assert out[2].split()[:4] == ["3", "0:01", "0:01", "two"]
+    assert out[1].split() == ["1", "0:00", "0:01", "one"]
+    assert out[2].split() == ["3", "0:01", "0:01", "two"]
     assert any("only 2 chapter" in row for row in out[3:])
 
 
@@ -319,9 +319,8 @@ def test_chapters_reports_problems_and_exits_1(setup, capsys):
 def test_chapters_truncates_text_to_40_chars(setup, monkeypatch, capsys):
     project, _ = setup
     project.ctx.cfg["publish"]["min_chapter_duration"] = 0.5
-    from dataclasses import replace
 
-    project.view.lines[0] = replace(project.view.lines[0], text="x" * 60)
+    project.transcripts[0].edit_lines[0] = "x" * 60
     assert cli.main(["chapters", "1"]) in (0, 1)
     out = capsys.readouterr().out
     assert "x" * 39 + "…" in out and "x" * 40 not in out
