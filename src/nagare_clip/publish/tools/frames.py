@@ -26,7 +26,12 @@ from nagare_clip.pipeline.external import (
 from nagare_clip.pipeline.sources import discover_sources
 from nagare_clip.publish.chapters import format_timestamp
 from nagare_clip.publish.thumbs import cap_candidates, frame_relpath, select_candidates
-from nagare_clip.publish.timeline import Placement, first_surviving_time
+from nagare_clip.publish.timeline import (
+    Placement,
+    first_surviving_time,
+    source_at,
+    total_duration,
+)
 from nagare_clip.publish.tools.lines import finished_placements, line_span
 from nagare_clip.timing import segment_times
 
@@ -131,6 +136,35 @@ def plan_stills(
                 f"line {number} @{pos:g}",
                 _display_line(project, span.stem, t),
                 frame_relpath(span.stem, t),
+            )
+        )
+    return stills, problems
+
+
+def at_stills(
+    project: Project, placements: Sequence[Placement] | None, times: Sequence[float]
+) -> tuple[list[Still], list[str]]:
+    """One still per finished-video time in *times* (``frames --at``)."""
+    if placements is None:
+        return [], ["--at needs the finished timeline (run intervals)"]
+    problems: list[str] = []
+    stills: list[Still] = []
+    runtime = format_timestamp(total_duration(placements))
+    for t in times:
+        label = format_timestamp(t)
+        hit = source_at(placements, t)
+        if hit is None:
+            problems.append(f"--at {label} is past the finished runtime {runtime}")
+            continue
+        stem, source_time = hit
+        stills.append(
+            Still(
+                stem,
+                source_time,
+                "at",
+                f"at {label}",
+                _display_line(project, stem, source_time),
+                frame_relpath(stem, source_time),
             )
         )
     return stills, problems

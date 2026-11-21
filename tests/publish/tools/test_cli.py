@@ -462,3 +462,55 @@ def test_chapters_warns_about_drift_too(setup, capsys):
     _saved_lines(project).write_text(json.dumps({"3": "other"}), encoding="utf-8")
     cli.main(["chapters", "1", "3"])
     assert "line 3 read 「other」" in capsys.readouterr().err
+
+
+@pytest.mark.parametrize(
+    "text,seconds",
+    [("28:16", 1696.0), ("1:02:03", 3723.0), ("90", 90.0), ("1.5", 1.5), ("0:01.5", 1.5)],
+)
+def test_parse_at(text, seconds):
+    assert cli._parse_at(text) == seconds
+
+
+@pytest.mark.parametrize("text", ["", "abc", "1:2:3:4", "-1", "1:xx", "0:75"])
+def test_parse_at_rejects_bad_formats(text):
+    import argparse
+
+    with pytest.raises(argparse.ArgumentTypeError):
+        cli._parse_at(text)
+
+
+def test_frames_at_merges_with_line_and_uses_one_extraction(setup, monkeypatch, capsys):
+    project, _ = setup
+    seen = []
+
+    def fake_extract(proj, stills, **kw):
+        seen.append(len(stills))
+        return stills
+
+    monkeypatch.setattr(cli, "extract_stills", fake_extract)
+    assert cli.main(["frames", "--line", "1", "--at", "0:01"]) == 0
+    assert seen == [2]
+    rows = json.loads((project.ctx.stage_dir("publish") / "stills.json").read_text())
+    assert [(r["kind"], r["label"], r["source_time"]) for r in rows] == [
+        ("line", "line 1 @0.5", 1.5),
+        ("at", "at 0:01", 5.0),
+    ]
+    assert cli.main(["frames", "--at", "0:00"]) == 0  # merges, does not rewrite
+    rows = json.loads((project.ctx.stage_dir("publish") / "stills.json").read_text())
+    assert len(rows) == 3
+
+
+def test_frames_at_past_the_runtime_exits_1_and_extracts_nothing(setup, monkeypatch, capsys):
+    called = []
+    monkeypatch.setattr(cli, "extract_stills", lambda *a, **k: called.append(1) or [])
+    assert cli.main(["frames", "--at", "31:00"]) == 1
+    assert "--at 31:00 is past the finished runtime 0:02" in capsys.readouterr().err
+    assert called == []
+
+
+def test_frames_at_without_a_timeline_exits_1(setup, monkeypatch, capsys):
+    monkeypatch.setattr(cli, "finished_placements", lambda p: None)
+    monkeypatch.setattr(cli, "extract_stills", lambda *a, **k: [])
+    assert cli.main(["frames", "--at", "0:01"]) == 1
+    assert "--at needs the finished timeline (run intervals)" in capsys.readouterr().err

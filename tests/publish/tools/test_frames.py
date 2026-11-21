@@ -203,3 +203,26 @@ def test_line_requests_are_never_dropped(project, monkeypatch):
     monkeypatch.setattr(frames, "finished_placements", lambda p: SHOWN_ONLY_LINE_1)
     stills, _ = plan_stills(project, project.ctx.cfg, [(2, 0.5)])
     assert len(stills) == 1
+
+
+def test_at_stills_map_finished_time_to_a_source_still(project):
+    placements = [Placement("a", 1.0, 2.0, 0.0, 1.0, 1.0), Placement("a", 5.0, 6.0, 1.0, 2.0, 1.0)]
+    stills, problems = frames.at_stills(project, placements, [0.5, 1.5])
+    assert problems == []
+    assert [(s.kind, s.label, s.source_time, s.line, s.path) for s in stills] == [
+        ("at", "at 0:00", 1.5, 1, "frames/a/1.500.jpg"),
+        ("at", "at 0:01", 5.5, 3, "frames/a/5.500.jpg"),
+    ]
+
+
+def test_at_without_a_timeline_or_past_the_end_is_a_problem(project):
+    placements = [Placement("a", 1.0, 2.0, 0.0, 1.0, 1.0), Placement("a", 5.0, 6.0, 1.0, 2.0, 1.0)]
+    stills, problems = frames.at_stills(project, None, [1.0])
+    assert stills == []
+    assert problems == ["--at needs the finished timeline (run intervals)"]
+    stills, problems = frames.at_stills(project, placements, [90.0, 3600.0])
+    assert stills == []
+    assert problems == [
+        "--at 1:30 is past the finished runtime 0:02",
+        "--at 1:00:00 is past the finished runtime 0:02",
+    ]

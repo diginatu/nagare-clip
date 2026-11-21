@@ -37,6 +37,7 @@ from nagare_clip.publish.tools.edit import (
 )
 from nagare_clip.publish.tools.frames import (
     Still,
+    at_stills,
     extract_stills,
     format_stills,
     plan_stills,
@@ -78,6 +79,27 @@ def _parse_line_pos(value: str) -> tuple[int, float]:
     if n < 1 or not 0.0 <= p <= 1.0:
         raise argparse.ArgumentTypeError(f"expected N>=1 and pos in [0, 1], got {value!r}")
     return n, p
+
+
+def _parse_at(value: str) -> float:
+    """``M:SS``, ``H:MM:SS`` or plain seconds (decimals allowed)."""
+    parts = value.strip().split(":")
+    try:
+        if not 1 <= len(parts) <= 3 or not all(parts):
+            raise ValueError
+        numbers = [float(x) for x in parts]
+        if any(n < 0 or n != n or n == float("inf") for n in numbers):
+            raise ValueError
+        if len(parts) > 1 and any(n >= 60 for n in numbers[1:]):
+            raise ValueError
+    except ValueError:
+        raise argparse.ArgumentTypeError(
+            f"expected M:SS, H:MM:SS or seconds, got {value!r}"
+        ) from None
+    total = 0.0
+    for n in numbers:
+        total = total * 60 + n
+    return total
 
 
 def _load_cfg(paths: list[str] | None) -> dict:
@@ -235,8 +257,16 @@ def _still_from_row(row: dict) -> Still:
 def cmd_frames(project: Project, args: argparse.Namespace) -> int:
     ctx = project.ctx
     requests = args.line or []
+    ats = args.at or []
     notes: list[str] = []
-    stills, problems = plan_stills(project, ctx.cfg, requests, notes=notes)
+    stills: list[Still] = []
+    problems: list[str] = []
+    if requests or not ats:
+        stills, problems = plan_stills(project, ctx.cfg, requests, notes=notes)
+    if ats:
+        at_found, at_problems = at_stills(project, finished_placements(project), ats)
+        stills += at_found
+        problems += at_problems
     if problems:
         for p in problems:
             print(f"  {p}", file=sys.stderr)
@@ -250,7 +280,7 @@ def cmd_frames(project: Project, args: argparse.Namespace) -> int:
     for w in dropped:
         print(f"warning: {w}", file=sys.stderr)
     path = ctx.stage_dir("publish") / "stills.json"
-    if requests:
+    if requests or ats:
         new_paths = {s.path for s in stills}
         kept = []
         for i, row in enumerate(read_stills(path)):
@@ -471,12 +501,22 @@ def build_parser() -> argparse.ArgumentParser:
         parents=[common],
         help="Extract the thumbnail shortlist, or stills at given lines",
         description=(
-            "Without --line: write the shortlist fresh. With --line N[@pos] "
-            "(repeatable, pos in [0,1], default 0.5): add those stills to the "
-            "existing list. One container for every still."
+            "Without --line/--at: write the shortlist fresh. With --line N[@pos] "
+            "(repeatable, pos in [0,1], default 0.5) and/or --at T (a finished-video "
+            "time): add those stills to the existing list. One container for every still."
         ),
     )
     p.add_argument("--line", action="append", type=_parse_line_pos, metavar="N[@pos]")
+    p.add_argument(
+        "--at",
+        action="append",
+        type=_parse_at,
+        metavar="T",
+        help=(
+            "A still at finished-video time T (M:SS, H:MM:SS or seconds; repeatable, "
+            "merges like --line)"
+        ),
+    )
     p.set_defaults(func=cmd_frames)
 
     p = sub.add_parser(

@@ -102,3 +102,17 @@ def first_surviving_time(
         if best is None or tl < best:
             best = tl
     return best
+
+
+def source_at(placements: Sequence[Placement], t: float) -> tuple[str, float] | None:
+    """The ``(stem, source seconds)`` shown at finished-timeline time *t*.
+
+    A boundary belongs to the placement that starts there; the very end of the
+    last placement is accepted too, so "the last frame" is addressable.
+    ``None`` outside the timeline.
+    """
+    for i, p in enumerate(placements):
+        last = i == len(placements) - 1
+        if p.tl_start <= t < p.tl_end or (last and t == p.tl_end):
+            return p.stem, p.src_start + (t - p.tl_start) * p.speed
+    return None

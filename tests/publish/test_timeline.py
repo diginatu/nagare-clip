@@ -128,3 +128,19 @@ def test_first_surviving_time_without_times_is_none():
     placements = build_placements([("a", {"keep_intervals": [{"start": 0.0, "end": 5.0}]})])
     assert first_surviving_time(placements, "a", None, 3.0) is None
     assert first_surviving_time(placements, "a", 1.0, None) is None
+
+
+def test_source_at_maps_finished_time_to_source_time():
+    from nagare_clip.publish.timeline import Placement, source_at
+
+    placements = [
+        Placement("a", 10.0, 12.0, 0.0, 2.0, 1.0),
+        Placement("b", 100.0, 140.0, 2.0, 12.0, 4.0),  # a 4x timelapse
+    ]
+    assert source_at(placements, 1.0) == ("a", 11.0)
+    assert source_at(placements, 2.0) == ("b", 100.0)  # boundary belongs to the next
+    assert source_at(placements, 4.0) == ("b", 108.0)  # sped: 2s on screen = 8s of footage
+    assert source_at(placements, 12.0) == ("b", 140.0)  # the very end is accepted
+    assert source_at(placements, 12.5) is None
+    assert source_at(placements, -0.1) is None
+    assert source_at([], 0.0) is None
