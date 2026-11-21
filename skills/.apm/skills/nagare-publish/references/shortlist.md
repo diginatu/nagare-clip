@@ -35,6 +35,12 @@ first above. The list is capped at `publish.max_frames` (24 by default; `0`
   line's footage with `N@pos` (`0` = its first moment, `1` = its last, `0.5`
   by default). A line marked `✂` in `view` is not in the finished video:
   avoid it as a background unless the user wants a frame from outside the cut.
+- **`--sheet` is the cheap first look.** It composites every still in the list
+  into `<output_dir>/publish/sheets/sheet<K>.jpg` (12 per sheet, tiles labelled
+  `#i  L<line>  M:SS`, `#i` being the row in the printed list). Read the sheet
+  to survey the list, then Read single stills to judge the ones you may use.
+  **`--at M:SS`** takes a still at a time of the *finished* video, for a scene
+  the user points at by its time.
 - **`--line` adds, plain `frames` replaces.** Plain `frames` rewrites
   `<output_dir>/publish/stills.json` from the director's ops; the stills you added
   with `--line` drop off the list (their JPEGs stay on disk, and a

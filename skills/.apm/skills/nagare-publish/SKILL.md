@@ -46,7 +46,7 @@ The tools are deterministic (no LLM call):
 
 ```bash
 <nagare-clip>/scripts/publish_tools.sh view   --config A.yml [--config B.yml] [--lines A-B | --compact]
-<nagare-clip>/scripts/publish_tools.sh frames --config ... [--line N[@pos]]...
+<nagare-clip>/scripts/publish_tools.sh frames --config ... [--line N[@pos]]... [--at M:SS]... [--sheet]
 <nagare-clip>/scripts/publish_tools.sh chapters N [N ...] --config ...
 <nagare-clip>/scripts/publish_tools.sh write  --config ... --edit FILE|- [--no-render]
 <nagare-clip>/scripts/publish_tools.sh render --config ...
@@ -74,7 +74,14 @@ The tools are deterministic (no LLM call):
   **added** to the existing list. Each row is `line  M:SS  kind  label
   path`, in playback order; the path is relative to `<output_dir>/publish/` and is
   what a thumbnail's `background` names. All stills of one call come from
-  one Docker run; if Docker fails it exits 1 with the reason.
+  one Docker run; if Docker fails it exits 1 with the reason. Rows carry the
+  position `#i` (`#i  line  M:SS  kind  label  path`).
+  `--at T` (repeatable; `M:SS`, `H:MM:SS` or seconds) takes a still at a
+  **finished-video** time — use it when the user names a time ("the last water
+  shot, 28:16"); it merges like `--line` and may be combined with it.
+  `--sheet` also composites every still in the list into contact sheets
+  `<output_dir>/publish/sheets/sheet<K>.jpg` (12 per sheet, 4 columns, each tile
+  labelled `#i  L<line>  M:SS` to match the rows) and prints `sheet: <path>`.
 - `chapters N [N ...]` — try chapter lines before writing: prints each one's
   finished time and length (`line time length text`, sorted by time; a
   chapter under `publish.min_chapter_duration` is marked), then every problem
@@ -115,14 +122,16 @@ Keep the draft edit in a file in the project's output directory (e.g.
    them — "a man holding a pump" instead of what makes the video worth a
    click. The headline comes from the story; the picture is chosen to carry
    it.
-4. **Get the stills.** Run `frames` (the shortlist), then **Read every
-   still** it lists. [references/shortlist.md](references/shortlist.md)
+4. **Get the stills.** Run `frames --sheet` (the shortlist), Read the
+   **sheet** to see the whole list in one Read, then **zoom by Reading the
+   single stills** that matter (a sheet tile is too small to judge legibility). [references/shortlist.md](references/shortlist.md)
    says what each kind is. The label is the director's claim about the
    moment; trust what is actually legible in the image, not the label.
 5. **Look for more.** The shortlist is where to start looking, not the
    answer. For a moment the copy needs and the shortlist lacks, find its line
    in `view` and run `frames --line N` (or `N@0.2`, `N@0.8` to move within
-   the line); Read those too. Run plain `frames` only once: it rewrites the
+   the line), or `frames --at M:SS` when the user names a time in the finished
+   video; Read those too (add `--sheet` to refresh the sheet). Run plain `frames` only once: it rewrites the
    list from scratch, dropping the stills you added.
 6. **Choose a background and a look per set.** Pick the still that carries
    that set's headline; place the text where the picture is empty and make it
@@ -177,7 +186,8 @@ Keep the draft edit in a file in the project's output directory (e.g.
   - Set keys: `gravity` (`northwest`, `north`, `northeast`, `west`,
     `center`, `east`, `southwest`, `south`, `southeast`) — where the text
     block is anchored; `offset` `+X+Y` in px from that anchor; `shadow`
-    `true`, `false` or `{"color": ..., "blur": "0x6"}`.
+    `true`, `false` or `{"color": ..., "blur": "0x6"}`; `line_gap` an int
+    0-400, the px between stacked lines for this set (absent = `render.line_gap`).
   - `lines` (at least one; any number, stacked top to bottom): `text`
     (required), `role` (`tag`, `hook`, `subtitle`; absent = `hook`) — it only
     picks the default size and colours for keys you leave out — and the

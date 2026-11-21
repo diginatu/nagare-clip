@@ -16,6 +16,7 @@ background is cropped to fill it, centred, whatever its aspect ratio.
 | --- | --- | --- |
 | `gravity` | `northwest` `north` `northeast` `west` `center` `east` `southwest` `south` `southeast` | `northwest` |
 | `offset` | `+X+Y` px from that anchor (`+56+62`) | `+56+62` |
+| `line_gap` | int 0-400, px between the stacked lines of this set | `render.line_gap` (12) |
 | `shadow` | `true`, `false`, or `{"color": "rgba(0,0,0,0.8)", "blur": "0x8"}` | on, `rgba(0,0,0,0.8)`, `0x8` |
 
 The lines stack top to bottom from the anchor. With a `south*` gravity the

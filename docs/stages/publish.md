@@ -45,7 +45,7 @@ tool sees the view the director saw.
 | command | does | writes |
 | --- | --- | --- |
 | `view [--lines A-B \| --compact]` | the page below | nothing |
-| `frames [--line N[@pos]]...` | the shortlist, or stills at given lines, in one Docker run | `publish/frames/…`, `publish/stills.json` |
+| `frames [--line N[@pos]]... [--at T]... [--sheet]` | the shortlist, or stills at given lines / finished-video times, in one Docker run; `--sheet` composites the list into contact sheets | `publish/frames/…`, `publish/stills.json`, `publish/sheets/sheet{K}.jpg` |
 | `chapters N [N ...]` | try chapter lines: finished time, length, `write`'s problems for them | nothing |
 | `write --edit F\|- [--no-render]` | validate; all problems or write `edit.json`, `publish.json`, `publish.md`, then render | `publish/`, `render/` |
 | `render` | `render.run.run_render()` over `publish.json` as it is on disk | `render/` |
@@ -113,6 +113,26 @@ Without `--line`: the **shortlist**, written fresh (`frames.plan_stills`):
    the finished video were left out` is printed.
 3. `thumbs.cap_candidates(publish.max_frames)` keeps the best kinds
    (`overlay` > `timelapse-start`/`-end` > `keep`; `0` = no limit).
+
+With `--at T` (repeatable; `M:SS`, `H:MM:SS` or seconds, decimals allowed; a bad
+format is an argparse error): one still per time of the **finished** video, via
+`timeline.source_at()` (the placement with `tl_start <= t < tl_end`, the last
+also accepting `t == tl_end`; source time `src_start + (t − tl_start)·speed`),
+kind `at`, label `at M:SS`, `line` the display line containing the source time.
+It merges like `--line` and may be combined with it; every still of the call is
+one Docker run. No finished timeline, or a time past the runtime, is a problem
+(exit 1, nothing extracted, all listed).
+
+`--sheet` (after the extraction and the `stills.json` update) composites every
+still now in `stills.json`, in the printed playback order, into
+`<output_dir>/publish/sheets/sheet{K}.jpg` — at most 12 per sheet, 4 columns,
+tile width `publish.frame_width`, each tile labelled `#<i>  L<line>  <M:SS>`
+(`—`/`✂` as in the listing; `i` is the row's `#i` in the printed list, which now
+leads each row). Stale `sheet<digits>.jpg` go first; a missing still file is
+skipped. Host ImageMagick through `run_magick` (`frames.sheet_commands()`, an argv
+list; `%` in a label is doubled because `-label` expands it; the
+`render.fonts` fallback face is passed as `-font` when set). A magick failure is
+`error: …` on stderr, exit 1, with `stills.json` already written. No LLM.
 
 With `--line N[@pos]` (repeatable): one still per request at
 `start + pos·(end − start)` of the line's footage (`pos` in `[0, 1]`, default
@@ -215,7 +235,7 @@ are exactly `titles`, `lead`, `chapters`, `thumbnails` (`edit.TOP_KEYS`);
 - `thumbnails` — one set per alternative thumbnail (`set1`, `set2`, …): a
   required `background` (a path relative to `<output_dir>/publish/`, or
   absolute — any image, not only a still), the set keys `gravity`/`offset`/
-  `shadow`, and `lines` (any number, stacked top to bottom), each with `text`,
+  `shadow`/`line_gap`, and `lines` (any number, stacked top to bottom), each with `text`,
   an optional `role` (`tag`/`hook`/`subtitle`; absent → `hook`, which only picks
   the preset defaults for unstated keys) and the line keys `font` (a
   `render.fonts` slot), `pointsize`, `fill`, `stroke`, `strokewidth`. The

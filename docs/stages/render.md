@@ -122,6 +122,7 @@ rather than an abstraction over it:
 | `strokewidth` | `-strokewidth` | line | int 0–40 |
 | `gravity` | `-gravity` | set | one of the nine gravity names |
 | `offset` | `-annotate +x+y` | set | `[+-]N[+-]N` (1-4 digit signed pair) — the shape is validated, not whether it lands on-canvas |
+| `line_gap` | (layout: px between stacked lines) | set | int 0–400 (`0` is real; bool rejected); overrides `render.line_gap` for that set in `layout_lines` and the height-overflow check; invalid → `set_style_problems` reports it, render falls back to `render.line_gap` |
 | `shadow` | (an inline blurred layer) | set | `{color, blur}` (`blur` as `RxS`), `true`, or literal `false` to disable the shadow layer entirely |
 
 A line's `role` (`tag`/`hook`/`subtitle`, `VALID_ROLES`) only picks the preset
