@@ -52,7 +52,7 @@ tool sees the view the director saw.
 
 Exit codes: `0` ok; `1` a problem with the work — a validation problem
 (`write`, `chapters`, a bad `frames --line`) or a failed Docker run in `frames`
-(`cmd_frames` catches its `PipelineError`); `2` a tool-usage error caught by
+(`cmd_frames` catches its `PipelineError`); `2` a tool-usage error, including `view --lines` starting past the last display line (`the video has N display lines`), caught by
 `cli.main` (`PipelineError`/`OSError`/`ValueError`: no project, unreadable edit
 JSON, …), printed as `error: …`. A closed stdout (`view | head`) exits quietly
 (`broken_pipe.silence_stdout`).
@@ -165,6 +165,21 @@ written nothing. Otherwise it prints the warnings, then writes
 `publish.md` (`document.render_publish_markdown`, honouring
 `general.image_markup`), prints each path, and runs the render
 (`_render`, the same as the `render` command) unless `--no-render`.
+
+Two things happen around that. `write` and `render` both end by refreshing
+`output/index.md` (`_refresh_index`: `index_page.write_index` with
+`PipelineContext.blend_path`, exactly as `pipeline.cli` does; an exception
+only prints `warning: index.md not refreshed: <e>` on stderr). And every
+successful `write` saves `publish/edit_lines.json`, `{"<line>": "<bare
+display text>"}` for each chapter line (`_bare_text`, what `chapters` shows),
+because `edit.json` stores line numbers and the display numbering shifts when
+transcripts are re-run or `director.silence_line_min` changes. Before
+overwriting it, `write` — and `chapters` for the lines it is given — compares
+each chapter line's current text with the saved one and prints, on stderr,
+`warning: line N read 「old」 when edit.json was last written; it now reads
+「new」 — the numbering may have moved; check this chapter`. It is a warning,
+not a problem (the file is still written); a missing or unreadable
+`edit_lines.json` gives no warnings.
 
 ## The edit file
 
@@ -289,7 +304,7 @@ bar would not be drawn.
 
 ## `publish.json`
 
-`build.build_publish()` — the shape the LLM stage wrote, so `render` and
+`build.build_publish()` — the shape the LLM publish wrote, so `render` and
 `index_page` read it unchanged (`document.empty_publish()` is that shape, empty):
 
 ```json

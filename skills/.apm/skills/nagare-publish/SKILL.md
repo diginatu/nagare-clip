@@ -214,7 +214,11 @@ the timestamps but draws no segmented progress bar.
 `write` saved the edit verbatim as `<output_dir>/publish/edit.json`; there is no
 `dump`. To revise, copy it to your draft file, change it, and `write` it
 again. After the director's edit changes and the pipeline is re-run through
-`blender`, the finished timeline has moved: run `write` again with the saved
+`blender`, the finished timeline has moved, and the display numbering may
+have too: first run `chapters` on the old edit's chapter lines — it warns
+`line N read 「old」 … now reads 「new」` for every line whose text changed
+since `write` last saved `edit_lines.json` — and fix each line it names. Then
+run `write` again with the saved
 edit — the times are recomputed, and a chapter on a line that is now cut is
 reported, so you re-choose it. `publish.json` is never rebuilt by the
 pipeline; until you write again, it describes the old cut.
