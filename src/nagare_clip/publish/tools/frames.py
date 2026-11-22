@@ -309,7 +309,7 @@ def sheet_commands(
 ) -> list[list[str]]:
     """``magick montage`` argv lists: the listed stills, 12 per sheet, 4 columns.
 
-    A tile reads ``#<i>  L<line>  <M:SS>`` where ``i`` is the still's position
+    A tile reads ``#<i>  L<line>  <M:SS>`` (ASCII: ``-`` for none, ``cut`` for cut) where ``i`` is the still's position
     in the printed list, so a tile maps back to a row.  A still whose file is
     missing is skipped (its index is not reused).
     """
@@ -317,8 +317,9 @@ def sheet_commands(
     for i, (s, when) in enumerate(_listed(stills, placements), start=1):
         if not (publish_dir / s.path).is_file():
             continue
-        line = "—" if s.line is None else str(s.line)
-        tiles.append((f"#{i}  L{line}  {when}", str(publish_dir / s.path)))
+        line = "-" if s.line is None else str(s.line)
+        ascii_when = {"—": "-", "✂": "cut"}.get(when, when)  # no font slot is needed
+        tiles.append((f"#{i}  L{line}  {ascii_when}", str(publish_dir / s.path)))
     commands = []
     for k, start in enumerate(range(0, len(tiles), SHEET_PER_SHEET), start=1):
         cmd = ["magick", "montage"]

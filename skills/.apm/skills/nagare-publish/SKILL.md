@@ -81,7 +81,7 @@ The tools are deterministic (no LLM call):
   shot, 28:16"); it merges like `--line` and may be combined with it.
   `--sheet` also composites every still in the list into contact sheets
   `<output_dir>/publish/sheets/sheet<K>.jpg` (12 per sheet, 4 columns, each tile
-  labelled `#i  L<line>  M:SS` to match the rows) and prints `sheet: <path>`.
+  labelled `#i  L<line>  M:SS` to match the rows; ASCII: `-` for none, `cut` for a cut still) and prints `sheet: <path>`.
 - `chapters N [N ...]` — try chapter lines before writing: prints each one's
   finished time and length (`line time length text`, sorted by time; a
   chapter under `publish.min_chapter_duration` is marked), then every problem

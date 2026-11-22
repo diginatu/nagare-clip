@@ -263,11 +263,11 @@ def test_sheet_commands_chunk_twelve_per_sheet_in_listed_order(project):
     files = [a for a in first if a.endswith(".jpg") and "frames" in a]
     assert len(labels) == len(files) == 12
     assert labels[0] == "#1  L1  0:01"
-    assert labels[1] == "#2  L—  0:02"
+    assert labels[1] == "#2  L-  0:02"
     assert files[0].endswith("frames/a/0.jpg") and files[11].endswith("frames/a/11.jpg")
     assert [cmds[1][i + 1] for i, a in enumerate(cmds[1]) if a == "-label"] == [
         "#13  L1  0:13",
-        "#14  L—  0:14",
+        "#14  L-  0:14",
     ]
 
 
@@ -277,7 +277,7 @@ def test_sheet_labels_follow_the_listing_index_not_the_file_order(project):
     placements = [Placement("a", 1.0, 2.0, 0.0, 1.0, 1.0), Placement("a", 3.0, 4.0, 1.0, 2.0, 1.0)]
     cmds = frames.sheet_commands(stills, placements, project.ctx.stage_dir("publish"), width=100)
     labels = [cmds[0][i + 1] for i, a in enumerate(cmds[0]) if a == "-label"]
-    assert labels == ["#1  L1  0:00", "#2  L1  0:01", "#3  L—  ✂"]
+    assert labels == ["#1  L1  0:00", "#2  L1  0:01", "#3  L-  cut"]
 
 
 def test_sheet_escapes_percent_and_passes_the_font(project):
@@ -299,3 +299,12 @@ def test_sheet_skips_missing_files_and_makes_no_command_when_none_left(project):
     assert sum(a.endswith("frames/a/0.jpg") for a in cmds[0]) == 0
     (out / stills[1].path).unlink()
     assert frames.sheet_commands(stills, PLAYBACK, out, width=100) == []
+
+
+def test_sheet_labels_are_ascii_even_without_a_timeline(project):
+    stills = _sheet_stills(project, 2)
+    out = project.ctx.stage_dir("publish")
+    cmd = frames.sheet_commands(stills, None, out, width=100)[0]
+    labels = [cmd[i + 1] for i, a in enumerate(cmd) if a == "-label"]
+    assert labels == ["#1  L1  -", "#2  L-  -"]
+    assert all(label.isascii() for label in labels)

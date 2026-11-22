@@ -127,7 +127,7 @@ one Docker run. No finished timeline, or a time past the runtime, is a problem
 still now in `stills.json`, in the printed playback order, into
 `<output_dir>/publish/sheets/sheet{K}.jpg` — at most 12 per sheet, 4 columns,
 tile width `publish.frame_width`, each tile labelled `#<i>  L<line>  <M:SS>`
-(`—`/`✂` as in the listing; `i` is the row's `#i` in the printed list, which now
+(ASCII only: `-` for no line or no timeline, `cut` for a still not shown; the printed listing keeps `—`/`✂`; `i` is the row's `#i` in the printed list, which now
 leads each row). Stale `sheet<digits>.jpg` go first; a missing still file is
 skipped. Host ImageMagick through `run_magick` (`frames.sheet_commands()`, an argv
 list; `%` in a label is doubled because `-label` expands it; the
