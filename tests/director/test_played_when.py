@@ -54,7 +54,6 @@ def test_the_untimed_fallback_lists_a_silence_line_that_plays():
     quiet, talk = _untimed_with_silence(), _talk()
     view = build_display_view([(Segment("q", None), quiet), (Segment("a", None), talk)])
     out = played_transcript(view, [quiet, talk], {}, when=lambda n: f"T{n}")
-    assert UNTIMED in out
     assert "T1  1: [silent 45.0s]" in out
 
 
@@ -70,3 +69,14 @@ def test_the_untimed_fallback_without_when_still_omits_silence_lines():
     view = build_display_view([(Segment("q", None), quiet), (Segment("a", None), talk)])
     out = played_transcript(view, [quiet, talk], {})
     assert "silent 45.0s" not in out
+
+
+def test_the_untimed_note_says_the_times_are_the_finished_videos():
+    from nagare_clip.director.played import UNTIMED_FINISHED
+
+    quiet, talk = _untimed_with_silence(), _talk()
+    view = build_display_view([(Segment("q", None), quiet), (Segment("a", None), talk)])
+    out = played_transcript(view, [quiet, talk], {}, when=lambda n: f"T{n}")
+    assert UNTIMED_FINISHED in out and UNTIMED not in out
+    assert "finished video" in UNTIMED_FINISHED
+    assert UNTIMED in played_transcript(view, [quiet, talk], {})

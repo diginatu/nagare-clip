@@ -56,6 +56,10 @@ HEADER = (
 )
 
 UNTIMED = "(no line timings: the lines below are shown without this source's ops)"
+UNTIMED_FINISHED = (
+    "(no line timings, so this source's ops are not modelled: the lines below "
+    "are the ones the finished video plays, at its times)"
+)
 
 
 def _texts(
@@ -230,7 +234,7 @@ def played_transcript(
             current = index
         if run is None:
             seg = view.segments[index - 1]
-            out.append(f"{INDENT}{UNTIMED}")
+            out.append(f"{INDENT}{UNTIMED if when is None else UNTIMED_FINISHED}")
             # Without timings the source's ops are not modelled, so a silence
             # line is listed only when *when* says the finished video plays it.
             listed = [
@@ -247,4 +251,4 @@ def played_transcript(
     return "\n".join(out)
 
 
-__all__ = ["HEADER", "played_transcript"]
+__all__ = ["HEADER", "UNTIMED", "UNTIMED_FINISHED", "played_transcript"]

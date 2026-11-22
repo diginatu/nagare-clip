@@ -91,7 +91,7 @@ One page, sections separated by blank lines:
    has the last word: lines the director's ops let play but whose footage did
    not survive `intervals` become one `✂ dropped lines A-B — not in the
    finished video` row (never a `✂` in the time column), and in a source the
-   preview cannot time (shown `(no line timings: …)`, e.g. a speechless source
+   preview cannot time (headed `(no line timings, so this source's ops are not modelled: …)`, e.g. a speechless source
    kept under a `keep`) a silence line is listed whenever the finished video
    plays it, so an opening with no talking still shows at `0:00`. It reads the director
    files on disk (`current_state`); when they do not map onto the view it warns

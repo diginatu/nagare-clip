@@ -82,5 +82,8 @@ def run_text_filter(
         logging.info("text_filter: %d/%d lines modified by AI", changes, len(lines))
 
     output_txt.parent.mkdir(parents=True, exist_ok=True)
-    output_txt.write_text("\n".join(result_lines) + "\n", encoding="utf-8")
+    # No line (a speechless source) stays an empty file: a lone "\n" reads back
+    # as one blank speech line, a phantom line in the director's view.
+    text = "".join(f"{line}\n" for line in result_lines)
+    output_txt.write_text(text, encoding="utf-8")
     logging.info("text_filter: wrote %s", output_txt)

@@ -175,3 +175,14 @@ class TestProjectBrief:
     def test_no_brief_leaves_prompt_untouched(self, tmp_path):
         captured = _run(tmp_path, _s2_config())
         assert captured["prompt"] == "Base prompt."
+
+
+def test_a_speechless_source_stays_an_empty_file(tmp_path):
+    """No lines in -> an empty file out, never a lone newline: every reader
+    splits "\\n" into one blank speech line, a phantom line in the director's
+    view after a speechless source's silence line."""
+    src = tmp_path / "quiet.txt"
+    src.write_text("", encoding="utf-8")
+    out = tmp_path / "quiet_edits.txt"
+    run_text_filter(src, out, get_effective_config(None, {}))
+    assert out.read_text(encoding="utf-8") == ""
