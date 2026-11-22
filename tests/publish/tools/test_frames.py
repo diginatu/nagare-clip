@@ -308,3 +308,12 @@ def test_sheet_labels_are_ascii_even_without_a_timeline(project):
     labels = [cmd[i + 1] for i, a in enumerate(cmd) if a == "-label"]
     assert labels == ["#1  L1  -", "#2  L-  -"]
     assert all(label.isascii() for label in labels)
+
+
+def test_at_in_a_float_gap_is_a_still_not_a_runtime_problem(project):
+    placements = [
+        Placement("a", 1.0, 2.0, 0.0, 1.0, 1.0),
+        Placement("a", 5.0, 6.0, 1.0 + 1e-9, 2.0, 1.0),
+    ]
+    stills, problems = frames.at_stills(project, placements, [1.0 + 5e-10])
+    assert problems == [] and [s.source_time for s in stills] == [5.0]

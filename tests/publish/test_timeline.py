@@ -144,3 +144,14 @@ def test_source_at_maps_finished_time_to_source_time():
     assert source_at(placements, 12.5) is None
     assert source_at(placements, -0.1) is None
     assert source_at([], 0.0) is None
+
+
+def test_source_at_snaps_a_float_gap_between_placements_to_the_next_start():
+    from nagare_clip.publish.timeline import Placement, source_at
+
+    placements = [
+        Placement("a", 10.0, 12.0, 0.0, 2.0, 1.0),
+        Placement("b", 100.0, 101.0, 2.0 + 1e-9, 3.0, 1.0),
+    ]
+    assert source_at(placements, 2.0 + 5e-10) == ("b", 100.0)
+    assert source_at(placements, 3.0 + 1e-6) is None

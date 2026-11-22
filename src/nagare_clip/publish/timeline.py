@@ -108,11 +108,16 @@ def source_at(placements: Sequence[Placement], t: float) -> tuple[str, float] | 
     """The ``(stem, source seconds)`` shown at finished-timeline time *t*.
 
     A boundary belongs to the placement that starts there; the very end of the
-    last placement is accepted too, so "the last frame" is addressable.
-    ``None`` outside the timeline.
+    last placement is accepted too, so "the last frame" is addressable.  A *t*
+    in the sliver between one placement's end and the next one's start (float
+    noise from cumulative addition) snaps to the next placement's start.
+    ``None`` only when *t* is before the timeline or past its end.
     """
     for i, p in enumerate(placements):
         last = i == len(placements) - 1
         if p.tl_start <= t < p.tl_end or (last and t == p.tl_end):
             return p.stem, p.src_start + (t - p.tl_start) * p.speed
+        if not last and p.tl_end <= t < placements[i + 1].tl_start:
+            nxt = placements[i + 1]
+            return nxt.stem, nxt.src_start
     return None
