@@ -87,7 +87,13 @@ One page, sections separated by blank lines:
    rows `director_tools.sh transcript` prints) with each row prefixed by its
    finished time through `played_transcript(..., when=...)`: only what plays, in
    playback order, a cut as one `✂` row and a timelapse as one `⏩` row — a long
-   video is a few screens instead of thousands of rows. It reads the director
+   video is a few screens instead of thousands of rows. The finished timeline
+   has the last word: lines the director's ops let play but whose footage did
+   not survive `intervals` become one `✂ dropped lines A-B — not in the
+   finished video` row (never a `✂` in the time column), and in a source the
+   preview cannot time (shown `(no line timings: …)`, e.g. a speechless source
+   kept under a `keep`) a silence line is listed whenever the finished video
+   plays it, so an opening with no talking still shows at `0:00`. It reads the director
    files on disk (`current_state`); when they do not map onto the view it warns
    on stderr, lists the unmapped items and falls back to the per-line rows.
 
@@ -170,10 +176,12 @@ relative to it)`.
 `chapters N [N ...]` resolves the given display lines with
 `edit.resolve_chapters()` — **the same function `write` validates with**, so the
 preview cannot disagree with the write — and prints `line  time  length  text`
-sorted by finished time (the text is the line's own, without the view's
+sorted by finished time, the first chapter at `0:00` and measured from there,
+exactly as `write` renders it (`chapter_timestamps`) (the text is the line's own, without the view's
 timing bracket, cut to 40 characters), marking a chapter shorter than
 `publish.min_chapter_duration`; then the fewer-than-three warning and every
-problem (stderr). Exit 1 on a problem; writes nothing.
+problem (stderr), listed in the edit's chapter order (`chapters[0]` first),
+as `write` lists them. Exit 1 on a problem; writes nothing.
 
 ### `write`
 

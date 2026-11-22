@@ -93,16 +93,50 @@ def _collapsed(run: Run) -> bool:
     return run.kind in SPED and (run.factor or 1.0) >= UNINTELLIGIBLE_FACTOR
 
 
+Stamp = Callable[[int], str | None]
+
+
+def _dropped_row(lines: list[int]) -> str:
+    """One row for consecutive lines *when* says are not in the finished video."""
+    return f"{INDENT}✂ dropped {_lines_phrase(lines)} — not in the finished video"
+
+
+def _line_rows(
+    numbers: Sequence[int],
+    row: Callable[[int], list[str]],
+    when: Stamp | None,
+) -> list[str]:
+    """``row(n)`` per line, prefixed with ``when(n)``; a run of lines *when*
+    maps to ``None`` becomes one :func:`_dropped_row` instead of a stamp."""
+    rows: list[str] = []
+    dropped: list[int] = []
+    for n in numbers:
+        stamp = None if when is None else when(n)
+        if when is not None and stamp is None:
+            dropped.append(n)
+            continue
+        if dropped:
+            rows.append(_dropped_row(dropped))
+            dropped = []
+        first, *rest = row(n)
+        rows.append(("" if stamp is None else stamp + "  ") + first)
+        rows.extend(rest)
+    if dropped:
+        rows.append(_dropped_row(dropped))
+    return rows
+
+
 def _run_rows(
     run: Run,
     view: DisplayView,
     texts: Mapping[int, str],
     edited: AbstractSet[int],
     captions: Mapping[int, list[tuple[str, float]]],
-    when: Callable[[int], str] | None = None,
+    when: Stamp | None = None,
 ) -> list[str]:
     def stamp(n: int | None) -> str:
-        return "" if when is None or n is None else when(n) + "  "
+        text = None if when is None or n is None else when(n)
+        return "" if text is None else text + "  "
 
     where = _lines_phrase(run.lines) if run.lines else ""
     if run.kind == "cut":
@@ -123,19 +157,20 @@ def _run_rows(
         # A wait with no line of its own that an op plays (a "n~" edge).
         place = "before line 1" if run.after == 0 else f"after line {run.after}"
         return [f"{INDENT}(the silence {place} plays, {_s(run.seconds)})"]
-    rows = []
-    for n in run.lines:
-        line = view.lines[n - 1]
-        if line.is_silence and run.kind != "keep":
-            continue  # dropped: nobody hears it
-        row = f"{stamp(n)}{n}: {texts[n]}"
+
+    def row(n: int) -> list[str]:
+        head = f"{n}: {texts[n]}"
         if n in edited:
-            row += "  (edited)"
+            head += "  (edited)"
         if run.kind in SPED:
-            row += f"  (x{run.factor})"
-        rows.append(row)
-        rows.extend(f"{INDENT}+「{text}」 {seconds:.1f} s" for text, seconds in captions.get(n, []))
-    return rows
+            head += f"  (x{run.factor})"
+        return [
+            head,
+            *(f"{INDENT}+「{text}」 {seconds:.1f} s" for text, seconds in captions.get(n, [])),
+        ]
+
+    heard = [n for n in run.lines if not view.lines[n - 1].is_silence or run.kind == "keep"]
+    return _line_rows(heard, row, when)
 
 
 def played_transcript(
@@ -145,7 +180,7 @@ def played_transcript(
     *,
     order: Sequence[tuple[int, int]] = (),
     only: AbstractSet[int] | None = None,
-    when: Callable[[int], str] | None = None,
+    when: Stamp | None = None,
 ) -> str:
     """The finished video as text, in playback order (see the module doc).
 
@@ -154,7 +189,10 @@ def played_transcript(
     display ranges (empty: shooting order); *only* narrows to those segments.
     *when* (display line -> text), when given, prefixes every played line row
     and every ``⏩`` row with ``when(its first display line) + "  "`` (the
-    publish view's finished times); ``None`` leaves the output unchanged.
+    publish view's finished times); a line it maps to ``None`` is not in the
+    finished video, and consecutive such lines become one ``✂ dropped`` row.
+    In a source the preview cannot time, *when* also decides which silence
+    lines are listed.  ``None`` leaves the output unchanged.
     """
     breaks = _order_breaks(order, len(view.lines))
     texts, edited = _texts(view, transcripts, ops)
@@ -193,11 +231,14 @@ def played_transcript(
         if run is None:
             seg = view.segments[index - 1]
             out.append(f"{INDENT}{UNTIMED}")
-            out.extend(
-                f"{'' if when is None else when(n) + '  '}{n}: {texts[n]}"
+            # Without timings the source's ops are not modelled, so a silence
+            # line is listed only when *when* says the finished video plays it.
+            listed = [
+                n
                 for n in range(seg.first, seg.last + 1)
-                if not view.lines[n - 1].is_silence
-            )
+                if not view.lines[n - 1].is_silence or (when is not None and when(n) is not None)
+            ]
+            out.extend(_line_rows(listed, lambda n: [f"{n}: {texts[n]}"], when))
             previous = seg.last
             continue
         out.extend(_run_rows(run, view, texts, edited, captions, when))

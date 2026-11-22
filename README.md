@@ -188,7 +188,8 @@ The tools, which you can also run yourself (all paths are under your config's
   slots a thumbnail may use (`render.fonts`), the finished runtime and one row
   per line, `N  M:SS  text` (`✂` = the line does not survive the cut, `—` = no
   finished timeline yet). `--compact` shows only what plays, in playback order,
-  each row with its finished time — a cut and a timelapse are one row each.
+  each row with its finished time — a cut and a timelapse are one row each, and
+  a kept stretch with no talking shows as its `[silent …]` line.
 - `frames` without `--line` writes the **shortlist**: stills at the moments the
   director marked as payoffs (mid-line of an `overlay` caption, the middle of a
   `keep`, both ends of a `timelapse`). Stills that are not in the finished video

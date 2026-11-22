@@ -26,7 +26,7 @@ from nagare_clip.director.transcript import clean_for_display
 from nagare_clip.index_page import write_index
 from nagare_clip.pipeline.errors import PipelineError
 from nagare_clip.pipeline.external import run_magick
-from nagare_clip.publish.chapters import _spans, format_timestamp
+from nagare_clip.publish.chapters import _spans, chapter_timestamps, format_timestamp
 from nagare_clip.publish.document import render_publish_markdown
 from nagare_clip.publish.timeline import total_duration
 from nagare_clip.publish.tools.build import build_publish
@@ -46,7 +46,7 @@ from nagare_clip.publish.tools.frames import (
     sheet_commands,
     write_stills,
 )
-from nagare_clip.publish.tools.lines import finished_placements, line_time
+from nagare_clip.publish.tools.lines import finished_placements, line_span, line_time
 from nagare_clip.render.run import run_render
 from nagare_clip.render.thumbnail import fallback_font
 
@@ -170,13 +170,14 @@ def _fonts_section(fonts: dict[str, str]) -> str:
 
 
 def _when(project: Project, placements):
-    """display line -> its finished time as text (``—`` unknown, ``✂`` cut)."""
+    """display line -> its finished time as text (``—`` unknown), or ``None``
+    when none of the line's footage is in the finished video."""
 
-    def when(number: int) -> str:
-        if placements is None:
+    def when(number: int) -> str | None:
+        if placements is None or line_span(project, number) is None:
             return "—"
         t = line_time(placements, project, number)
-        return "✂" if t is None else format_timestamp(t)
+        return None if t is None else format_timestamp(t)
 
     return when
 
@@ -238,7 +239,7 @@ def cmd_view(project: Project, args: argparse.Namespace) -> int:
     else:
         rows = []
         for line in view.lines[first - 1 : last]:
-            when = _when(project, placements)(line.number)
+            when = _when(project, placements)(line.number) or "✂"
             rows.append(f"{line.number}  {when}  {line.text}".rstrip())
         parts.append("\n".join(rows))
     print("\n\n".join(parts))
@@ -471,8 +472,9 @@ def cmd_chapters(project: Project, args: argparse.Namespace) -> int:
     if chapters and placements is not None:
         spans = _spans([c.time for c in chapters], total_duration(placements))
         print("line   time   length  text")
-        for c, span in zip(chapters, spans):
-            row = f"{c.line:<6} {format_timestamp(c.time):<6} {format_timestamp(span):<7} {c.title}"
+        stamps = chapter_timestamps(chapters)  # the first is 0:00, as write renders it
+        for c, stamp, span in zip(chapters, stamps, spans):
+            row = f"{c.line:<6} {stamp:<6} {format_timestamp(span):<7} {c.title}"
             if span < min_chapter:
                 row += f"   ← shorter than {min_chapter:g} s"
             print(row)

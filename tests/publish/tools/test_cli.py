@@ -581,3 +581,32 @@ def test_frames_without_sheet_runs_no_magick(setup, monkeypatch):
     _fake_magick(monkeypatch, calls)
     assert cli.main(["frames", "--line", "1"]) == 0
     assert calls == []
+
+
+def test_view_compact_marks_a_line_with_no_surviving_footage_as_one_row(setup, monkeypatch, capsys):
+    monkeypatch.setattr(cli, "finished_placements", lambda p: PLACEMENTS[:1])  # line 3 gone
+    assert cli.main(["view", "--compact"]) == 0
+    out = capsys.readouterr().out
+    assert "0:00  1: one" in out
+    assert "    ✂ dropped line 3 — not in the finished video" in out
+    assert "✂  3:" not in out
+
+
+def test_view_rows_still_show_a_cut_line_as_a_scissor(setup, monkeypatch, capsys):
+    monkeypatch.setattr(cli, "finished_placements", lambda p: PLACEMENTS[:1])
+    assert cli.main(["view"]) == 0
+    assert "3  ✂  two" in capsys.readouterr().out
+
+
+def test_chapters_shows_the_first_chapter_at_0_00_as_write_does(setup, capsys):
+    project, _ = setup
+    project.ctx.cfg["publish"]["min_chapter_duration"] = 0.5
+    cli.main(["chapters", "3"])
+    out = capsys.readouterr().out.splitlines()
+    assert out[1].split() == ["3", "0:00", "0:02", "two"]  # survives from 0:01; rendered 0:00
+
+
+def test_chapters_problems_are_listed_in_edit_order(setup, capsys):
+    assert cli.main(["chapters", "3", "1"]) == 1  # chapters[1] (line 1) plays first
+    err = capsys.readouterr().err
+    assert err.index("chapters[0]") < err.index("chapters[1]")

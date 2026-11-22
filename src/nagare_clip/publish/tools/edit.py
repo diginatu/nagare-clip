@@ -117,6 +117,7 @@ def resolve_chapters(
     ``chapters`` command use, so a preview can never disagree with the write.
     """
     problems: list[str] = []
+    found: list[tuple[int, str]] = []  # (chapter index, problem), sorted at the end
     if not refs:
         return [], problems
     if placements is None:
@@ -126,29 +127,36 @@ def resolve_chapters(
     for i, ref in enumerate(refs):
         where = f"chapters[{i}] (line {ref.line})"
         if not 1 <= ref.line <= len(project.view.lines):
-            problems.append(f"{where}: no such line (1-{len(project.view.lines)})")
+            found.append((i, f"{where}: no such line (1-{len(project.view.lines)})"))
             continue
         if line_span(project, ref.line) is None:
-            problems.append(f"{where}: the line has no timing")
+            found.append((i, f"{where}: the line has no timing"))
             continue
         time = line_time(placements, project, ref.line)
         if time is None:
-            problems.append(f"{where}: the line is entirely cut from the finished video")
+            found.append((i, f"{where}: the line is entirely cut from the finished video"))
             continue
         resolved.append((i, ResolvedChapter(ref.line, time, ref.title)))
     resolved.sort(key=lambda pair: pair[1].time)
     for (_, a), (j, b) in zip(resolved, resolved[1:]):
         if a.time == b.time:
-            problems.append(
-                f"chapters[{j}] (line {b.line}): at the same time as line {a.line} ({a.time:.1f}s)"
+            found.append(
+                (
+                    j,
+                    f"chapters[{j}] (line {b.line}): at the same time as line {a.line} ({a.time:.1f}s)",
+                )
             )
     spans = _spans([c.time for _, c in resolved], total_duration(placements))
     for (i, c), span in zip(resolved, spans):
         if span < min_chapter:
-            problems.append(
-                f"chapters[{i}] (line {c.line}): runs {span:.1f}s, "
-                f"shorter than the minimum {min_chapter:g}s"
+            found.append(
+                (
+                    i,
+                    f"chapters[{i}] (line {c.line}): runs {span:.1f}s, "
+                    f"shorter than the minimum {min_chapter:g}s",
+                )
             )
+    problems.extend(p for _, p in sorted(found, key=lambda pair: pair[0]))
     return [c for _, c in resolved], problems
 
 

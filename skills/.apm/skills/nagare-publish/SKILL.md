@@ -65,7 +65,9 @@ The tools are deterministic (no LLM call):
   finished video as the director's played transcript: only what plays, in
   playback order, each row prefixed with its finished time, a cut as one `✂`
   row and a timelapse as one `⏩` row — a long video is a few screens instead
-  of thousands of rows. `--lines A-B` zooms into those display lines (it does
+  of thousands of rows. `✂ dropped lines A-B` marks lines whose footage did not
+  survive the cut; a kept stretch with no talking (an opening shot) shows as
+  its `[silent …]` line with its time. `--lines A-B` zooms into those display lines (it does
   not combine with `--compact`).
 - `frames` — with no `--line`: the thumbnail **shortlist** read off the
   director's ops (capped by `publish.max_frames`), written fresh to
@@ -83,8 +85,8 @@ The tools are deterministic (no LLM call):
   `<output_dir>/publish/sheets/sheet<K>.jpg` (12 per sheet, 4 columns, each tile
   labelled `#i  L<line>  M:SS` to match the rows; ASCII: `-` for none, `cut` for a cut still) and prints `sheet: <path>`.
 - `chapters N [N ...]` — try chapter lines before writing: prints each one's
-  finished time and length (`line time length text`, sorted by time; a
-  chapter under `publish.min_chapter_duration` is marked), then every problem
+  finished time and length (`line time length text`, sorted by time, the
+  first shown at `0:00` as `write` renders it; a chapter under `publish.min_chapter_duration` is marked), then every problem
   `write` would report for them and the fewer-than-three warning. Exit 1 on a
   problem. It writes nothing.
 - `write` — validates the whole edit; on **any** problem it prints them all
