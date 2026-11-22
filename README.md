@@ -190,6 +190,12 @@ The tools, which you can also run yourself (all paths are under your config's
   finished timeline yet). `--compact` shows only what plays, in playback order,
   each row with its finished time — a cut and a timelapse are one row each, and
   a kept stretch with no talking shows as its `[silent …]` line.
+- `view` and `write` warn when the `.blend` is 1 s or more shorter or longer
+  than the timeline the tools compute, which means it was edited by hand in
+  Blender. The tools cannot see that edit, so chapter and still times can be off
+  from the real video. Carry the edit back into the director's edit and re-run
+  through `blender`, or check the chapters in the rendered video before
+  uploading.
 - `frames` without `--line` writes the **shortlist**: stills at the moments the
   director marked as payoffs (mid-line of an `overlay` caption, the middle of a
   `keep`, both ends of a `timelapse`). Stills that are not in the finished video

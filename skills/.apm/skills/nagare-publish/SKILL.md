@@ -221,6 +221,13 @@ them at once:
 It warns but writes when there are fewer than three chapters: YouTube links
 the timestamps but draws no segmented progress bar.
 
+`view` and `write` also warn when the `.blend` is 1 s or more shorter or longer
+than the timeline the tools compute: the user edited it by hand in Blender, and
+the tools cannot see that edit, so every chapter and still time after it can be
+off from the real video. Tell the user. Either they carry the edit back into
+the director's edit and re-run the pipeline through `blender`, or they check
+each chapter's position in the rendered video before uploading.
+
 ## Revising later
 
 `write` saved the edit verbatim as `<output_dir>/publish/edit.json`; there is no

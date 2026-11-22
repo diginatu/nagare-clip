@@ -11,6 +11,7 @@ import argparse
 import json
 import logging
 import re
+import subprocess
 import sys
 from pathlib import Path
 from typing import Any
@@ -25,7 +26,8 @@ from nagare_clip.director.tools.project import Project, current_state, load_proj
 from nagare_clip.director.transcript import clean_for_display
 from nagare_clip.index_page import write_index
 from nagare_clip.pipeline.errors import PipelineError
-from nagare_clip.pipeline.external import run_magick
+from nagare_clip.pipeline.external import failure_reason, run_magick
+from nagare_clip.publish.blend_check import mismatch_warning, read_blend_range
 from nagare_clip.publish.chapters import _spans, chapter_timestamps, format_timestamp
 from nagare_clip.publish.document import render_publish_markdown
 from nagare_clip.publish.timeline import total_duration
@@ -204,6 +206,26 @@ def _compact_rows(project: Project, placements) -> str | None:
     )
 
 
+def _warn_blend_mismatch(project: Project, placements) -> None:
+    """Say on stderr when the .blend no longer matches the computed timeline
+    (a hand edit in Blender); never fails the command."""
+    blend = project.ctx.blend_path
+    if not placements or not blend.is_file():
+        return
+    try:
+        rng = read_blend_range(blend)
+    except (OSError, subprocess.CalledProcessError, ValueError) as e:
+        print(
+            f"warning: the .blend's length was not checked against these times ({blend}): "
+            f"{failure_reason(e)}",
+            file=sys.stderr,
+        )
+        return
+    warning = mismatch_warning(total_duration(placements), rng.seconds, blend)
+    if warning:
+        print(f"warning: {warning}", file=sys.stderr)
+
+
 def cmd_view(project: Project, args: argparse.Namespace) -> int:
     view = project.view
     total = len(view.lines)
@@ -243,6 +265,7 @@ def cmd_view(project: Project, args: argparse.Namespace) -> int:
             rows.append(f"{line.number}  {when}  {line.text}".rstrip())
         parts.append("\n".join(rows))
     print("\n\n".join(parts))
+    _warn_blend_mismatch(project, placements)
     return 0
 
 
@@ -409,6 +432,7 @@ def cmd_write(project: Project, args: argparse.Namespace) -> int:
         return 1
     for w in warnings:
         print(f"warning: {w}", file=sys.stderr)
+    _warn_blend_mismatch(project, placements)
     assert edit is not None
     publish_dir.mkdir(parents=True, exist_ok=True)
     lines_path = publish_dir / "edit_lines.json"

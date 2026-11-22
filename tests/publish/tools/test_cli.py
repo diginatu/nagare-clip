@@ -610,3 +610,87 @@ def test_chapters_problems_are_listed_in_edit_order(setup, capsys):
     assert cli.main(["chapters", "3", "1"]) == 1  # chapters[1] (line 1) plays first
     err = capsys.readouterr().err
     assert err.index("chapters[0]") < err.index("chapters[1]")
+
+
+# --- the .blend's real length vs the computed one ------------------------------
+
+from nagare_clip.publish.blend_check import BlendRange  # noqa: E402
+
+
+def _blend(project, *, seconds: float | None = None, error: Exception | None = None):
+    """Put a .blend where the blender stage writes it; reading it gives *seconds*."""
+    path = project.ctx.blend_path
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_bytes(b"blend")
+    calls: list = []
+
+    def read(blend):
+        calls.append(blend)
+        if error is not None:
+            raise error
+        return BlendRange(10, 1.0, 1, round(seconds * 10))
+
+    return read, calls
+
+
+def test_view_warns_when_the_blend_was_trimmed_by_hand(setup, monkeypatch, capsys):
+    project, _ = setup
+    read, calls = _blend(project, seconds=0.5)  # the timeline computes 2.0 s
+    monkeypatch.setattr(cli, "read_blend_range", read)
+    assert cli.main(["view"]) == 0
+    captured = capsys.readouterr()
+    assert calls == [project.ctx.blend_path]
+    assert "1.5 s" in captured.err and "shorter" in captured.err
+    assert "chapter" in captured.err
+    assert "shorter" not in captured.out
+
+
+def test_view_is_quiet_when_the_blend_matches(setup, monkeypatch, capsys):
+    project, _ = setup
+    read, calls = _blend(project, seconds=2.0)
+    monkeypatch.setattr(cli, "read_blend_range", read)
+    assert cli.main(["view"]) == 0
+    assert calls and ".blend" not in capsys.readouterr().err
+
+
+def test_view_does_not_look_without_a_blend_or_a_timeline(setup, monkeypatch, capsys):
+    project, _ = setup
+    calls: list = []
+    monkeypatch.setattr(cli, "read_blend_range", lambda b: calls.append(b))
+    assert cli.main(["view"]) == 0  # no .blend yet
+    _blend(project, seconds=0.5)
+    monkeypatch.setattr(cli, "finished_placements", lambda p: None)
+    assert cli.main(["view"]) == 0  # no timeline to compare
+    assert calls == []
+    assert ".blend" not in capsys.readouterr().err
+
+
+def test_view_says_when_the_blend_cannot_be_read(setup, monkeypatch, capsys):
+    project, _ = setup
+    read, _ = _blend(project, error=FileNotFoundError("blender"))
+    monkeypatch.setattr(cli, "read_blend_range", read)
+    assert cli.main(["view"]) == 0
+    err = capsys.readouterr().err
+    assert "not checked" in err and "blender" in err
+
+
+def test_write_warns_on_a_trimmed_blend_and_still_writes(setup, tmp_path, monkeypatch, capsys):
+    project, calls = setup
+    read, _ = _blend(project, seconds=5.0)
+    monkeypatch.setattr(cli, "read_blend_range", read)
+    project.ctx.cfg["publish"]["min_chapter_duration"] = 0.5
+    (project.ctx.stage_dir("publish") / "frames/a").mkdir(parents=True)
+    (project.ctx.stage_dir("publish") / "frames/a/1.500.jpg").write_bytes(b"x")
+    assert cli.main(["write", "--edit", _edit_file(tmp_path, GOOD)]) == 0
+    err = capsys.readouterr().err
+    assert "3.0 s" in err and "longer" in err
+    assert (project.ctx.stage_dir("publish") / "publish.json").is_file()
+    assert len(calls) == 1
+
+
+def test_write_with_problems_does_not_read_the_blend(setup, tmp_path, monkeypatch):
+    project, _ = setup
+    read, calls = _blend(project, seconds=5.0)
+    monkeypatch.setattr(cli, "read_blend_range", read)
+    assert cli.main(["write", "--edit", _edit_file(tmp_path, {**GOOD, "titles": []})]) == 1
+    assert calls == []

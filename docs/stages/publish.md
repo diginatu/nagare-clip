@@ -209,6 +209,32 @@ each chapter line's current text with the saved one and prints, on stderr,
 not a problem (the file is still written); a missing or unreadable
 `edit_lines.json` gives no warnings.
 
+### The `.blend`'s real length (`blend_check.py`)
+
+The tools never read the `.blend`; every time is computed from the intervals
+(below). A user who opens `<output_dir>/blender/<stem>_edited.blend`
+(`PipelineContext.blend_path`) and trims it by hand changes the real video
+behind the tools' back — once every chapter after the trim was late, by up to
+~56 s, and nobody saw it until the user watched the video. So `view` (after its
+output) and `write` (after validation passes, before writing) open the `.blend`
+in headless Blender (`blend_check.read_blend_range`: `blender --background
+--factory-startup <blend> --python-expr …`, which prints one
+`NAGARE_BLEND_INFO {json}` line; about half a second; Blender is a host binary,
+as for the blender stage) and read the scene's frame range — what Blender
+renders: `(frame_end − frame_start + 1) × fps_base / fps` (`frame_end` is
+inclusive). When that differs from `total_duration(placements)` by
+`MISMATCH_SECONDS` (1.0 s) or more, `mismatch_warning()` prints on stderr both
+lengths and the difference (each `M:SS` and seconds, shorter/longer), that
+chapter and still times can be off from the real video, and the fix: carry the
+hand edit back into the director's edit and re-run through `blender`, or check
+each chapter in the rendered video before uploading. It is only a warning —
+`write` still writes and exits 0. Below the threshold it is silent: the blender
+stage rounds each interval to whole frames, so an untouched `.blend` differs by
+a fraction of a second (measured: 0.0 s on a 28-minute, 211-strip project). No
+`.blend` yet, or no timeline, → no check; Blender missing or failing → one
+`warning: the .blend's length was not checked …` line with the reason. `chapters`
+does not check (its times are the same; `write` will say so).
+
 ## The edit file
 
 ```json
@@ -276,6 +302,8 @@ Every problem at once:
 
 - fewer than three chapters, zero included (`chapter_count_warning`): YouTube
   links the timestamps but draws no segmented bar.
+- the `.blend` is 1 s or more shorter/longer than the computed timeline (a hand
+  edit in Blender; see *The `.blend`'s real length* above).
 
 ## Timing: the tool's, never the edit's
 
